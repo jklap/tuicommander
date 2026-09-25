@@ -307,15 +307,44 @@ describe("executeCleanup", () => {
 		});
 		await executeCleanup(config);
 
-		// `force: true` — this dialog IS the confirmation. It renders the
-		// uncommitted-work warning under the worktree step, so the backend guard
-		// must not ask a second time and fail the step.
+		// A clean checkout does not need permission to discard dirty files.
 		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
 			repoPath: "/repo",
 			workspaceId: "feature/login",
 			action: "archive",
+			force: false,
+		});
+	});
+
+	it("passes force only when the worktree has dirty files", async () => {
+		const config = makeConfig({
+			steps: [{ id: "worktree", checked: true }],
+			worktreeAction: "delete",
+		});
+		(config as CleanupConfig & { worktreeDirty: boolean }).worktreeDirty = true;
+		await executeCleanup(config);
+
+		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
+			repoPath: "/repo",
+			workspaceId: "feature/login",
+			action: "delete",
 			force: true,
 		});
+	});
+
+	it("shows the branch-retained warning from forced cleanup", async () => {
+		mockInvoke.mockResolvedValueOnce({
+			action: "deleted",
+			branch_delete_warning: "branch has unmerged commits",
+		});
+		const onStepNote = vi.fn();
+		await executeCleanup(makeConfig({
+			steps: [{ id: "worktree", checked: true }],
+			worktreeAction: "delete",
+			onStepNote,
+		}));
+
+		expect(onStepNote).toHaveBeenCalledWith("worktree", expect.stringContaining("unmerged commits"));
 	});
 
 	it("calls finalize_merged_worktree with 'delete' action", async () => {
@@ -335,7 +364,7 @@ describe("executeCleanup", () => {
 			repoPath: "/repo",
 			workspaceId: "feature/login",
 			action: "delete",
-			force: true,
+			force: false,
 		});
 	});
 

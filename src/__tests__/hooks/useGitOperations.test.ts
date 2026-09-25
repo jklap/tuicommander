@@ -2042,7 +2042,7 @@ describe("useGitOperations", () => {
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
 		});
 
-		it("retries with force=true when user confirms force removal of locked worktree", async () => {
+		it("retries with an explicit lock override after confirmation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
@@ -2052,7 +2052,7 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true, true);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 

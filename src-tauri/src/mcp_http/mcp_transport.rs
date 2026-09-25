@@ -8012,6 +8012,97 @@ mod tests {
         assert_eq!(warned["branch_delete_warning"], "branch retained");
     }
 
+    #[tokio::test]
+    async fn mcp_worktree_remove_defaults_to_non_force_and_keeps_dirty_work() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        crate::git_cli::git_cmd(&repo).args(["init"]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(&repo).args(["add", "."]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "base"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["branch", "-M", "main"])
+            .run()
+            .unwrap();
+        let worktree = temp.path().join("feature");
+        crate::git_cli::git_cmd(&repo)
+            .args(["worktree", "add", "-b", "feature", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        let dirty = worktree.join("untracked.txt");
+        std::fs::write(&dirty, "keep this\n").unwrap();
+        let state = test_state();
+        let repo_path = repo.to_string_lossy().into_owned();
+
+        let refused = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature"}),
+            false,
+        )
+        .await;
+        assert!(refused["error"].as_str().unwrap().contains("uncommitted"), "{refused}");
+        assert!(dirty.exists());
+        assert!(crate::git_cli::git_cmd(&repo)
+            .args(["show-ref", "--verify", "refs/heads/feature"])
+            .run()
+            .is_ok());
+
+        crate::git_cli::git_cmd(&worktree)
+            .args(["add", "untracked.txt"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["commit", "-m", "unique change"])
+            .run()
+            .unwrap();
+        let removed = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature", "force": true, "delete_branch": true}),
+            false,
+        )
+        .await;
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert!(removed["branch_delete_warning"].as_str().is_some_and(|s| s.contains("unmerged")), "{removed}");
+        assert!(!worktree.exists());
+        assert!(crate::git_cli::git_cmd(&repo)
+            .args(["show-ref", "--verify", "refs/heads/feature"])
+            .run()
+            .is_ok());
+
+        let second = temp.path().join("force-default");
+        crate::git_cli::git_cmd(&repo)
+            .args(["worktree", "add", "-b", "force-default", &second.to_string_lossy()])
+            .run()
+            .unwrap();
+        std::fs::write(second.join("untracked.txt"), "discardable\n").unwrap();
+        let force_without_delete = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "force-default", "force": true}),
+            false,
+        )
+        .await;
+        assert_eq!(force_without_delete["ok"], true, "{force_without_delete}");
+        assert!(!second.exists());
+        assert!(crate::git_cli::git_cmd(&repo)
+            .args(["show-ref", "--verify", "refs/heads/force-default"])
+            .run()
+            .is_ok(), "force alone does not authorize branch deletion");
+    }
+
     #[test]
     fn native_mcp_worktree_remove_uses_the_blocking_pool() {
         let source = include_str!("mcp_transport.rs");

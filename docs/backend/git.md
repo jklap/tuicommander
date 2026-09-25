@@ -165,15 +165,20 @@ instructions say to wait before running a build; `GET /worktrees/paths?path=<rep
 and IPC `get_worktree_paths` report each workspace's `warm_artifacts.status`
 (`pending`, `done`, or `failed`). A configured setup script runs before the warm,
 so it cannot write the same cache tree concurrently. Pending is recorded before
-the setup script starts. Removing a worktree waits for an active copy, clears
-its warm state after Git unregisters it, and prevents a queued copy from
-recreating the removed path.
+the setup script starts. If creation is cancelled during setup, the status
+becomes `failed` instead of remaining `pending`. Removing or archiving a
+worktree waits for an active copy, clears its warm state, and prevents a queued
+copy from recreating the old path.
 
-Non-force removal first requires a clean checkout with no Git operation in
-progress and a HEAD matching the captured branch tip. It uses plain
-`git worktree remove`, then compare-and-deletes the branch at that captured
-OID. If the branch moved, removal reports a branch deletion warning and keeps
-the ref. For branch deletion, it checks the default branch's ancestry. A clean branch
+Non-force removal first requires a clean checkout and submodules, no Git
+operation in progress, and a HEAD matching the captured branch tip. Git needs
+one `--force` to remove a populated submodule even when it is clean; TUICommander
+uses it only after checking submodule status and rechecking dirtiness immediately
+before removal. A separate, confirmed lock override unlocks the worktree before
+removal; dirty-file `force` alone does not bypass a lock. Branch deletion in
+either mode uses the captured OID in a compare-and-delete operation. If proof
+fails or the branch moves, removal reports a warning and keeps the ref. For
+branch deletion, it checks the default branch's ancestry. A clean branch
 whose commits were squash- or rebase-merged can also pass when `git cherry`
 reports no unique patches. A branch with an unmerged merge commit is refused:
 `git cherry` does not compare changes made by merge resolution. The removal
@@ -217,9 +222,11 @@ valid, cold linked worktree.
 Lifecycle is backend-authored from the exact checkout `HEAD`. Linked worktrees
 report dirty state, default-branch ancestry, and removal safety. Any failed check
 serializes as `unknown`, never as clean or safe.
-When branch deletion is requested without force, worktree removal checks this
-verdict before touching the checkout. An unmerged branch or unknown verdict
-stops the combined operation and leaves the worktree in place.
+When branch deletion is requested, worktree removal checks this verdict before
+touching the checkout. Without force, an unmerged branch or unknown verdict
+stops the combined operation and leaves the worktree in place. With force,
+removal may discard dirty checkout files, but an unmerged branch is retained
+with a warning.
 
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 
