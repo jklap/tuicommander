@@ -1,5 +1,6 @@
 use super::model::{
     NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
+    StoryTransition, StoryTransitionActor,
     StoryStatus,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -114,6 +115,13 @@ impl StoryStore {
                 story_id TEXT NOT NULL REFERENCES stories(id),
                 input_sha256 TEXT NOT NULL,
                 PRIMARY KEY(run_id, proposal_key)
+            );
+            CREATE TABLE IF NOT EXISTS story_transitions (
+                story_id TEXT NOT NULL REFERENCES stories(id),
+                revision INTEGER NOT NULL,
+                command_json TEXT NOT NULL,
+                actor_json TEXT NOT NULL,
+                PRIMARY KEY(story_id, revision)
             );
             PRAGMA user_version = 1;",
         )

@@ -117,3 +117,19 @@ pub enum StoryCommand {
     Unblock,
     WontFix,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StoryTransitionActor {
+    Human,
+    ManagedSession { session_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryTransition {
+    pub story_id: String,
+    pub revision: i64,
+    pub command: StoryCommand,
+    pub actor: StoryTransitionActor,
+}

@@ -1,4 +1,4 @@
-use super::{NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryStore};
+use super::{NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryStore, StoryTransition};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -25,6 +25,9 @@ pub enum StoryAction {
         plan_id: String,
     },
     GetStory {
+        story_id: String,
+    },
+    TransitionHistory {
         story_id: String,
     },
     AddDependency {
@@ -57,6 +60,7 @@ pub enum StoryReply {
     PlanView(PlanView),
     Story(Story),
     Stories(Vec<Story>),
+    Transitions(Vec<StoryTransition>),
 }
 
 /// All transports use this boundary, so an identifier alone never grants cross-project access.
@@ -111,6 +115,12 @@ pub fn story_action(
             Ok(StoryReply::Stories(store.list_stories(&plan_id)?))
         }
         StoryAction::GetStory { story_id } => Ok(StoryReply::Story(story_in_project(&story_id)?)),
+        StoryAction::TransitionHistory { story_id } => {
+            story_in_project(&story_id)?;
+            Ok(StoryReply::Transitions(
+                store.transition_history(&story_id)?,
+            ))
+        }
         StoryAction::AddDependency {
             story_id,
             dependency_id,

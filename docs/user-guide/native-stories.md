@@ -25,7 +25,7 @@ The result is JSON with a `type` and `value`. Supply the returned plan ID when c
 tuic story '{"action":"create_story","input":{"planId":"PLAN_ID","title":"Implement","criteria":["Behavior verified"],"priority":1,"origin":{"type":"native"},"fileScope":[]}}' --project /absolute/project
 ```
 
-Changes to an existing story take its current `revision` as `expected_revision`; a stale request is rejected. The user-only `start_manual` transition moves a Ready story into progress without a PTY claim. A terminal `claim` instead takes `--session-id` with a live PTY ID from the same project. Closing that tab releases its claim. A session-bound agent can check criteria and submit review only on its own claim; a user performs review and administrative transitions.
+Changes to an existing story take its current `revision` as `expected_revision`; a stale request is rejected. The user-only `start_manual` transition moves a Ready story into progress without a PTY claim. A terminal `claim` instead takes `--session-id` with a live PTY ID from the same project. Closing that tab releases its claim. A session-bound agent can check criteria and submit review only on its own claim; a user performs review and administrative transitions. `transition_history` shows who performed each committed transition; approval from a managed MCP session is refused.
 
 To remove a cancelled prerequisite, send `{"action":"remove_dependency","story_id":"DEPENDENT_ID","dependency_id":"CANCELLED_ID","expected_revision":2}` as a user action. Session-bound agent calls, stale revisions, non-Backlog dependents, and prerequisites other than Won't fix are rejected.
 
