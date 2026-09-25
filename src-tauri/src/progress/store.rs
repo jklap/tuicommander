@@ -250,7 +250,13 @@ impl ProgressStore {
         target_pty_id: Option<&str>,
         target_name: Option<&str>,
     ) -> Result<ProgressEntry, String> {
+        let mut entry = entry.clone();
+        entry.text = crate::redaction::redact_secrets(&entry.text);
+        if let Some(step) = entry.step.as_mut() {
+            *step = crate::redaction::redact_secrets(step);
+        }
         entry.validate()?;
+        let target_name = target_name.and_then(super::model::bounded_name);
         let mut conn = self.connect()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -286,7 +292,7 @@ impl ProgressStore {
                 &agent_name,
                 pty_id,
                 target_pty_id,
-                target_name,
+                &target_name,
             ],
         )
         .map_err(db_error("insert progress entry"))?;
@@ -302,7 +308,7 @@ impl ProgressStore {
             step,
             agent_name,
             target_pty_id: target_pty_id.map(str::to_string),
-            target_name: target_name.map(str::to_string),
+            target_name,
         })
     }
 

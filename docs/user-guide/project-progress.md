@@ -31,6 +31,7 @@ reporting tool refuses that kind.
 TUI agents can redraw an intent one word at a time. Progress waits for the
 completed line or turn boundary before saving it, so a growing preview appears
 as one entry rather than a series of partial entries.
+The journal redacts secrets from intents and agent reports before writing them.
 
 ## How an agent reports
 
