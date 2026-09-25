@@ -1212,13 +1212,11 @@ agent-specific launch semantics. Later `session action=input` calls may update
 the same field without adding another command to the MCP surface.
 
 Every managed child is registered server-side and receives an inbox immediately,
-even when the caller has no bound peer identity. A parent registered with an
-explicit `tuic_session` additionally creates the bidirectional relationship even
-without a bound PTY: the child prompt receives its parent ID and send instruction,
-while the spawn response returns `parent_session_id`. A headerless MCP-scoped
-identity and an unregistered caller get no `parent_session_id` and a warning
-instead of a false two-way guarantee. `communication_ready`, `send_to` and
-`peer_registered` are gone:
+even when the caller has no bound peer identity. A registered parent additionally
+creates the bidirectional relationship: the child prompt receives its parent ID
+and send instruction, while the spawn response returns `parent_session_id`. An
+unregistered caller gets no `parent_session_id` and a warning instead of a false
+two-way guarantee. `communication_ready`, `send_to` and `peer_registered` are gone:
 the first two restated `parent_session_id`, and the third restated that TUIC always
 registers a managed child.
 The spawn still records the caller's MCP session as a pending parent: a later

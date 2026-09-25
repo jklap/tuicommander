@@ -427,7 +427,6 @@ fn bind_peer_identity_locked(
     name: String,
     project: Option<String>,
     registered_at: u64,
-    mcp_scoped_identity: bool,
 ) {
     let prior_mcp = state
         .peer_agents
@@ -467,7 +466,6 @@ fn bind_peer_identity_locked(
             name,
             project,
             registered_at,
-            mcp_scoped_identity,
         },
     );
     state
@@ -684,20 +682,11 @@ fn register_peer_identity(
     name: String,
     project: Option<String>,
     registered_at: u64,
-    mcp_scoped_identity: bool,
 ) -> Result<Option<String>, String> {
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
     match peer_identity_ownership_locked(state, mcp_sid, tuic_session) {
         PeerIdentityOwnership::Vacant(prior_mcp) => {
-            bind_peer_identity_locked(
-                state,
-                mcp_sid,
-                tuic_session,
-                name,
-                project,
-                registered_at,
-                mcp_scoped_identity,
-            );
+            bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
             Ok(prior_mcp)
         }
         // A session that already routes to the identity was bound to it by an
@@ -710,7 +699,6 @@ fn register_peer_identity(
                 if project.is_some() {
                     peer.project = project;
                 }
-                peer.mcp_scoped_identity = mcp_scoped_identity;
             }
             Ok(None)
         }
@@ -786,7 +774,7 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
             now_unix_ms(),
         ),
     };
-    bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at, false);
+    bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at);
     if let Some(prior_mcp) = prior_mcp {
         tracing::warn!(
             source = "mcp_initialize",
@@ -3815,17 +3803,8 @@ fn handle_agent_with_parent_cwd(
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
-            let caller_identity: Option<String> = mcp_session_id
+            let caller_tuic: Option<String> = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
-            let caller_tuic = caller_identity
-                .as_deref()
-                .filter(|identity| {
-                    state
-                        .peer_agents
-                        .get(*identity)
-                        .is_some_and(|peer| !peer.mcp_scoped_identity)
-                })
-                .map(str::to_string);
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
@@ -4061,12 +4040,9 @@ fn handle_agent_with_parent_cwd(
             }
             // Resolved before the session-created broadcast so the event names the
             // parent; the parent map entry below uses the same value.
-            let spawn_parent = caller_tuic.clone().or_else(|| {
-                caller_identity
-                    .is_none()
-                    .then(|| mcp_session_id.map(pending_parent_id))
-                    .flatten()
-            });
+            let spawn_parent = caller_tuic
+                .clone()
+                .or_else(|| mcp_session_id.map(pending_parent_id));
             // What the UI is told. A placeholder matches no tab, and nothing
             // corrects the tab once `register` resolves it; the session row does,
             // on the next reload.
@@ -4134,7 +4110,6 @@ fn handle_agent_with_parent_cwd(
                     name: peer_name.clone(),
                     project: effective_cwd.clone(),
                     registered_at: now_unix_ms(),
-                    mcp_scoped_identity: false,
                 },
             );
             state.agent_inbox.entry(session_id.clone()).or_default();
@@ -4393,15 +4368,6 @@ fn handle_messaging(
                     Ok(identity) => identity,
                     Err(error) => return error,
                 };
-            let mcp_scoped_identity = generated_identity
-                || (args["tuic_session"]
-                    .as_str()
-                    .filter(|value| !value.is_empty())
-                    .is_none()
-                    && previously_bound
-                        .as_deref()
-                        .and_then(|identity| state.peer_agents.get(identity))
-                        .is_some_and(|peer| peer.mcp_scoped_identity));
             let existing = state
                 .peer_agents
                 .get(&tuic_session)
@@ -4434,7 +4400,6 @@ fn handle_messaging(
                 name.clone(),
                 project,
                 now_ms,
-                mcp_scoped_identity,
             ) {
                 Ok(prior) => prior,
                 Err(error) => {
@@ -13283,7 +13248,6 @@ mod tests {
                 name: "progress-worker".to_string(),
                 project: Some(project.path().to_string_lossy().to_string()),
                 registered_at: 0,
-                mcp_scoped_identity: false,
             },
         );
         #[cfg(unix)]
@@ -14554,7 +14518,6 @@ mod tests {
                 name: "codex".to_string(),
                 project: Some("/Gits/personal/tuicommander".to_string()),
                 registered_at: 0,
-                mcp_scoped_identity: false,
             },
         );
 
@@ -14601,7 +14564,6 @@ mod tests {
                 name: "codex".to_string(),
                 project: Some("/Gits/personal/tuicommander".to_string()),
                 registered_at: 0,
-                mcp_scoped_identity: false,
             },
         );
 
@@ -15476,7 +15438,6 @@ mod tests {
                 name: "wiz".to_string(),
                 project: Some("/Gits/personal/alpha".to_string()),
                 registered_at: 0,
-                mcp_scoped_identity: false,
             },
         );
 
@@ -17083,15 +17044,12 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn headerless_registered_spawn_has_no_parent() {
+    async fn unregistered_headerless_spawn_has_no_parent() {
+        // A registered headerless caller is a parent (see
+        // parent_registration_after_spawn_links_existing_child); only a caller
+        // that never registered has no identity for the child to answer.
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
-        let registered = handle_messaging(
-            &state,
-            &serde_json::json!({"action": "register", "name": "external"}),
-            Some("mcp-anon"),
-        );
-        assert_eq!(registered["ok"], true, "registration failed: {registered}");
         let result = handle_agent(
             &state,
             addr,
@@ -17114,12 +17072,12 @@ mod tests {
         }
         assert!(
             result.get("error").is_none(),
-            "headerless registered caller spawn must succeed: {result}"
+            "unregistered caller spawn must succeed: {result}"
         );
         assert!(result["session_id"].as_str().is_some());
         assert!(
             result.get("parent_session_id").is_none(),
-            "an external caller has an MCP identity but no terminal parent"
+            "an unregistered caller has no identity for the child to answer"
         );
         assert!(
             result["communication_warning"]
