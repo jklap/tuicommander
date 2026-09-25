@@ -414,6 +414,19 @@ pub(super) async fn ci_failure_logs(
     json_result(crate::github::fetch_ci_failure_logs_with_state(q.repo_path, q.branch, state).await)
 }
 
+pub(super) async fn circleci_token_status() -> Response {
+    json_result(crate::circleci::circleci_token_status().await)
+}
+
+pub(super) async fn circleci_set_token(Json(body): Json<serde_json::Value>) -> Response {
+    let token = body
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    json_result(crate::circleci::circleci_set_token(token).await)
+}
+
 pub(super) async fn github_set_hide_drafts(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubSetHideDraftsRequest>,

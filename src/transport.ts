@@ -1095,6 +1095,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}`,
 		}),
 	},
+	circleci_token_status: {
+		map: () => ({ method: "GET", path: "/circleci/token" }),
+	},
+	circleci_set_token: {
+		map: (args) => ({ method: "POST", path: "/circleci/token", body: { token: args.token } }),
+	},
 	github_set_pr_hide_drafts: {
 		map: (args) => ({ method: "POST", path: "/github/pr-hide-drafts", body: { hide: args.hide } }),
 	},

@@ -1419,6 +1419,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route("/repo/ci-failure-logs", get(github_routes::ci_failure_logs))
         .route(
+            "/circleci/token",
+            get(github_routes::circleci_token_status).post(github_routes::circleci_set_token),
+        )
+        .route(
             "/github/pr-hide-drafts",
             post(github_routes::github_set_hide_drafts),
         )

@@ -51,6 +51,7 @@
 /api/plugins/x/register
 /api/plugins/x/unregister
 /audio/output-devices
+/circleci/token
 /claude/projects
 /claude/session-stats
 /claude/timeline
