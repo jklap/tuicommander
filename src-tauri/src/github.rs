@@ -3797,14 +3797,16 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
 pub(crate) async fn fetch_ci_failure_logs(
     repo_path: String,
     branch: String,
+    check_url: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    fetch_ci_failure_logs_with_state(repo_path, branch, state.inner().clone()).await
+    fetch_ci_failure_logs_with_state(repo_path, branch, check_url, state.inner().clone()).await
 }
 
 pub(crate) async fn fetch_ci_failure_logs_with_state(
     repo_path: String,
     branch: String,
+    check_url: Option<String>,
     state: Arc<AppState>,
 ) -> Result<String, String> {
     let outcome =
@@ -3815,6 +3817,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     match outcome {
         CiLogsOutcome::Logs(logs) => Ok(logs),
         CiLogsOutcome::ExternalOnly { checks, owner, repo } => {
+            let checks = check_url.as_deref().map_or(checks, |selected| checks.into_iter().filter(|check| check.link == selected).collect());
             let jobs: Vec<_> = circleci_jobs_from_checks(&checks)
                 .into_iter()
                 .filter(|(_, job)| job.vcs == "gh" && job.org.eq_ignore_ascii_case(&owner) && job.repo.eq_ignore_ascii_case(&repo))

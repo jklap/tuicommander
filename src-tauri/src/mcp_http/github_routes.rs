@@ -416,7 +416,7 @@ pub(super) async fn ci_failure_logs(
     if let Err(e) = validate_repo_path(&q.repo_path) {
         return e.into_response();
     }
-    json_result(crate::github::fetch_ci_failure_logs_with_state(q.repo_path, q.branch, state).await)
+    json_result(crate::github::fetch_ci_failure_logs_with_state(q.repo_path, q.branch, q.check_url, state).await)
 }
 
 pub(super) async fn circleci_token_status() -> Response {
