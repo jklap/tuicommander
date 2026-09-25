@@ -11614,7 +11614,7 @@ impl std::io::Write for TimedWriter {
 /// text, and the text a real gap before the Enter.
 #[cfg(unix)]
 #[test]
-fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
+fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -11625,6 +11625,13 @@ fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
         }),
         TtyMode::Raw,
     );
+    agent_session(&state, "timed-submit", SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut("timed-submit")
+        .unwrap()
+        .agent_type = Some("codex".into());
     let text = "dictated text ".repeat(50);
     let text = text.trim();
 
@@ -11641,9 +11648,12 @@ fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
         "Ctrl-U and the text must not share a read"
     );
     assert!(
-        writes[2].0 - writes[1].0 >= INJECT_ENTER_GAP,
-        "the text and the Enter must not share a read"
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        "Codex Enter must arrive after its 120ms paste suppression window"
     );
+
+    assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
+    assert_eq!(injection_enter_gap(None), INJECT_ENTER_GAP);
 }
 
 #[test]

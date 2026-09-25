@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dictation auto-send and other injected prompts now submit in Codex after its paste-burst Enter suppression window, in both the frontend and MCP session paths.
 - **Side panels follow an agent click to another repository** — A click on an agent row under another repository in the sidebar now moves the Notes, Git and Files panels to that repository, as a click on its branch row does. Opening another repository's settings no longer moves those panels there.
 - **No duplicated agent rows after a WebView reload** — A surviving agent tab is re-adopted with the intent and prompt the backend holds, so its Context bar is there before the terminal measures. Before, the bar appeared later, the pane shrank, and Claude's repaint for the transient taller height was pushed into scrollback a second time.
 - Mobile terminal output rejoins agent prose wrapped at the desktop PTY width before wrapping it for the phone, while preserving lists and tables.
