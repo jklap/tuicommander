@@ -292,6 +292,10 @@ pub(super) async fn spawn_agent_session(
     let spawn_output_format = body.output_format.clone();
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
+    let spawn_env = body.env.clone();
+    let allow_alt_screen = spawn_env
+        .get("TUIC_ALLOW_ALT_SCREEN")
+        .is_some_and(|value| value == "1");
     let spawn_agent_type = body
         .agent_type
         .clone()
@@ -325,16 +329,23 @@ pub(super) async fn spawn_agent_session(
                 launch_args.push(spawn_prompt.clone());
             }
             if spawn_agent_type == "claude" {
-                cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+                cmd.env(
+                    "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
+                    if allow_alt_screen { "0" } else { "1" },
+                );
             }
             for arg in crate::agent_hook_launch::augment_args(
                 &spawn_agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-                false,
+                allow_alt_screen,
             ) {
                 cmd.arg(arg);
+            }
+
+            for (key, value) in &spawn_env {
+                cmd.env(key, value);
             }
 
             if let Some(ref cwd) = spawn_cwd {
@@ -465,7 +476,55 @@ mod tests {
                     .into_owned(),
             ),
             args: Some(vec!["--help".into()]),
+            env: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn http_agent_spawn_respects_explicit_alt_screen_choice() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-agent-screen-choice",
+            "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\n' \"$*\"; fi",
+            "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%*)",
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "rows": 24,
+            "cols": 80,
+            "prompt": "ignored",
+            "agent_type": "codex",
+            "binary_path": script.to_string_lossy(),
+            "args": ["resume"],
+            "env": {"TUIC_ALLOW_ALT_SCREEN": "1"},
+        }))
+        .unwrap();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
+                    let text = buffer.lock().screen_rows().join("\n");
+                    if text.contains("ARGS=") {
+                        break text;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake agent output");
+        assert!(output.contains("ARGS=resume"), "{output}");
+        assert!(!output.contains("--no-alt-screen"), "{output}");
     }
 
     async fn response_json(response: Response) -> serde_json::Value {

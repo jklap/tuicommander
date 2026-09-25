@@ -249,6 +249,8 @@ pub(super) struct SpawnAgentRequest {
     pub agent_type: Option<String>,
     pub binary_path: Option<String>,
     pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
