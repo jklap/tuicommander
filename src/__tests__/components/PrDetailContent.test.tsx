@@ -92,6 +92,33 @@ describe("PrDetailContent — ego review result metadata", () => {
 		expect(await findByText("failed step")).toBeTruthy();
 	});
 
+	it("offers a Log toggle only on failed CircleCI rows", () => {
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: lint", state: "success", html_url: "https://circleci.com/gh/acme/widget/41" },
+			{ context: "build", state: "failure", html_url: "https://github.com/acme/widget/actions/runs/7" },
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
+		]);
+		const repo = nextRepo();
+		const { getAllByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		expect(getAllByText("Log")).toHaveLength(1);
+	});
+
+	it("fetches a CircleCI log once and reuses it when the row is reopened", async () => {
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
+		]);
+		mockRpc.mockResolvedValue("failed step");
+		const repo = nextRepo();
+		const { getByText, findByText, queryByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		fireEvent.click(getByText("Log"));
+		expect(await findByText("failed step")).toBeTruthy();
+		fireEvent.click(getByText("Log"));
+		expect(queryByText("failed step")).toBeNull();
+		fireEvent.click(getByText("Log"));
+		expect(await findByText("failed step")).toBeTruthy();
+		expect(mockRpc.mock.calls.filter(([command]) => command === "fetch_ci_failure_logs")).toHaveLength(1);
+	});
+
 	it.each(["Enter", " "])("keeps %s on the CircleCI Log button from opening the check URL", (key) => {
 		mockGithubStore.getCheckDetails.mockReturnValue([
 			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },

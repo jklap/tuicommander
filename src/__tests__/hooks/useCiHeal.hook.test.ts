@@ -199,6 +199,10 @@ describe("useCiHeal budget + re-entry guard", () => {
 		expect(h.loggerWarn).toHaveBeenCalled();
 		expect(h.loggerError).not.toHaveBeenCalled();
 		expect(h.toastAdd).toHaveBeenCalledWith(expect.any(String), expect.any(String), "warn");
+		// An expected failure is a delivery failure, not a heal attempt.
+		expect(h.repoState.repositories["/repo"].workspaces.main.ciAutoHeal).toEqual(
+			expect.objectContaining({ attempts: 0, healing: false }),
+		);
 	});
 
 	it("shows an error toast for an unexpected CI log failure", async () => {

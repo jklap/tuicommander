@@ -295,6 +295,16 @@ describe("GitHubTab — CircleCI token", () => {
 		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("circleci_delete_token"));
 	});
 
+	it("saves a token through the CircleCI command and clears the field", async () => {
+		const { findByText, getByPlaceholderText, getByText } = render(() => <GitHubTab />);
+		await findByText("CircleCI");
+		const input = getByPlaceholderText("CircleCI read-only token") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "  circle-token  " } });
+		fireEvent.click(getByText("Save token"));
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("circleci_set_token", { token: "circle-token" }));
+		await waitFor(() => expect(input.value).toBe(""));
+	});
+
 	it("does not save an empty CircleCI token", async () => {
 		const { findByText, getByText } = render(() => <GitHubTab />);
 		await findByText("CircleCI");
