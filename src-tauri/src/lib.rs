@@ -1334,6 +1334,23 @@ async fn prewarm_content_indices(state: Arc<AppState>, repos: Vec<String>) {
 }
 
 #[cfg(feature = "desktop")]
+fn is_app_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
+    let bundled_origin = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (url.scheme() == "http"
+            && url.host_str() == Some("tauri.localhost")
+            && url.port().is_none());
+    #[cfg(debug_assertions)]
+    {
+        bundled_origin || dev_url.is_some_and(|dev| url.origin() == dev.origin())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = dev_url;
+        bundled_origin
+    }
+}
+
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Must run before the first `config::config_dir()` read (below) — see
@@ -1526,35 +1543,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
-                .on_navigation(|_webview, url| {
-                    // Allow internal navigation (tauri://, localhost in dev,
-                    // and http://tauri.localhost/ on Windows production builds)
-                    let scheme = url.scheme();
-                    if scheme == "tauri" || scheme == "asset" || scheme == "plugin" {
+                .on_navigation(|webview, url| {
+                    // Only the app's own origin may replace the top document.
+                    // Explicit external opens use the opener plugin and never
+                    // pass through this navigation callback.
+                    let dev_url = webview.app_handle().config().build.dev_url.as_ref();
+                    if is_app_navigation(url, dev_url) {
                         return true;
                     }
-                    let host = url.host_str().unwrap_or("");
-                    if host == "tauri.localhost" || host == "localhost" || host == "127.0.0.1" {
-                        return true;
-                    }
-                    // External URL — open in system browser, block webview navigation
-                    if scheme == "http" || scheme == "https" {
-                        let url_str = url.to_string();
-                        tracing::info!(url = %url_str, "Opening external URL in browser");
-                        #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(&url_str).spawn();
-                        #[cfg(target_os = "linux")]
-                        let _ = std::process::Command::new("xdg-open").arg(&url_str).spawn();
-                        #[cfg(target_os = "windows")]
-                        {
-                            let mut cmd = std::process::Command::new("cmd");
-                            cmd.args(["/c", "start", &url_str]);
-                            cli::apply_no_window(&mut cmd);
-                            let _ = cmd.spawn();
-                        }
-                        return false;
-                    }
-                    true
+                    tracing::debug!(url = %url, "Blocked implicit WebView navigation");
+                    false
                 })
                 .on_page_load(|webview, payload| {
                     // A WebContent crash leaves the WebView on about:blank; the
@@ -2796,6 +2794,39 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn navigation_guard_accepts_only_the_app_origin() {
+        let dev = tauri::Url::parse("http://127.0.0.1:1421/").unwrap();
+        for allowed in ["tauri://localhost/index.html", "http://tauri.localhost/"] {
+            assert!(
+                is_app_navigation(&tauri::Url::parse(allowed).unwrap(), Some(&dev)),
+                "{allowed}"
+            );
+        }
+        assert_eq!(
+            is_app_navigation(
+                &tauri::Url::parse("http://127.0.0.1:1421/docs").unwrap(),
+                Some(&dev)
+            ),
+            cfg!(debug_assertions)
+        );
+        for blocked in [
+            "http://127.0.0.1:1420/docs",
+            "http://localhost:1421/docs",
+            "http://localhost:9876/",
+            "https://example.com/",
+            "file:///tmp/secret",
+            "javascript:alert(1)",
+            "asset://localhost/file",
+        ] {
+            assert!(
+                !is_app_navigation(&tauri::Url::parse(blocked).unwrap(), Some(&dev)),
+                "{blocked}"
+            );
+        }
+    }
 
     #[cfg(feature = "desktop")]
     #[tokio::test]

@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **File browser opens in tree view** — New installations and preferences without a saved view mode show the directory tree by default. An explicitly saved flat list remains selected.
+- **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView.
 
 - **CircleCI CI Auto-Heal** — Failed CircleCI checks can now contribute bounded, sanitised logs when a token is configured. Token removal is explicit, and remote transports use the same protected backend path.
 

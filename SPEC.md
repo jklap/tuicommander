@@ -655,7 +655,7 @@ Some frontend-only stores persist to localStorage:
 - [x] agents.json persistence for run configurations
 
 ### Completed (P3)
-- [x] Markdown rendering (MarkdownPanel, not inline terminal)
+- [x] Markdown rendering (MarkdownPanel, not inline terminal), with in-app local links and guarded WebView navigation
 - [x] Task queue UI
 - [x] Advanced keyboard shortcuts
 
