@@ -226,7 +226,8 @@ export function useCiHeal(): void {
 			// fetch, no failed GHA job at the head yet, an agent that never went
 			// idle, or a vanished terminal) log at warn to avoid error noise;
 			// anything unexpected stays at error.
-			if (isExpectedHealFailure(message)) {
+			const expectedFailure = isExpectedHealFailure(message);
+			if (expectedFailure) {
 				appLogger.warn("ci-heal", `Auto-heal couldn't run for ${branch}: ${message}`);
 			} else {
 				appLogger.error("ci-heal", `Auto-heal failed for ${branch}`, err);
@@ -234,7 +235,11 @@ export function useCiHeal(): void {
 			// Surface WHY it couldn't proceed — without this the user sees nothing.
 			// Common case: failing checks are on external CI (CircleCI, Codacy)
 			// whose logs auto-heal can't fetch — the backend error names them.
-			toastsStore.add(t("ciHeal.failedTitle", "Auto-heal couldn't run"), `${branch}: ${message}`, "warn");
+			toastsStore.add(
+				t("ciHeal.failedTitle", "Auto-heal couldn't run"),
+				`${branch}: ${message}`,
+				expectedFailure ? "warn" : "error",
+			);
 		} finally {
 			// Clear healing flag (keep attempts)
 			const current = repositoriesStore.state.repositories[repoPath]?.workspaces[workspaceId]?.ciAutoHeal;
