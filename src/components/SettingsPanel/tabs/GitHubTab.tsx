@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { t } from "../../../i18n";
 import { appLogger } from "../../../stores/appLogger";
 import { githubStore } from "../../../stores/github";
 import type {
@@ -148,7 +149,7 @@ export const GitHubTab: Component = () => {
 
 	async function saveCircleCiToken() {
 		const token = circleCiToken().trim();
-		if (!token) return setCircleCiError("Enter a CircleCI token before saving");
+		if (!token) return setCircleCiError(t("github.circleCiTokenRequired", "Enter a CircleCI token before saving"));
 		try {
 			await rpc("circleci_set_token", { token });
 			setCircleCiToken("");
@@ -932,25 +933,29 @@ export const GitHubTab: Component = () => {
 			</Show>
 
 			<h3>CircleCI</h3>
-			<p class={s.hint}>Use a read-only CircleCI token. Stored tokens are never shown again.</p>
+			<p class={s.hint}>
+				{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
+			</p>
 			<div class={s.group}>
 				<input
 					type="password"
-					placeholder="CircleCI read-only token"
+					placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
 					value={circleCiToken()}
 					onInput={(e) => setCircleCiToken(e.currentTarget.value)}
 				/>
 				<div class={g.actions}>
 					<button class={cx(g.btn, g.btnPrimary)} onClick={saveCircleCiToken}>
-						Save token
+						{t("github.circleCiSave", "Save token")}
 					</button>
 					<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>
-						Remove token
+						{t("github.circleCiRemove", "Remove token")}
 					</button>
 				</div>
-				<Show when={circleCiError()}>{(message) => <div class={s.error}>{message()}</div>}</Show>
+				<Show when={circleCiError()}>{(message) => <div class={g.error}>{message()}</div>}</Show>
 				<div class={g.tokenSource}>
-					{circleCiStatus()?.configured ? `Configured (${circleCiStatus()?.source})` : "Not configured"}
+					{circleCiStatus()?.configured
+						? t("github.circleCiConfigured", "Configured ({source})", { source: circleCiStatus()?.source ?? "" })
+						: t("github.circleCiNotConfigured", "Not configured")}
 				</div>
 			</div>
 

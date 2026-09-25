@@ -190,6 +190,7 @@ pub(crate) fn failed_actions(detail: &serde_json::Value) -> Vec<(String, String)
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("failed step")
                 .to_string();
+            let step_name = crate::github::sanitize_ci_label(&step_name);
             step.get("actions")
                 .and_then(serde_json::Value::as_array)
                 .into_iter()
@@ -285,7 +286,9 @@ async fn fetch_job_log_from_base(
         .and_then(serde_json::Value::as_str)
         != Some(expected_sha)
     {
-        return Err("CircleCI job revision does not match the branch head".to_string());
+        return Err(
+            "CircleCI job revision does not match the expected PR or branch head".to_string(),
+        );
     }
     if actions.is_empty() {
         return Err("CircleCI job contains no failed action logs".to_string());
@@ -376,7 +379,9 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
                     if let Some(message) = chunk.get("message").and_then(serde_json::Value::as_str)
                     {
                         tail.push_str(message);
-                        if tail.len() > MAX_LOG_BODY_BYTES {
+                        // Trim in batches so short messages do not move the
+                        // entire retained window on every array element.
+                        if tail.len() > MAX_LOG_BODY_BYTES * 2 {
                             let mut cut = tail.len() - MAX_LOG_BODY_BYTES;
                             while !tail.is_char_boundary(cut) {
                                 cut += 1;
@@ -384,6 +389,13 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
                             tail.drain(..cut);
                         }
                     }
+                }
+                if tail.len() > MAX_LOG_BODY_BYTES {
+                    let mut cut = tail.len() - MAX_LOG_BODY_BYTES;
+                    while !tail.is_char_boundary(cut) {
+                        cut += 1;
+                    }
+                    tail.drain(..cut);
                 }
                 Ok(tail)
             }
@@ -439,6 +451,15 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::parse_check_url;
+
+    #[test]
+    fn strips_control_sequences_from_failed_step_names() {
+        let detail = serde_json::json!({"steps": [{
+            "name": "safe\n\u{1b}]52;c;clipboard\u{7}\u{202e}step",
+            "actions": [{"failed": true, "output_url": "https://s3.amazonaws.com/log"}]
+        }]});
+        assert_eq!(super::failed_actions(&detail)[0].0, "safestep");
+    }
 
     #[test]
     fn parses_classic_circleci_job_url_with_query() {

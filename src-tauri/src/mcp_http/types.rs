@@ -603,6 +603,8 @@ pub(super) struct CiFailureLogsQuery {
     pub branch: String,
     #[serde(rename = "checkUrl")]
     pub check_url: Option<String>,
+    #[serde(rename = "headSha")]
+    pub head_sha: Option<String>,
 }
 
 #[derive(Deserialize)]

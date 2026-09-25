@@ -89,7 +89,18 @@ const h = vi.hoisted(() => {
 				return Promise.resolve(undefined);
 		}
 	});
-	return { rpc, accounts, resolutions, repos, get circleCiStatus() { return circleCiStatus; }, set circleCiStatus(value) { circleCiStatus = value; } };
+	return {
+		rpc,
+		accounts,
+		resolutions,
+		repos,
+		get circleCiStatus() {
+			return circleCiStatus;
+		},
+		set circleCiStatus(value) {
+			circleCiStatus = value;
+		},
+	};
 });
 
 vi.mock("../../transport", () => ({ rpc: h.rpc, isTauri: () => true }));

@@ -178,7 +178,10 @@ receive it on `/events`.
 | `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `fetch_ci_failure_logs` | `repo_path, branch, check_url?` | `String` | Fetch failed-job logs for the local branch head; `check_url` selects one backend-listed external check |
+| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA |
+| `circleci_token_status` | — | `CircleCiTokenStatus` | Report token presence and source without returning the token |
+| `circleci_set_token` | `token` | `()` | Store a read-only CircleCI token |
+| `circleci_delete_token` | — | `()` | Remove the stored CircleCI token |
 | `check_github_circuit` | `path` | `CircuitState` | Check GitHub API circuit breaker state |
 
 ## Review, Changelog and Improvement Scan (`pr_review.rs`, `changelog.rs`, `improvement_scan.rs`)

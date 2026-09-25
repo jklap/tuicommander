@@ -1403,10 +1403,20 @@ describe("transport", () => {
 			expect(result.path).toBe("/github/viewer-login");
 		});
 
-	it("maps fetch_ci_failure_logs to GET with query", () => {
+		it("maps fetch_ci_failure_logs to GET with query", () => {
 			const result = mapCommandToHttp("fetch_ci_failure_logs", { repoPath: "/r", branch: "feat" });
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/repo/ci-failure-logs?repoPath=%2Fr&branch=feat");
+			expect(
+				mapCommandToHttp("fetch_ci_failure_logs", {
+					repoPath: "/r",
+					branch: "feat",
+					checkUrl: "https://circleci.com/gh/a/b/1",
+					headSha: "abc",
+				}).path,
+			).toBe(
+				"/repo/ci-failure-logs?repoPath=%2Fr&branch=feat&checkUrl=https%3A%2F%2Fcircleci.com%2Fgh%2Fa%2Fb%2F1&headSha=abc",
+			);
 		});
 
 		it("maps github_set_pr_hide_drafts to POST", () => {

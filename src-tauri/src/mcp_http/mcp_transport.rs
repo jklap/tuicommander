@@ -3276,7 +3276,14 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 None => return serde_json::json!({"error":"Action 'ci_logs' requires 'branch'"}),
             };
             to_json_or_error(
-                crate::github::fetch_ci_failure_logs_with_state(path, branch, None, state.clone()).await,
+                crate::github::fetch_ci_failure_logs_with_state(
+                    path,
+                    branch,
+                    None,
+                    None,
+                    state.clone(),
+                )
+                .await,
             )
         }
         "prs" => {

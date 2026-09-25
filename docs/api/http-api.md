@@ -949,7 +949,10 @@ router only (the headless `tuic-remote` daemon does not expose GitHub).
 
 ```
 GET  /github/viewer-login                       -> string (login)
-GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=    -> string (logs; checkUrl optional)
+GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=&headSha= -> string (logs; checkUrl and headSha optional)
+GET  /circleci/token                          -> CircleCiTokenStatus (no token value)
+POST /circleci/token       { token }           -> null (store read-only token)
+DELETE /circleci/token                         -> null
 POST /github/pr-hide-drafts   { hide }          -> null
 POST /github/auth/start                         -> DeviceCodeResponse
 POST /github/auth/poll        { deviceCode }    -> PollResult
