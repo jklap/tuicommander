@@ -404,11 +404,14 @@ pub(super) async fn github_viewer_login(State(state): State<Arc<AppState>>) -> R
     json_result(crate::github::get_viewer_login(&state).await)
 }
 
-pub(super) async fn ci_failure_logs(Query(q): Query<CiFailureLogsQuery>) -> Response {
+pub(super) async fn ci_failure_logs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CiFailureLogsQuery>,
+) -> Response {
     if let Err(e) = validate_repo_path(&q.repo_path) {
         return e.into_response();
     }
-    json_result(crate::github::fetch_ci_failure_logs(q.repo_path, q.branch).await)
+    json_result(crate::github::fetch_ci_failure_logs_with_state(q.repo_path, q.branch, state).await)
 }
 
 pub(super) async fn github_set_hide_drafts(
