@@ -10,7 +10,7 @@ The `command` action also accepts `answer_input {attempt_id,answer}` for a pause
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
 
 ## Native stories
 

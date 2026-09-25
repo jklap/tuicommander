@@ -5,6 +5,30 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowClosure {
+    #[default]
+    Human,
+    Automatic,
+}
+
+impl WorkflowClosure {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Automatic => "automatic",
+        }
+    }
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "human" => Ok(Self::Human),
+            "automatic" => Ok(Self::Automatic),
+            _ => Err("invalid workflow closure in store".into()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowDraft {
@@ -12,6 +36,7 @@ pub struct WorkflowDraft {
     pub project: String,
     pub name: String,
     pub kind: WorkflowKind,
+    pub closure: WorkflowClosure,
     pub graph: WorkflowGraph,
     pub draft_revision: i64,
     pub latest_published_revision: i64,
@@ -25,6 +50,7 @@ pub struct PublishedWorkflow {
     pub project: String,
     pub name: String,
     pub kind: WorkflowKind,
+    pub closure: WorkflowClosure,
     pub graph: WorkflowGraph,
     pub revision: i64,
 }
@@ -66,6 +92,7 @@ impl WorkflowStore {
                 project TEXT NOT NULL,
                 name TEXT NOT NULL,
                 kind TEXT NOT NULL CHECK(kind IN ('plan','story')),
+                closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic')),
                 graph_json TEXT NOT NULL,
                 draft_revision INTEGER NOT NULL,
                 latest_published_revision INTEGER NOT NULL DEFAULT 0,
@@ -80,10 +107,27 @@ impl WorkflowStore {
                 project TEXT NOT NULL,
                 name TEXT NOT NULL,
                 kind TEXT NOT NULL,
+                closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic')),
                 graph_json TEXT NOT NULL,
                 PRIMARY KEY(id,revision)
             );",
         ).map_err(|e| format!("prepare workflow schema: {e}"))?;
+        for table in ["workflow_definitions", "workflow_published"] {
+            let has_closure: bool = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM pragma_table_info('{table}') WHERE name='closure'"
+                    ),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| format!("inspect workflow closure schema: {e}"))?
+                != 0;
+            if !has_closure {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic'))"))
+                    .map_err(|e| format!("migrate workflow closure schema: {e}"))?;
+            }
+        }
         Ok(conn)
     }
 
@@ -100,6 +144,7 @@ impl WorkflowStore {
             project: project.into(),
             name: name.trim().into(),
             kind,
+            closure: WorkflowClosure::Human,
             graph,
             draft_revision: 1,
             latest_published_revision: 0,
@@ -152,6 +197,29 @@ impl WorkflowStore {
         Ok(updated)
     }
 
+    pub fn update_closure(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        closure: WorkflowClosure,
+    ) -> Result<WorkflowDraft, String> {
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("begin workflow closure edit: {e}"))?;
+        let draft = read_draft(&tx, id)?;
+        if draft.draft_revision != expected_revision {
+            return Err("stale workflow draft revision".into());
+        }
+        tx.execute("UPDATE workflow_definitions SET closure=?1,draft_revision=draft_revision+1 WHERE id=?2 AND draft_revision=?3",
+            params![closure.as_str(), id, expected_revision])
+            .map_err(|e| format!("update workflow closure: {e}"))?;
+        let updated = read_draft(&tx, id)?;
+        tx.commit()
+            .map_err(|e| format!("commit workflow closure edit: {e}"))?;
+        Ok(updated)
+    }
+
     pub fn publish(
         &self,
         id: &str,
@@ -176,10 +244,15 @@ impl WorkflowStore {
             return Err("draft revision has already been published".into());
         }
         validate_graph(&draft.graph, draft.kind)?;
+        if draft.closure == WorkflowClosure::Automatic {
+            return Err(
+                "automatic closure cannot be published until its evidence gate exists".into(),
+            );
+        }
         validate_pinned_templates(&tx, &draft)?;
         let revision = draft.latest_published_revision + 1;
-        tx.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json) VALUES (?1,?2,?3,?4,?5,?6)",
-            params![id, revision, draft.project, draft.name, kind_str(draft.kind), encode_graph(&draft.graph)?])
+        tx.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,closure) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![id, revision, draft.project, draft.name, kind_str(draft.kind), encode_graph(&draft.graph)?, draft.closure.as_str()])
             .map_err(|e| format!("publish workflow revision: {e}"))?;
         tx.execute("UPDATE workflow_definitions SET latest_published_revision=?1,last_published_draft_revision=?2 WHERE id=?3",
             params![revision, draft.draft_revision, id])
@@ -276,15 +349,16 @@ fn decode_graph(raw: String) -> Result<WorkflowGraph, String> {
 
 fn read_draft(conn: &Connection, id: &str) -> Result<WorkflowDraft, String> {
     let row = conn.query_row(
-        "SELECT id,project,name,kind,graph_json,draft_revision,latest_published_revision,builtin_key FROM workflow_definitions WHERE id=?1",
+        "SELECT id,project,name,kind,graph_json,draft_revision,latest_published_revision,builtin_key,closure FROM workflow_definitions WHERE id=?1",
         [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, Option<String>>(7)?))
+            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, Option<String>>(7)?, row.get::<_, String>(8)?))
     ).optional().map_err(|e| format!("read workflow draft: {e}"))?.ok_or("workflow draft not found")?;
     Ok(WorkflowDraft {
         id: row.0,
         project: row.1,
         name: row.2,
         kind: parse_kind(&row.3)?,
+        closure: WorkflowClosure::parse(&row.8)?,
         graph: decode_graph(row.4)?,
         draft_revision: row.5,
         latest_published_revision: row.6,
@@ -294,15 +368,16 @@ fn read_draft(conn: &Connection, id: &str) -> Result<WorkflowDraft, String> {
 
 fn read_published(conn: &Connection, id: &str, revision: i64) -> Result<PublishedWorkflow, String> {
     let row = conn.query_row(
-        "SELECT id,project,name,kind,graph_json,revision FROM workflow_published WHERE id=?1 AND revision=?2",
+        "SELECT id,project,name,kind,graph_json,revision,closure FROM workflow_published WHERE id=?1 AND revision=?2",
         params![id, revision], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?, row.get::<_, i64>(5)?))
+            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?))
     ).optional().map_err(|e| format!("read published workflow: {e}"))?.ok_or("published workflow revision not found")?;
     Ok(PublishedWorkflow {
         id: row.0,
         project: row.1,
         name: row.2,
         kind: parse_kind(&row.3)?,
+        closure: WorkflowClosure::parse(&row.6)?,
         graph: decode_graph(row.4)?,
         revision: row.5,
     })

@@ -261,7 +261,7 @@ mod tests {
     use crate::stories::{Plan, Story, StoryOrigin, StoryStatus};
     use crate::workflows::{
         AgentRole, AttemptState, Node, NodeAttempt, NodeKind, PublishedWorkflow, RunLimits,
-        RunSnapshot, RunStatus, WorkflowGraph, WorkflowKind,
+        RunSnapshot, RunStatus, WorkflowClosure, WorkflowGraph, WorkflowKind,
     };
 
     fn fixture() -> (RunSnapshot, Plan, Story, NodeAttempt, PublishedWorkflow) {
@@ -323,6 +323,7 @@ mod tests {
             project: "/project".into(),
             name: "Story delivery".into(),
             kind: WorkflowKind::Story,
+            closure: WorkflowClosure::Human,
             graph: WorkflowGraph {
                 nodes: vec![Node {
                     id: "implement".into(),
@@ -466,6 +467,7 @@ mod tests {
             project: run.project.clone(),
             name: "Plan delivery".into(),
             kind: WorkflowKind::Plan,
+            closure: WorkflowClosure::Human,
             graph: WorkflowGraph {
                 nodes: vec![Node {
                     id: "coordinate".into(),

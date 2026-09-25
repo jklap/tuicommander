@@ -10,7 +10,7 @@
 
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `workflow_definition_action` | `project, action` | tagged `WorkflowReply` | Reads, edits, validates, and publishes project-scoped workflow definitions. See [Workflow definitions](../backend/workflows.md). |
+| `workflow_definition_action` | `project, action` | tagged `WorkflowReply` | Reads, edits, validates, and publishes project-scoped workflow definitions; `update_closure` sets the draft's human or automatic policy. See [Workflow definitions](../backend/workflows.md). |
 
 ## Native stories
 
