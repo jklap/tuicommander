@@ -13049,13 +13049,37 @@ mod tests {
         state.bind_live_pty(tuic, "pty-story");
         crate::repo_watcher::start_watching(&project.path().to_string_lossy(), &state)
             .expect("watch project");
+        let created = handle_story(
+            &state,
+            &serde_json::json!({"input": {"action": "create_plan", "title": "Bound plan", "source": "plan.md"}}),
+            Some(mcp_sid),
+        );
+        assert_eq!(created["Ok"]["type"], "plan", "unexpected result {created}");
+        crate::stories::StoryStore::open()
+            .expect("store")
+            .create_plan(crate::stories::NewPlan {
+                project: "/another/project".into(),
+                title: "Foreign plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("foreign plan");
         let result = handle_story(
             &state,
             &serde_json::json!({"input": {"action": "list_plans"}}),
             Some(mcp_sid),
         );
         assert_eq!(result["Ok"]["type"], "plans", "unexpected result {result}");
-        assert_eq!(result["Ok"]["value"], serde_json::json!([]));
+        let titles: Vec<_> = result["Ok"]["value"]
+            .as_array()
+            .expect("plan list")
+            .iter()
+            .map(|plan| plan["title"].as_str().expect("title"))
+            .collect();
+        assert_eq!(
+            titles,
+            ["Bound plan"],
+            "the caller's tab project scopes the list"
+        );
     }
 
     /// Claude Code defers MCP tools behind ToolSearch: the model sees only the

@@ -532,10 +532,13 @@ pub(super) async fn close_session(
 
         let cleanup_session_id = session_id.clone();
         let cleanup_state = state.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        if let Err(error) = tokio::task::spawn_blocking(move || {
             crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
         })
-        .await;
+        .await
+        {
+            tracing::warn!(session_id = %session_id, "session cleanup task failed: {error}");
+        }
 
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
     } else {

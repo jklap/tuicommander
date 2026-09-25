@@ -30,7 +30,9 @@ impl StoryStore {
         if !path.exists() {
             return Ok(0);
         }
-        if !Self::session_has_claim(&path, session)? {
+        // The probe only proves "no claim". When it cannot answer (schema missing or
+        // unreadable), the full path creates or rejects the schema as it would on open.
+        if let Ok(false) = Self::session_has_claim(&path, session) {
             return Ok(0);
         }
         Self::open_at(&path)?.release_session_claims(session)

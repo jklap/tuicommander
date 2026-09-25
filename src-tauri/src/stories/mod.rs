@@ -336,4 +336,19 @@ mod tests {
         lock.execute_batch("ROLLBACK").expect("release write lock");
         drop(store);
     }
+
+    #[test]
+    fn closed_session_release_survives_a_store_without_its_schema() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // A file whose schema never landed (for example a crash between open and DDL):
+        // the read-only probe cannot see a `stories` table, and teardown must not fail on it.
+        rusqlite::Connection::open(dir.path().join("stories.sqlite3"))
+            .and_then(|conn| conn.execute_batch("CREATE TABLE unrelated(x INTEGER)"))
+            .expect("create schema-less store");
+        assert_eq!(
+            StoryStore::release_closed_session("unclaimed").expect("release"),
+            0
+        );
+    }
 }
