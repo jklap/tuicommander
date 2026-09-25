@@ -12963,7 +12963,7 @@ async fn progress_open_intent_close_matrix() {
         &[
             "\x1b[4;1H\x1b[2K● intent: Reviewing the streaming parser for the Progress journal\r\n  correctness guarantees (Review parser)",
         ],
-        80,
+        72,
         true,
         false,
     );
@@ -12981,22 +12981,22 @@ async fn progress_open_intent_close_matrix() {
 
     let (events, entries) = run_progress_intent_case(
         &[
-            "\x1b[4;1H\x1b[2K● intent: Reviewing the narrow terminal\r\n  and the Progress journal\r\n  together (Narrow replay)",
+            "\x1b[4;1H\x1b[2K● intent: Reviewing the narrow terminal\r\n  and the Progress journal carefully\r\n  together (Narrow replay)",
         ],
-        80,
+        40,
         true,
         false,
     );
     assert_eq!(
         events,
         [(
-            "Reviewing the narrow terminal and the Progress journal together".into(),
+            "Reviewing the narrow terminal and the Progress journal carefully together".into(),
             Some("Narrow replay".into())
         )]
     );
     assert_eq!(
         entries,
-        ["Reviewing the narrow terminal and the Progress journal together"]
+        ["Reviewing the narrow terminal and the Progress journal carefully together"]
     );
 
     let (events, entries) = run_progress_intent_case(
@@ -13176,13 +13176,33 @@ async fn progress_open_intent_close_matrix() {
 #[tokio::test(flavor = "current_thread")]
 async fn indented_prose_after_a_short_intent_is_not_a_wrap() {
     let (events, entries) = run_progress_intent_case(
-        &["\x1b[4;1H\x1b[2K• intent: Inspect the auth path\r\n  Reading src/auth.rs (the entry point)"],
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the auth path\r\n  Reading src/auth.rs (the entry point)",
+        ],
         128,
         true,
         false,
     );
     assert_eq!(events, [("Inspect the auth path".into(), None)]);
     assert_eq!(entries, ["Inspect the auth path"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn indented_prose_after_a_soft_wrapped_intent_is_not_a_hard_wrap() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the authentication path carefully\r\n  Reading src/auth.rs (the entry point)",
+        ],
+        40,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Inspect the authentication path carefully".into(), None)]
+    );
+    assert_eq!(entries, ["Inspect the authentication path carefully"]);
 }
 
 #[cfg(unix)]
@@ -13213,7 +13233,9 @@ async fn capped_main_screen_origin_closes_a_titleless_intent() {
 #[tokio::test(flavor = "current_thread")]
 async fn narrow_intent_absorbs_three_hard_wrap_rows() {
     let (events, entries) = run_progress_intent_case(
-        &["\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and\r\n  journal text (Narrow complete)"],
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and\r\n  journal text (Narrow complete)",
+        ],
         40,
         true,
         false,
@@ -13249,8 +13271,8 @@ async fn incomplete_narrow_title_is_not_discarded_by_the_next_intent() {
     assert_eq!(
         entries,
         [
-            "Review narrow rows and preserve every continuation while collecting the complete title and",
-            "Begin the next step"
+            "Begin the next step",
+            "Review narrow rows and preserve every continuation while collecting the complete title and"
         ]
     );
 }
@@ -13284,7 +13306,11 @@ async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
     assert!(events.is_empty());
     assert!(entries.is_empty());
     INTENT_CANDIDATE_GRID_READS.with(|reads| {
-        assert!(reads.get() <= 2, "{} logical grid scans for a non-intent repaint", reads.get());
+        assert!(
+            reads.get() <= 2,
+            "{} logical grid scans for a non-intent repaint",
+            reads.get()
+        );
     });
 }
 

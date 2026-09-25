@@ -52,7 +52,6 @@ fn append(
     if !progress_tracking_enabled(state, agent_type) {
         return Err(TRACKING_DISABLED.to_string());
     }
-    entry.validate()?;
     let project = resolve_owning_project(project_hint)?;
     ProgressStore::open()?.record_hand_off(
         &project.to_string_lossy(),
@@ -204,12 +203,22 @@ pub fn record_intent(
     agent_type: Option<&str>,
     pty_id: Option<&str>,
 ) -> Result<ProgressEntry, String> {
+    let redacted = crate::redaction::redact_secrets(text);
+    let journal_text = if redacted.chars().count() > MAX_TEXT_CHARS {
+        redacted
+            .chars()
+            .take(MAX_TEXT_CHARS - 1)
+            .chain(['…'])
+            .collect()
+    } else {
+        redacted
+    };
     append(
         state,
         project_hint,
         NewProgressEntry {
             kind: ProgressKind::Intent,
-            text: text.to_string(),
+            text: journal_text,
             step: None,
             agent_name,
         },

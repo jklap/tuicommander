@@ -1595,11 +1595,9 @@ lazy_static::lazy_static! {
         regex::Regex::new(r"^(.*?)\(([^)]+)\)\s*$").unwrap();
 }
 
-/// Rows an `intent:` token may be rejoined from beyond the first. A protocol
-/// intent is one present-tense sentence plus a ≤3-word title, which covers two
-/// continuation rows on a narrow pane. The cap bounds the damage if every stop
-/// condition below misses at once.
-pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
+/// Keep pathological narrow-pane output bounded while allowing long intents.
+pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 64;
+const MAX_INTENT_CANDIDATE_CHARS: usize = 2048;
 
 /// Rejoin an `intent:` token that the agent hard-wrapped across physical rows.
 ///
@@ -1610,21 +1608,20 @@ pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
 /// event exists to set.
 ///
 /// Ink-hosted agents wrap at a word boundary and indent the continuation by the
-/// bullet width, and they separate paragraphs with a blank row. That makes an
-/// **indented, non-empty, immediately following** row a continuation by
-/// construction, and it is the only shape absorbed: an un-indented row is a new
-/// logical line, a blank row ends the paragraph, and a bullet or prompt glyph
-/// opens new content. A row already carrying a closed `(title)` is a complete
-/// token and absorbs nothing.
+/// bullet width. The PTY supplies its column count so an indented row is joined
+/// only when the preceding row could not fit its first word. Blank rows,
+/// bullets, prompts, and a closed `(title)` stop the join. Direct parser calls
+/// have no terminal geometry and retain the legacy indentation check.
 ///
 /// Returns `Cow::Borrowed` when there is nothing to rejoin.
 fn dewrap_intent_continuation(text: &str) -> std::borrow::Cow<'_, str> {
-    dewrap_intent_continuation_with_rows(text).0
+    dewrap_intent_continuation_with_rows(text, None).0
 }
 
-pub(crate) fn dewrap_intent_continuation_with_rows(
-    text: &str,
-) -> (std::borrow::Cow<'_, str>, usize) {
+pub(crate) fn dewrap_intent_continuation_with_rows<'a>(
+    text: &'a str,
+    geometry: Option<(usize, &[usize])>,
+) -> (std::borrow::Cow<'a, str>, usize) {
     if !text.contains('\n') {
         return (std::borrow::Cow::Borrowed(text), 0);
     }
@@ -1642,7 +1639,24 @@ pub(crate) fn dewrap_intent_continuation_with_rows(
     }
     let mut absorbed = 0;
     for line in lines.iter().skip(anchor + 1) {
-        if absorbed == MAX_INTENT_CONTINUATION_ROWS || !is_intent_continuation_row(line) {
+        if absorbed == MAX_INTENT_CONTINUATION_ROWS
+            || merged.chars().count() >= MAX_INTENT_CANDIDATE_CHARS
+            || !is_intent_continuation_row(line)
+        {
+            break;
+        }
+        if let Some((columns, physical_widths)) = geometry {
+            let previous = lines[anchor + absorbed].trim_end();
+            let first_word = line.trim().split_whitespace().next().unwrap_or_default();
+            let previous_width = physical_widths
+                .get(absorbed)
+                .copied()
+                .unwrap_or_else(|| unicode_width::UnicodeWidthStr::width(previous));
+            if previous_width + 1 + unicode_width::UnicodeWidthStr::width(first_word) <= columns {
+                break;
+            }
+        }
+        if merged.chars().count() + 1 + line.trim().chars().count() > MAX_INTENT_CANDIDATE_CHARS {
             break;
         }
         merged.push(' ');

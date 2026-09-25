@@ -5905,6 +5905,7 @@ impl ChunkProcessor {
             let logical_prefix = vt.logical_prefix_at_cursor();
             let physical_prefix = vt.physical_prefix_at_cursor();
             let intent_candidate = agent_type.as_ref().and_then(|_| {
+                let mut visited = std::collections::HashSet::new();
                 changed.iter().rev().find_map(|row| {
                     // A later read may update only an indented continuation.
                     // Search its bounded predecessors for the unchanged anchor.
@@ -5913,6 +5914,15 @@ impl ChunkProcessor {
                         ..=row.row_index)
                         .rev()
                         .find_map(|anchor_row| {
+                            if !visited.insert(anchor_row)
+                                || screen_ref.is_some_and(|screen| {
+                                    !screen
+                                        .get(anchor_row)
+                                        .is_some_and(|text| text.contains("intent:"))
+                                })
+                            {
+                                return None;
+                            }
                             #[cfg(test)]
                             INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(reads.get() + 1));
                             let mut line = vt.logical_line_at_row(anchor_row)?;
@@ -5924,7 +5934,22 @@ impl ChunkProcessor {
                             let anchor_text = line.text.clone();
                             let mut block = anchor_text.clone();
                             let mut continuation_ends = Vec::new();
+                            let mut physical_widths = Vec::new();
+                            physical_widths.push(
+                                screen_ref
+                                    .and_then(|screen| screen.get(line.end_row))
+                                    .map_or_else(
+                                        || {
+                                            unicode_width::UnicodeWidthStr::width(
+                                                anchor_text.as_str(),
+                                            )
+                                        },
+                                        |row| unicode_width::UnicodeWidthStr::width(row.trim_end()),
+                                    ),
+                            );
                             let mut next = line.end_row + 1;
+                            // DEFERRED (2026-09-25) — Stop at the chrome cutoff once a
+                            // production-path test captures a task panel under an intent.
                             for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
                                 let Some(continuation) = vt.logical_line_at_row(next) else {
                                     break;
@@ -5935,17 +5960,40 @@ impl ChunkProcessor {
                                 block.push('\n');
                                 block.push_str(&continuation.text);
                                 continuation_ends.push(continuation.end_row);
+                                physical_widths.push(
+                                    screen_ref
+                                        .and_then(|screen| screen.get(continuation.end_row))
+                                        .map_or_else(
+                                            || {
+                                                unicode_width::UnicodeWidthStr::width(
+                                                    continuation.text.as_str(),
+                                                )
+                                            },
+                                            |row| {
+                                                unicode_width::UnicodeWidthStr::width(
+                                                    row.trim_end(),
+                                                )
+                                            },
+                                        ),
+                                );
                                 next = continuation.end_row + 1;
                             }
                             let (dewrapped, absorbed) =
-                                crate::output_parser::dewrap_intent_continuation_with_rows(&block);
-                            line.text = dewrapped.into_owned();
+                                crate::output_parser::dewrap_intent_continuation_with_rows(
+                                    &block,
+                                    Some((vt.grid_columns(), &physical_widths)),
+                                );
+                            line.text = dewrapped.lines().next().unwrap_or_default().to_string();
                             if absorbed > 0 {
                                 line.end_row = continuation_ends[absorbed - 1];
                             }
-                            (line.start_row..=line.end_row)
-                                .contains(&row.row_index)
-                                .then_some((line, anchor_text))
+                            if !(line.start_row..=line.end_row).contains(&row.row_index) {
+                                // A changed prose row can search past the anchor first.
+                                // Let the anchor's own changed row inspect it again.
+                                visited.remove(&anchor_row);
+                                return None;
+                            }
+                            Some((line, anchor_text))
                         })
                 })
             });
