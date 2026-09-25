@@ -70,6 +70,30 @@ pnpm test:coverage     # Coverage report
 
 **Coverage:** ~80%+
 
+### TypeScript mutation testing
+
+Run Stryker on the changed source files and their relevant Vitest files. Keep both
+lists narrow; a mutation run executes the selected tests for each mutant.
+
+```bash
+~/.claude/skills/adversarial-tdd/scripts/gate-lock.sh run <owner> -- \
+  node scripts/ts-mutants.mjs \
+  'src/utils/pathUtils.ts:65-65' -- \
+  'src/__tests__/utils/pathUtils.test.ts'
+```
+
+List the changed source files or line ranges before `--`, and the tests that
+exercise them after it. Read
+`reports/mutation/mutation.json` and the console verdicts. A known behavior
+change, such as inverting the `pathBasename` condition above, must be reported
+`Killed` before treating the other verdicts as evidence. The checked-in Stryker
+config copies only frontend inputs into its sandbox, leaves the worktree source
+untouched, and runs Vitest as a separate command for each mutant. Stryker 10's
+Vitest runner reports false survivors with this repo's Vitest 5, so it is not
+used. Stryker's TypeScript preprocessor is pointed at an absent file because
+this repo's TypeScript 7 does not expose the compiler API it calls; Vitest still
+transforms and runs the TypeScript tests.
+
 ## Project Structure
 
 See [Architecture Overview](../architecture/overview.md) for full directory structure.

@@ -58,6 +58,7 @@ scripts/*
 !scripts/check-frontend-cycles.mjs
 !scripts/check-make-instance-scope.sh
 !scripts/mutants.sh
+!scripts/ts-mutants.mjs
 !scripts/install-launch-shells.sh
 !scripts/test-shell-entrypoint.sh
 !scripts/hooks/

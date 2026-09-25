@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node scripts/ts-mutants.mjs --runner"
+  },
+  "coverageAnalysis": "off",
+  "ignorePatterns": [
+    "**",
+    "!src/**/*",
+    "!vitest.config.ts",
+    "!scripts/ts-mutants.mjs",
+    "!tsconfig.json",
+    "!package.json"
+  ],
+  "tsconfigFile": ".stryker-unused-tsconfig.json",
+  "checkers": [],
+  "concurrency": 1,
+  "reporters": ["clear-text", "json"]
+}
