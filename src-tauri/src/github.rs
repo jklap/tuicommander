@@ -3504,10 +3504,17 @@ fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
 /// aggregated PR check summary also carries external CI (CircleCI, Codacy, …)
 /// that auto-heal can't fetch logs for. `is_github_actions` is derived from the
 /// check's detail link, which for GHA points at `/actions/runs/…`.
+#[derive(Debug)]
 struct FailingCheck {
     name: String,
     link: String,
     is_github_actions: bool,
+}
+
+#[derive(Debug)]
+enum CiLogsOutcome {
+    Logs(String),
+    ExternalOnly(Vec<FailingCheck>),
 }
 
 /// A check's detail link points at `/actions/runs/…` only for GitHub Actions.
@@ -3540,6 +3547,32 @@ fn failing_checks_from_json(json: &serde_json::Value) -> Vec<FailingCheck> {
             }
         })
         .collect()
+}
+
+fn circleci_jobs_from_checks(
+    checks: &[FailingCheck],
+) -> Vec<(String, crate::circleci::CircleCiJob)> {
+    checks
+        .iter()
+        .filter_map(|check| {
+            crate::circleci::parse_check_url(&check.link).map(|job| (check.name.clone(), job))
+        })
+        .collect()
+}
+
+fn external_ci_names(checks: &[FailingCheck]) -> String {
+    checks
+        .iter()
+        .map(|check| check.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn circleci_token_not_configured_error(checks: &[FailingCheck]) -> String {
+    format!(
+        "CircleCI token not configured — cannot fetch logs for: {}. Add a read-only token in Settings → GitHub → CircleCI.",
+        external_ci_names(checks)
+    )
 }
 
 /// List the PR's failing checks via `gh pr checks`. Unlike `gh run list` (which
@@ -3575,7 +3608,7 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<Faili
 /// Job-level log downloads work even while sibling jobs keep the overall
 /// workflow run in progress, unlike `gh run view --log-failed`.
 /// Resolves the GitHub repo slug from the local repo path.
-fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, String> {
+fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOutcome, String> {
     let repo_path_buf = PathBuf::from(repo_path);
 
     // gh-CLI-assisted CI log fetch is only available for github.com in v1. If
@@ -3705,15 +3738,12 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
         // external CI (CircleCI, Codacy, …). Auto-heal only reads GitHub Actions
         // logs, so name the real culprits instead of the misleading "no jobs".
         let failing = list_failing_checks_cli(&gh, &repo_slug, branch);
-        let external: Vec<String> = failing
-            .iter()
-            .filter(|c| !c.is_github_actions)
-            .map(|c| c.name.clone())
-            .collect();
-        if !external.is_empty() {
-            return Err(format!(
-                "Auto-heal can only fetch GitHub Actions logs, but the failing checks run on external CI (not supported): {}. Fix them on that provider — auto-heal can't retrieve their logs.",
-                external.join(", ")
+        if failing.iter().any(|check| !check.is_github_actions) {
+            return Ok(CiLogsOutcome::ExternalOnly(
+                failing
+                    .into_iter()
+                    .filter(|check| !check.is_github_actions)
+                    .collect(),
             ));
         }
         return Err("No failed GitHub Actions job found for this branch head".to_string());
@@ -3746,7 +3776,7 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
         logs.push_str(&String::from_utf8_lossy(&logs_output.stdout));
     }
 
-    Ok(truncate_ci_logs(&logs))
+    Ok(CiLogsOutcome::Logs(truncate_ci_logs(&logs)))
 }
 
 /// Tauri command: fetch failed-job logs for the branch's latest workflow head.
@@ -3754,11 +3784,43 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
 pub(crate) async fn fetch_ci_failure_logs(
     repo_path: String,
     branch: String,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || fetch_ci_failure_logs_impl(&repo_path, &branch))
-        .await
-        .map_err(|e| format!("Task failed: {e}"))
-        .and_then(|r| r)
+    fetch_ci_failure_logs_with_state(repo_path, branch, state.inner().clone()).await
+}
+
+pub(crate) async fn fetch_ci_failure_logs_with_state(
+    repo_path: String,
+    branch: String,
+    state: Arc<AppState>,
+) -> Result<String, String> {
+    let outcome =
+        tokio::task::spawn_blocking(move || fetch_ci_failure_logs_impl(&repo_path, &branch))
+            .await
+            .map_err(|e| format!("Task failed: {e}"))
+            .and_then(|result| result)?;
+    match outcome {
+        CiLogsOutcome::Logs(logs) => Ok(logs),
+        CiLogsOutcome::ExternalOnly(checks) => {
+            let jobs = circleci_jobs_from_checks(&checks);
+            if jobs.is_empty() {
+                return Err(format!(
+                    "Auto-heal can only fetch GitHub Actions logs, but the failing checks run on external CI (not supported): {}. Fix them on that provider — auto-heal can't retrieve their logs.",
+                    external_ci_names(&checks)
+                ));
+            }
+            let (token, _) = crate::circleci::resolve_token();
+            let token = token.ok_or_else(|| circleci_token_not_configured_error(&checks))?;
+            let mut logs = String::new();
+            for (name, job) in jobs {
+                logs.push_str(&format!("===== FAILED CHECK: {name} =====\n"));
+                logs.push_str(
+                    &crate::circleci::fetch_job_log(&state.http_client, &job, &token).await?,
+                );
+            }
+            Ok(truncate_ci_logs(&logs))
+        }
+    }
 }
 
 /// Fetch PR diff via GitHub REST API (Tauri command).
@@ -3816,6 +3878,20 @@ mod tests {
         assert_eq!(failing[0].name, "ci/circleci: test");
         assert_eq!(failing[0].link, "https://circleci.com/gh/acme/widget/42");
         assert!(!failing[0].is_github_actions);
+    }
+
+    #[test]
+    fn circleci_external_checks_require_a_configured_token() {
+        let checks = vec![FailingCheck {
+            name: "ci/circleci: test".into(),
+            link: "https://circleci.com/gh/acme/widget/42".into(),
+            is_github_actions: false,
+        }];
+
+        assert_eq!(circleci_jobs_from_checks(&checks).len(), 1);
+        assert!(
+            circleci_token_not_configured_error(&checks).contains("CircleCI token not configured")
+        );
     }
 
     // --- hex_to_rgba tests ---
