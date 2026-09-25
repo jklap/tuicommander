@@ -54,6 +54,22 @@ fn pty_identity_defaults_claude_to_native_scrollback() {
         cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
         Some(std::ffi::OsStr::new("0"))
     );
+
+    let mut ipc = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut ipc, "screen-ipc", None);
+    let mut http = CommandBuilder::new("claude");
+    let mut env = std::collections::HashMap::new();
+    env.insert("TUIC_ALLOW_ALT_SCREEN".to_string(), "1".to_string());
+    apply_agent_screen_env(&mut ipc, &env);
+    apply_agent_screen_env(&mut http, &env);
+    assert_eq!(
+        ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        http.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
+    );
+    assert_eq!(
+        ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("0"))
+    );
 }
 
 #[cfg(unix)]

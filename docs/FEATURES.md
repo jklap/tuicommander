@@ -656,7 +656,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 | pi | `pi` | `pi --continue` |
 | Git (background) | `git` | — |
 
-TUICommander defaults supported agents to native terminal scrollback: every PTY exports Claude's environment setting; Codex and Grok get `--no-alt-screen`, and OpenCode gets `--mini`, only when the installed CLI advertises the option. The setting covers menu, IPC/HTTP/MCP, worktree, and resume launches. `TUIC_ALLOW_ALT_SCREEN=1` in a Codex, Grok or OpenCode run config is an explicit override; an unexpected alternate-screen entry emits one warning per session.
+TUICommander defaults supported agents to native terminal scrollback: every PTY exports Claude's environment setting; Codex and Grok get `--no-alt-screen`, and OpenCode gets `--mini`, only when the installed CLI advertises the option. One Rust decision covers menu, IPC/HTTP/MCP, worktree, and resume launches. `TUIC_ALLOW_ALT_SCREEN=1` overrides the flag choice and also opts Claude out on structured IPC/HTTP/MCP spawns; an unexpected alternate-screen entry emits one warning per session.
 
 ### 6.1.1 Session-Aware Resume
 When an agent is detected running in a terminal, TUICommander automatically discovers its session ID from the filesystem and stores it per-terminal (`agentSessionId`). On restore, this enables session-specific resume instead of generic fallback commands.

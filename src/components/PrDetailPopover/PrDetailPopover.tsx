@@ -14,7 +14,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
-import { buildAgentLaunchCommand, supportsAgentNoAltScreen } from "../../utils/agentSession";
+import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isAlreadyMerged, mergeWithFallback } from "../../utils/prMerge";
 import { prContextVariables } from "../../utils/promptContext";
@@ -409,17 +409,12 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 												onClick={async () => {
 													const launch = reviewCommand();
 													if (launch && props.onReview) {
-														const supported = await supportsAgentNoAltScreen(
-															launch.agentType,
-															launch.command,
-															props.repoPath,
-														);
-														const command = buildAgentLaunchCommand(
+														const command = await prepareAgentLaunchCommand(
 															launch.command,
 															null,
 															launch.agentType,
-															supported,
 															launch.allowAltScreen,
+															props.repoPath,
 														);
 														props.onReview(props.repoPath, props.branch, command);
 														props.onClose();

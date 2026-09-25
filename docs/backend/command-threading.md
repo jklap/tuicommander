@@ -127,6 +127,11 @@ pool. Its HTTP route now awaits the command directly, so both transports share
 the placement. The startup CLI version probes and atomic replacement also run in
 a detached blocking task instead of inside Tauri `setup`.
 
+Agent binary detection and terminal launch-argument preparation also use async
+commands that offload CLI lookup, version and bounded `--help` probes to the
+blocking pool. Their HTTP counterparts await the same commands, leaving Tokio
+workers free while a configured CLI takes time to answer.
+
 ### Known gaps, with reasons
 
 | Command | Why it is still where it is |

@@ -1761,6 +1761,20 @@ describe("transport", () => {
 		});
 
 		it("maps agent detection and spawn aliases to HTTP", () => {
+			const launchArgs = mapCommandToHttp("prepare_agent_launch_args", {
+				agentType: "codex",
+				binaryPath: "/opt/bin/codex",
+				args: ["resume"],
+				allowAltScreen: true,
+			});
+			expect(launchArgs.method).toBe("POST");
+			expect(launchArgs.path).toBe("/agents/launch-args");
+			expect(launchArgs.body).toEqual({
+				agentType: "codex",
+				binaryPath: "/opt/bin/codex",
+				args: ["resume"],
+				allowAltScreen: true,
+			});
 			const detectClaude = mapCommandToHttp("detect_claude_binary", {});
 			expect(detectClaude.method).toBe("GET");
 			expect(detectClaude.path).toBe("/agents/detect?binary=claude");

@@ -1872,6 +1872,7 @@ pub fn run() {
             agent::open_in_custom,
             agent::detect_claude_binary,
             agent::detect_agent_binary,
+            agent_hook_launch::prepare_agent_launch_args,
             agent::detect_all_agent_binaries,
             agent::spawn_agent,
             agent_session::discover_agent_session,

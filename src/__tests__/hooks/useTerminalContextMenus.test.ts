@@ -80,7 +80,7 @@ describe("useTerminalContextMenus", () => {
 		mockPaneLayout.isSplit.mockReset().mockReturnValue(false);
 		mockPaneLayout.canSplit.mockReset().mockReturnValue(true);
 		mockWriteClipboard.mockClear();
-		mockRpc.mockReset();
+		mockRpc.mockReset().mockImplementation(async (_command: string, args: { args?: string[] }) => args?.args ?? []);
 	});
 
 	it("builds core terminal actions and disables splitting without an active terminal", () => {
@@ -147,7 +147,7 @@ describe("useTerminalContextMenus", () => {
 	});
 
 	it.each(["codex", "grok"])("passes native scrollback to %s from the active agent menu", async (agentType) => {
-		mockRpc.mockResolvedValue({ path: `/opt/bin/${agentType}`, supports_no_alt_screen: true });
+		mockRpc.mockResolvedValueOnce(["--no-alt-screen"]);
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
 		mockTerminals.getActive.mockReturnValue({

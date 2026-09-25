@@ -20,11 +20,11 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 
 ### Native scrollback on launch
 
-TUICommander keeps agent conversations in the terminal's native scrollback on new launches and resumes. Every TUICommander PTY sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`, so Claude Code inherits it even when started manually inside a tab. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. The CLI capability is checked once per binary, so older versions still start without an unsupported option. Existing flags are not duplicated.
+TUICommander keeps agent conversations in the terminal's native scrollback on new launches and resumes. Every TUICommander PTY sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`, so Claude Code inherits it even when started manually inside a tab. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. TUICommander checks the configured executable with a two-second deadline, shares concurrent checks, and retries inconclusive checks. Older versions still start without an unsupported option. Existing flags are not duplicated. The same Rust decision builds commands typed into an existing terminal and agents started through IPC, HTTP or MCP.
 
 Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`), Cursor enables fullscreen only when requested, and pi defaults to regular TUI mode. Other agents without a documented alternate-screen control keep their own defaults. If an agent enters the alternate screen despite these defaults, TUICommander records one warning for that session with the agent name and detected version.
 
-To deliberately allow alternate screen for a Codex, Grok or OpenCode run config, set `TUIC_ALLOW_ALT_SCREEN=1` in its environment flags. HTTP agent spawns accept the same flag in their `env` map; it also opts Claude Code out on that route. For Claude Code launched inside a terminal, set `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0` in that process's environment. These choices do not change your global agent configuration.
+To deliberately allow alternate screen for a Codex, Grok or OpenCode run config, set `TUIC_ALLOW_ALT_SCREEN=1` in its environment flags. IPC, HTTP and MCP agent spawns apply this choice to Claude Code as well; HTTP accepts it in the spawn request's `env` map. For Claude Code launched into an existing terminal, set `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0` in the command's environment. These choices do not change your global agent configuration.
 
 ## Agent Detection
 

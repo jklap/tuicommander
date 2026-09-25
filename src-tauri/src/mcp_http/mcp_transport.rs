@@ -3753,7 +3753,7 @@ fn handle_agent_with_parent_cwd(
             let results: Vec<serde_json::Value> = crate::agent::KNOWN_AGENT_BINARIES
                 .iter()
                 .filter_map(|name| {
-                    let det = crate::agent::detect_agent_binary(name.to_string());
+                    let det = crate::agent::detect_agent_binary_sync(name.to_string());
                     det.path
                         .map(|path| serde_json::json!({"name": name, "path": path, "version": det.version}))
                 })
@@ -3794,7 +3794,7 @@ fn handle_agent_with_parent_cwd(
                 let rc = resolve_run_config(agent_type_raw, &agents_cfg);
                 let bin_raw = rc.command.as_deref().unwrap_or(&rc.agent_type);
                 let bin = crate::cli::expand_tilde(bin_raw);
-                let detection = crate::agent::detect_agent_binary(bin.clone());
+                let detection = crate::agent::detect_agent_binary_sync(bin.clone());
                 match detection.path {
                     Some(p) => (p, Some(rc)),
                     None => {
@@ -3869,14 +3869,9 @@ fn handle_agent_with_parent_cwd(
                     .get("TUIC_ALLOW_ALT_SCREEN")
                     .is_some_and(|value| value == "1")
             });
-            if effective_agent_type.as_deref() == Some("claude")
-                && !allow_alt_screen
-                && !resolved
-                    .as_ref()
-                    .is_some_and(|rc| rc.env.contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"))
-            {
-                cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
-            }
+            let empty_env = std::collections::HashMap::new();
+            let screen_env = resolved.as_ref().map(|rc| &rc.env).unwrap_or(&empty_env);
+            crate::pty::apply_agent_screen_env(&mut cmd, screen_env);
 
             // Inject peer env vars so spawned agents know their identity and parent.
             cmd.env("TUIC_SESSION", &session_id);

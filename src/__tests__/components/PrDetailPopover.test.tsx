@@ -63,8 +63,8 @@ describe("PrDetailPopover", () => {
 		vi.spyOn(agentConfigsStore, "getRunConfigs").mockReturnValue([
 			{ name: "Review", command: "codex", args: [], env },
 		] as never);
-		mockInvoke.mockImplementation(async (command: string) =>
-			command === "detect_agent_binary" ? { path: "/opt/bin/codex", supports_no_alt_screen: true } : null,
+		mockInvoke.mockImplementation(async (command: string, args: { allowAltScreen?: boolean }) =>
+			command === "prepare_agent_launch_args" ? (args.allowAltScreen ? [] : ["--no-alt-screen"]) : null,
 		);
 		const onReview = vi.fn();
 		const { getByText } = render(() => <PrDetailPopover {...defaultProps} onReview={onReview} />);

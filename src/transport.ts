@@ -1659,6 +1659,18 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	detect_agent_binary: {
 		map: (_args, p) => ({ method: "GET", path: `/agents/detect?binary=${p("binary")}` }),
 	},
+	prepare_agent_launch_args: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agents/launch-args",
+			body: {
+				agentType: args.agentType,
+				binaryPath: args.binaryPath,
+				args: args.args,
+				allowAltScreen: args.allowAltScreen,
+			},
+		}),
+	},
 	detect_claude_binary: {
 		map: () => ({
 			method: "GET",

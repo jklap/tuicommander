@@ -93,7 +93,7 @@ fn looks_like_contract_failure(message: &str) -> bool {
 }
 
 async fn fetch_usage() -> Result<GrokUsageApiResponse, String> {
-    let detection = crate::agent::detect_agent_binary("grok".to_string());
+    let detection = crate::agent::detect_agent_binary("grok".to_string()).await;
     let binary = detection
         .path
         .ok_or_else(|| "Grok CLI not found".to_string())?;

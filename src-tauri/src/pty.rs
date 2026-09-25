@@ -115,6 +115,29 @@ pub(crate) fn bind_pty_identity(
     state.bind_live_pty(identity, session_id);
 }
 
+/// Apply the same Claude screen choice after PTY identity defaults on IPC,
+/// HTTP and MCP paths. Caller environment is applied afterward, so an explicit
+/// Claude setting retains precedence over the TUIC opt-out.
+pub(crate) fn apply_agent_screen_env(
+    cmd: &mut CommandBuilder,
+    env: &std::collections::HashMap<String, String>,
+) {
+    let mode = env
+        .get("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if env
+                .get("TUIC_ALLOW_ALT_SCREEN")
+                .is_some_and(|value| value == "1")
+            {
+                "0"
+            } else {
+                "1"
+            }
+        });
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", mode);
+}
+
 fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -5763,7 +5786,7 @@ impl ChunkProcessor {
             let agent = agent_type.unwrap_or_else(|| "unknown".to_string());
             let session_id = session_id.to_string();
             std::thread::spawn(move || {
-                let version = crate::agent::detect_agent_binary(agent.clone())
+                let version = crate::agent::detect_agent_binary_sync(agent.clone())
                     .version
                     .unwrap_or_else(|| "unknown".to_string());
                 tracing::warn!(
