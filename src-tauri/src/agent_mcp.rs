@@ -347,7 +347,7 @@ const BRIDGE_NAME: &str = "tuic-bridge";
 /// it as `tuic-bridge`, which is the name this looks for.
 fn bridge_beside(dir: &std::path::Path) -> Option<PathBuf> {
     let candidate = bridge_path_in(dir);
-    candidate.exists().then_some(candidate)
+    candidate.is_file().then_some(candidate)
 }
 
 /// Where the bridge would sit in `dir`, whether or not anything is there.
@@ -408,9 +408,19 @@ pub(crate) fn locate_bridge_binary() -> Option<PathBuf> {
 }
 
 fn detect_bridge_binary() -> String {
-    locate_bridge_binary().map_or_else(
-        // Last resort: bare name, hope it's on PATH
-        || BRIDGE_NAME.to_string(),
+    bridge_command_from_location(locate_bridge_binary(), &bridge_search_paths())
+}
+
+fn bridge_command_from_location(located: Option<PathBuf>, searched_paths: &[PathBuf]) -> String {
+    located.map_or_else(
+        || {
+            tracing::warn!(
+                source = "mcp",
+                ?searched_paths,
+                "Bridge binary not found; a new MCP entry will use the bare tuic-bridge name"
+            );
+            BRIDGE_NAME.to_string()
+        },
         |path| path.to_string_lossy().to_string(),
     )
 }
@@ -995,6 +1005,11 @@ fn auto_install_allowed(spec: &McpConfigSpec, agent_label: &str) -> bool {
 
 /// Write the bridge entry for one target, dispatching on its config format.
 fn ensure_spec_entry(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str) -> bool {
+    // A fallback command must never replace an existing integration, even when
+    // that integration needs a later repair. Only a located bridge can repair it.
+    if bridge_path == BRIDGE_NAME && has_bridge_entry(spec) {
+        return false;
+    }
     match spec.format {
         McpFormat::Toml { forward_session } => {
             ensure_toml_mcp_entry(&spec.config_path, forward_session, bridge_path, agent_label)
@@ -1023,17 +1038,36 @@ fn ensure_spec_entry(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str)
 /// home directory with configs for tools the user never had. Settings > Agents
 /// still installs on demand — that is an explicit request, not a guess.
 pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
-    let bridge_path = detect_bridge_binary();
+    let bridge = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(bridge_beside));
+    ensure_mcp_configs_for(
+        disabled,
+        bridge.as_deref(),
+        SUPPORTED_AGENTS
+            .iter()
+            .filter_map(|agent| get_mcp_config_spec(agent).map(|spec| (*agent, spec))),
+    );
+}
+
+fn ensure_mcp_configs_for<'a>(
+    disabled: &[String],
+    bridge: Option<&std::path::Path>,
+    agents: impl IntoIterator<Item = (&'a str, McpConfigSpec)>,
+) {
+    let Some(bridge) = bridge else {
+        tracing::warn!(source = "mcp", searched_paths = ?bridge_search_paths(),
+            "Skipping agent MCP config updates: no bridge beside this executable");
+        return;
+    };
+    let bridge_path = bridge.to_string_lossy();
     tracing::info!(source = "mcp", bridge = %bridge_path, "Ensuring bridge configs");
 
-    for agent in SUPPORTED_AGENTS {
+    for (agent, spec) in agents {
         if disabled.iter().any(|d| d == agent) {
             tracing::debug!(source = "mcp", agent, "Skipping (disabled by user)");
             continue;
         }
-        let Some(spec) = get_mcp_config_spec(agent) else {
-            continue;
-        };
         if !auto_install_allowed(&spec, agent) {
             continue;
         }
@@ -1284,6 +1318,46 @@ mod tests {
         std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
     }
 
+    #[test]
+    fn missing_bridge_warning_names_the_searched_paths() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let searched = [dir.path().join("tuic-bridge"), PathBuf::from(BRIDGE_NAME)];
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(output.clone()))
+            .with_ansi(false)
+            .finish();
+        let command = tracing::subscriber::with_default(subscriber, || {
+            bridge_command_from_location(None, &searched)
+        });
+        assert_eq!(command, BRIDGE_NAME);
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("WARN"), "{log}");
+        for path in searched {
+            assert!(log.contains(&path.to_string_lossy().to_string()), "{log}");
+        }
+    }
+
     /// The daemon is unpacked into a directory of its own, so the bridge it
     /// configures agents to run has to be found beside it. The release publishes
     /// `tuic-bridge` for every target that publishes `tuic-remote` (#793-23a5);
@@ -1302,6 +1376,12 @@ mod tests {
             BRIDGE_NAME.to_string()
         };
         let placed = dir.path().join(&name);
+        std::fs::create_dir(&placed).unwrap();
+        assert!(
+            bridge_beside(dir.path()).is_none(),
+            "a directory is not a bridge"
+        );
+        std::fs::remove_dir(&placed).unwrap();
         std::fs::write(&placed, b"").unwrap();
 
         assert_eq!(bridge_beside(dir.path()), Some(placed));
@@ -2049,6 +2129,223 @@ mod tests {
             requires_existing_config: false,
             shared_settings_file: false,
         }
+    }
+
+    fn command_at_spec(spec: &McpConfigSpec) -> String {
+        let path = &spec.config_path;
+        match spec.format {
+            McpFormat::Toml { .. } => {
+                read_toml_file(path).unwrap()["mcp_servers"][TUIC_MCP_KEY]["command"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+            McpFormat::Yaml => read_yaml_file(path).unwrap()["extensions"][TUIC_MCP_KEY]["cmd"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            McpFormat::OpenCode => read_json_file(path).unwrap()["mcp"][TUIC_MCP_KEY]["command"][0]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            McpFormat::Json => {
+                read_json_file(path).unwrap()[spec.key_path[0]][TUIC_MCP_KEY]["command"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+        }
+    }
+
+    #[test]
+    fn missing_bridge_does_not_replace_a_working_absolute_command() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let working_bridge = std::env::current_exe().unwrap();
+        let working_command = working_bridge.to_str().unwrap();
+
+        for (label, format, key_path, extension) in [
+            ("claude", McpFormat::Json, vec!["mcpServers"], "json"),
+            ("vscode", McpFormat::Json, vec!["servers"], "json"),
+            ("opencode", McpFormat::OpenCode, vec!["mcp"], "json"),
+            (
+                "codex",
+                McpFormat::Toml {
+                    forward_session: true,
+                },
+                vec![],
+                "toml",
+            ),
+            (
+                "grok",
+                McpFormat::Toml {
+                    forward_session: false,
+                },
+                vec![],
+                "toml",
+            ),
+            ("goose", McpFormat::Yaml, vec!["extensions"], "yaml"),
+        ] {
+            let path = dir.path().join(format!("{label}.{extension}"));
+            let spec = McpConfigSpec {
+                key_path,
+                format,
+                ..spec_at(path.clone())
+            };
+            assert!(ensure_spec_entry(&spec, working_command, label));
+            let before = std::fs::read(&path).unwrap();
+            assert!(
+                !ensure_spec_entry(&spec, BRIDGE_NAME, label),
+                "{label} must retain its working absolute command"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{label} changed");
+
+            let missing = dir.path().join(format!("new-{label}.{extension}"));
+            let new_spec = McpConfigSpec {
+                config_path: missing.clone(),
+                key_path: spec.key_path.clone(),
+                format,
+                ..spec_at(missing.clone())
+            };
+            assert!(ensure_spec_entry(&new_spec, BRIDGE_NAME, label));
+            assert_eq!(command_at_spec(&new_spec), BRIDGE_NAME, "{label}");
+        }
+    }
+
+    #[test]
+    fn startup_without_an_adjacent_bridge_never_writes_agent_configs() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let stale_bridge = dir.path().join("moved-bridge");
+        let real_bridge = dir.path().join("tuic-bridge");
+        std::fs::write(&real_bridge, b"bridge").unwrap();
+        let unrelated_exe_dir = dir.path().join("test-target");
+        std::fs::create_dir(&unrelated_exe_dir).unwrap();
+
+        for (label, format, key_path, extension) in [
+            ("claude", McpFormat::Json, vec!["mcpServers"], "json"),
+            ("vscode", McpFormat::Json, vec!["servers"], "json"),
+            ("opencode", McpFormat::OpenCode, vec!["mcp"], "json"),
+            (
+                "codex",
+                McpFormat::Toml {
+                    forward_session: true,
+                },
+                vec![],
+                "toml",
+            ),
+            (
+                "grok",
+                McpFormat::Toml {
+                    forward_session: false,
+                },
+                vec![],
+                "toml",
+            ),
+            ("goose", McpFormat::Yaml, vec!["extensions"], "yaml"),
+        ] {
+            let path = dir.path().join(format!("startup-{label}.{extension}"));
+            let spec = McpConfigSpec {
+                key_path,
+                format,
+                ..spec_at(path.clone())
+            };
+            assert!(ensure_spec_entry(
+                &spec,
+                stale_bridge.to_str().unwrap(),
+                label
+            ));
+            let before = std::fs::read(&path).unwrap();
+            ensure_mcp_configs_for(
+                &[],
+                bridge_beside(&unrelated_exe_dir).as_deref(),
+                std::iter::once((
+                    label,
+                    McpConfigSpec {
+                        key_path: spec.key_path.clone(),
+                        format,
+                        ..spec_at(path.clone())
+                    },
+                )),
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{label} changed");
+
+            let absent = dir.path().join(format!("absent-{label}.{extension}"));
+            ensure_mcp_configs_for(
+                &[],
+                bridge_beside(&unrelated_exe_dir).as_deref(),
+                std::iter::once((
+                    label,
+                    McpConfigSpec {
+                        key_path: spec.key_path.clone(),
+                        format,
+                        ..spec_at(absent.clone())
+                    },
+                )),
+            );
+            assert!(!absent.exists(), "{label} was installed without a bridge");
+
+            ensure_mcp_configs_for(
+                &[],
+                Some(&real_bridge),
+                std::iter::once((
+                    label,
+                    McpConfigSpec {
+                        key_path: spec.key_path.clone(),
+                        format,
+                        ..spec_at(path.clone())
+                    },
+                )),
+            );
+            assert_ne!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "{label} was not repaired"
+            );
+            assert_eq!(
+                command_at_spec(&spec),
+                real_bridge.to_str().unwrap(),
+                "{label}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_entry_point_cannot_edit_the_user_home_without_a_sidecar() {
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join(".claude.json");
+        let original = r#"{"mcpServers":{"tuicommander":{"type":"stdio","command":"/working/bridge","args":[],"env":{}}}}"#;
+        std::fs::write(&config, original).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        assert!(bridge_beside(exe.parent().unwrap()).is_none());
+
+        let output = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("agent_mcp::tests::startup_entry_point_child")
+            .env("HOME", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+            .env("TUIC_MCP_TEST_HOME", dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(config).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_entry_point_child() {
+        let Some(expected_home) = std::env::var_os("TUIC_MCP_TEST_HOME") else {
+            return;
+        };
+        // This assertion precedes the production entry point: a HOME override
+        // failure must never turn this test into a write of real user configs.
+        assert_eq!(home(), PathBuf::from(expected_home));
+        ensure_mcp_configs(&[]);
     }
 
     #[test]
