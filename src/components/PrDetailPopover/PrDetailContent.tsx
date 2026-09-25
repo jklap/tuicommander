@@ -115,7 +115,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const [circleCiLogs, setCircleCiLogs] = createSignal<
 		Record<string, { text?: string; error?: string; loading?: boolean }>
 	>({});
-	// DEFERRED: check details expose a URL but no CI provider. This predicate only
+	// DEFERRED (2026-09-25) — check details expose a URL but no CI provider. This predicate only
 	// controls whether to show the Log button; the backend verifies the selected
 	// check URL against the PR's head before fetching logs. Use a provider field
 	// here when the check-details protocol supplies one.
