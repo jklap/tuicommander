@@ -277,10 +277,13 @@ Creates a git worktree and a PTY session in one call.
 POST /sessions/agent
 Content-Type: application/json
 
-{ "pty_config": { ... }, "agent_config": { ... } }
+{ "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"], "env": { "TUIC_ALLOW_ALT_SCREEN": "1" } }
 ```
 
-Spawns an AI agent (Claude, etc.) in a PTY session.
+Spawns an AI agent in a PTY session. The request is flat; browser transport merges
+the desktop `pty_config` and `agent_config` objects. The optional `env` map is
+applied to the agent process. By default, supported interactive CLIs use native
+scrollback; `TUIC_ALLOW_ALT_SCREEN=1` opts out for this spawn.
 
 ### Write to Session
 
