@@ -24,6 +24,7 @@ type CredentialDigest = [u8; 32];
 /// always runs after it is released.
 pub(crate) struct AuthRateLimit {
     state: Mutex<AuthRateLimitState>,
+    verifying_changed: tokio::sync::Notify,
 }
 
 struct AuthRateLimitState {
@@ -44,6 +45,38 @@ impl AuthRateLimit {
                 failed: VecDeque::new(),
                 verifying: HashSet::new(),
             }),
+            verifying_changed: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+/// Owns one credential's in-progress verification slot. A request can be
+/// cancelled while bcrypt runs, so dropping this guard must release waiters.
+struct AuthAttemptGuard {
+    limit: Arc<AuthRateLimit>,
+    credential: CredentialDigest,
+    finished: bool,
+}
+
+impl AuthAttemptGuard {
+    fn new(limit: Arc<AuthRateLimit>, credential: CredentialDigest) -> Self {
+        Self {
+            limit,
+            credential,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, failed: bool) {
+        finish_auth_attempt(&self.limit, self.credential, failed);
+        self.finished = true;
+    }
+}
+
+impl Drop for AuthAttemptGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            release_verifying_slot(&self.limit, self.credential);
         }
     }
 }
@@ -343,6 +376,9 @@ pub async fn basic_auth_middleware(
         .clone();
 
     let result = loop {
+        let notified = limit.verifying_changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         let admission = admit_auth_attempt(
             &limit,
             credential_digest,
@@ -353,10 +389,11 @@ pub async fn basic_auth_middleware(
         match admission {
             AuthAdmission::CachedFailure => break AuthResult::Invalid,
             AuthAdmission::Limited(retry_after) => return rate_limited_response(retry_after),
-            // A duplicate is already in bcrypt. Yield briefly instead of
-            // blocking a Tokio worker; the result is then served from cache.
-            AuthAdmission::Wait => tokio::time::sleep(Duration::from_millis(1)).await,
+            // A duplicate is already in bcrypt. Wait for the owner to finish
+            // instead of polling the admission mutex.
+            AuthAdmission::Wait => notified.await,
             AuthAdmission::Verify => {
+                let attempt = AuthAttemptGuard::new(Arc::clone(&limit), credential_digest);
                 // bcrypt::verify is CPU-intensive (~100ms). Run it on a blocking
                 // thread to avoid stalling the single-threaded tokio runtime.
                 let result = tokio::task::spawn_blocking({
@@ -370,11 +407,7 @@ pub async fn basic_auth_middleware(
                     tracing::error!(source = "auth", error = %e, "spawn_blocking for bcrypt panicked or was cancelled");
                     AuthResult::Invalid
                 });
-                finish_auth_attempt(
-                    &limit,
-                    credential_digest,
-                    matches!(result, AuthResult::Invalid),
-                );
+                attempt.finish(matches!(result, AuthResult::Invalid));
                 break result;
             }
         }
@@ -462,6 +495,13 @@ fn finish_auth_attempt(limit: &AuthRateLimit, credential: CredentialDigest, fail
         }
         state.failed.push_back(credential);
     }
+    drop(state);
+    limit.verifying_changed.notify_waiters();
+}
+
+fn release_verifying_slot(limit: &AuthRateLimit, credential: CredentialDigest) {
+    limit.state.lock().verifying.remove(&credential);
+    limit.verifying_changed.notify_waiters();
 }
 
 fn unauthorized_response(message: &'static str) -> Response {
@@ -777,6 +817,35 @@ mod tests {
         assert!(matches!(
             admit_auth_attempt(&limit, correct, config, 2, 300),
             AuthAdmission::Limited(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_a_verifying_request_releases_its_slot() {
+        let limit = Arc::new(AuthRateLimit::new());
+        let config = auth_config_digest("boss", "hash");
+        let credential = failed_credential_digest(Some("Basic stale"), &config);
+        assert!(matches!(
+            admit_auth_attempt(&limit, credential, config, 2, 300),
+            AuthAdmission::Verify
+        ));
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let request = tokio::spawn({
+            let limit = Arc::clone(&limit);
+            async move {
+                let _slot = AuthAttemptGuard::new(limit, credential);
+                entered_tx.send(()).unwrap();
+                std::future::pending::<()>().await;
+            }
+        });
+        entered_rx.await.unwrap();
+        request.abort();
+        let _ = request.await;
+
+        assert!(matches!(
+            admit_auth_attempt(&limit, credential, config, 2, 300),
+            AuthAdmission::Verify
         ));
     }
 
