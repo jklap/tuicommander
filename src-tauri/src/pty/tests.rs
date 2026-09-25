@@ -8837,6 +8837,36 @@ fn custom_pty_env_skips_invalid_keys_but_applies_valid_ones() {
     );
 }
 
+/// `spawn_session_for_agent` is the shared spawn function behind the
+/// `ai_terminal_drive_agent` MCP tool's `spawn_session` action, scheduled cron
+/// jobs (`ai_agent/scheduler.rs`), and PR-review watcher sessions
+/// (`ai_agent/watcher.rs`) — all three hand the returned session id straight to
+/// something that can write into it immediately, the identical
+/// p10k-wizard-hijack race shape `tmux_routes::materialize`'s gate closes for
+/// the tmux shim. No test anywhere previously called this function against a
+/// real PTY at all, so nothing would have caught a regression here. Proves the
+/// gate is actually wired in, not just that `wait_for_shell_idle` works in
+/// isolation (already covered by `mcp_transport.rs`'s own tests).
+#[tokio::test]
+async fn spawn_session_for_agent_reaches_idle_before_returning() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let session_id = super::spawn_session_for_agent(&state, None, None)
+        .await
+        .expect("spawn_session_for_agent must succeed");
+
+    let shell_state = state
+        .session_maps
+        .shell_states
+        .get(&session_id)
+        .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        shell_state,
+        Some(crate::pty::SHELL_IDLE),
+        "spawn_session_for_agent must not return until the spawned shell reaches \
+         SHELL_IDLE (or the gate times out, which a real quick shell here should not hit)"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();

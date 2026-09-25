@@ -2388,18 +2388,32 @@ where
     woke || predicate(state)
 }
 
+/// Shared bound for every shell-readiness gate built on [`wait_for_shell_idle`]
+/// — one constant, not a fresh magic number per call site (a code review
+/// predicted exactly this: "a future second readiness-gate call site would
+/// likely duplicate yet another ad hoc constant instead of reusing one," the
+/// moment a second call site — `pty::spawn_session_for_agent` — actually
+/// showed up). Long enough for a normal `zsh -l`/`bash -l` startup (including
+/// Oh My Zsh/Powerlevel10k, which motivated this gate) under real spawn-burst
+/// contention, short enough that a shell with no detectable prompt signal
+/// doesn't stall the caller for long.
+pub(crate) const SHELL_READINESS_TIMEOUT_MS: u64 = 5_000;
+
 /// Block until `session_id`'s shell reaches `SHELL_IDLE`, or `timeout_ms`
 /// elapses — the same event-driven mechanism `session action=wait until=idle`
-/// uses, shared via `wait_for_session_predicate`. Used by that handler and by
-/// the pane-materialize shell-readiness gate (`tmux_routes.rs::materialize`) so
-/// a freshly spawned pane's first injected keystrokes never arrive before the
-/// shell has actually reached a prompt — see
+/// uses, shared via `wait_for_session_predicate`. Used by that handler, by the
+/// pane-materialize shell-readiness gate (`tmux_routes.rs::materialize`), and
+/// by `pty::spawn_session_for_agent`'s own gate — every path that spawns a
+/// shell and hands the caller a session id it might write into immediately —
+/// so a freshly spawned session's first injected keystrokes never arrive
+/// before the shell has actually reached a prompt. See
 /// `plans/p10k-wizard-hijack-agent-pane-spawn-race.md` for the race this closes.
 ///
 /// Fail-open by design: returns `false` on timeout rather than erroring. Every
 /// caller must decide for itself what "gave up waiting" means in its own
 /// context — `handle_session_wait` reports `timed_out: true`, while
-/// `materialize` proceeds anyway rather than hanging pane creation forever.
+/// `materialize`/`spawn_session_for_agent` proceed anyway rather than hanging
+/// forever.
 pub(crate) async fn wait_for_shell_idle(
     state: &Arc<AppState>,
     session_id: &str,
