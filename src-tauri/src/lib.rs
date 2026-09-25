@@ -19,6 +19,7 @@ pub(crate) mod agent_hook_launch;
 pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
+pub(crate) mod agent_wrap_prompt;
 pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
@@ -911,6 +912,31 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
 #[tauri::command]
 fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
+}
+
+/// Answer a pending "wrap my shell function?" prompt. `decision` is
+/// `Some(true)`/`Some(false)` for an explicit answer, or `None` for a
+/// dismiss (Escape/overlay-click/close) — see `agent_wrap_prompt::resolve`'s
+/// doc comment for why this is a separate mechanism from `mcp_confirm_response`
+/// rather than reusing its bool-only shape.
+///
+/// Deliberately not gated behind `require_local_or_auth` on the HTTP side
+/// (`mcp_http::mod::agent_wrap_prompt_response_http`) — same accepted
+/// precedent as `mcp_confirm_response`/`resolve_mcp_confirm`: the
+/// server-generated `request_id` UUID is the effective credential, and
+/// `resolve` only acts when it exactly matches the one pending entry for
+/// that `agent_type`. Reviewed and confirmed 2026-09-25 (code review +
+/// security review) — not a gap, don't re-flag without a concrete new
+/// exploitation path (see `AGENTS.md`'s "Accepted Security Decisions").
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn agent_wrap_prompt_response(
+    state: State<'_, Arc<AppState>>,
+    request_id: String,
+    agent_type: String,
+    decision: Option<bool>,
+) -> Result<(), String> {
+    crate::agent_wrap_prompt::resolve(&state, &request_id, &agent_type, decision)
 }
 
 /// One IPv4 address found on a network interface.
@@ -3162,6 +3188,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             agent_hook_commands::get_agent_hook_state,
             agent_hook_commands::get_agent_native_status_signals,
             agent_hook_commands::set_agent_native_status_signals,
+            agent_hook_commands::get_agent_wrap_user_function,
+            agent_hook_commands::set_agent_wrap_user_function,
             agent_mcp::get_agent_mcp_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
@@ -3256,6 +3284,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             mcp_confirm_response,
             mcp_http::suspended_routes::suspended_session_action,
             mcp_http::suspended_routes::resume_session,
+            agent_wrap_prompt_response,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

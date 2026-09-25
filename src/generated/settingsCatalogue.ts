@@ -855,13 +855,81 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "agents.agents.{key}.wrap_user_function": {
+      "id": "agents.agents.{key}.wrap_user_function",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 27,
+      "path": "/agents/{key}/wrap_user_function",
+      "labelKey": "settings.catalogue.agents.agents.{key}.wrap_user_function.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.wrap_user_function.help",
+      "label": "wrap user function",
+      "schema": {
+        "description": "zsh only. What to do when the user's shell already defines its own\n`claude`/`codex`/`goose` function, which otherwise silently skips\nTUIC's launch-flag injection for that agent (see `shell_integration.rs`'s\nmodule doc comment). `None` = ask when detected; `Some(true)` = wrap\nthe user's function and add TUIC's launch flag — ONLY for the function\nwhose fingerprint is `wrap_user_function_hash`; `Some(false)` = leave\nthe user's function alone (for that fingerprint, or for any function\nwhen no fingerprint is recorded).",
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Whether new zsh sessions wrap the user's own agent shell function to add TUIC's launch flag.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "agents.agents.{key}.wrap_user_function_hash": {
+      "id": "agents.agents.{key}.wrap_user_function_hash",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 28,
+      "path": "/agents/{key}/wrap_user_function_hash",
+      "labelKey": "settings.catalogue.agents.agents.{key}.wrap_user_function_hash.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.wrap_user_function_hash.help",
+      "label": "wrap user function hash",
+      "schema": {
+        "description": "Fingerprint (`cksum` CRC-length of the function body, computed by the\nzsh integration) of the user function `wrap_user_function` was decided\nfor. Recorded only from the consent prompt; a different or missing\nfingerprint means a `Some(true)` is NOT applied (the user is asked).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Records which user shell function the wrap decision was made for.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
     "agents.headless_agent": {
       "id": "agents.headless_agent",
       "store": "agents",
       "owner": "machine",
       "area": "agents",
       "group": "headless_agent",
-      "order": 27,
+      "order": 29,
       "path": "/headless_agent",
       "labelKey": "settings.catalogue.agents.headless_agent.label",
       "helpKey": "settings.catalogue.agents.headless_agent.help",
@@ -969,7 +1037,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "launch_instructions",
-      "order": 28,
+      "order": 30,
       "path": "/launch_instructions",
       "labelKey": "settings.catalogue.agents.launch_instructions.label",
       "helpKey": "settings.catalogue.agents.launch_instructions.help",
@@ -1003,7 +1071,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "launch_instructions_disabled",
-      "order": 30,
+      "order": 32,
       "path": "/launch_instructions_disabled",
       "labelKey": "settings.catalogue.agents.launch_instructions_disabled.label",
       "helpKey": "settings.catalogue.agents.launch_instructions_disabled.help",
@@ -1035,7 +1103,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "launch_modules",
-      "order": 29,
+      "order": 31,
       "path": "/launch_modules/{key}",
       "labelKey": "settings.catalogue.agents.launch_modules.{key}.label",
       "helpKey": "settings.catalogue.agents.launch_modules.{key}.help",

@@ -430,6 +430,15 @@ export interface AgentSettingsConfig {
 	launch_instructions?: string;
 	launch_modules?: Record<string, boolean>;
 	launch_instructions_disabled?: boolean;
+	/**
+	 * zsh only. What to do when the user's shell already defines its own
+	 * `claude`/`codex`/`goose` function, which otherwise silently skips
+	 * TUIC's launch-flag injection for that agent. `null`/undefined = ask
+	 * when detected; `true` = wrap the user's function and append TUIC's
+	 * launch flag; `false` = leave the user's function alone, never ask
+	 * again.
+	 */
+	wrap_user_function?: boolean | null;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */

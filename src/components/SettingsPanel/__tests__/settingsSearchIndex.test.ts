@@ -98,7 +98,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 2, orphans: 20 },
+	// The per-agent "If your shell already defines its own <agent> function"
+	// wrap-user-function select has a runtime label naming the agent.
+	agents: { dynamic: 3, orphans: 20 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

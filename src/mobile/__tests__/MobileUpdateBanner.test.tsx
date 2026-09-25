@@ -8,6 +8,11 @@ const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 
 vi.mock("../../transport", () => ({ rpc }));
 vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
+// MobileApp subscribes to the "wrap my shell function?" prompt at mount.
+vi.mock("../../stores/agentWrapPrompt", () => ({
+	subscribeAgentWrapPrompt: () => Promise.resolve(() => {}),
+	pendingAgentWrapPrompts: () => [],
+}));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({
