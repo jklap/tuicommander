@@ -55,13 +55,17 @@ export interface CustomEnvVarEntry {
 /** Drop malformed keys and collapse duplicate keys (first occurrence wins) from
  *  a hand-edited `config.json`'s `custom_pty_env` — same "revalidate on
  *  hydrate, not just on write" precedent as `sanitizeIndicatorOverrides`, since
- *  this is untrusted input reaching real process environment variables. */
+ *  this is untrusted input reaching real process environment variables.
+ *  Case-insensitive dedup: Windows env var names collide case-insensitively at
+ *  the OS level, so "PATH" and "Path" as two separate entries would silently
+ *  let one clobber the other at spawn time with no indication which. */
 function sanitizeCustomPtyEnv(entries: CustomEnvVarEntry[]): CustomEnvVarEntry[] {
 	const seen = new Set<string>();
 	const out: CustomEnvVarEntry[] = [];
 	for (const entry of entries) {
-		if (!isValidEnvVarKey(entry.key) || seen.has(entry.key)) continue;
-		seen.add(entry.key);
+		const normalized = entry.key.toLowerCase();
+		if (!isValidEnvVarKey(entry.key) || seen.has(normalized)) continue;
+		seen.add(normalized);
 		out.push({ key: entry.key, value: entry.value });
 	}
 	return out;
