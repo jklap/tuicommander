@@ -15,7 +15,9 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     if event.sequence != snapshot.sequence + 1 {
         return Err("workflow event sequence gap".into());
     }
-    if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
+    if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled)
+        && !matches!(&event.kind, RunEventKind::CanonicalRecertified { .. })
+    {
         return Err("terminal workflow cannot advance".into());
     }
     match &event.kind {
@@ -247,6 +249,10 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                 return Err("story has already been integrated".into());
             }
             story.integration_receipt = Some(receipt.clone());
+        }
+        RunEventKind::CanonicalRecertified { receipt } => {
+            snapshot.canonical_recertification = Some(receipt.clone());
+            snapshot.verification_fingerprint = None;
         }
         RunEventKind::VerificationPassed { fingerprint } => {
             snapshot.verification_fingerprint = Some(fingerprint.clone())

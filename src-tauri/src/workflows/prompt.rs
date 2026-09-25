@@ -284,6 +284,7 @@ mod tests {
             planning_fingerprint: None,
             verification_fingerprint: None,
             stories: vec![],
+            canonical_recertification: None,
             attempts: vec![],
             effects: vec![],
         };

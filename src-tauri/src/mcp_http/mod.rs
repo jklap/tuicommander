@@ -746,6 +746,7 @@ const API_PREFIXES: &[&str] = &[
     "terminal",
     "tunnels",
     "watchers",
+    "workflows",
     "worktrees",
 ];
 
