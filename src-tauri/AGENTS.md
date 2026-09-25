@@ -767,6 +767,62 @@ Frontend consumer rules (`rowAnchoredBlocks()`, `CommandOverview.tsx`'s
 `getCommandText`, eviction-stable-to-grid-relative conversion): see
 `src/components/Terminal/AGENTS.md`.
 
+## Custom PTY Env Vars + Pane Shell-Readiness Gate (2026-09-24)
+
+Two related features closing the p10k-wizard-hijack pane-spawn race
+(`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`): `AppConfig::custom_pty_env`
+(user `KEY=value` pairs injected into every spawned PTY via the single choke point
+in `spawn_pty_pair_with_retry`) and `tmux_routes::materialize`'s shell-readiness
+gate (blocks until the freshly spawned shell reaches `SHELL_IDLE`, event-driven,
+5s bound, fail-open). Full design: `docs/backend/pty.md`'s "Custom PTY
+environment variables" and "Pane Shell-Readiness Gate" sections.
+
+**A "materialize already returns this pane's session, skip everything else" fast
+path must run the readiness gate too, not just the fresh-spawn path.** Found by
+code review: `materialize()` records `pane.tuic_session_id` in topology *before*
+its own readiness-gate call runs (so a second concurrent caller can find and
+reuse the session rather than double-spawning) — which means a second concurrent
+`materialize` call for the same pane, landing while the first call's gate is
+still waiting, used to hit the "already materialized" early return and skip the
+gate entirely. This is a real, not theoretical, shape: `tuic-cli`'s own
+`respawn-pane` retry logic documents an eager-materialize race from a sibling
+caller. Fixed by calling the gate on the fast path too — cheap when already idle
+(the underlying `wait_for_shell_idle` returns immediately in that case).
+**Any future "already have this, return early" fast path added near a
+readiness/settling gate needs the same treatment** — a fast path is not exempt
+from an invariant the slow path enforces just because it usually observes state
+the slow path already established.
+
+**A client-side timeout shorter than a server-side bounded-wait feature's own
+timeout turns "slow but working" into an apparent client error.** `tuic-cli`'s
+IPC client had one fixed 3s socket timeout applied to every request; the new
+gate's `PANE_READY_TIMEOUT_MS` is 5s. Without raising the client's budget for
+this specific call (`ipc::post_with_timeout`, 8s), a legitimately slow (not
+hung) shell startup — the literal motivating scenario for this feature — would
+make the *client* time out and report failure before the *server's* own
+fail-open path had a chance to return `Ok`. Any new server-side bounded-wait
+feature reachable through this IPC client must check its timeout against
+whatever fixed client-side budget the call goes through, not just against the
+server's own request-handling timeout (if any).
+
+**A real-PTY test that records a cwd fixture and reads it back must use a real,
+existing directory once the code under test lets the shell actually run before
+the read** — not a fictional path like `/explicit/repo`. This repo's own OSC 7
+cwd tracking (`pty.rs`'s `parse_osc7_cwd`, `entry.lock().cwd = Some(cwd)`)
+overwrites `PtySession.cwd` the moment a real shell reports its actual directory
+— harmless when a test reads that field before the shell has had time to run
+(the pre-readiness-gate case), but three `tmux_routes.rs` cwd tests broke the
+instant the shell-readiness gate above started actually waiting for the shell to
+reach a prompt, because a real shell given a non-existent directory falls back
+to some real directory (its own `$HOME`, empirically) and OSC 7 duly reports
+*that* instead of the fixture string. Fixed by switching the fixture to
+`tempfile::tempdir()` for whichever cwd actually becomes the real spawn target
+in each test (a "loser" cwd that's never actually spawned into, e.g. a session's
+own cwd in a test proving a window's cwd wins instead, can stay fictional — only
+the winning value needs to be real). If you add a new PTY-spawn test that reads
+back `PtySession.cwd` after any code path that can give the shell real running
+time, use a real directory for whichever cwd you expect to observe.
+
 ## Agent Session Management
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
