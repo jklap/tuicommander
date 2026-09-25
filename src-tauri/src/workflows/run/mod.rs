@@ -334,6 +334,109 @@ mod tests {
     }
 
     #[test]
+    fn only_the_bound_coordinator_can_create_a_story_once() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let started = store
+            .command(
+                &run.id,
+                "coordinate",
+                RunCommand::StartPlanAgent {
+                    node_id: "coordinate".into(),
+                },
+            )
+            .unwrap();
+        let attempt_id = started.snapshot.attempts[0].id.clone();
+        let reserved = store
+            .command(
+                &run.id,
+                "spawn",
+                RunCommand::ReserveEffect {
+                    key: format!("spawn:{attempt_id}"),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap();
+        store
+            .bind_agent(
+                &run.id,
+                &attempt_id,
+                AgentBinding {
+                    session_id: "coordinator".into(),
+                    task_id: None,
+                    effect_id: reserved.snapshot.effects[0].id.clone(),
+                    prompt_contract_version: 1,
+                    prompt_sha256: "a".repeat(64),
+                    audit_preview: "redacted".into(),
+                },
+            )
+            .unwrap();
+        let proposed = NewStory {
+            plan_id: plan_id.clone(),
+            title: "Follow up".into(),
+            criteria: vec!["Covered".into()],
+            priority: 1,
+            origin: StoryOrigin::PlanStep {
+                step: "follow-up".into(),
+            },
+            file_scope: vec![],
+        };
+        assert!(
+            store
+                .create_story_from_coordinator(&run.id, "stranger", "proposal-1", proposed.clone())
+                .is_err()
+        );
+        let first = store
+            .create_story_from_coordinator(&run.id, "coordinator", "proposal-1", proposed.clone())
+            .unwrap();
+        let second = store
+            .create_story_from_coordinator(&run.id, "coordinator", "proposal-1", proposed.clone())
+            .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(
+            StoryStore::open()
+                .unwrap()
+                .list_stories(&plan_id)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            store
+                .snapshot(&run.id)
+                .unwrap()
+                .effects
+                .iter()
+                .any(|effect| {
+                    effect.key == "create-story:proposal-1"
+                        && effect.state == EffectState::Succeeded
+                })
+        );
+        let mut changed = proposed;
+        changed.title = "Different".into();
+        assert!(
+            store
+                .create_story_from_coordinator(&run.id, "coordinator", "proposal-1", changed)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn effect_outcomes_remain_recordable_when_story_shape_reopens_planning() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let store = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("run store");

@@ -105,6 +105,69 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_story_proposal_is_idempotent_across_reopen() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let proposed = NewStory {
+            plan_id: plan.id.clone(),
+            title: "Implement".into(),
+            criteria: vec!["Focused test passes".into()],
+            priority: 1,
+            origin: StoryOrigin::PlanStep {
+                step: "implementation".into(),
+            },
+            file_scope: vec!["src/core.rs".into()],
+        };
+        assert!(
+            store
+                .existing_story_for_proposal("run-1", "proposal-1", &proposed)
+                .unwrap()
+                .is_none()
+        );
+        let first = store
+            .create_story_once("run-1", "proposal-1", proposed.clone())
+            .expect("create");
+        drop(store);
+        let reopened = StoryStore::open_at(&db).expect("reopen");
+        let retry = reopened
+            .create_story_once("run-1", "proposal-1", proposed.clone())
+            .expect("retry");
+        assert_eq!(retry.id, first.id);
+        assert_eq!(
+            reopened
+                .existing_story_for_proposal("run-1", "proposal-1", &proposed)
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert_eq!(reopened.list_stories(&plan.id).unwrap().len(), 1);
+        let mut changed = proposed.clone();
+        changed.title = "Different".into();
+        assert!(
+            reopened
+                .create_story_once("run-1", "proposal-1", changed)
+                .is_err()
+        );
+        let mut invalid = proposed;
+        invalid.origin = StoryOrigin::PlanStep { step: " ".into() };
+        assert!(
+            reopened
+                .create_story_once("run-1", "proposal-2", invalid)
+                .is_err()
+        );
+        assert_eq!(reopened.list_stories(&plan.id).unwrap().len(), 1);
+    }
+
+    #[test]
     fn operator_can_work_a_story_without_a_terminal_claim() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");

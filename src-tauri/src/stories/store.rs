@@ -1,7 +1,9 @@
 use super::model::{
-    NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryRead, StoryStatus,
+    NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
+    StoryStatus,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -106,6 +108,13 @@ impl StoryStore {
             CREATE INDEX IF NOT EXISTS stories_by_plan ON stories(plan_id);
             CREATE UNIQUE INDEX IF NOT EXISTS one_story_per_session
               ON stories(claim_session) WHERE claim_session IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS workflow_story_proposals (
+                run_id TEXT NOT NULL,
+                proposal_key TEXT NOT NULL,
+                story_id TEXT NOT NULL REFERENCES stories(id),
+                input_sha256 TEXT NOT NULL,
+                PRIMARY KEY(run_id, proposal_key)
+            );
             PRAGMA user_version = 1;",
         )
         .map_err(|e| format!("prepare story schema: {e}"))?;
@@ -172,51 +181,90 @@ impl StoryStore {
     }
 
     pub fn create_story(&self, input: NewStory) -> Result<Story, String> {
-        validate_text("story title", &input.title, 200)?;
-        if input.criteria.is_empty() || input.criteria.len() > 100 {
-            return Err("story must have between 1 and 100 criteria".into());
-        }
-        for criterion in &input.criteria {
-            validate_text("criterion", criterion, 2000)?;
-        }
-        if !(1..=3).contains(&input.priority) {
-            return Err("priority must be 1, 2 or 3".into());
-        }
-        if input.file_scope.len() > 100 {
-            return Err("file scope has too many paths".into());
-        }
-        for path in &input.file_scope {
-            validate_scope_path(path)?;
-        }
+        validate_new_story(&input)?;
         self.get_plan(&input.plan_id)?;
-        let story = Story {
-            id: Uuid::now_v7().to_string(),
-            plan_id: input.plan_id,
-            title: input.title.trim().into(),
-            checked: vec![false; input.criteria.len()],
-            criteria: input.criteria,
-            dependencies: Vec::new(),
-            priority: input.priority,
-            origin: input.origin,
-            file_scope: input.file_scope,
-            status: StoryStatus::Ready,
-            revision: 1,
-            claim_session: None,
-        };
-        self.connect()?
-            .execute(
-                "INSERT INTO stories(id,plan_id,document,status,revision,claim_session)
-             VALUES (?1,?2,?3,?4,?5,NULL)",
-                params![
-                    story.id,
-                    story.plan_id,
-                    encode(&story)?,
-                    story.status.as_str(),
-                    story.revision
-                ],
-            )
-            .map_err(|e| format!("create story: {e}"))?;
+        let story = build_story(input);
+        insert_story(&self.connect()?, &story)?;
         Ok(story)
+    }
+
+    /// The coordinator's proposal key is persisted in the same transaction as
+    /// the story. A retry after a lost MCP response returns the original story;
+    /// reusing the key for different work is rejected.
+    pub fn create_story_once(
+        &self,
+        run_id: &str,
+        proposal_key: &str,
+        input: NewStory,
+    ) -> Result<Story, String> {
+        validate_text("workflow run id", run_id, 128)?;
+        validate_text("story proposal key", proposal_key, 128)?;
+        validate_new_story(&input)?;
+        let hash = proposal_hash(&input)?;
+        let mut conn = self.connect()?;
+        let tx = immediate(&mut conn)?;
+        if let Some((story_id, prior_hash)) = tx
+            .query_row(
+                "SELECT story_id,input_sha256 FROM workflow_story_proposals WHERE run_id=?1 AND proposal_key=?2",
+                params![run_id, proposal_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("read story proposal: {error}"))?
+        {
+            if prior_hash != hash {
+                return Err("story proposal key was reused with a different payload".into());
+            }
+            return read_story(&tx, &story_id);
+        }
+        let exists: bool = tx
+            .query_row("SELECT 1 FROM plans WHERE id=?1", [&input.plan_id], |_| {
+                Ok(true)
+            })
+            .optional()
+            .map_err(|error| format!("read proposal plan: {error}"))?
+            .unwrap_or(false);
+        if !exists {
+            return Err("story proposal plan not found".into());
+        }
+        let story = build_story(input);
+        insert_story(&tx, &story)?;
+        tx.execute(
+            "INSERT INTO workflow_story_proposals(run_id,proposal_key,story_id,input_sha256) VALUES (?1,?2,?3,?4)",
+            params![run_id, proposal_key, story.id, hash],
+        )
+        .map_err(|error| format!("record story proposal: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit story proposal: {error}"))?;
+        Ok(story)
+    }
+
+    /// Observe an uncertain effect without replaying an external creation.
+    pub fn existing_story_for_proposal(
+        &self,
+        run_id: &str,
+        proposal_key: &str,
+        input: &NewStory,
+    ) -> Result<Option<Story>, String> {
+        validate_text("workflow run id", run_id, 128)?;
+        validate_text("story proposal key", proposal_key, 128)?;
+        let hash = proposal_hash(input)?;
+        let conn = self.connect()?;
+        let prior: Option<(String, String)> = conn
+            .query_row(
+                "SELECT story_id,input_sha256 FROM workflow_story_proposals WHERE run_id=?1 AND proposal_key=?2",
+                params![run_id, proposal_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("read story proposal: {error}"))?;
+        match prior {
+            Some((story_id, prior_hash)) if prior_hash == hash => {
+                read_story(&conn, &story_id).map(Some)
+            }
+            Some(_) => Err("story proposal key was reused with a different payload".into()),
+            None => Ok(None),
+        }
     }
 
     pub fn get_story(&self, id: &str) -> Result<Story, String> {
@@ -319,8 +367,7 @@ impl StoryStore {
         tx.commit().map_err(|e| format!("commit claim: {e}"))?;
         Ok(story)
     }
-
-    /// A manual claim belongs to a live tab and is released at tab teardown.
+    /// A manual claim belongs to a live tab, not to a durable workflow reservation.
     pub fn release_session_claims(&self, session: &str) -> Result<usize, String> {
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
@@ -373,4 +420,66 @@ mod connection_tests {
             .expect("connection-local table survives method calls");
         assert_eq!(count, 1);
     }
+}
+
+fn validate_new_story(input: &NewStory) -> Result<(), String> {
+    validate_text("story title", &input.title, 200)?;
+    if let StoryOrigin::PlanStep { step } = &input.origin {
+        validate_text("plan step", step, 200)?;
+    }
+    if input.criteria.is_empty() || input.criteria.len() > 100 {
+        return Err("story must have between 1 and 100 criteria".into());
+    }
+    for criterion in &input.criteria {
+        validate_text("criterion", criterion, 2000)?;
+    }
+    if !(1..=3).contains(&input.priority) {
+        return Err("priority must be 1, 2 or 3".into());
+    }
+    if input.file_scope.len() > 100 {
+        return Err("file scope has too many paths".into());
+    }
+    for path in &input.file_scope {
+        validate_scope_path(path)?;
+    }
+    Ok(())
+}
+
+fn proposal_hash(input: &NewStory) -> Result<String, String> {
+    Ok(hex::encode(Sha256::digest(
+        serde_json::to_vec(input).map_err(|error| format!("encode story proposal: {error}"))?,
+    )))
+}
+
+fn build_story(input: NewStory) -> Story {
+    Story {
+        id: Uuid::now_v7().to_string(),
+        plan_id: input.plan_id,
+        title: input.title.trim().into(),
+        checked: vec![false; input.criteria.len()],
+        criteria: input.criteria,
+        dependencies: Vec::new(),
+        priority: input.priority,
+        origin: input.origin,
+        file_scope: input.file_scope,
+        status: StoryStatus::Ready,
+        revision: 1,
+        claim_session: None,
+    }
+}
+
+fn insert_story(conn: &Connection, story: &Story) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO stories(id,plan_id,document,status,revision,claim_session)
+         VALUES (?1,?2,?3,?4,?5,NULL)",
+        params![
+            story.id,
+            story.plan_id,
+            encode(story)?,
+            story.status.as_str(),
+            story.revision
+        ],
+    )
+    .map_err(|error| format!("create story: {error}"))?;
+    Ok(())
 }
