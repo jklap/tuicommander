@@ -178,7 +178,7 @@ uses it only after checking submodule status and rechecking dirtiness immediatel
 before removal. A separate, confirmed lock override bypasses the lock during
 removal; dirty-file `force` alone does not bypass a lock. Before removal, every
 initialized submodule's HEAD and refs are copied into preserved refs in the
-main checkout's module repository; if this fails, removal stops. An
+main checkout's module repository under a unique namespace; if this fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. A missing checkout is pruned only after any registered submodule module repositories are preserved. An
 uninitialized submodule without Git state is safe to remove. Force confirmation
 can carry a fingerprint of checkout status, HEAD, and submodule refs, rechecked
 under the removal lock. Branch deletion in

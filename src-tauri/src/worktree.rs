@@ -645,19 +645,21 @@ fn preserve_submodule_refs(
         tips.push((name.to_string(), oid.to_string()));
     }
     let namespace = format!(
-        "refs/tuic/preserved/{}/{}/",
+        "refs/tuic/preserved/{}/{}/{}/",
         hex::encode(worktree.to_string_lossy().as_bytes()),
-        hex::encode(submodule_path.as_bytes())
+        hex::encode(submodule_path.as_bytes()),
+        uuid::Uuid::new_v4().simple()
     );
     let mut args = vec![
         "fetch".to_string(),
         "--no-tags".to_string(),
+        "--no-recurse-submodules".to_string(),
         "--no-write-fetch-head".to_string(),
         source_gitdir,
     ];
     for (name, oid) in tips {
         args.push(format!(
-            "+{oid}:{}{}",
+            "{oid}:{}{}",
             namespace,
             hex::encode(name.as_bytes())
         ));
@@ -1021,6 +1023,176 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
     remove_worktree_internal_with_lock(worktree, force, false, None)
 }
 
+struct ClearWarmOnDrop<'a>(&'a Path);
+
+impl Drop for ClearWarmOnDrop<'_> {
+    fn drop(&mut self) {
+        clear_warm(self.0);
+    }
+}
+
+fn registered_worktree_admin_dir(base_repo: &Path, path: &Path) -> Result<Option<PathBuf>, String> {
+    let admin_root = PathBuf::from(rev_at(base_repo, "--absolute-git-dir")?).join("worktrees");
+    let entries = match std::fs::read_dir(&admin_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Cannot inspect worktree registrations: {error}")),
+    };
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Cannot inspect worktree registration: {error}"))?;
+        let gitdir = match std::fs::read_to_string(entry.path().join("gitdir")) {
+            Ok(gitdir) => gitdir,
+            Err(_) => continue,
+        };
+        if Path::new(gitdir.trim()).parent().map(warm_key).as_deref() == Some(&warm_key(path)) {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
+}
+
+fn preserve_missing_worktree_modules(
+    base_repo: &Path,
+    worktree: &Path,
+    admin: &Path,
+) -> Result<(), String> {
+    fn visit(
+        base_repo: &Path,
+        worktree: &Path,
+        path: &Path,
+        names: &mut Vec<String>,
+        inside_repo: bool,
+    ) -> Result<(), String> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+        let is_repo = path.join("HEAD").is_file() && path.join("objects").is_dir();
+        if is_repo {
+            let relative = names.join("/");
+            let destination = base_repo.join(&relative);
+            if !destination.join(".git").exists() {
+                return Err(format!(
+                    "Cannot preserve missing worktree submodule {relative}: main module is not initialized"
+                ));
+            }
+            let refs = git_cmd(base_repo)
+                .args([
+                    "--git-dir",
+                    &path.to_string_lossy(),
+                    "--work-tree",
+                    &base_repo.to_string_lossy(),
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname)",
+                ])
+                .run()
+                .map_err(|e| format!("Cannot inspect missing submodule {relative}: {e}"))?;
+            let head = git_cmd(base_repo)
+                .args([
+                    "--git-dir",
+                    &path.to_string_lossy(),
+                    "--work-tree",
+                    &base_repo.to_string_lossy(),
+                    "rev-parse",
+                    "HEAD",
+                ])
+                .run()
+                .map_err(|e| format!("Cannot inspect missing submodule HEAD {relative}: {e}"))?;
+            // A deleted checkout leaves core.worktree pointing at a path that no
+            // longer exists. Bundle from its gitdir with an explicit live worktree
+            // so upload-pack never tries to chdir into the vanished checkout.
+            let bundle = tempfile::Builder::new()
+                .prefix("tuic-module-")
+                .suffix(".bundle")
+                .tempfile_in(rev_at(base_repo, "--absolute-git-dir")?)
+                .map_err(|e| format!("Cannot stage missing submodule refs: {e}"))?;
+            git_cmd(base_repo)
+                .args([
+                    "--git-dir",
+                    &path.to_string_lossy(),
+                    "--work-tree",
+                    &base_repo.to_string_lossy(),
+                    "bundle",
+                    "create",
+                    &bundle.path().to_string_lossy(),
+                    "HEAD",
+                    "--all",
+                ])
+                .run()
+                .map_err(|e| format!("Cannot bundle missing submodule {relative}: {e}"))?;
+            let namespace = format!(
+                "refs/tuic/preserved/{}/{}/{}/",
+                hex::encode(worktree.to_string_lossy().as_bytes()),
+                hex::encode(relative.as_bytes()),
+                uuid::Uuid::new_v4().simple()
+            );
+            let mut args = vec![
+                "fetch".to_string(),
+                "--no-tags".to_string(),
+                "--no-recurse-submodules".to_string(),
+                "--no-write-fetch-head".to_string(),
+                bundle.path().to_string_lossy().into_owned(),
+                format!(
+                    "{}:{}{}",
+                    head.stdout.trim(),
+                    namespace,
+                    hex::encode(b"HEAD")
+                ),
+            ];
+            for line in refs.stdout.lines() {
+                let (name, oid) = line
+                    .split_once(' ')
+                    .ok_or_else(|| format!("Cannot parse submodule ref: {line}"))?;
+                args.push(format!(
+                    "{oid}:{}{}",
+                    namespace,
+                    hex::encode(name.as_bytes())
+                ));
+            }
+            git_cmd(&destination)
+                .args(&args)
+                .timeout(Duration::from_secs(60))
+                .run()
+                .map_err(|e| format!("Cannot preserve missing submodule {relative}: {e}"))?;
+        }
+        for entry in std::fs::read_dir(path)
+            .map_err(|e| format!("Cannot inspect module admin directory: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("Cannot inspect module admin entry: {e}"))?;
+            if !entry.path().is_dir()
+                || entry.file_name() == "objects"
+                || entry.file_name() == "refs"
+                || entry.file_name() == "logs"
+            {
+                continue;
+            }
+            let component = entry.file_name().to_string_lossy().into_owned();
+            let structural_modules = component == "modules" && (inside_repo || is_repo);
+            if !structural_modules {
+                names.push(component.clone());
+            }
+            visit(
+                base_repo,
+                worktree,
+                &entry.path(),
+                names,
+                inside_repo || is_repo,
+            )?;
+            if !structural_modules {
+                names.pop();
+            }
+        }
+        Ok(())
+    }
+    visit(
+        base_repo,
+        worktree,
+        &admin.join("modules"),
+        &mut Vec::new(),
+        false,
+    )
+}
+
 fn remove_worktree_internal_with_lock(
     worktree: &WorktreeInfo,
     force: bool,
@@ -1034,6 +1206,7 @@ fn remove_worktree_internal_with_lock(
         lock.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     });
+    let _clear_warm = ClearWarmOnDrop(&worktree.path);
     let wt_path_str = worktree.path.to_string_lossy().to_string();
     tracing::info!(
         source = "worktree",
@@ -1043,16 +1216,70 @@ fn remove_worktree_internal_with_lock(
         "remove_worktree_internal: start"
     );
 
-    if !worktree.path.exists() {
-        return Err("Cannot remove worktree: its directory is missing, so submodule Git state cannot be preserved".into());
+    if warm_key(&worktree.path) == warm_key(&worktree.base_repo) {
+        return Err(format!(
+            "{MAIN_WORKTREE_PREFIX}cannot remove the main worktree"
+        ));
     }
+    let admin = registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?;
+    if !worktree.path.exists() {
+        if let Some(admin) = admin {
+            if admin.join("locked").exists() && !override_lock {
+                return Err(format!(
+                    "{LOCKED_WORKTREE_PREFIX}missing worktree is locked"
+                ));
+            }
+            preserve_missing_worktree_modules(&worktree.base_repo, &worktree.path, &admin)?;
+            let force_args: &[&str] = if override_lock {
+                &["worktree", "remove", "--force", "--force"]
+            } else {
+                &["worktree", "remove", "--force"]
+            };
+            git_cmd(&worktree.base_repo)
+                .args(
+                    force_args
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(wt_path_str.as_str())),
+                )
+                .run()
+                .map_err(|e| format!("Cannot remove missing worktree registration: {e}"))?;
+            if admin.exists() {
+                return Err("Cannot prune missing worktree registration".into());
+            }
+        }
+        return Ok(());
+    }
+    if admin.is_none() && worktree.path.join(".git").exists() {
+        return Err("Cannot remove worktree: its Git registration is missing".into());
+    }
+
+    let before = if admin.is_some() {
+        Some(dirty_fingerprint_at(&worktree.path)?.0)
+    } else {
+        None
+    };
 
     if !force {
         if dirty_files_at(&worktree.path)? != 0 {
             return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
         }
     }
-    verify_submodules_at(&worktree.path, &worktree.base_repo, force)?;
+    if admin.is_some() {
+        verify_submodules_at(&worktree.path, &worktree.base_repo, force)?;
+    }
+    if let Some(before) = before {
+        let after = dirty_fingerprint_at(&worktree.path)?.0;
+        if before != after {
+            return Err(
+                "Worktree state changed while preserving submodules; review it before removal"
+                    .into(),
+            );
+        }
+        if !force && dirty_files_at(&worktree.path)? != 0 {
+            return Err("Cannot remove worktree: the worktree gained uncommitted changes".into());
+        }
+    }
     if let Some(expected) = expected_fingerprint {
         let (current, _) = dirty_fingerprint_at(&worktree.path)?;
         if current != expected {
@@ -1123,8 +1350,6 @@ fn remove_worktree_internal_with_lock(
                 .unwrap_or_else(|| format!("Git worktree remove failed: {e}")));
         }
     }
-
-    clear_warm(&worktree.path);
 
     // A non-force request must not turn a failed Git cleanup into recursive deletion.
     if worktree.path.exists() {
@@ -6284,7 +6509,55 @@ branch refs/heads/feat
     }
 
     #[test]
-    fn missing_worktree_directory_cannot_discard_its_submodule_gitdir() {
+    fn repeated_preservation_keeps_refs_for_both_submodule_heads() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "repeat-module");
+        git_cmd(&worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = worktree.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "first.txt", "first\n");
+        let first = rev_at(&module, "HEAD").unwrap();
+        preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
+        commit_file(&module, "second.txt", "second\n");
+        let second = rev_at(&module, "HEAD").unwrap();
+        preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
+        for oid in [&first, &second] {
+            let refs = git_cmd(&repo.join("modules/local"))
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(
+                !refs.stdout.trim().is_empty(),
+                "{oid} lost its preservation ref"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_worktree_directory_preserves_its_submodule_refs_before_pruning() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
         let worktree_path = add_worktree(&repo, "missing-module");
@@ -6301,16 +6574,51 @@ branch refs/heads/feat
         let module = worktree_path.join("modules/local");
         let module_gitdir = rev_at(&module, "--absolute-git-dir").unwrap();
         assert!(Path::new(&module_gitdir).exists());
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-only.txt", "local commit\n");
+        let local_oid = rev_at(&module, "HEAD").unwrap();
+        assert!(
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .is_err()
+        );
         fs::remove_dir_all(&worktree_path).unwrap();
         let worktree = WorktreeInfo {
             name: "missing-module".into(),
             path: worktree_path,
             branch: Some("missing-module".into()),
-            base_repo: repo,
+            base_repo: repo.clone(),
         };
-        let error = remove_worktree_internal(&worktree, false).unwrap_err();
-        assert!(error.contains("missing"), "{error}");
-        assert!(Path::new(&module_gitdir).exists());
+        remove_worktree_internal(&worktree, false).unwrap();
+        assert!(!Path::new(&module_gitdir).exists());
+        assert!(
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .is_ok()
+        );
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &local_oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(
+            !refs.stdout.trim().is_empty(),
+            "local commit needs a durable ref"
+        );
     }
 
     #[test]
