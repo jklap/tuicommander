@@ -511,8 +511,11 @@ describe("useGitOperations", () => {
 			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Only the agent tab is restored (plain shell filtered out)
 			expect(branch?.terminals.length).toBe(1);
-			const agentTerm = terminalsStore.get(branch!.terminals[0]);
-			expect(agentTerm?.pendingResumeCommand).toBe("claude --continue");
+			// Resume verification is a deliberate non-blocking second pass
+			// (it asks the backend for launch arguments), so wait for it.
+			await vi.waitFor(() =>
+				expect(terminalsStore.get(branch!.terminals[0])?.pendingResumeCommand).toBe("claude --continue"),
+			);
 		});
 
 		it("does not restore savedTerminals when live terminals exist", async () => {
