@@ -49,9 +49,9 @@ it runs, so a copy that fails costs build time and nothing else — creation sti
 succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
-For HTTP/MCP creation, wait until the workspace's warm status is `done` or
-`failed` before installing dependencies or building. The configured setup script
-runs before the copy starts. Desktop creation waits for the copy before returning.
+For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
+`done` or `failed` before installing dependencies or building. When creation
+runs a configured setup script, it finishes before the copy starts.
 
 Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*
@@ -118,6 +118,11 @@ The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflict
 Both **Archive** and **Delete** remove the worktree, so TUICommander asks first whenever the worktree is not known to be clean — whether or not the branch carries commits, and whether the cleanup was started by hand or by **Auto-archive merged**. The confirmation names what happens to the work: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, that counts as "not clean" and the cleanup still stops.
 
 The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).
+
+Removing a worktree without force also refuses uncommitted changes when the
+branch will be kept. It stops if a Git operation is in progress. If an archive
+script adds a commit after the removal check, the worktree can be removed, but
+the branch stays and the result warns that the branch changed.
 
 When using **Ask** mode, the cleanup dialog detects uncommitted changes and auto-stashes them during the branch switch. An "Unstash after switch" checkbox lets you restore changes on the target branch. That stash covers the **base repository**; the warning under the worktree step is about the branch's own directory, which is a different place.
 

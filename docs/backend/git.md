@@ -26,7 +26,7 @@ Read operations go through a reversible `GitReads` port (`src-tauri/src/git_read
 |----|---------|-------|
 | `branches_detail` | **gix** | `references()` → shorten / peel / committer ISO8601 / author / summary / upstream. ahead/behind via the `ahead_behind` backend. |
 | `ahead_behind` | **gix** | `rev_parse_single`, then **identical tips short-circuit to `(0, 0)` with no walk**; otherwise two `with_hidden` revwalks (counts are order-independent; handles no-common-ancestor). `branches_detail` asks this once per branch, and a branch level with its upstream is the common case, so the short-circuit is what keeps that fan-out off `O(branches x history)`. |
-| `worktree_paths` | **gix** | `worktrees()` + main worktree; paths canonicalized to match `git worktree list` real paths. |
+| `worktree_paths` | **gix** | `worktrees()` + main worktree; paths canonicalized to match `git worktree list` real paths. Warm status is attached after backend selection so CLI and gix return the same checkout data. |
 | `blame` | **gix** | `blame_file()`; **renamed-history files fall back to CLI** (gix blame lacks `-C`/`-M` rename following). |
 | `commit_log`, `graph_commits` | **gix** | gix has no built-in topo sort, so `gix_topo_order` reproduces `git log --topo-order` (Kahn seeded by commit-date) and `gix_decorations` reproduces `%D` byte-for-byte (reverse-refname order, `tag:` prefix, `HEAD -> branch`). `author_date` UTC is normalized to git's `Z`. |
 | `status_counts` | **gix** | `repo.status()` items mapped to staged/changed counts (TreeIndex = staged; IndexWorktree Change/IntentToAdd/untracked/conflict = changed; `NeedsUpdate` skipped). **sparse-checkout / submodule → CLI fallback.** |
@@ -160,15 +160,20 @@ Submodules initialise from the parent checkout first (with the configured remote
 as fallback), so unpublished pinned objects remain usable; failures are returned
 as workspace warnings.
 
-HTTP and MCP creation return while copy-on-write warming is pending. Their
+HTTP, MCP, and desktop IPC creation return while copy-on-write warming is pending. Their
 instructions say to wait before running a build; `GET /worktrees/paths?path=<repo>`
 and IPC `get_worktree_paths` report each workspace's `warm_artifacts.status`
 (`pending`, `done`, or `failed`). A configured setup script runs before the warm,
-so it cannot write the same cache tree concurrently. Desktop IPC creation waits
-for warming and returns `done`. Removing a worktree clears its warm state; a
-late result from its old copy cannot update a new worktree at the same path.
+so it cannot write the same cache tree concurrently. Pending is recorded before
+the setup script starts. Removing a worktree waits for an active copy, clears
+its warm state after Git unregisters it, and prevents a queued copy from
+recreating the removed path.
 
-Non-force removal checks the default branch's ancestry first. A clean branch
+Non-force removal first requires a clean checkout with no Git operation in
+progress and a HEAD matching the captured branch tip. It uses plain
+`git worktree remove`, then compare-and-deletes the branch at that captured
+OID. If the branch moved, removal reports a branch deletion warning and keeps
+the ref. For branch deletion, it checks the default branch's ancestry. A clean branch
 whose commits were squash- or rebase-merged can also pass when `git cherry`
 reports no unique patches. A branch with an unmerged merge commit is refused:
 `git cherry` does not compare changes made by merge resolution. The removal

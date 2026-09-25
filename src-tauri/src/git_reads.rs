@@ -80,7 +80,7 @@ impl GitReads for CliGitReads {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
-        crate::worktree::get_worktree_paths(repo.to_string_lossy().into_owned())
+        crate::worktree::get_worktree_paths_raw(&repo.to_string_lossy())
     }
 
     fn status_counts(&self, repo: &Path) -> StatusCounts {
@@ -996,10 +996,12 @@ impl GitReadsRouter {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
-        match self.backend.worktree_paths {
+        let mut paths = match self.backend.worktree_paths {
             Backend::Cli => self.cli.worktree_paths(repo),
             Backend::Gix => self.gix.worktree_paths(repo),
-        }
+        }?;
+        crate::worktree::attach_warm_statuses(&mut paths);
+        Ok(paths)
     }
 
     pub(crate) fn status_counts(&self, repo: &Path) -> StatusCounts {
@@ -1345,6 +1347,13 @@ mod tests {
         let b = gix.worktree_paths(&repo).unwrap();
         assert_eq!(a, b, "worktree_paths gix != cli\ncli={a:#?}\ngix={b:#?}");
         assert!(a.contains_key("main") && a.contains_key("wt-branch"));
+        crate::worktree::begin_warm(&wt);
+        let routed = GitReadsRouter::new().worktree_paths(&repo).unwrap();
+        assert_eq!(
+            routed["wt-branch"].warm_artifacts.as_ref().unwrap()["status"],
+            "pending"
+        );
+        crate::worktree::clear_warm(&wt);
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.
@@ -1759,6 +1768,10 @@ mod tests {
         // worktree_paths
         assert_eq!(
             cli.worktree_paths(&repo).unwrap(),
+            crate::worktree::get_worktree_paths_raw(&repo.to_string_lossy()).unwrap(),
+        );
+        assert_eq!(
+            GitReadsRouter::new().worktree_paths(&repo).unwrap(),
             crate::worktree::get_worktree_paths(repo.to_string_lossy().into_owned()).unwrap(),
         );
 

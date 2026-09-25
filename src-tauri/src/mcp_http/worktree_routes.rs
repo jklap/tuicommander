@@ -3,30 +3,36 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
-fn spawn_background_warm(
-    source: PathBuf,
-    destination: PathBuf,
-    warm: impl FnOnce(&FsPath, &FsPath) -> crate::cow::WarmingReport + Send + 'static,
-) -> tokio::task::JoinHandle<()> {
-    let token = crate::worktree::begin_warm(&destination);
-    tokio::task::spawn_blocking(move || {
-        let report = warm(&source, &destination);
-        let status = if report.warnings.is_empty() {
-            serde_json::json!({"status": "done"})
-        } else {
-            serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")})
-        };
-        crate::worktree::finish_warm(&destination, token, status);
-        for warning in report.warnings {
-            tracing::warn!(source = "worktree", worktree = %destination.display(), "background warm failed: {warning}");
+async fn run_setup_then_warm(
+    script: Option<String>,
+    source: std::path::PathBuf,
+    destination: std::path::PathBuf,
+    token: u64,
+    warm: impl FnOnce(&std::path::Path, &std::path::Path) -> crate::cow::WarmingReport + Send + 'static,
+) -> (
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    tokio::task::JoinHandle<()>,
+) {
+    let mut setup_result = None;
+    let mut setup_error = None;
+    if let Some(script) = script {
+        let cwd = destination.to_string_lossy().into_owned();
+        match tokio::task::spawn_blocking(move || crate::worktree::run_setup_script(script, cwd))
+            .await
+        {
+            Ok(Ok(result)) => setup_result = Some(result),
+            Ok(Err(error)) => setup_error = Some(serde_json::json!(error)),
+            Err(error) => setup_error = Some(serde_json::json!(format!("task panic: {error}"))),
         }
-    })
+    }
+    let task = crate::worktree::spawn_background_warm(source, destination, token, warm);
+    (setup_result, setup_error, task)
 }
 
 pub(super) struct CreatedWorktree {
@@ -183,6 +189,7 @@ pub(super) async fn create_worktree_shared(
             let wt_path = workspace.path.to_string_lossy().to_string();
             let branch_name = workspace.branch.clone();
             let workspace_id = workspace.workspace_id.clone();
+            let warm_token = crate::worktree::begin_warm(&workspace.path);
             // Built before the setup script runs: the payload describes what the
             // workspace ARRIVED with, and a script that installs something does
             // not change what was already warm.
@@ -196,34 +203,21 @@ pub(super) async fn create_worktree_shared(
             });
             let warm_source = std::path::PathBuf::from(&base_repo);
             let warm_destination = workspace.path.clone();
-            let mut setup_script = None;
-            let mut setup_script_error = None;
             let repo_for_script = base_repo.clone();
-            let cwd_for_script = wt_path.clone();
-            if let Some(script) = tokio::task::spawn_blocking(move || {
+            let script = tokio::task::spawn_blocking(move || {
                 crate::config::resolve_effective_setup_script(&repo_for_script)
             })
             .await
             .ok()
-            .flatten()
-            {
-                match tokio::task::spawn_blocking(move || {
-                    crate::worktree::run_setup_script(script, cwd_for_script)
-                })
-                .await
-                {
-                    Ok(Ok(result)) => {
-                        setup_script = Some(result);
-                    }
-                    Ok(Err(e)) => {
-                        setup_script_error = Some(serde_json::json!(e));
-                    }
-                    Err(e) => {
-                        setup_script_error = Some(serde_json::json!(format!("task panic: {e}")));
-                    }
-                }
-            }
-            spawn_background_warm(warm_source, warm_destination, crate::cow::warm_worktree);
+            .flatten();
+            let (setup_script, setup_script_error, _warm_task) = run_setup_then_warm(
+                script,
+                warm_source,
+                warm_destination,
+                warm_token,
+                crate::cow::warm_worktree,
+            )
+            .await;
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
@@ -553,10 +547,16 @@ mod warm_tests {
         let destination = temp.path().join("workspace");
         let (release, wait) = std::sync::mpsc::channel::<()>();
 
-        let task = spawn_background_warm(source, destination.clone(), move |_, _| {
-            wait.recv().unwrap();
-            crate::cow::WarmingReport::default()
-        });
+        let token = crate::worktree::begin_warm(&destination);
+        let task = crate::worktree::spawn_background_warm(
+            source,
+            destination.clone(),
+            token,
+            move |_, _| {
+                wait.recv().unwrap();
+                crate::cow::WarmingReport::default()
+            },
+        );
 
         assert!(!task.is_finished());
         assert_eq!(
@@ -565,6 +565,35 @@ mod warm_tests {
         );
         release.send(()).unwrap();
         task.await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        crate::worktree::clear_warm(&destination);
+    }
+
+    #[tokio::test]
+    async fn setup_finishes_before_warm_reads_the_workspace() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        let (setup, error, warm_task) = run_setup_then_warm(
+            Some("echo ready > setup.marker".into()),
+            source,
+            destination.clone(),
+            token,
+            |_, destination| {
+                assert!(destination.join("setup.marker").exists());
+                crate::cow::WarmingReport::default()
+            },
+        )
+        .await;
+        assert!(setup.is_some(), "setup result: {error:?}");
+        assert!(error.is_none(), "{error:?}");
+        warm_task.await.unwrap();
         assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
         crate::worktree::clear_warm(&destination);
     }

@@ -10,13 +10,16 @@ use std::time::Duration;
 #[cfg(feature = "desktop")]
 use tauri::State;
 
-static WARM_STATES: LazyLock<dashmap::DashMap<String, (u64, serde_json::Value)>> =
+type WarmEntry = (u64, serde_json::Value, Arc<std::sync::Mutex<()>>);
+static WARM_STATES: LazyLock<dashmap::DashMap<String, WarmEntry>> =
     LazyLock::new(dashmap::DashMap::new);
 static NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 fn warm_key(path: &Path) -> String {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
+    let parent = path.parent().unwrap_or(path);
+    std::fs::canonicalize(parent)
+        .unwrap_or_else(|_| parent.to_path_buf())
+        .join(path.file_name().unwrap_or_default())
         .to_string_lossy()
         .into_owned()
 }
@@ -25,7 +28,11 @@ pub(crate) fn begin_warm(path: &Path) -> u64 {
     let token = NEXT_WARM_TOKEN.fetch_add(1, Ordering::Relaxed);
     WARM_STATES.insert(
         warm_key(path),
-        (token, serde_json::json!({"status": "pending"})),
+        (
+            token,
+            serde_json::json!({"status": "pending"}),
+            Arc::new(std::sync::Mutex::new(())),
+        ),
     );
     token
 }
@@ -40,6 +47,47 @@ pub(crate) fn finish_warm(path: &Path, token: u64, status: serde_json::Value) {
 
 pub(crate) fn clear_warm(path: &Path) {
     WARM_STATES.remove(&warm_key(path));
+}
+
+pub(crate) fn warm_lock(path: &Path) -> Option<Arc<std::sync::Mutex<()>>> {
+    WARM_STATES
+        .get(&warm_key(path))
+        .map(|state| Arc::clone(&state.2))
+}
+
+pub(crate) fn warm_token_is_current(path: &Path, token: u64) -> bool {
+    WARM_STATES
+        .get(&warm_key(path))
+        .is_some_and(|state| state.0 == token)
+}
+
+pub(crate) fn spawn_background_warm(
+    source: PathBuf,
+    destination: PathBuf,
+    token: u64,
+    warm: impl FnOnce(&Path, &Path) -> crate::cow::WarmingReport + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        let Some(lock) = warm_lock(&destination) else {
+            return;
+        };
+        let _guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !warm_token_is_current(&destination, token) {
+            return;
+        }
+        let report = warm(&source, &destination);
+        let status = if report.warnings.is_empty() {
+            serde_json::json!({"status": "done"})
+        } else {
+            serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")})
+        };
+        finish_warm(&destination, token, status);
+        for warning in report.warnings {
+            tracing::warn!(source = "worktree", worktree = %destination.display(), "background warm failed: {warning}");
+        }
+    })
 }
 
 pub(crate) fn warm_status(path: &Path) -> serde_json::Value {
@@ -562,11 +610,12 @@ pub(crate) fn resolve_any_workspace(
     base_repo: &Path,
     workspace_id: &str,
 ) -> Result<WorkspaceWorktree, String> {
-    git_cmd(base_repo)
+    let listed = git_cmd(base_repo)
         .args(["worktree", "list", "--porcelain"])
         .run()
-        .ok()
-        .and_then(|out| map_worktree_workspace_paths(&out.stdout).remove(workspace_id))
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    map_worktree_workspace_paths(&listed.stdout)
+        .remove(workspace_id)
         .ok_or_else(|| {
             format!(
                 "No workspace found for id '{workspace_id}' in '{}'",
@@ -626,6 +675,13 @@ impl CreatedWorkspace {
     ///   and merges the WRONG one.
     pub(crate) fn instruction_payload(&self) -> serde_json::Value {
         let warm = crate::cow::warm_artifacts(&self.path);
+        let warm_state = if WARM_STATES.contains_key(&warm_key(&self.path)) {
+            warm_status(&self.path)
+        } else if self.warnings.is_empty() {
+            serde_json::json!({"status": "done"})
+        } else {
+            serde_json::json!({"status": "failed", "reason": self.warnings.join("; ")})
+        };
         let isolation = "This is a linked worktree: refs and objects are shared with the parent \
             repository, so your commits are visible there immediately."
             .to_string();
@@ -650,7 +706,8 @@ impl CreatedWorkspace {
                 "note": "Tracked changes are not carried over: this workspace starts from a clean checkout.",
             },
             "warm_artifacts": {
-                "status": "done",
+                "status": warm_state["status"],
+                "reason": warm_state.get("reason"),
                 "present": warm,
                 "warmed_directories": self.warmed_directories,
                 "note": setup,
@@ -772,7 +829,7 @@ fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
         if local.is_ok() { return None; }
         let local_error = local.err().expect("failed above");
         let _ = git_cmd(dest).args(["config", "--unset", &url_key]).run();
-        match git_cmd(dest).args(["submodule", "sync", "--", path]).run().and_then(|_| git_cmd(dest).args(["submodule", "update", "--init", "--", path]).run()) {
+        match git_cmd(dest).args(["submodule", "sync", "--", path]).run().and_then(|_| git_cmd(dest).args(["submodule", "update", "--init", "--", path]).timeout(FETCH_TIMEOUT).run()) {
             Ok(_) => Some(format!("submodule '{path}' could not use the parent checkout ({local_error}); initialized from its configured remote instead")),
             Err(remote_error) => Some(format!("could not initialize submodule '{path}' from the parent checkout ({local_error}) or its configured remote ({remote_error})")),
         }
@@ -797,6 +854,13 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
     }
 }
 pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
+    // A copy already in flight must finish before Git can remove its destination.
+    // If removal wins, the queued copy sees the cleared token and never starts.
+    let warm_lock = warm_lock(&worktree.path);
+    let _warm_guard = warm_lock.as_ref().map(|lock| {
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     let wt_path_str = worktree.path.to_string_lossy().to_string();
     tracing::info!(
         source = "worktree",
@@ -809,7 +873,7 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
     let force_args: &[&str] = if force {
         &["worktree", "remove", "--force", "--force"]
     } else {
-        &["worktree", "remove", "--force"]
+        &["worktree", "remove"]
     };
 
     match git_cmd(&worktree.base_repo)
@@ -869,8 +933,16 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
         }
     }
 
-    // Cleanup the directory if it still exists
+    clear_warm(&worktree.path);
+
+    // A non-force request must not turn a failed Git cleanup into recursive deletion.
     if worktree.path.exists() {
+        if !force {
+            return Err(format!(
+                "Worktree directory still exists after removal: {}",
+                worktree.path.display()
+            ));
+        }
         tracing::warn!(
             source = "worktree",
             branch = %worktree.name,
@@ -895,7 +967,6 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
     }
 
     tracing::info!(source = "worktree", branch = %worktree.name, "remove_worktree_internal: done");
-    clear_warm(&worktree.path);
     Ok(())
 }
 
@@ -1014,13 +1085,24 @@ pub(crate) async fn create_worktree(
     let worktrees_dir =
         resolve_worktree_dir_for_repo(Path::new(&config.base_repo), &state.worktrees_dir);
     let workspace = tokio::task::spawn_blocking(move || {
-        create_workspace(&worktrees_dir, &config, base_ref.as_deref())
+        create_workspace_unwarmed(&worktrees_dir, &config, base_ref.as_deref())
     })
     .await
     .map_err(|error| format!("Task panic: {error}"))??;
 
+    let token = begin_warm(&workspace.path);
+    spawn_background_warm(
+        PathBuf::from(&base_repo),
+        workspace.path.clone(),
+        token,
+        crate::cow::warm_worktree,
+    );
     state.invalidate_repo_caches(&base_repo);
-    Ok(serde_json::json!({
+    Ok(ipc_worktree_response(&workspace, &base_repo))
+}
+
+fn ipc_worktree_response(workspace: &CreatedWorkspace, base_repo: &str) -> serde_json::Value {
+    serde_json::json!({
         "status": "ok",
         "name": workspace.path.file_name().map(|name| name.to_string_lossy().to_string()),
         "path": workspace.path.to_string_lossy(),
@@ -1028,8 +1110,8 @@ pub(crate) async fn create_worktree(
         "branch": workspace.branch,
         "base_repo": base_repo,
         "kind": workspace.kind,
-        "instructions": workspace.instruction_payload(),
-    }))
+        "instructions": workspace.instruction_payload_pending(),
+    })
 }
 /// Get worktrees directory path.
 /// When `repo_path` is provided, resolves the effective storage strategy for the repo.
@@ -1092,55 +1174,70 @@ pub(crate) fn remove_worktree_by_workspace_id(
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
 
-    // Refuse the combined operation before removing the checkout. A clean
-    // worktree can still carry commits that `git branch -d` will not delete.
-    if delete_branch && !force {
+    // Refuse every non-force removal unless the checkout is proven clean and
+    // still points at the branch tip whose commits are being inspected.
+    let expected_branch_oid = if !force {
+        let branch_ref = format!("refs/heads/{branch_name}");
+        let oid = rev_at(&base_repo, &branch_ref)?;
         let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
-        match lifecycle.commit_status {
-            WorkspaceCommitStatus::Unmerged => {
-                if lifecycle.dirty_files != Some(0) {
-                    return Err(format!(
-                        "Cannot remove {branch_name}: the worktree has uncommitted changes"
-                    ));
-                }
-                let default_branch = get_remote_default_branch(repo_path)?;
-                // `git cherry` omits merge commits, including their resolution
-                // changes. Require every commit on this path to be comparable.
-                let merges = git_cmd(&base_repo)
-                    .args([
-                        "rev-list",
-                        "--merges",
-                        &format!("{default_branch}..{branch_name}"),
-                    ])
-                    .run()
-                    .map_err(|e| format!("Cannot check merge commits for {branch_name}: {e}"))?;
-                if !merges.stdout.trim().is_empty() {
-                    return Err(format!(
-                        "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                    ));
-                }
-                let cherry = git_cmd(&base_repo)
-                    .args(["cherry", &default_branch, branch_name])
-                    .run()
-                    .map_err(|e| {
-                        format!("Cannot check patch equivalence for {branch_name}: {e}")
-                    })?;
-                if cherry.stdout.lines().any(|line| !line.starts_with("- ")) {
-                    return Err(format!(
-                        "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                    ));
-                }
-                removal_rule = "patch_equivalence";
-            }
-            WorkspaceCommitStatus::Unknown => {
-                return Err(lifecycle.error.unwrap_or_else(|| {
-                    format!("Cannot verify whether {branch_name} can be safely removed")
-                }));
-            }
-            WorkspaceCommitStatus::InSync => removal_rule = "in_sync",
-            WorkspaceCommitStatus::Merged => removal_rule = "ancestry",
+        if lifecycle.dirty_files != Some(0) {
+            return Err(lifecycle.error.unwrap_or_else(|| {
+                format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
+            }));
         }
-    }
+        if has_operation_in_progress(&workspace.path) {
+            return Err(format!(
+                "Cannot remove {branch_name}: a Git operation is in progress"
+            ));
+        }
+        if rev_at(&worktree_path, "HEAD")? != oid {
+            return Err(format!(
+                "Cannot remove {branch_name}: worktree HEAD differs from its branch tip"
+            ));
+        }
+        if delete_branch {
+            match lifecycle.commit_status {
+                WorkspaceCommitStatus::Unmerged => {
+                    let default_branch = get_remote_default_branch(repo_path)?;
+                    // `git cherry` omits merge commits, including their resolution
+                    // changes. Require every commit on this path to be comparable.
+                    let merges = git_cmd(&base_repo)
+                        .args(["rev-list", "--merges", &format!("{default_branch}..{oid}")])
+                        .run()
+                        .map_err(|e| {
+                            format!("Cannot check merge commits for {branch_name}: {e}")
+                        })?;
+                    if !merges.stdout.trim().is_empty() {
+                        return Err(format!(
+                            "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                        ));
+                    }
+                    let cherry = git_cmd(&base_repo)
+                        .args(["cherry", &default_branch, &oid])
+                        .run()
+                        .map_err(|e| {
+                            format!("Cannot check patch equivalence for {branch_name}: {e}")
+                        })?;
+                    if cherry.stdout.lines().any(|line| !line.starts_with("- ")) {
+                        return Err(format!(
+                            "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                        ));
+                    }
+                    removal_rule = "patch_equivalence";
+                }
+                WorkspaceCommitStatus::Unknown => {
+                    return Err(lifecycle.error.unwrap_or_else(|| {
+                        format!("Cannot verify whether {branch_name} can be safely removed")
+                    }));
+                }
+                WorkspaceCommitStatus::InSync => removal_rule = "in_sync",
+                WorkspaceCommitStatus::Merged => removal_rule = "ancestry",
+            }
+        }
+        Some(oid)
+    } else {
+        None
+    };
 
     tracing::info!(
         source = "worktree",
@@ -1168,34 +1265,34 @@ pub(crate) fn remove_worktree_by_workspace_id(
 
     remove_worktree_internal(&worktree, force)?;
 
-    // Delete the local branch when requested. Default uses `-d` (safe delete):
-    // unmerged branches are refused so unpushed commits aren't silently lost.
-    // Only when the caller passes `force=true` (e.g. the locked-worktree
-    // confirmation dialog already warned the user) do we use `-D`.
+    // Compare-and-delete prevents an archive hook or another process from
+    // advancing the branch after the safety proof.
     if delete_branch {
-        let flag = if force || removal_rule == "patch_equivalence" {
-            "-D"
+        let deleted = if let Some(expected_oid) = expected_branch_oid.as_deref() {
+            git_cmd(&worktree.base_repo)
+                .args([
+                    "update-ref",
+                    "-d",
+                    &format!("refs/heads/{branch_name}"),
+                    expected_oid,
+                ])
+                .run()
         } else {
-            "-d"
+            git_cmd(&worktree.base_repo)
+                .args(["branch", "-D", "--", branch_name])
+                .run()
         };
-        // `--` separates flags from positional args so a branch name beginning
-        // with `-` (e.g. `-D`, `--force`) cannot be misparsed as a git option.
-        match git_cmd(&worktree.base_repo)
-            .args(["branch", flag, "--", branch_name])
-            .run()
-        {
+        match deleted {
             Ok(_) => tracing::info!(
                 source = "worktree",
                 branch = %branch_name,
-                flag = %flag,
                 "git branch delete: OK"
             ),
             Err(e) => {
-                let warning = format!("git branch {flag} {branch_name} failed: {e}");
+                let warning = format!("Branch {branch_name} changed or could not be deleted: {e}");
                 tracing::warn!(
                     source = "worktree",
                     branch = %branch_name,
-                    flag = %flag,
                     "git branch delete failed (branch ref preserved): {e}"
                 );
                 branch_delete_warning = Some(warning);
@@ -1619,7 +1716,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
                     branch,
                     path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
-                    warm_artifacts: Some(warm_status(Path::new(&entry.path))),
+                    warm_artifacts: None,
                 },
             );
         }
@@ -1633,12 +1730,26 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
 pub(crate) fn get_worktree_paths(
     repo_path: String,
 ) -> Result<HashMap<String, WorkspaceWorktree>, String> {
+    let mut paths = get_worktree_paths_raw(&repo_path)?;
+    attach_warm_statuses(&mut paths);
+    Ok(paths)
+}
+
+pub(crate) fn get_worktree_paths_raw(
+    repo_path: &str,
+) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let base_repo = PathBuf::from(&repo_path);
     let output = git_cmd(&base_repo)
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|error| format!("git worktree list failed: {error}"))?;
     Ok(map_worktree_workspace_paths(&output.stdout))
+}
+
+pub(crate) fn attach_warm_statuses(paths: &mut HashMap<String, WorkspaceWorktree>) {
+    for workspace in paths.values_mut() {
+        workspace.warm_artifacts = Some(warm_status(Path::new(&workspace.path)));
+    }
 }
 /// Resolve one workspace by its opaque id.
 ///
@@ -2332,7 +2443,7 @@ pub(crate) fn finalize_merged_worktree_impl(
                 &workspace_id,
                 true,
                 script.as_deref(),
-                false,
+                force,
             )?;
             state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                 repo_path: repo_path.clone(),
@@ -2475,7 +2586,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 &workspace_id,
                 true,
                 script.as_deref(),
-                false,
+                force,
             )?;
             state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                 repo_path: repo_path.clone(),
@@ -5446,6 +5557,46 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn ipc_create_response_reports_pending_warm_state() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let config = WorktreeConfig {
+            task_name: "ipc-pending".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("ipc-pending".into()),
+            create_branch: true,
+        };
+        let workspace = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        begin_warm(&workspace.path);
+        let response = ipc_worktree_response(&workspace, &repo.to_string_lossy());
+        assert_eq!(
+            response["instructions"]["warm_artifacts"]["status"],
+            "pending"
+        );
+        clear_warm(&workspace.path);
+    }
+
+    #[test]
+    fn instructions_report_failed_warming() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let config = WorktreeConfig {
+            task_name: "failed-warm".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("failed-warm".into()),
+            create_branch: true,
+        };
+        let mut workspace = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        workspace.warnings.push("copy failed".into());
+        let payload = workspace.instruction_payload();
+        assert_eq!(payload["warm_artifacts"]["status"], "failed");
+        assert!(
+            payload["warm_artifacts"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("copy failed")
+        );
+    }
+
+    #[test]
     fn workspace_payload_states_linked_isolation_and_clean_tracked_state() {
         let (_temp, repo, workspaces) = workspace_fixture();
         let config = WorktreeConfig {
@@ -5548,7 +5699,20 @@ branch refs/heads/feat
     #[test]
     fn squash_merged_clean_workspace_is_removed_by_patch_equivalence() {
         let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
         let worktree = add_worktree(&repo, "squashed");
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ])
+            .run()
+            .unwrap();
         commit_file(&worktree, "same.txt", "same patch\n");
         fs::write(repo.join("same.txt"), "same patch\n").unwrap();
         git_cmd(&repo).args(["add", "same.txt"]).run().unwrap();
@@ -5556,6 +5720,19 @@ branch refs/heads/feat
             .args(["commit", "-m", "squash equivalent"])
             .run()
             .unwrap();
+        assert_ne!(
+            git_cmd(&repo)
+                .args(["rev-parse", "main"])
+                .run()
+                .unwrap()
+                .stdout,
+            git_cmd(&repo)
+                .args(["rev-parse", "origin/main"])
+                .run()
+                .unwrap()
+                .stdout,
+            "the squash commit must exist only on local main"
+        );
 
         let outcome =
             remove_worktree_by_workspace_id(&repo.to_string_lossy(), "squashed", true, None, false)
@@ -5607,6 +5784,130 @@ branch refs/heads/feat
 
         assert!(error.contains("unmerged commits"), "{error}");
         assert!(worktree.exists());
+    }
+
+    #[test]
+    fn non_force_removal_preserves_dirty_work_in_every_commit_state() {
+        for (name, advance_main, delete_branch) in [
+            ("dirty-in-sync", false, true),
+            ("dirty-merged", true, true),
+            ("dirty-keep-branch", false, false),
+        ] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let worktree = add_worktree(&repo, name);
+            if advance_main {
+                commit_file(&repo, "main-only.txt", "advanced\n");
+            }
+            fs::write(worktree.join("untracked.txt"), "keep me\n").unwrap();
+            let error = remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                name,
+                delete_branch,
+                None,
+                false,
+            )
+            .unwrap_err();
+            assert!(error.contains("uncommitted changes"), "{name}: {error}");
+            assert_eq!(
+                fs::read_to_string(worktree.join("untracked.txt")).unwrap(),
+                "keep me\n"
+            );
+        }
+    }
+
+    #[test]
+    fn non_force_patch_equivalence_preserves_dirty_work() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "dirty-squash");
+        commit_file(&worktree, "same.txt", "same patch\n");
+        commit_file(&repo, "same.txt", "same patch\n");
+        git_cmd(&repo)
+            .args(["commit", "--amend", "-m", "squash equivalent"])
+            .run()
+            .unwrap();
+        fs::write(worktree.join("untracked.txt"), "keep me\n").unwrap();
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "dirty-squash",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("uncommitted changes"), "{error}");
+        assert!(worktree.join("untracked.txt").exists());
+    }
+
+    #[test]
+    fn archive_that_advances_branch_keeps_its_new_commit() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "late-commit");
+        commit_file(&worktree, "same.txt", "same patch\n");
+        commit_file(&repo, "same.txt", "same patch\n");
+        git_cmd(&repo)
+            .args(["commit", "--amend", "-m", "squash equivalent"])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "late-commit",
+            true,
+            Some("git commit --allow-empty -m late-commit"),
+            false,
+        )
+        .unwrap();
+        assert!(
+            outcome
+                .branch_delete_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("changed")),
+            "{:?}",
+            outcome.branch_delete_warning
+        );
+        assert!(
+            git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/late-commit"])
+                .run()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn non_force_removal_refuses_an_in_progress_git_operation() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "mid-merge");
+        let admin = worktree_admin_dir(&worktree.to_string_lossy()).unwrap();
+        fs::write(admin.join("MERGE_HEAD"), rev_at(&repo, "HEAD").unwrap()).unwrap();
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "mid-merge",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("operation is in progress"), "{error}");
+        assert!(worktree.exists());
+    }
+
+    #[tokio::test]
+    async fn queued_warm_cannot_recreate_a_removed_worktree() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "cancelled-warm");
+        let token = begin_warm(&path);
+        let worktree = WorktreeInfo {
+            name: "cancelled-warm".into(),
+            path: path.clone(),
+            branch: Some("cancelled-warm".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, false).unwrap();
+        let task = spawn_background_warm(repo, path.clone(), token, |_, destination| {
+            fs::create_dir_all(destination).unwrap();
+            crate::cow::WarmingReport::default()
+        });
+        task.await.unwrap();
+        assert!(!path.exists());
     }
 
     #[test]
@@ -5712,6 +6013,14 @@ branch refs/heads/feat
             "the reason must name the workspace: {:?}",
             status.error
         );
+    }
+
+    #[test]
+    fn resolving_a_workspace_preserves_git_failure() {
+        let temp = TempDir::new().unwrap();
+        let error = resolve_any_workspace(temp.path(), "missing").unwrap_err();
+        assert!(error.contains("git worktree list failed"), "{error}");
+        assert!(!error.contains("No workspace found"), "{error}");
     }
 
     /// The serialized spellings are the contract the sidebar's label table
