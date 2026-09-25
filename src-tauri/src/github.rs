@@ -3809,7 +3809,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
                     external_ci_names(&checks)
                 ));
             }
-            let (token, _) = crate::circleci::resolve_token();
+            let (token, _) = crate::circleci::resolve_token()?;
             let token = token.ok_or_else(|| circleci_token_not_configured_error(&checks))?;
             let mut logs = String::new();
             for (name, job) in jobs {

@@ -72,17 +72,26 @@ fn token_from_cli_config_file() -> Option<String> {
     token_from_cli_config(&std::fs::read_to_string(path).ok()?)
 }
 
-pub(crate) fn resolve_token() -> (Option<String>, TokenSource) {
-    let vault = crate::credentials::get(crate::credentials::Credential::CircleCiToken)
-        .ok()
-        .flatten();
-    let env = std::env::var("CIRCLE_TOKEN").ok();
-    resolve_token_from_sources(vault, env, token_from_cli_config_file())
+pub(crate) fn resolve_token() -> Result<(Option<String>, TokenSource), String> {
+    resolve_token_from_vault_result(
+        crate::credentials::get(crate::credentials::Credential::CircleCiToken),
+        std::env::var("CIRCLE_TOKEN").ok(),
+        token_from_cli_config_file(),
+    )
+}
+
+fn resolve_token_from_vault_result(
+    vault: Result<Option<String>, String>,
+    env: Option<String>,
+    cli_config: Option<String>,
+) -> Result<(Option<String>, TokenSource), String> {
+    let vault = vault.map_err(|error| format!("Failed to read CircleCI token: {error}"))?;
+    Ok(resolve_token_from_sources(vault, env, cli_config))
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn circleci_token_status() -> Result<serde_json::Value, String> {
-    let (token, source) = resolve_token();
+    let (token, source) = resolve_token()?;
     Ok(serde_json::json!({ "configured": token.is_some(), "source": source }))
 }
 
@@ -310,6 +319,14 @@ mod tests {
         assert_eq!(
             super::resolve_token_from_sources(None, None, None),
             (None, super::TokenSource::None)
+        );
+    }
+
+    #[test]
+    fn vault_failure_is_not_reported_as_an_absent_token() {
+        assert_eq!(
+            super::resolve_token_from_vault_result(Err("keychain unavailable".into()), None, None),
+            Err("Failed to read CircleCI token: keychain unavailable".into())
         );
     }
 
