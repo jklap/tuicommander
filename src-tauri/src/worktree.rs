@@ -634,20 +634,64 @@ pub(crate) fn create_workspace_with(
     ensure_branch_has_no_workspace(&src, &branch)?;
     let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
     let branch = worktree.branch.unwrap_or(branch);
+    let mut warnings = link_shared_stores(&src, &worktree.path);
+    warnings.extend(initialize_submodules(&src, &worktree.path));
 
     // DEFERRED (2026-09-13): carrying the parent's tracked changes was dropped
     // with independent COW workspace creation. If reinstated, pipe
     // `git diff HEAD` in the parent to `git apply` in this linked worktree.
     let warming = warm(&src, &worktree.path);
+    warnings.extend(warming.warnings);
     Ok(CreatedWorkspace {
         workspace_id: workspace_id_of_worktree(&branch),
         path: worktree.path,
         branch,
         kind: WorkspaceKind::Worktree,
-        warnings: warming.warnings,
+        warnings,
         warmed_directories: warming.warmed,
     })
 }
+
+const SHARED_WORKTREE_STORES: [&str; 3] = ["stories", "plans", "ideas"];
+
+fn link_shared_stores(src: &Path, dest: &Path) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for store in SHARED_WORKTREE_STORES {
+        let source = src.join(store);
+        if !source.is_dir() { continue; }
+        let target = dest.join(store);
+        if std::fs::symlink_metadata(&target).is_ok() {
+            warnings.push(format!("could not link shared store '{store}': '{}' already exists", target.display()));
+            continue;
+        }
+        #[cfg(unix)] let result = std::os::unix::fs::symlink(&source, &target);
+        #[cfg(windows)] let result = std::os::windows::fs::symlink_dir(&source, &target);
+        #[cfg(not(any(unix, windows)))] let result: std::io::Result<()> = Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory symlinks are unsupported"));
+        if let Err(error) = result { warnings.push(format!("could not link shared store '{store}': {error}")); }
+    }
+    warnings
+}
+
+fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
+    if !src.join(".gitmodules").is_file() { return Vec::new(); }
+    let Ok(listed) = git_cmd(src).args(["config", "--file", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"]).run() else {
+        return vec!["could not read submodule declarations".into()];
+    };
+    listed.stdout.lines().filter_map(|line| {
+        let (key, path) = line.split_once(char::is_whitespace)?;
+        let name = key.strip_prefix("submodule.")?.strip_suffix(".path")?;
+        let url_key = format!("submodule.{name}.url");
+        let local = git_cmd(dest).args(["config", &url_key, &src.join(path).to_string_lossy()]).run().and_then(|_| git_cmd(dest).args(["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", path]).run());
+        if local.is_ok() { return None; }
+        let local_error = local.err().expect("failed above");
+        let _ = git_cmd(dest).args(["config", "--unset", &url_key]).run();
+        match git_cmd(dest).args(["submodule", "sync", "--", path]).run().and_then(|_| git_cmd(dest).args(["submodule", "update", "--init", "--", path]).run()) {
+            Ok(_) => Some(format!("submodule '{path}' could not use the parent checkout ({local_error}); initialized from its configured remote instead")),
+            Err(remote_error) => Some(format!("could not initialize submodule '{path}' from the parent checkout ({local_error}) or its configured remote ({remote_error})")),
+        }
+    }).collect()
+}
+
 /// A branch can belong to only one linked worktree.
 fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), String> {
     let listed = git_cmd(base_repo)
@@ -5059,6 +5103,91 @@ branch refs/heads/feat
 
         assert_eq!(created.warmed_directories, 2);
         assert_eq!(created.warnings, vec!["one cache stayed cold"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_workspace_links_existing_shared_stores_to_the_parent() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::create_dir(repo.join("stories")).unwrap();
+        fs::write(repo.join("stories/active.md"), "shared").unwrap();
+        let config = WorktreeConfig {
+            task_name: "shared-stores".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("shared-stores".into()),
+            create_branch: true,
+        };
+
+        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
+            crate::cow::WarmingReport::default()
+        })
+        .expect("linked workspace");
+
+        assert!(
+            fs::symlink_metadata(created.path.join("stories"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(created.path.join("stories/active.md")).unwrap(),
+            fs::canonicalize(repo.join("stories/active.md")).unwrap()
+        );
+    }
+
+    #[test]
+    fn create_workspace_initializes_submodules_from_the_parent_checkout() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let module = repo.parent().unwrap().join("module");
+        fs::create_dir(&module).unwrap();
+        git_cmd(&module).args(["init"]).run().unwrap();
+        git_cmd(&module).args(["config", "user.email", "test@test.com"]).run().unwrap();
+        git_cmd(&module).args(["config", "user.name", "Test"]).run().unwrap();
+        fs::write(module.join("sidecar.txt"), "local object").unwrap();
+        git_cmd(&module).args(["add", "."]).run().unwrap();
+        git_cmd(&module).args(["commit", "-m", "module"]).run().unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &module.to_string_lossy(),
+                "modules/local",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo).args(["commit", "-m", "submodule"]).run().unwrap();
+        git_cmd(&repo)
+            .args([
+                "config",
+                "--file",
+                ".gitmodules",
+                "submodule.modules/local.url",
+                "/missing/remote",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
+        git_cmd(&repo).args(["commit", "-m", "unavailable remote"]).run().unwrap();
+
+        let config = WorktreeConfig {
+            task_name: "local-submodule".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("local-submodule".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
+            crate::cow::WarmingReport::default()
+        })
+        .unwrap();
+
+        assert!(created.warnings.is_empty(), "{:#?}", created.warnings);
+        assert_eq!(
+            fs::read_to_string(created.path.join("modules/local/sidecar.txt")).unwrap(),
+            "local object"
+        );
     }
 
     #[test]
