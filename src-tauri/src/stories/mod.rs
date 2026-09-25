@@ -311,4 +311,29 @@ mod tests {
             StoryStatus::Ready
         );
     }
+
+    #[test]
+    fn closed_unclaimed_session_does_not_wait_for_a_story_write_lock() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let store = StoryStore::open().expect("store");
+        let lock = rusqlite::Connection::open(dir.path().join("stories.sqlite3"))
+            .expect("open locking connection");
+        lock.execute_batch("BEGIN IMMEDIATE").expect("acquire write lock");
+
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            sent.send(StoryStore::release_closed_session("unclaimed"))
+                .expect("send release result");
+        });
+        assert_eq!(
+            received
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .expect("unclaimed release must not wait for a write transaction")
+                .expect("release"),
+            0
+        );
+        lock.execute_batch("ROLLBACK").expect("release write lock");
+        drop(store);
+    }
 }
