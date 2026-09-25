@@ -6,6 +6,8 @@ Toggle with `Cmd+E` or the folder icon in the status bar. The file browser shows
 
 The file browser, Markdown viewer, and Diff panels are mutually exclusive — opening one closes any other that is open.
 
+The file browser opens in tree view by default. Use the toolbar buttons to switch between the tree and flat list. Your choice is saved.
+
 ### Navigation
 
 - **Arrow keys** (`Up` / `Down`) — Move selection

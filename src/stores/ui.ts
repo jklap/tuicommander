@@ -114,7 +114,7 @@ function createUIStore() {
 		settingsNavWidth: SETTINGS_NAV_DEFAULT_WIDTH,
 		settingsExpertMode: false,
 		diffViewMode: "split" as DiffViewMode,
-		fileBrowserViewMode: "flat" as "flat" | "tree",
+		fileBrowserViewMode: "tree" as "flat" | "tree",
 		fileBrowserExternalRoot: null,
 		fileBrowserContentSearchNonce: 0,
 		activeDropdown: null,

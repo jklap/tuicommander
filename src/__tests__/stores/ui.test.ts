@@ -154,6 +154,23 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("file browser view mode", () => {
+		it("starts in tree view without loaded preferences", () => {
+			testInScope(() => {
+				expect(store.state.fileBrowserViewMode).toBe("tree");
+			});
+		});
+
+		it("keeps an explicitly saved flat view", async () => {
+			mockInvoke.mockResolvedValueOnce({ file_browser_view_mode: "flat" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.fileBrowserViewMode).toBe("flat");
+			});
+		});
+	});
+
 	describe("hydrate()", () => {
 		it("loads sidebar state from Rust backend", async () => {
 			mockInvoke.mockResolvedValueOnce({ sidebar_visible: false, sidebar_width: 280 });
