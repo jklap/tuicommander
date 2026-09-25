@@ -379,7 +379,10 @@ support comes from the optional pi-mcp-adapter extension, which owns
 auto-written entry would configure nothing.
 
 A target that already holds a `tuicommander` entry gets a path repair only when
-its command is bare or no longer names a non-empty executable. An explicit
+its command is the bare `tuic-bridge` name or a broken absolute executable path.
+Wrapper and templated commands, and HTTP entries with a URL or URI, belong to
+the user and are left unchanged at launch. An explicit install rejects a custom
+command or HTTP transport until the user removes that entry. An explicit
 install may use the bare `tuic-bridge` name for a new entry when no bridge is
 located; it reports an error rather than using that fallback to repair an
 existing entry. A working absolute command is preserved. All target-presence
@@ -418,7 +421,9 @@ single-quoted strings, unquoted keys and hexadecimal numbers do not, because a
 file using them is one the owning tool cannot read either — writing it back as
 if it were fine would be worse than refusing. TOML edits preserve comments and
 formatting through `toml_edit`. Goose YAML edits splice the bridge command or
-entry and validate the result; unsupported YAML layouts are left untouched.
+entry with the section's indentation and compare the parsed document before
+and after to verify that other extensions and fields remain unchanged;
+unsupported YAML layouts are left untouched.
 Existing config files are backed up once under TUICommander's `mcp-backups`
 directory before any edit. Atomic replacements preserve the file's permissions
 and follow config symlinks to their targets.
