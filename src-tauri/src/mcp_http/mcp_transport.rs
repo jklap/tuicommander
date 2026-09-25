@@ -161,6 +161,7 @@ use super::mcp_transport_session_agent::INFERRED_PTY_DESCRIPTION_MAX_CHARS;
 use super::mcp_transport_session_agent::McpSpawnArgs;
 #[cfg(test)]
 use super::mcp_transport_session_agent::PtyDescriptionUpdate;
+pub(crate) use super::mcp_transport_session_agent::SHELL_READINESS_TIMEOUT_MS;
 #[cfg(all(test, unix))]
 use super::mcp_transport_session_agent::SUBMIT_ACK_MIN_MS;
 #[cfg(test)]
