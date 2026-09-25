@@ -37,6 +37,16 @@ set -euo pipefail
 
 RANGE="${1:-HEAD~1}"
 ROOT="$(git rev-parse --show-toplevel)"
+case "${TMPDIR:-}" in
+  "$ROOT/"*|"$HOME/Gits/"*) TEST_TMP_BASE="${TMPDIR%/}" ;;
+  *) TEST_TMP_BASE="$ROOT/.tmp/tuic-tests" ;;
+esac
+mkdir -p "$TEST_TMP_BASE"
+TEST_TMP="$(mktemp -d "$TEST_TMP_BASE/tuic-mutants.XXXXXX")"
+trap 'rm -rf "$TEST_TMP"' EXIT
+export TMPDIR="$TEST_TMP/"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+export TUIC_TEST_TMP_ROOT="$TEST_TMP"
 SRC="$ROOT/.tmp/mutants-src"
 DIFF="$ROOT/.tmp/mutants.diff"
 

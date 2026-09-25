@@ -18847,9 +18847,8 @@ mod tests {
     #[test]
     fn config_list_prompts_empty_library() {
         let state = test_state();
-        let dir = std::env::temp_dir().join("test-prompts-list");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
 
         let r = handle_config(
             &state,
@@ -18862,9 +18861,8 @@ mod tests {
     #[test]
     fn config_save_and_load_prompt_round_trip() {
         let state = test_state();
-        let dir = std::env::temp_dir().join("test-prompts-roundtrip");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
 
         let save_r = handle_config(
             &state,
@@ -18890,9 +18888,8 @@ mod tests {
     #[test]
     fn config_save_prompt_upserts() {
         let state = test_state();
-        let dir = std::env::temp_dir().join("test-prompts-upsert");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
 
         handle_config(
             &state,
@@ -18936,9 +18933,8 @@ mod tests {
     #[test]
     fn config_load_prompt_not_found() {
         let state = test_state();
-        let dir = std::env::temp_dir().join("test-prompts-404");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
 
         let r = handle_config(
             &state,

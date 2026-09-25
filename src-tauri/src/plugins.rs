@@ -1700,8 +1700,6 @@ mod tests {
         // plugins_dir() points to the real config; we test the scanning logic
         // indirectly through validate_manifest above. The list function itself
         // just returns an empty vec when the dir doesn't exist.
-        let dir = std::env::temp_dir().join("tuic-test-nonexistent-plugins");
-        let _ = std::fs::remove_dir_all(&dir);
         // We can't easily override plugins_dir() in tests, but we can verify
         // the function doesn't panic
         let _ = list_user_plugins();

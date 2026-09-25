@@ -2134,6 +2134,9 @@ pub struct AppState {
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
     pub(crate) hot_repo_paths: parking_lot::RwLock<std::collections::HashSet<String>>,
+    /// Owns the fixture's data directory through normal drop and panic unwind.
+    #[cfg(test)]
+    _test_data_dir: Option<tempfile::TempDir>,
 }
 
 impl AppState {
@@ -3170,6 +3173,8 @@ impl AppState {
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            #[cfg(test)]
+            _test_data_dir: None,
         }
     }
 
@@ -5280,17 +5285,20 @@ pub(crate) mod tests_support {
     }
 
     pub fn make_test_app_state() -> AppState {
+        make_test_app_state_in(&crate::test_support::test_temp_root())
+    }
+
+    pub fn make_test_app_state_in(root: &std::path::Path) -> AppState {
         // Unique data dir per call: AppState::new eagerly opens
         // `data_dir/tunnel_audit.db`, so a shared path makes parallel tests
         // collide on the SQLite file (concurrent opens → SQLITE_BUSY
-        // "database is locked"). The pid + monotonic seq keeps each test's
-        // on-disk DB isolated.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let data_dir =
-            std::env::temp_dir().join(format!("test-tuic-data-{}-{}", std::process::id(), seq));
-        let _ = std::fs::create_dir_all(&data_dir);
+        // "database is locked"). The guard keeps every DB isolated and
+        // removes it when the state drops, including during panic unwind.
+        let data_guard = tempfile::Builder::new()
+            .prefix("test-tuic-data-")
+            .tempdir_in(root)
+            .expect("create test AppState data dir");
+        let data_dir = data_guard.path().to_path_buf();
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
         ));
@@ -5309,7 +5317,7 @@ pub(crate) mod tests_support {
         // `worktree.rs` hung until nextest's timeout before this was reverted).
         let mut state = AppState::new(
             data_dir,
-            std::env::temp_dir().join("test-worktrees"),
+            data_guard.path().join("worktrees"),
             crate::config::AppConfig::default(),
             log_buffer,
         );
@@ -5317,6 +5325,7 @@ pub(crate) mod tests_support {
         state.session_token = parking_lot::RwLock::new(String::from("test-token"));
         // Skip disk I/O for claude_usage in tests
         state.claude_usage_cache = parking_lot::Mutex::new(std::collections::HashMap::new());
+        state._test_data_dir = Some(data_guard);
         state
     }
 }
@@ -6660,10 +6669,13 @@ mod tests {
     #[test]
     fn test_state_has_data_dir() {
         let state = tests_support::make_test_app_state();
-        // make_test_app_state assigns a unique per-call dir under temp (named
-        // `test-tuic-data-<pid>-<seq>`) so parallel tests don't share the
-        // tunnel_audit.db SQLite file.
-        assert!(state.data_dir.starts_with(std::env::temp_dir()));
+        // The test fixture belongs to this checkout, even when the caller
+        // did not set TMPDIR before invoking Cargo.
+        assert!(
+            state
+                .data_dir
+                .starts_with(crate::test_support::test_temp_root())
+        );
         assert!(
             state
                 .data_dir
@@ -6673,6 +6685,45 @@ mod tests {
             "unexpected data_dir: {:?}",
             state.data_dir
         );
+    }
+
+    #[test]
+    fn test_state_data_dir_is_removed_on_drop_and_panic() {
+        let scratch =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("scratch test root");
+        let entries = || {
+            std::fs::read_dir(scratch.path())
+                .expect("read scratch root")
+                .count()
+        };
+        let before = entries();
+        let state = tests_support::make_test_app_state_in(scratch.path());
+        let normal_path = state.data_dir.clone();
+        let worktrees_path = state.worktrees_dir.clone();
+        std::fs::create_dir_all(&worktrees_path).expect("create fixture worktrees");
+        std::fs::write(worktrees_path.join("probe"), b"fixture").expect("write fixture worktree");
+        assert!(normal_path.exists());
+        drop(state);
+        assert!(
+            !normal_path.exists(),
+            "fixture survived normal drop: {normal_path:?}"
+        );
+        assert!(!worktrees_path.exists(), "fixture worktree survived drop");
+        assert_eq!(entries(), before, "fixture left an entry after normal drop");
+
+        let mut panic_path = None;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let state = tests_support::make_test_app_state_in(scratch.path());
+            panic_path = Some(state.data_dir.clone());
+            panic!("exercise fixture cleanup during unwind");
+        }));
+        assert!(outcome.is_err());
+        let panic_path = panic_path.expect("fixture was created before panic");
+        assert!(
+            !panic_path.exists(),
+            "fixture survived panic: {panic_path:?}"
+        );
+        assert_eq!(entries(), before, "fixture left an entry after panic");
     }
 
     // ── split_name_segments ──────────────────────────────────

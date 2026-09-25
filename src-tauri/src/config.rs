@@ -132,8 +132,40 @@ pub(crate) fn config_dir() -> PathBuf {
 #[cfg(test)]
 fn test_fallback_config_dir() -> &'static PathBuf {
     static FALLBACK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static GUARD: std::sync::OnceLock<std::sync::Mutex<Option<tempfile::TempDir>>> =
+        std::sync::OnceLock::new();
+
+    // The fallback is process-wide so spawn_blocking workers see the same path.
+    // Statics are not dropped on exit; atexit releases the TempDir after tests
+    // and their worker threads have finished, including when a test unwinds.
+    extern "C" fn cleanup() {
+        if let Some(guard) = GUARD.get() {
+            let _ = guard
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take();
+        }
+    }
+
+    unsafe extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+    }
+
     FALLBACK.get_or_init(|| {
-        std::env::temp_dir().join(format!("tuic-test-fallback-{}", std::process::id()))
+        let dir = tempfile::Builder::new()
+            .prefix("tuic-test-fallback-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .expect("create test config fallback");
+        let path = dir.path().to_path_buf();
+        GUARD
+            .set(std::sync::Mutex::new(Some(dir)))
+            .expect("initialize test config fallback guard once");
+        assert_eq!(
+            unsafe { atexit(cleanup) },
+            0,
+            "register test config cleanup"
+        );
+        path
     })
 }
 
@@ -3804,8 +3836,8 @@ mod tests {
         let _exclusive = without_config_dir_override();
         let resolved = config_dir();
         assert!(
-            resolved.starts_with(std::env::temp_dir()),
-            "with no override in scope, config_dir() must resolve under the OS temp \
+            resolved.starts_with(crate::test_support::test_temp_root()),
+            "with no override in scope, config_dir() must resolve under the checkout's test temp \
              directory, never the platform config directory: got {}",
             resolved.display()
         );
