@@ -189,6 +189,75 @@ describe("StoriesDialog", () => {
 		await screen.findByText(/offline/);
 		expect(appLogger.warn).toHaveBeenCalledWith("store", expect.stringContaining("Stories"), expect.anything());
 	});
+	it("records a human answer to a paused workflow request", async () => {
+		const run = {
+			id: "r1", planId: "p1", status: "paused", sequence: 4, startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [{ id: "a1", storyId: "s1", nodeId: "implement", state: "reported",
+				outcome: "needs_input", inputAnswer: null,
+				report: { inputRequest: { question: "Use A or B?", options: ["A", "B"] } } }],
+		};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (command === "workflow_run_action") {
+				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action.action === "get") return { type: "snapshot", value: run };
+				if (action.action === "events") return { type: "events", value: [] };
+				if (action.action === "command") return { type: "receipt", value: { snapshot: run } };
+			}
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [story] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		await screen.findByText("Use A or B?");
+		fireEvent.input(screen.getByRole("textbox", { name: "Answer" }), { target: { value: "A" } });
+		fireEvent.click(screen.getByRole("button", { name: "Record answer" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+			project: "/repo", action: {
+				action: "command", run_id: "r1", expected_sequence: 4,
+				command_id: expect.any(String),
+				command: { action: "answer_input", attempt_id: "a1", answer: "A" },
+			},
+		}));
+	});
+
+	it("resumes a paused run after the answer is recorded", async () => {
+		const run = {
+			id: "r1", planId: "p1", status: "paused", sequence: 5, startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [{ id: "a1", storyId: "s1", nodeId: "implement", state: "reported",
+				outcome: "needs_input", inputAnswer: "A",
+				report: { inputRequest: { question: "Use A or B?", options: [] } } }],
+		};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (command === "workflow_run_action") {
+				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
+				if (action.action === "get") return { type: "snapshot", value: run };
+				if (action.action === "events") return { type: "events", value: [] };
+				if (action.action === "command") return { type: "receipt", value: { snapshot: { ...run, status: "running", sequence: 6 } } };
+			}
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [story] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Resume run" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+			project: "/repo", action: {
+				action: "command", run_id: "r1", expected_sequence: 5,
+				command_id: expect.any(String), command: { action: "resume" },
+			},
+		}));
+	});
+
 	it("opens the project workflow designer", async () => {
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			const action = (args as { action: { action: string } }).action;

@@ -1,4 +1,5 @@
 use super::{RunCommand, RunEvent, RunLimits, RunReceipt, RunSnapshot, RunStore};
+use crate::workflows::{AgentRole, NodeKind, WorkflowStore};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
@@ -39,6 +40,45 @@ pub enum RunReply {
     Runs(Vec<RunSnapshot>),
     Events(Vec<RunEvent>),
     Receipt(RunReceipt),
+}
+
+/// The live coordinator is the only inbox recipient for story-worker results.
+/// A plan may contain other agent roles, so a plan attempt alone is insufficient.
+pub fn active_coordinator_session(run: &RunSnapshot) -> Result<Option<String>, String> {
+    if !run.attempts.iter().any(|attempt| {
+        attempt.story_id == run.plan_id && attempt.state == super::AttemptState::Running
+    }) {
+        return Ok(None);
+    }
+    let definition =
+        WorkflowStore::open()?.get_published(&run.definition_id, run.definition_revision)?;
+    let coordinator_nodes: std::collections::HashSet<&str> = definition
+        .graph
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            matches!(
+                node.kind,
+                NodeKind::Agent {
+                    role: AgentRole::Coordinator,
+                    ..
+                }
+            )
+            .then_some(node.id.as_str())
+        })
+        .collect();
+    let mut sessions = run.attempts.iter().filter_map(|attempt| {
+        (attempt.story_id == run.plan_id
+            && attempt.state == super::AttemptState::Running
+            && coordinator_nodes.contains(attempt.node_id.as_str()))
+        .then(|| attempt.agent.as_ref().map(|agent| agent.session_id.clone()))
+        .flatten()
+    });
+    let session = sessions.next();
+    if sessions.next().is_some() {
+        return Err("more than one coordinator is active".into());
+    }
+    Ok(session)
 }
 
 pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> {

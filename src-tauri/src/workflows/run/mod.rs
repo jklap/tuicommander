@@ -148,6 +148,8 @@ mod tests {
                 evidence: "focused test passed".into(),
             }],
             evidence: vec!["test receipt 123".into()],
+            input_request: None,
+            review: None,
         };
         assert!(
             store
@@ -227,6 +229,297 @@ mod tests {
             store.replay(&run.id).unwrap(),
             store.snapshot(&run.id).unwrap()
         );
+    }
+
+    #[test]
+    fn bound_input_request_pauses_until_a_durable_answer_and_resume() {
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let started = store
+            .command(
+                &run.id,
+                "input-attempt",
+                RunCommand::StartAttempt {
+                    story_id: story_id.clone(),
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap();
+        let attempt = started.snapshot.attempts.last().unwrap();
+        let reserved = store
+            .command(
+                &run.id,
+                "input-spawn",
+                RunCommand::ReserveEffect {
+                    key: format!("spawn:{}", attempt.id),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap();
+        store
+            .bind_agent(
+                &run.id,
+                &attempt.id,
+                AgentBinding {
+                    session_id: "input-worker".into(),
+                    task_id: None,
+                    effect_id: reserved.snapshot.effects.last().unwrap().id.clone(),
+                    prompt_contract_version: 1,
+                    prompt_sha256: "a".repeat(64),
+                    audit_preview: "request input".into(),
+                },
+            )
+            .unwrap();
+        let story = StoryStore::open().unwrap().get_story(&story_id).unwrap();
+        let report: AttemptReport = serde_json::from_value(serde_json::json!({
+            "contractVersion": 1, "runId": run.id, "storyId": story_id,
+            "storyRevision": story.revision, "attemptId": attempt.id,
+            "generation": attempt.generation, "outcome": "needs_input",
+            "summary": "Need product decision", "criterionResults": [], "evidence": [],
+            "inputRequest": {"question": "Use A or B?", "options": ["A", "B"]}
+        }))
+        .unwrap();
+        let receipt = store.report_bound_agent(report, "input-worker").unwrap();
+        assert_eq!(receipt.snapshot.status, RunStatus::Paused);
+        assert_eq!(receipt.snapshot.attempts[0].input_answer, None);
+        assert_eq!(
+            receipt.snapshot.attempts[0]
+                .report
+                .as_ref()
+                .unwrap()
+                .input_request
+                .as_ref()
+                .unwrap()
+                .question,
+            "Use A or B?"
+        );
+        assert!(
+            store
+                .command(&run.id, "early-resume", RunCommand::Resume)
+                .is_err()
+        );
+        let answered = store
+            .command(
+                &run.id,
+                "human-answer",
+                RunCommand::AnswerInput {
+                    attempt_id: attempt.id.clone(),
+                    answer: "A".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(answered.snapshot.status, RunStatus::Paused);
+        assert_eq!(
+            answered.snapshot.attempts[0].input_answer.as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            store
+                .command(
+                    &run.id,
+                    "human-answer",
+                    RunCommand::AnswerInput {
+                        attempt_id: attempt.id.clone(),
+                        answer: "A".into(),
+                    }
+                )
+                .unwrap()
+                .sequence,
+            answered.sequence
+        );
+        assert!(
+            store
+                .command(
+                    &run.id,
+                    "different-answer",
+                    RunCommand::AnswerInput {
+                        attempt_id: attempt.id.clone(),
+                        answer: "B".into(),
+                    }
+                )
+                .is_err()
+        );
+        let resumed = store
+            .command(&run.id, "human-resume", RunCommand::Resume)
+            .unwrap();
+        assert_eq!(resumed.snapshot.status, RunStatus::Running);
+        assert_eq!(store.replay(&run.id).unwrap(), resumed.snapshot);
+    }
+
+    #[test]
+    fn reviewer_report_records_advisory_findings_without_changing_story_status() {
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let started = store
+            .command(
+                &run.id,
+                "review-attempt",
+                RunCommand::StartAttempt {
+                    story_id: story_id.clone(),
+                    node_id: "review".into(),
+                },
+            )
+            .unwrap();
+        let attempt = started.snapshot.attempts.last().unwrap();
+        let reserved = store
+            .command(
+                &run.id,
+                "review-spawn",
+                RunCommand::ReserveEffect {
+                    key: format!("spawn:{}", attempt.id),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap();
+        store
+            .bind_agent(
+                &run.id,
+                &attempt.id,
+                AgentBinding {
+                    session_id: "review-worker".into(),
+                    task_id: None,
+                    effect_id: reserved.snapshot.effects.last().unwrap().id.clone(),
+                    prompt_contract_version: 1,
+                    prompt_sha256: "a".repeat(64),
+                    audit_preview: "review".into(),
+                },
+            )
+            .unwrap();
+        let story = StoryStore::open().unwrap().get_story(&story_id).unwrap();
+        let report: AttemptReport = serde_json::from_value(serde_json::json!({
+            "contractVersion": 1, "runId": run.id, "storyId": story_id,
+            "storyRevision": story.revision, "attemptId": attempt.id,
+            "generation": attempt.generation, "outcome": "completed",
+            "summary": "Criterion needs repair", "criterionResults": [], "evidence": [],
+            "review": {"decision": "changes_requested", "artifactDigest": "a".repeat(64),
+                "findings": [{"criterionIndex": 0, "severity": "major",
+                    "summary": "Missing failure path", "evidence": "test did not cover error"}]}
+        }))
+        .unwrap();
+        assert_eq!(report.review.as_ref().unwrap().findings.len(), 1);
+        let mut invalid = report.clone();
+        invalid.review.as_mut().unwrap().findings[0].criterion_index = story.criteria.len();
+        assert!(store.report_bound_agent(invalid, "review-worker").is_err());
+        assert!(
+            store
+                .report_bound_agent(report.clone(), "wrong-worker")
+                .is_err()
+        );
+        let mut missing_review = report.clone();
+        missing_review.review = None;
+        assert!(
+            store
+                .report_bound_agent(missing_review, "review-worker")
+                .is_err()
+        );
+        let receipt = store
+            .report_bound_agent(report.clone(), "review-worker")
+            .unwrap();
+        assert_eq!(receipt.snapshot.attempts[0].report.as_ref(), Some(&report));
+        assert_eq!(
+            StoryStore::open()
+                .unwrap()
+                .get_story(&story.id)
+                .unwrap()
+                .status,
+            story.status
+        );
+        assert_eq!(store.replay(&run.id).unwrap(), receipt.snapshot);
+    }
+
+    #[test]
+    fn coordinator_wake_target_is_the_active_bound_plan_coordinator() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        assert_eq!(active_coordinator_session(&run).unwrap(), None);
+        let started = store
+            .command(
+                &run.id,
+                "coordinator-attempt",
+                RunCommand::StartPlanAgent {
+                    node_id: "coordinate".into(),
+                },
+            )
+            .unwrap();
+        let attempt = started.snapshot.attempts.last().unwrap();
+        let reserved = store
+            .command(
+                &run.id,
+                "coordinator-spawn",
+                RunCommand::ReserveEffect {
+                    key: format!("spawn:{}", attempt.id),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap();
+        let bound = store
+            .bind_agent(
+                &run.id,
+                &attempt.id,
+                AgentBinding {
+                    session_id: "coordinator-pty".into(),
+                    task_id: None,
+                    effect_id: reserved.snapshot.effects.last().unwrap().id.clone(),
+                    prompt_contract_version: 1,
+                    prompt_sha256: "a".repeat(64),
+                    audit_preview: "coordinate".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            active_coordinator_session(&bound.snapshot)
+                .unwrap()
+                .as_deref(),
+            Some("coordinator-pty")
+        );
+        let interrupted = store.interrupt_agent_session("coordinator-pty").unwrap();
+        assert_eq!(interrupted.len(), 1);
+        assert_eq!(active_coordinator_session(&interrupted[0]).unwrap(), None);
     }
 
     #[test]

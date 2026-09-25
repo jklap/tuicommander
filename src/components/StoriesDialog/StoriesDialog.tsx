@@ -23,10 +23,11 @@ type Reply =
 interface RunSnapshot {
 	id: string; planId: string; status: string; sequence: number; startedMs: number;
 	stories: { storyId: string; accepted: boolean }[];
-	attempts: { id: string; storyId: string; nodeId: string; state: string; outcome: string | null }[];
+	attempts: { id: string; storyId: string; nodeId: string; state: string; outcome: string | null;
+		inputAnswer?: string | null; report?: { inputRequest?: { question: string; options: string[] } | null } | null }[];
 }
 interface RunEvent { sequence: number; atMs: number; kind: { type: string } }
-type RunReply = { type: "runs"; value: RunSnapshot[] } | { type: "snapshot"; value: RunSnapshot } | { type: "events"; value: RunEvent[] };
+type RunReply = { type: "runs"; value: RunSnapshot[] } | { type: "snapshot"; value: RunSnapshot } | { type: "events"; value: RunEvent[] } | { type: "receipt"; value: { snapshot: RunSnapshot; event?: RunEvent } };
 
 export interface StoriesDialogProps { project: string; onClose: () => void }
 
@@ -57,6 +58,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [runEvents, setRunEvents] = createSignal<RunEvent[]>([]);
 	const [runLoading, setRunLoading] = createSignal(false);
 	const [runError, setRunError] = createSignal("");
+	const [inputAnswer, setInputAnswer] = createSignal("");
 	let request = 0;
 	let runRequest = 0;
 	createEffect(on(storyId, () => setDependencyId("")));
@@ -68,6 +70,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
+	const pendingInput = () => run()?.attempts.find((attempt) => attempt.outcome === "needs_input" && !attempt.inputAnswer && attempt.report?.inputRequest);
 	const call = (action: Record<string, unknown>) => invoke<Reply>("story_action_command", { project: props.project, action });
 	const callRun = (action: Record<string, unknown>) => invoke<RunReply>("workflow_run_action", { project: props.project, action });
 
@@ -113,6 +116,46 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			else if (unchanged) await loadRun(selected);
 		} catch (cause) {
 			setRunError(String(cause));
+			setRunLoading(false);
+		}
+	}
+
+	async function answerRunInput(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		const selected = run();
+		const attempt = pendingInput();
+		const answer = inputAnswer().trim();
+		if (!selected || !attempt || !answer) return;
+		setRunLoading(true);
+		setRunError("");
+		try {
+			const reply = await callRun({ action: "command", run_id: selected.id,
+				command_id: `answer-input:${attempt.id}`, expected_sequence: selected.sequence,
+				command: { action: "answer_input", attempt_id: attempt.id, answer } });
+			if (reply.type !== "receipt") throw new Error("Invalid run response");
+			setRun(reply.value.snapshot);
+			setInputAnswer("");
+		} catch (cause) {
+			setRunError(String(cause));
+		} finally {
+			setRunLoading(false);
+		}
+	}
+
+	async function resumeRun(): Promise<void> {
+		const selected = run();
+		if (!selected || selected.status !== "paused" || pendingInput()) return;
+		setRunLoading(true);
+		setRunError("");
+		try {
+			const reply = await callRun({ action: "command", run_id: selected.id,
+				command_id: `resume:${selected.sequence}`, expected_sequence: selected.sequence,
+				command: { action: "resume" } });
+			if (reply.type !== "receipt") throw new Error("Invalid run response");
+			setRun(reply.value.snapshot);
+		} catch (cause) {
+			setRunError(String(cause));
+		} finally {
 			setRunLoading(false);
 		}
 	}
@@ -253,6 +296,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						<Show when={run()}>{(selected) => <>
 							<div class={s.detailHeader}><div><span class={s.eyebrow}>Run · {selected().id}</span><h3>{selectedPlan()?.title}</h3></div><span class={s.status} data-status={selected().status}>{selected().status.replaceAll("_", " ")}</span></div>
 							<p class={s.muted}>{selected().stories.length} {selected().stories.length === 1 ? "story" : "stories"} · {selected().attempts.length} {selected().attempts.length === 1 ? "attempt" : "attempts"} · sequence {selected().sequence}</p>
+							<Show when={pendingInput()}>{(attempt) => <form class={s.form} onSubmit={(event) => void answerRunInput(event)}>
+								<p>{attempt().report?.inputRequest?.question}</p>
+								<label>Answer<input value={inputAnswer()} onInput={(event) => setInputAnswer(event.currentTarget.value)} /></label>
+								<Show when={attempt().report?.inputRequest?.options.length}><small>Suggested: {attempt().report?.inputRequest?.options.join(", ")}</small></Show>
+								<button type="submit" disabled={runLoading() || !inputAnswer().trim()}>Record answer</button>
+							</form>}</Show>
+							<Show when={selected().status === "paused" && !pendingInput()}><button type="button" class={s.loadMore} disabled={runLoading()} onClick={() => void resumeRun()}>Resume run</button></Show>
 							<ol class={s.timeline}><For each={runEvents()}>{(event) => <li><span class={s.eventSequence}>#{event.sequence}</span><span>{event.kind.type.replaceAll("_", " ")}</span><time>{new Date(event.atMs).toLocaleTimeString()}</time></li>}</For></ol>
 							<Show when={(runEvents().at(-1)?.sequence ?? 0) < selected().sequence}><button type="button" class={s.loadMore} disabled={runLoading()} onClick={() => void loadRun(selected().id)}>Load more events</button></Show>
 						</>}</Show>
