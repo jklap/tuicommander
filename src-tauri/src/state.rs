@@ -1951,7 +1951,8 @@ pub struct AppState {
     /// per start). Browsers auto-send cookies in fetch(), unlike stored Basic Auth.
     /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
     pub(crate) session_token: parking_lot::RwLock<String>,
-    pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
+    pub(crate) auth_rate_limits:
+        DashMap<std::net::IpAddr, Arc<crate::mcp_http::auth::AuthRateLimit>>,
     #[cfg(feature = "desktop")]
     pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
     #[cfg(feature = "desktop")]
