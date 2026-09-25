@@ -584,6 +584,8 @@ reads `dirty_files` off an old backend that does not send it, so every count is
 
 ## Progress dialog and journal (2026-09-19)
 
+- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, print a title-less `intent:` followed by indented prose in a wide agent terminal. Progress must keep only the intent text; the prose must not become a tab title. In a narrow terminal, print a title after three hard-wrap rows, then another intent: both entries and both titles must appear. A long intent must keep its full tab-title event while its journal text ends at 500 characters.
+
 - [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, have Codex stream a long `intent:` in a narrow terminal while it redraws and moves the cursor to its composer. Progress should receive one full entry with its title; a later identical repaint must add none. Restart when current PTY sessions may be lost.
 
 - [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically.

@@ -7,7 +7,14 @@ pub const MAX_NAME_CHARS: usize = 80;
 pub(crate) fn bounded_name(name: &str) -> Option<String> {
     let redacted = crate::redaction::redact_secrets(name);
     let trimmed = redacted.trim();
-    (!trimmed.is_empty()).then(|| trimmed.chars().take(MAX_NAME_CHARS).collect())
+    (!trimmed.is_empty()).then(|| {
+        trimmed
+            .chars()
+            .take(MAX_NAME_CHARS)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    })
 }
 
 /// Newest entries returned by one `list`. There is no cursor and no paging: a

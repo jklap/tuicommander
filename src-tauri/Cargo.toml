@@ -165,6 +165,7 @@ tauri-plugin-opener = { version = "2", optional = true }
 # an unrelated build.
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+unicode-width = "0.2"
 # Zed, VS Code and opencode all store their MCP servers in a JSONC document —
 # comments and trailing commas that serde_json rejects. We parse with ranges so
 # the writer can splice a single member instead of reserializing the file.

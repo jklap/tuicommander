@@ -751,7 +751,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   quota interface. Session-local `/stats` is not treated as account headroom.
 
 ### 6.7 Intent Event Tracking
-- Agents declare work phases via `intent: text (Title)` tokens at the start of a row, colorized dim yellow in terminal output. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across rows — that wrap used to drop the `(Title)`, which is the tab name
+- Agents declare work phases via `intent: text (Title)` tokens at the start of a row, colorized dim yellow in terminal output. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across rows; terminal width distinguishes wrapped text from adjacent indented prose. A long intent keeps its full tab-title event while the Progress journal stores a redacted, capped copy
 - MCP instructions request an intent on its own line, at the start of every task and on each material phase change; the terminal Context bar shows it separately from the orchestrator assignment and user prompt
 - Session snapshots restore captured intent and the last substantial prompt after reconnect, even while the agent remains idle; live state updates use the same reconciliation path.
 - Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
