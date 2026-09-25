@@ -392,13 +392,14 @@ fn link_pending_children_to_parent(
     if let Some((_, messages)) = state.agent_inbox.remove(&pending_parent) {
         for message in messages {
             let message_id = message.id.clone();
-            let message_timestamp = state.push_agent_inbox(parent_tuic_session, message);
-            crate::pty::route_registered_orchestrator_mail(
-                state,
-                parent_tuic_session,
-                &message_id,
-                message_timestamp,
-            );
+            if let Some(message_timestamp) = state.push_agent_inbox(parent_tuic_session, message) {
+                crate::pty::route_registered_orchestrator_mail(
+                    state,
+                    parent_tuic_session,
+                    &message_id,
+                    message_timestamp,
+                );
+            }
         }
     }
     if let Some((_, missed)) = state.agent_inbox_evictions.remove(&pending_parent) {
@@ -628,10 +629,11 @@ fn retire_repaired_phantom_identity(
         let carried = match state.agent_inbox.remove(phantom) {
             Some((_, pending)) => pending
                 .into_iter()
-                .map(|message| {
+                .filter_map(|message| {
                     let message_id = message.id.clone();
-                    let message_timestamp = state.push_agent_inbox(repaired, message);
-                    (message_id, message_timestamp)
+                    state
+                        .push_agent_inbox(repaired, message)
+                        .map(|message_timestamp| (message_id, message_timestamp))
                 })
                 .collect(),
             None => Vec::new(),
@@ -4666,7 +4668,14 @@ fn handle_messaging(
                         "Recipient '{requested_to}' is not registered — it matched no tuic_session, PTY id or terminal alias. Use list_peers to find valid targets."
                     )});
                 }
-                state.push_agent_inbox(to, msg)
+                match state.try_push_agent_inbox(to, msg) {
+                    Ok(timestamp) => timestamp,
+                    Err(crate::state::AgentInboxFull) => {
+                        return serde_json::json!({"error": format!(
+                            "Recipient '{requested_to}' inbox is full of in-flight messages; retry send after delivery completes."
+                        )});
+                    }
+                }
             };
             // DEFERRED (2026-09-23) — a recipient with no terminal (an external
             // MCP client) has no Progress Flow column, so its mail is not
@@ -12447,6 +12456,48 @@ mod tests {
         assert_eq!(
             recovered["messages"][0]["id"], "lone-terminal-mail",
             "{recovered}"
+        );
+    }
+
+    #[test]
+    fn agent_send_reports_back_pressure_when_recipient_inbox_is_all_in_flight() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let message_id = format!("pending-{index}");
+            state.push_agent_inbox(
+                TEST_UUID_B,
+                crate::state::AgentMessage {
+                    id: message_id.clone(),
+                    from_tuic_session: TEST_UUID_A.into(),
+                    from_name: "sender".into(),
+                    content: "in flight".into(),
+                    timestamp: index as u64,
+                    delivered_via_channel: false,
+                },
+            );
+            assert_eq!(
+                state.assign_agent_delivery(TEST_UUID_B, &message_id, true),
+                crate::state::AgentDeliveryAssignment::Terminal
+            );
+        }
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "cannot be buffered",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert!(
+            sent["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("full of in-flight messages")),
+            "sender must receive retryable back-pressure: {sent}"
         );
     }
 

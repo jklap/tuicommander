@@ -1449,6 +1449,13 @@ its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
 it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
+Inbox overflow evicts only the oldest message that has no active delivery lease
+or has already been returned to a waiter or dispatched to a terminal. It never
+evicts `TerminalPending` or waiter-owned mail, because either may still need a
+terminal-failure requeue. If all 100 retained messages are in flight, `agent
+action=send` rejects the new message with an error asking the sender to retry
+after delivery completes; it does not silently discard any mail.
+
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake
 capability remains server-derived: without a live managed PTY and its canonical
