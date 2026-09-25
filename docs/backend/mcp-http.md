@@ -1052,7 +1052,13 @@ runs on the blocking pool and the local MCP bridge allows up to 305 seconds for
 the response, covering linked worktrees with large ignored build artifacts.
 Non-forced removal refuses staged, unstaged, or untracked work. The optional
 MCP `force` boolean defaults to `false`; `true` is the explicit,
-confirmation-gated authority to discard that worktree-only state.
+confirmation-gated authority to discard that worktree-only state. It does not
+override a worktree lock or authorize deletion of unmerged commits. The
+optional `delete_branch` flag defaults to `true` for a normal removal and
+`false` when `force=true`; an explicit `delete_branch=true` still runs the
+branch safety proof and may return a branch-retained warning. Unlocking a
+locked worktree requires the separate `override_lock=true` flag and user
+confirmation; no removal sends Git two `--force` flags.
 
 When `delete_branch=true` and safe branch
 deletion fails after a linked worktree is removed, the action still succeeds

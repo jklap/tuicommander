@@ -540,6 +540,118 @@ pub(super) async fn run_setup_script_http(
 mod warm_tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = crate::git_cli::git_cmd(&repo);
+        git.args(["init"]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(&repo).args(["add", "."]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "base"])
+            .run()
+            .unwrap();
+        repo
+    }
+
+    #[cfg(unix)]
+    fn set_gated_setup_script(started: &std::path::Path, gate: &std::path::Path) {
+        let mut defaults = crate::config::RepoDefaultsConfig::default();
+        let finished = gate.with_extension("finished");
+        defaults.setup_script = format!(
+            "echo started > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo finished > '{}'",
+            started.display(),
+            gate.display(),
+            finished.display()
+        );
+        crate::config::save_repo_defaults(defaults).unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_file(path: &std::path::Path) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !path.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("setup script did not start");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn create_worktree_shared_reports_pending_while_the_setup_script_runs() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let started = temp.path().join("setup.started");
+        let gate = temp.path().join("setup.release");
+        set_gated_setup_script(&started, &gate);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().into_owned();
+        let state_for_create = Arc::clone(&state);
+        let repo_for_create = repo_path.clone();
+        let create = tokio::spawn(async move {
+            create_worktree_shared(&state_for_create, repo_for_create, "pending-setup".into(), None)
+                .await
+        });
+
+        wait_for_file(&started).await;
+        let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
+        assert_eq!(paths["pending-setup"].warm_artifacts.as_ref().unwrap()["status"], "pending");
+        std::fs::write(&gate, "release").unwrap();
+        let created = create.await.unwrap().unwrap_or_else(|(status, body)| panic!("{status}: {:?}", body.0));
+        assert_eq!(created.instructions["warm_artifacts"]["status"], "pending");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while crate::worktree::warm_status(&created.worktree.path)["status"] == "pending" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&created.worktree.path)["status"], "done");
+        crate::worktree::clear_warm(&created.worktree.path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_create_marks_pending_warm_failed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let started = temp.path().join("setup.started");
+        let gate = temp.path().join("setup.release");
+        set_gated_setup_script(&started, &gate);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().into_owned();
+        let state_for_create = Arc::clone(&state);
+        let repo_for_create = repo_path.clone();
+        let create = tokio::spawn(async move {
+            create_worktree_shared(&state_for_create, repo_for_create, "cancelled-setup".into(), None)
+                .await
+        });
+
+        wait_for_file(&started).await;
+        let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
+        let path = std::path::PathBuf::from(&paths["cancelled-setup"].path);
+        assert_eq!(crate::worktree::warm_status(&path)["status"], "pending");
+        create.abort();
+        let _ = create.await;
+        assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
+        std::fs::write(&gate, "release").unwrap();
+        wait_for_file(&gate.with_extension("finished")).await;
+        crate::worktree::clear_warm(&path);
+    }
+
     #[tokio::test]
     async fn a_slow_warm_keeps_the_returned_workspace_pending_until_it_finishes() {
         let temp = tempfile::TempDir::new().unwrap();

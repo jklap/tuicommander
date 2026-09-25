@@ -2195,20 +2195,22 @@ DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 
 Query parameters:
 - `repoPath` (required) -- base repository path
-- `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch
-- `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree state and uses forced worktree removal and branch deletion
+- `deleteBranch` (optional, default `true`; default `false` with `force=true`) -- when `true`, also requests deletion of the local git branch
+- `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
+- `overrideLock` (optional, default `false`) -- explicit authorization to unlock a locked worktree before removal
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
 Returns `{ "ok": true, "branch_delete_warning": null, "removal_rule": "ancestry" }`
 on full success. `removal_rule` names the rule that allowed removal:
 `in_sync`, `ancestry`, `patch_equivalence`, `kept_branch`, or `force`.
-A non-force request requires a clean worktree with no Git operation in progress,
-even when `deleteBranch=false`, and uses plain `git worktree remove`. A clean
+A non-force request requires a clean worktree and submodules with no Git
+operation in progress, even when `deleteBranch=false`. A populated submodule
+requires one `git worktree remove --force` after a fresh clean-state check. A clean
 branch whose commits were squash- or rebase-merged can use
 `patch_equivalence` when `git cherry` finds no unique patches. Merge commits
 are refused because `git cherry` does not compare their resolution changes. When
-`deleteBranch=true` and the branch ref changes after the preflight,
+`deleteBranch=true` and the branch fails proof or moves after the preflight,
 the compare-and-delete operation keeps the branch and the request
 still succeeds with `branch_delete_warning` set so clients can report the
 partial outcome.

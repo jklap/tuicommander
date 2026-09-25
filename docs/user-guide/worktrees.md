@@ -120,7 +120,7 @@ Both **Archive** and **Delete** remove the worktree, so TUICommander asks first 
 The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).
 
 Removing a worktree without force also refuses uncommitted changes when the
-branch will be kept. It stops if a Git operation is in progress. If an archive
+branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive
 script adds a commit after the removal check, the worktree can be removed, but
 the branch stays and the result warns that the branch changed.
 
@@ -149,9 +149,9 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 
 Removing a worktree:
 1. Closes all terminals associated with that branch
-2. Runs `git worktree remove` to clean up
+2. Checks checkout and submodule state, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check
 3. Removes the branch entry from the sidebar
-4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks the operation and stays in the sidebar. Merge it first, or turn off **Delete branch on remove** to keep the branch.
+4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks a normal removal. A confirmed dirty-file removal can remove the checkout, but keeps an unmerged branch and reports a warning. Merge it first, or turn off **Delete branch on remove** to keep the branch.
 5. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
 
 Immediately before removal, TUICommander refreshes the backend lifecycle verdict

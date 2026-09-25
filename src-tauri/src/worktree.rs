@@ -3276,7 +3276,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_locked_worktree_with_force_succeeds() {
+    fn test_remove_locked_worktree_with_force_still_refuses_lock() {
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
 
@@ -3303,16 +3303,9 @@ mod tests {
             .output()
             .expect("git worktree lock failed");
 
-        let result = remove_worktree_internal(&worktree, true);
-        assert!(
-            result.is_ok(),
-            "Force removal of locked worktree should succeed: {:?}",
-            result
-        );
-        assert!(
-            !worktree.path.exists(),
-            "Worktree directory should be gone after force removal"
-        );
+        let error = remove_worktree_internal(&worktree, true).unwrap_err();
+        assert!(error.starts_with(LOCKED_WORKTREE_PREFIX), "{error}");
+        assert!(worktree.path.exists());
     }
 
     #[test]
@@ -3382,9 +3375,9 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_worktree_by_workspace_id_force_delete_removes_unmerged_branch() {
-        // Scenario: same as above but with force=true (user confirmed via locked-worktree dialog).
-        // Expected: branch ref is force-deleted via `git branch -D`.
+    fn force_removal_keeps_an_unmerged_branch_with_a_warning() {
+        // Force may discard checkout changes, but it does not grant permission
+        // to delete commits that have not reached the default branch.
         let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
@@ -3413,18 +3406,15 @@ mod tests {
             true,
         );
         let outcome = res.expect("force remove should succeed");
-        assert!(
-            outcome.branch_delete_warning.is_none(),
-            "force branch delete should not report a partial warning"
-        );
+        assert!(outcome.branch_delete_warning.as_deref().is_some_and(|w| w.contains("unmerged")), "{outcome:?}");
 
         let branches = git_cmd(repo.path())
             .args(["branch", "--list", "feat-force"])
             .run()
             .unwrap();
         assert!(
-            !branches.stdout.contains("feat-force"),
-            "branch ref should be force-deleted (got: {})",
+            branches.stdout.contains("feat-force"),
+            "unmerged branch ref must survive (got: {})",
             branches.stdout
         );
     }
@@ -3880,6 +3870,32 @@ mod tests {
 
         assert_eq!(res.action, "deleted");
         assert!(!wt.exists(), "the user asked for it");
+    }
+
+    #[test]
+    fn forced_finalize_reports_that_an_unmerged_branch_was_kept() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "feat-finalize-unmerged", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "feat-finalize-unmerged".into(),
+            "delete".into(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(result.action, "deleted");
+        assert!(!worktree.exists());
+        let payload = serde_json::to_value(result).unwrap();
+        assert!(payload["branch_delete_warning"].as_str().is_some_and(|w| w.contains("unmerged")), "{payload}");
+        assert!(git_cmd(repo.path())
+            .args(["show-ref", "--verify", "refs/heads/feat-finalize-unmerged"])
+            .run()
+            .is_ok());
     }
 
     #[test]
@@ -5680,6 +5696,95 @@ branch refs/heads/feat
         path
     }
 
+    fn add_populated_submodule(repo: &Path) {
+        let module = repo.parent().unwrap().join("module-source");
+        fs::create_dir(&module).unwrap();
+        git_cmd(&module).args(["init"]).run().unwrap();
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "module.txt", "committed module content\n");
+        git_cmd(repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &module.to_string_lossy(),
+                "modules/local",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(repo).args(["add", "."]).run().unwrap();
+        git_cmd(repo)
+            .args(["commit", "-m", "add submodule"])
+            .run()
+            .unwrap();
+    }
+
+    #[test]
+    fn clean_populated_submodule_allows_non_force_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "clean-module");
+        git_cmd(&worktree)
+            .args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"])
+            .run()
+            .unwrap();
+
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "clean-module",
+            true,
+            None,
+            false,
+        )
+        .expect("a clean populated submodule can be safely removed");
+        assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn local_submodule_commit_blocks_non_force_removal_and_keeps_gitdir() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "modified-module");
+        git_cmd(&worktree)
+            .args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"])
+            .run()
+            .unwrap();
+        let module = worktree.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local.txt", "only in this checkout\n");
+        let gitdir = fs::read_to_string(module.join(".git")).unwrap();
+        let gitdir = gitdir.trim().strip_prefix("gitdir: ").unwrap();
+        let gitdir = module.join(gitdir);
+        assert!(gitdir.exists());
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "modified-module",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("uncommitted") || error.contains("submodule"), "{error}");
+        assert!(worktree.exists());
+        assert!(gitdir.exists(), "local-only commit must stay reachable");
+    }
+
     fn commit_file(dir: &Path, name: &str, body: &str) {
         fs::write(dir.join(name), body).expect("write file");
         git_cmd(dir).args(["add", "."]).run().expect("git add");
@@ -5914,6 +6019,32 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn forced_removal_still_compares_the_branch_tip_before_deleting() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "force-late-commit");
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "force-late-commit",
+            true,
+            Some("git commit --allow-empty -m late-commit"),
+            true,
+        )
+        .unwrap();
+        assert!(!worktree.exists());
+        assert!(
+            outcome
+                .branch_delete_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("changed")),
+            "{outcome:?}"
+        );
+        assert!(git_cmd(&repo)
+            .args(["show-ref", "--verify", "refs/heads/force-late-commit"])
+            .run()
+            .is_ok());
+    }
+
+    #[test]
     fn non_force_removal_refuses_an_in_progress_git_operation() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let worktree = add_worktree(&repo, "mid-merge");
@@ -5929,6 +6060,30 @@ branch refs/heads/feat
         .unwrap_err();
         assert!(error.contains("operation is in progress"), "{error}");
         assert!(worktree.exists());
+    }
+
+    #[test]
+    fn force_cannot_discard_a_detached_head_commit() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "detached-work");
+        git_cmd(&worktree)
+            .args(["checkout", "--detach"])
+            .run()
+            .unwrap();
+        commit_file(&worktree, "detached.txt", "only at detached HEAD\n");
+        let detached_oid = rev_at(&worktree, "HEAD").unwrap();
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "detached-work",
+            true,
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert!(error.contains("HEAD differs"), "{error}");
+        assert!(worktree.exists());
+        assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
     }
 
     #[tokio::test]
@@ -5949,6 +6104,41 @@ branch refs/heads/feat
         });
         task.await.unwrap();
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn archive_waits_for_active_warm_and_cancels_queued_warm() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "archive-warm");
+        let token = begin_warm(&path);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let active = spawn_background_warm(repo.clone(), path.clone(), token, move |_, dest| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            fs::create_dir_all(dest.join("warm-cache")).unwrap();
+            crate::cow::WarmingReport::default()
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let repo_for_archive = repo.clone();
+        let archive = tokio::task::spawn_blocking(move || {
+            archive_worktree(&repo_for_archive, "archive-warm", None)
+        });
+        // Before the guard, archive completes while the copy is held and the
+        // copy later recreates the old checkout path. With the guard it waits.
+        for _ in 0..100 {
+            if archive.is_finished() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        release_tx.send(()).unwrap();
+        active.await.unwrap();
+        let archived = archive.await.unwrap().unwrap();
+        assert!(!path.exists(), "warm recreated {}", path.display());
+        assert!(Path::new(&archived).join("warm-cache").exists());
+        assert!(!warm_token_is_current(&path, token));
     }
 
     #[test]

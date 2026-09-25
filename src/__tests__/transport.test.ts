@@ -1187,6 +1187,17 @@ describe("transport", () => {
 			expect(result.path).toBe("/worktrees/feat~a1b2c3d4?repoPath=%2Fr&deleteBranch=true");
 		});
 
+		it("forwards an explicit lock override separately from dirty-file force", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "locked",
+				deleteBranch: true,
+				force: true,
+				overrideLock: true,
+			});
+			expect(result.path).toBe("/worktrees/locked?repoPath=%2Fr&deleteBranch=true&force=true&overrideLock=true");
+		});
+
 		// Creation is the one command that takes a branch and no id — the id does
 		// not exist yet. It comes back in the response.
 		it("maps create_worktree to POST carrying the branch name", () => {
