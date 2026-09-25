@@ -152,9 +152,13 @@ the probe does on unix.
 
 Every managed workspace is a linked Git worktree. After Git creates the clean
 checkout, `cow.rs` asks Git for ignored directories and copy-on-write copies
-those directories from the parent. Tracked paths and ignored files are never
-copied; nested repositories and any directory containing the destination are
-skipped.
+those directories from the parent. It excludes every `.tmp` path component,
+tracked paths, ignored files, nested repositories, and any directory containing
+the destination. Tauri `bundle.externalBin` entries additionally select their
+target-triple sidecar files by configuration, rather than by hard-coded names.
+Submodules initialise from the parent checkout first (with the configured remote
+as fallback), so unpublished pinned objects remain usable; failures are returned
+as workspace warnings.
 
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per

@@ -202,19 +202,34 @@ fn external_bin_candidates(src: &Path) -> Vec<PathBuf> {
     let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) else {
         return Vec::new();
     };
-    let Some(entries) = config.pointer("/bundle/externalBin").and_then(serde_json::Value::as_array) else {
+    let Some(entries) = config
+        .pointer("/bundle/externalBin")
+        .and_then(serde_json::Value::as_array)
+    else {
         return Vec::new();
     };
-    entries.iter().filter_map(serde_json::Value::as_str).flat_map(|entry| {
-        let declared = Path::new(entry);
-        let (Some(name), Some(parent)) = (declared.file_name(), declared.parent()) else { return Vec::new(); };
-        let prefix = format!("{}-", name.to_string_lossy());
-        std::fs::read_dir(src.join("src-tauri").join(parent)).into_iter().flatten()
-            .filter_map(Result::ok)
-            .filter_map(|child| (child.path().is_file() && child.file_name().to_string_lossy().starts_with(&prefix))
-                .then(|| child.path().strip_prefix(src).ok().map(PathBuf::from)).flatten())
-            .collect()
-    }).collect()
+    entries
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .flat_map(|entry| {
+            let declared = Path::new(entry);
+            let (Some(name), Some(parent)) = (declared.file_name(), declared.parent()) else {
+                return Vec::new();
+            };
+            let prefix = format!("{}-", name.to_string_lossy());
+            std::fs::read_dir(src.join("src-tauri").join(parent))
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter_map(|child| {
+                    (child.path().is_file()
+                        && child.file_name().to_string_lossy().starts_with(&prefix))
+                    .then(|| child.path().strip_prefix(src).ok().map(PathBuf::from))
+                    .flatten()
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Production wrapper. Probe once so a filesystem without clonefile support
@@ -667,6 +682,40 @@ mod tests {
         warm_worktree_with(&repo, &worktree, plain_copy);
 
         assert!(!worktree.join(".env").exists());
+    }
+
+    #[test]
+    fn warming_preserves_an_existing_target() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::create_dir_all(worktree.join("build/cache")).unwrap();
+        std::fs::write(worktree.join("build/cache/data"), "workspace").unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, |_, _| {
+            panic!("existing target must not be copied over")
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert!(report.warnings.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
+            "workspace"
+        );
+    }
+
+    #[test]
+    fn a_slow_warm_finishes_without_changing_its_report() {
+        let (_temp, repo, worktree) = warming_fixture();
+        let report = warm_worktree_with(&repo, &worktree, |from, to| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            plain_copy(from, to)
+        });
+
+        assert_eq!(report.warmed, 1);
+        assert!(report.warnings.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
+            "warm"
+        );
     }
 
     #[test]
