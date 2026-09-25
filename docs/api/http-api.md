@@ -1588,7 +1588,7 @@ Returns detected agent binaries and installed IDEs.
 GET /agents/detect?binary=claude
 ```
 
-Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. The help result is cached per executable and false when no compatible option is advertised.
+Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary name or absolute executable path. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. The help result is cached per executable and false when no compatible option is advertised. An absolute path checks that exact installed version.
 
 ### Detect Installed IDEs
 

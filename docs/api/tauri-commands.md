@@ -307,7 +307,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary in PATH, version, and cached `supports_no_alt_screen` help probe |
+| `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary name in PATH or an exact absolute path, version, and cached `supports_no_alt_screen` help probe |
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |

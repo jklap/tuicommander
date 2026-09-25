@@ -587,7 +587,12 @@ pub(crate) struct AgentBinaryDetection {
 
 /// Probe a direct CLI once per executable. Older releases may reject the flag.
 pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
-    let flag = match agent_type {
+    let binary_name = std::path::Path::new(agent_type)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(agent_type);
+    let binary_name = binary_name.strip_suffix(".exe").unwrap_or(binary_name);
+    let flag = match binary_name {
         "codex" | "grok" => "--no-alt-screen",
         "opencode" => "--mini",
         _ => return false,
@@ -628,6 +633,14 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
 /// Detect any agent binary location
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
+    let direct_path = std::path::Path::new(&binary);
+    if direct_path.is_absolute() && direct_path.is_file() {
+        return AgentBinaryDetection {
+            path: Some(binary.clone()),
+            version: get_binary_version(&binary),
+            supports_no_alt_screen: supports_no_alt_screen(&binary, &binary),
+        };
+    }
     let home = dirs::home_dir()
         .unwrap_or_default()
         .to_string_lossy()
@@ -1093,6 +1106,17 @@ mod tests {
     use super::*;
 
     // resolve_cli and extra_bin_dirs tests are now in cli.rs
+
+    #[test]
+    fn direct_agent_binary_path_is_detected_without_using_path_search() {
+        let path = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let detected = detect_agent_binary(path.clone());
+        assert_eq!(detected.path.as_deref(), Some(path.as_str()));
+        assert!(!detected.supports_no_alt_screen);
+    }
 
     /// The MCP/HTTP detect surface reports KNOWN_AGENT_BINARIES verbatim, so an agent added to
     /// the frontend registry but not here is installed-yet-invisible to an orchestrator.

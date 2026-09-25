@@ -211,6 +211,14 @@ describe("supportsAgentNoAltScreen", () => {
 		mockRpc.mockResolvedValue({ path: "/opt/bin/codex", supports_no_alt_screen: false });
 		expect(await supportsAgentNoAltScreen("codex", "codex")).toBe(false);
 	});
+	it("probes the configured absolute binary rather than another version on PATH", async () => {
+		mockRpc.mockResolvedValue({ path: "/opt/custom/codex", supports_no_alt_screen: true });
+		expect(await supportsAgentNoAltScreen("codex", "/opt/custom/codex")).toBe(true);
+		expect(mockRpc).toHaveBeenCalledWith("detect_agent_binary", {
+			binary: "/opt/custom/codex",
+			repoPath: undefined,
+		});
+	});
 	it("does not pass an unverified flag when binary detection fails", async () => {
 		mockRpc.mockRejectedValueOnce(new Error("offline"));
 		expect(await supportsAgentNoAltScreen("grok", "grok")).toBe(false);
