@@ -597,4 +597,28 @@ mod warm_tests {
         assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
         crate::worktree::clear_warm(&destination);
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_script_observes_pending_before_warm_starts() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let (setup, error, task) = run_setup_then_warm(
+            Some("sleep 2; echo setup > setup.marker".into()),
+            temp.path().to_path_buf(),
+            destination.clone(),
+            token,
+            |_, dest| {
+                assert_eq!(crate::worktree::warm_status(dest)["status"], "pending");
+                assert!(dest.join("setup.marker").exists());
+                crate::cow::WarmingReport::default()
+            },
+        )
+        .await;
+        assert!(setup.is_some(), "{error:?}");
+        task.await.unwrap();
+        crate::worktree::clear_warm(&destination);
+    }
 }
