@@ -1092,7 +1092,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	fetch_ci_failure_logs: {
 		map: (_args, p) => ({
 			method: "GET",
-			path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}`,
+            path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}${_args.checkUrl ? `&checkUrl=${p("checkUrl")}` : ""}`,
 		}),
 	},
 	circleci_token_status: {

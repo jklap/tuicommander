@@ -79,7 +79,11 @@ describe("PrDetailContent — ego review result metadata", () => {
 		const repo = nextRepo();
 		const { getByText, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
 		fireEvent.click(getByText("Log"));
-		expect(mockRpc).toHaveBeenCalledWith("fetch_ci_failure_logs", { repoPath: repo, branch: "feature" });
+		expect(mockRpc).toHaveBeenCalledWith("fetch_ci_failure_logs", {
+			repoPath: repo,
+			branch: "feature",
+			checkUrl: "https://circleci.com/gh/acme/widget/42",
+		});
 		expect(await findByText("failed step")).toBeTruthy();
 	});
 
