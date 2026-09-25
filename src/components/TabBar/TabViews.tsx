@@ -15,6 +15,7 @@ import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
 import { markdownDocumentPanelId } from "../../utils/markdownDocumentPanelId";
 import type { LeafRect } from "../../utils/paneTreeGeometry";
+import { ptyCaptureStore } from "../../utils/ptyCapture";
 import { getRepoColor } from "../../utils/repoColor";
 import { GlobeIcon } from "../GlobeIcon";
 import s from "./TabBar.module.css";
@@ -131,6 +132,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	const isExited = () => terminal()?.shellState === "exited";
 	const isUnseen = () => !isActive() && terminal()?.unseen;
 	const awaitingInput = () => terminal()?.awaitingInput;
+	const sessionId = () => terminal()?.sessionId;
 	const statusIconId = () =>
 		resolveIconId(
 			settingsStore.state.indicatorOverrides,
@@ -233,6 +235,13 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 							<Show when={terminal()?.suspended}>
 								<span class={s.suspendedBadge} title={t("tabBar.suspended", "Suspended")}>
 									zz
+								</span>
+							</Show>
+							<Show when={sessionId() && ptyCaptureStore.isRecording(sessionId()!)}>
+								<span class={s.captureBadge} title="Diagnostics capture recording">
+									<svg viewBox="0 0 8 8" width="8" height="8" fill="currentColor">
+										<circle cx="4" cy="4" r="4" />
+									</svg>
 								</span>
 							</Show>
 							<Show when={isDetached()}>
