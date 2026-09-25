@@ -196,8 +196,19 @@ export const DEFAULT_HOLD_BACK_MS = 1500;
 export const DEFAULT_SPEECH_VOLUME_DB = -18;
 export const DEFAULT_SPEECH_LEVELLING = 0.67;
 
-/** What "Listen" says. */
-const VOICE_PREVIEW_TEXT = "This is how replies will sound.";
+/** What "Listen" says in each bundled speech language. */
+const VOICE_PREVIEW_TEXT: Record<string, string> = {
+	en: "This is how replies will sound.",
+	fr: "Voici comment les réponses sonneront.",
+	de: "So werden Antworten klingen.",
+	it: "Questa è la voce delle risposte.",
+	pt: "É assim que as respostas vão soar.",
+	es: "Así sonarán las respuestas.",
+};
+
+function voicePreviewText(language: string): string {
+	return VOICE_PREVIEW_TEXT[language] ?? VOICE_PREVIEW_TEXT.en;
+}
 
 /** A file's bytes as base64, the form a voice file travels in over IPC and HTTP. */
 async function fileToBase64(file: Blob): Promise<string> {
@@ -993,7 +1004,7 @@ function createDictationStore() {
 		 */
 		async previewSpeechVoice(language: string, voice: string): Promise<string | null> {
 			try {
-				await invoke("preview_speech_voice", { language, voice, text: VOICE_PREVIEW_TEXT });
+				await invoke("preview_speech_voice", { language, voice, text: voicePreviewText(language) });
 				return null;
 			} catch (err) {
 				appLogger.warn("dictation", `Voice preview refused: ${voice}`, err);
