@@ -10,6 +10,44 @@ pub use store::StoryStore;
 mod tests {
     use super::*;
 
+    /// The dialog reads these exact keys; a serde rename or a lost flatten must fail here.
+    #[test]
+    fn plan_view_reply_keeps_the_wire_shape_the_dialog_reads() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Wire plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        store
+            .create_story(NewStory {
+                plan_id: plan.id.clone(),
+                title: "Wire story".into(),
+                criteria: vec!["Shown".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let reply = serde_json::to_value(StoryReply::PlanView(
+            store.plan_view(&plan.id).expect("plan view"),
+        ))
+        .expect("serialize");
+        assert_eq!(reply["type"], "plan_view");
+        let value = &reply["value"];
+        assert_eq!(value["wontFixCount"], 0);
+        assert_eq!(value["allCancelled"], false);
+        assert_eq!(value["stories"][0]["title"], "Wire story");
+        assert_eq!(value["stories"][0]["abandoned"], false);
+        assert!(
+            value["stories"][0].get("story").is_none(),
+            "story fields are flattened"
+        );
+    }
+
     #[test]
     fn new_store_sets_schema_version_one() {
         let dir = tempfile::tempdir().expect("temporary config");
