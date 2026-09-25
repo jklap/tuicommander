@@ -2096,8 +2096,8 @@ what MCP `repo action=worktree_create` returns — one value, two carriers — a
 it is the ONLY instruction channel: there is no enforcement layer behind it.
 Its `warm_artifacts.status` starts as `pending`; wait for `done` or `failed`
 in `GET /worktrees/paths?path=<base_repo>` before installing or building.
-The setup script completes before warming begins. Desktop IPC creation waits
-for warming and returns `done`.
+The setup script completes before warming begins. Desktop IPC creation also
+returns `pending` and warms in the background.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,
@@ -2203,11 +2203,13 @@ The path segment is the opaque workspace id from `GET /worktrees/paths`, not a b
 Returns `{ "ok": true, "branch_delete_warning": null, "removal_rule": "ancestry" }`
 on full success. `removal_rule` names the rule that allowed removal:
 `in_sync`, `ancestry`, `patch_equivalence`, `kept_branch`, or `force`.
-A clean branch whose commits were squash- or rebase-merged can use
+A non-force request requires a clean worktree with no Git operation in progress,
+even when `deleteBranch=false`, and uses plain `git worktree remove`. A clean
+branch whose commits were squash- or rebase-merged can use
 `patch_equivalence` when `git cherry` finds no unique patches. Merge commits
 are refused because `git cherry` does not compare their resolution changes. When
-`deleteBranch=true` and `git branch -d`
-refuses to delete the branch after a linked worktree is removed, the request
+`deleteBranch=true` and the branch ref changes after the preflight,
+the compare-and-delete operation keeps the branch and the request
 still succeeds with `branch_delete_warning` set so clients can report the
 partial outcome.
 
