@@ -11,9 +11,17 @@ import { type FileTab, type MdTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
-import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
+import {
+	isAbsolutePath,
+	joinPath,
+	normalizeSep,
+	pathDirname,
+	pathStartsWith,
+	pathStripPrefix,
+} from "../../utils/pathUtils";
 import {
 	insertTweakBlockComment,
 	insertTweakComment,
@@ -49,6 +57,31 @@ export interface MarkdownTabHandle {
  *  for a deleted file — an expected, non-warn-worthy state for a stale tab. */
 function isMissingFileError(msg: string): boolean {
 	return msg.includes("No such file") || msg.includes("os error 2");
+}
+
+/** Anchor requested for a Markdown tab that has not finished loading yet. */
+const pendingHeadings = new Map<string, string>();
+
+function normalizeLinkPath(path: string): string | null {
+	const value = normalizeSep(path);
+	const drive = /^[A-Za-z]:\//.exec(value)?.[0] ?? (value.startsWith("//") ? "//" : value.startsWith("/") ? "/" : "");
+	const parts: string[] = [];
+	for (const part of value.slice(drive.length).split("/")) {
+		if (!part || part === ".") continue;
+		if (part === "..") {
+			if (!parts.length) return null;
+			parts.pop();
+		} else parts.push(part);
+	}
+	return drive + parts.join("/");
+}
+
+function headingSlug(text: string): string {
+	return text
+		.trim()
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s-]/gu, "")
+		.replace(/\s+/g, "-");
 }
 
 export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
@@ -283,13 +316,96 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		focusWrapper();
 	};
 
-	const handleMdLink = (href: string) => {
+	const scrollToHeading = (anchor: string) => {
+		const wanted = anchor.toLowerCase();
+		const heading = Array.from(contentRef?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6") ?? []).find(
+			(el) => el.id.toLowerCase() === wanted || headingSlug(el.textContent ?? "") === wanted,
+		);
+		heading?.scrollIntoView({ block: "start" });
+	};
+
+	createEffect(() => {
+		const tab = props.tab;
+		const body = content();
+		if (tab.type !== "file" || !body || loading() || mdTabsStore.state.activeId !== tab.id) return;
+		const root = tab.fsRoot || tab.repoPath;
+		const absolute = isAbsolutePath(tab.filePath)
+			? normalizeLinkPath(tab.filePath)
+			: normalizeLinkPath(joinPath(root, tab.filePath));
+		const anchor = absolute ? pendingHeadings.get(absolute) : undefined;
+		if (!anchor) return;
+		pendingHeadings.delete(absolute!);
+		requestAnimationFrame(() => scrollToHeading(anchor));
+	});
+
+	const handleMdLink = async (href: string) => {
 		const tab = props.tab;
 		if (tab.type !== "file") return;
 		const ft = tab as FileTab;
-		const currentDir = ft.filePath.includes("/") ? ft.filePath.slice(0, ft.filePath.lastIndexOf("/")) : "";
-		const resolved = currentDir ? `${currentDir}/${href}` : href;
-		openFileAction(resolved, ft.repoPath, ft.fsRoot);
+		const root = ft.fsRoot || ft.repoPath;
+		const current = isAbsolutePath(ft.filePath) ? ft.filePath : joinPath(root, ft.filePath);
+		let decoded: string;
+		try {
+			decoded = decodeURIComponent(href);
+		} catch {
+			toastsStore.add("Invalid link", href, "error");
+			return;
+		}
+		const hash = decoded.indexOf("#");
+		let path = hash < 0 ? decoded : decoded.slice(0, hash);
+		let anchor = hash < 0 ? "" : decoded.slice(hash + 1);
+		let line: number | undefined;
+		const lineHash = /^L([1-9]\d*)$/i.exec(anchor);
+		if (lineHash) {
+			line = Number(lineHash[1]);
+			anchor = "";
+		} else if (!anchor) {
+			const lineSuffix = /:([1-9]\d*)$/.exec(path);
+			if (lineSuffix) {
+				line = Number(lineSuffix[1]);
+				path = path.slice(0, -lineSuffix[0].length);
+			}
+		}
+		if (!path && anchor) {
+			scrollToHeading(anchor);
+			return;
+		}
+		const absolute = normalizeLinkPath(
+			path ? (isAbsolutePath(path) ? path : joinPath(pathDirname(current), path)) : current,
+		);
+		if (!absolute || (!isAbsolutePath(path) && root && !pathStartsWith(absolute, root))) {
+			appLogger.debug("app", "Blocked Markdown link outside filesystem root", { href, root });
+			return;
+		}
+		try {
+			const resolved = await invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
+				cwd: root,
+				candidate: absolute,
+			});
+			if (!resolved) {
+				toastsStore.add("File not found", `File not found: ${path || ft.filePath}`, "error");
+				return;
+			}
+			if (!isAbsolutePath(path) && root && !pathStartsWith(resolved.absolute_path, root)) {
+				appLogger.debug("app", "Blocked Markdown symlink outside filesystem root", { href, root });
+				return;
+			}
+			if (resolved.is_directory) {
+				uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
+				uiStore.setFileBrowserPanelVisible(true);
+				return;
+			}
+			const relative = root ? pathStripPrefix(resolved.absolute_path, root) : null;
+			const target = relative ?? resolved.absolute_path;
+			if (anchor && resolved.absolute_path !== normalizeLinkPath(current) && /\.mdx?$/i.test(target)) {
+				pendingHeadings.set(resolved.absolute_path, anchor);
+			}
+			openFileAction(target, ft.repoPath, ft.fsRoot, line);
+			if (anchor && absolute === normalizeLinkPath(current)) requestAnimationFrame(() => scrollToHeading(anchor));
+		} catch (err) {
+			appLogger.error("app", "Markdown link target lookup failed", { href, error: String(err) });
+			toastsStore.add("Could not open link", path || ft.filePath, "error");
+		}
 	};
 
 	/** Write the updated markdown source back to disk and refresh displayed content. */
@@ -562,7 +678,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					content={content()}
 					commentableBlocks={props.tab.type === "file"}
 					baseDir={baseDir()}
-					onLinkClick={handleMdLink}
+					onLinkClick={(href) => void handleMdLink(href)}
 					onCheckboxToggle={(idx, mark, col) => {
 						void handleCheckboxToggle(idx, mark, col);
 					}}

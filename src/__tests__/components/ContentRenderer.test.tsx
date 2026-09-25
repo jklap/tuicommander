@@ -5,8 +5,11 @@ import { marked } from "marked";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { applyCommentBlockMetadata, ContentRenderer, stripEventHandlers } from "../../components/ui/ContentRenderer";
+import { handleOpenUrl } from "../../utils/openUrl";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { findTweakCommentBlocks, insertTweakBlockComment } from "../../utils/tweakComments";
+
+vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: vi.fn() }));
 
 describe("stripAnsi", () => {
 	it("strips ANSI escape codes", () => {
@@ -169,12 +172,76 @@ describe("ContentRenderer", () => {
 		expect(onLinkClick).not.toHaveBeenCalled();
 	});
 
-	it("does not intercept .md links when onLinkClick is not provided", () => {
+	it("prevents a local link when no file handler is provided", () => {
 		const { container } = render(() => <ContentRenderer content="See [readme](docs/README.md) for details" />);
 		const link = container.querySelector('a[href="docs/README.md"]') as HTMLAnchorElement;
 		expect(link).not.toBeNull();
-		// Should not throw when clicked without handler
-		fireEvent.click(link);
+		const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+		link.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(true);
+	});
+
+	it.each([
+		"doc.md#section",
+		"src/main.rs",
+		"src/App.tsx",
+		"script.sh",
+		"Makefile",
+		"LICENSE",
+		"docs/",
+		"#heading",
+		"/tmp/file.py",
+		"file.rs:42",
+		"file.rs#L42",
+		"My%20File.md",
+		"./doc.md",
+		"file://etc/passwd",
+		"javascript:alert(1)",
+		"javascript:42",
+		"data:text/plain,hi",
+	])("never lets rendered link %s navigate the webview", (href) => {
+		const onLinkClick = vi.fn();
+		const { container } = render(() => <ContentRenderer content={`[link](${href})`} onLinkClick={onLinkClick} />);
+		const link = container.querySelector("a") as HTMLAnchorElement | null;
+		if (!link) return; // DOMPurify may remove unsafe links entirely.
+		const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+		link.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(true);
+	});
+
+	it.each(["https://example.com", "http://example.com", "mailto:boss@example.com"])(
+		"opens %s explicitly without navigating the webview",
+		(href) => {
+			vi.mocked(handleOpenUrl).mockClear();
+			const onLinkClick = vi.fn();
+			const { container } = render(() => <ContentRenderer content={`[link](${href})`} onLinkClick={onLinkClick} />);
+			const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+			container.querySelector("a")!.dispatchEvent(event);
+			expect(event.defaultPrevented).toBe(true);
+			expect(handleOpenUrl).toHaveBeenCalledWith(href);
+			expect(onLinkClick).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["src/main.rs", "file.rs:42", "My%20File.md", "docs/", "#heading"])(
+		"passes local link %s to its file handler",
+		(href) => {
+			const onLinkClick = vi.fn();
+			const { container } = render(() => <ContentRenderer content={`[link](${href})`} onLinkClick={onLinkClick} />);
+			const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+			container.querySelector("a")!.dispatchEvent(event);
+			expect(event.defaultPrevented).toBe(true);
+			expect(onLinkClick).toHaveBeenCalledWith(href);
+		},
+	);
+
+	it("blocks a numeric-suffixed URI scheme instead of treating it as a file line", () => {
+		const onLinkClick = vi.fn();
+		const { container } = render(() => <ContentRenderer content="[bad](javascript:42)" onLinkClick={onLinkClick} />);
+		const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+		container.querySelector("a")!.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(true);
+		expect(onLinkClick).not.toHaveBeenCalled();
 	});
 
 	describe("image src sanitization", () => {

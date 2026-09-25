@@ -9,6 +9,7 @@ import "./markdown-content.css";
 import { type Component, createEffect, createMemo, Index, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
+import { handleOpenUrl } from "../../utils/openUrl";
 import { stripAnsi } from "../../utils/stripAnsi";
 import {
 	findTweakCommentBlocks,
@@ -27,15 +28,10 @@ import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
 const ALLOWED_URI_REGEXP =
 	/^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset|tauri):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
-/** File extensions that can be previewed inline when clicked as relative links.
- *  .md files open in a markdown tab; all others open in the file preview tab. */
-const PREVIEWABLE_RE =
-	/\.(md|pdf|html?|png|jpe?g|gif|webp|svg|avif|ico|bmp|mp4|webm|mov|ogg|mp3|wav|flac|aac|m4a|txt|json|csv|log|xml|ya?ml|toml|ini|cfg|conf)$/i;
-
 export interface ContentRendererProps {
 	content: string;
 	emptyMessage?: string;
-	/** Called when a relative file link is clicked (href passed as argument) */
+	/** Called for local file, directory, and heading links (raw href passed as argument). */
 	onLinkClick?: (href: string) => void;
 	/**
 	 * Called when a checkbox is clicked (source line, new mark, and — for a
@@ -346,8 +342,16 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 			return `<${tag}${attrs}><input type="checkbox"${checked}${tilde} data-source-line="${opts.lineOffset + site.line}" data-source-col="${site.col}"></${tag}>`;
 		});
 
+		// Preserve the source href in an inert attribute. DOMPurify strips unsafe
+		// href schemes, including useful `file.rs:42` line links; the click
+		// dispatcher still needs their text to block or route them explicitly.
+		html = html.replace(
+			/<a\b([^>]*?)\shref="([^"]*)"([^>]*)>/gi,
+			(_match, before, href, after) => `<a${before} href="${href}" data-tuic-href="${href}"${after}>`,
+		);
 		return DOMPurify.sanitize(stripEventHandlers(html), {
 			ADD_ATTR: [
+				"data-tuic-href",
 				"data-tweak-id",
 				"data-tweak-at",
 				"data-tweak-comment",
@@ -448,14 +452,40 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			return;
 		}
 
-		// Relative file link navigation
-		if (!props.onLinkClick) return;
 		const anchor = target.closest("a");
 		if (!anchor) return;
-		const href = anchor.getAttribute("href");
-		if (href && !href.startsWith("http") && PREVIEWABLE_RE.test(href)) {
-			e.preventDefault();
+		const href = anchor.getAttribute("data-tuic-href") ?? anchor.getAttribute("href");
+		// All rendered links are untrusted document content. Nothing may fall
+		// through to WebView navigation, including links without a host handler.
+		e.preventDefault();
+		e.stopPropagation();
+		if (!href) {
+			appLogger.debug("app", "Blocked Markdown link without a safe href");
+			return;
+		}
+		if (/^(https?:|mailto:)/i.test(href)) {
+			handleOpenUrl(href);
+		} else if (
+			/^[a-z][a-z\d+.-]*:/i.test(href) &&
+			!/^[a-z]:[\\/]/i.test(href) &&
+			!/^(?:[^:/\\]*[./\\][^:]*):[1-9]\d*$/.test(href)
+		) {
+			appLogger.debug("app", "Blocked Markdown link scheme", { href });
+		} else if (props.onLinkClick) {
 			props.onLinkClick(href);
+		} else if (href.startsWith("#")) {
+			const heading = Array.from(containerRef?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find(
+				(el) =>
+					el.id === href.slice(1) ||
+					el.textContent
+						?.trim()
+						.toLowerCase()
+						.replace(/[^\p{L}\p{N}\s-]/gu, "")
+						.replace(/\s+/g, "-") === href.slice(1).toLowerCase(),
+			);
+			heading?.scrollIntoView({ block: "start" });
+		} else {
+			appLogger.debug("app", "Markdown link has no file handler", { href });
 		}
 	};
 

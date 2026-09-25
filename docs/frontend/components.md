@@ -443,7 +443,7 @@ system and never turns an absent provider value into zero.
 | `CiRing` | SVG circular CI status indicator with proportional segments |
 | `DiffViewer` | Syntax-highlighted unified diff renderer |
 | `Dropdown` | Reusable dropdown select component |
-| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization, interactive checkboxes, tweak highlights |
+| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization, interactive checkboxes, tweak highlights, and click interception for every rendered link |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
 | `PromptOption` | Agent prompt multiple-choice option |
 | `StatusBadge` | Git status badges (clean/dirty/conflict) |

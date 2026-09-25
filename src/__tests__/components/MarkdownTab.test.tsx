@@ -17,13 +17,16 @@ vi.mock("../../transport", async (importOriginal) => ({
 }));
 
 import { MarkdownTab } from "../../components/MarkdownTab/MarkdownTab";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { type FileTab, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import { toastsStore } from "../../stores/toasts";
+import { setToastBellMirrorResolver, toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 
 describe("MarkdownTab agent review actions", () => {
 	beforeEach(() => {
+		setToastBellMirrorResolver(() => false);
 		mockInvoke.mockReset();
 		mockRpc.mockReset();
 		mockInvoke.mockImplementation((command: string) => {
@@ -40,6 +43,7 @@ describe("MarkdownTab agent review actions", () => {
 	});
 
 	afterEach(() => {
+		setToastBellMirrorResolver(() => true);
 		cleanup();
 		vi.restoreAllMocks();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
@@ -149,5 +153,172 @@ describe("MarkdownTab agent review actions", () => {
 
 		expect(screen.queryByRole("combobox", { name: "Review agent" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
+	});
+
+	it.each([
+		["../src/main.rs:42", "/repo/src/main.rs", "src/main.rs", 42],
+		["../LICENSE", "/repo/LICENSE", "LICENSE", undefined],
+		["./My%20File.tsx#L7", "/repo/docs/My File.tsx", "docs/My File.tsx", 7],
+	] as const)("opens local source link %s in the editor", async (href, absolute, relative, line) => {
+		fileContent = `[link](${href})`;
+		mockInvoke.mockImplementation((command: string, args: { candidate?: string }) =>
+			Promise.resolve(
+				command === "resolve_terminal_path" ? { absolute_path: args.candidate, is_directory: false } : fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		const open = vi.spyOn(editorTabsStore, "add").mockReturnValue("opened");
+		const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+		link.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(true);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: "/repo", candidate: absolute }),
+		);
+		expect(open).toHaveBeenCalledWith("/repo", relative, line, { fsRoot: "/repo" });
+	});
+
+	it("reveals a directory and toasts for a missing file", async () => {
+		fileContent = "[folder](./subdir/) [missing](./gone.rs)";
+		mockInvoke.mockImplementation((command: string, args: { candidate?: string }) =>
+			Promise.resolve(
+				command === "resolve_terminal_path"
+					? args.candidate === "/repo/docs/gone.rs"
+						? null
+						: { absolute_path: args.candidate, is_directory: true }
+					: fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const links = await waitFor(() => {
+			const elements = Array.from(container.querySelectorAll("a"));
+			if (elements.length !== 2) throw new Error("Markdown links not rendered yet");
+			return elements;
+		});
+		const toast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+		fireEvent.click(links[0]);
+		await Promise.resolve();
+		expect(uiStore.state.fileBrowserExternalRoot).toBe("/repo/docs/subdir");
+		expect(uiStore.state.fileBrowserPanelVisible).toBe(true);
+		fireEvent.click(links[1]);
+		await Promise.resolve();
+		expect(toast).toHaveBeenCalledWith("File not found", "File not found: ./gone.rs", "error");
+		// The File Browser visibility change persists UI prefs after a 500ms debounce.
+		await new Promise((resolve) => setTimeout(resolve, 550));
+	});
+
+	it("refuses a relative path that escapes the filesystem root", async () => {
+		fileContent = "[escape](../../secret.rs)";
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		fireEvent.click(link);
+		expect(mockInvoke).not.toHaveBeenCalledWith("resolve_terminal_path", expect.anything());
+	});
+
+	it("refuses a symlink that resolves outside the filesystem root", async () => {
+		fileContent = "[escape](./outside.rs)";
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "resolve_terminal_path" ? { absolute_path: "/secret.rs", is_directory: false } : fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		const open = vi.spyOn(editorTabsStore, "add");
+		fireEvent.click(link);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("resolve_terminal_path", {
+				cwd: "/repo",
+				candidate: "/repo/docs/outside.rs",
+			}),
+		);
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("scrolls a same-document heading without probing the filesystem", async () => {
+		fileContent = "# Target Heading\n\n[go](#target-heading)";
+		const scroll = vi.fn();
+		const original = HTMLElement.prototype.scrollIntoView;
+		HTMLElement.prototype.scrollIntoView = scroll;
+		try {
+			const tabId = mdTabsStore.add("/repo", "docs/review.md");
+			const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+			const link = await waitFor(() => {
+				const element = container.querySelector("a");
+				if (!element) throw new Error("Markdown link not rendered yet");
+				return element;
+			});
+			fireEvent.click(link);
+			expect(scroll).toHaveBeenCalledWith({ block: "start" });
+			expect(mockInvoke).not.toHaveBeenCalledWith("resolve_terminal_path", expect.anything());
+		} finally {
+			HTMLElement.prototype.scrollIntoView = original;
+		}
+	});
+
+	it("opens a linked Markdown file as a preview tab", async () => {
+		fileContent = "[next](./next.md)";
+		mockInvoke.mockImplementation((command: string, args: { candidate?: string }) =>
+			Promise.resolve(
+				command === "resolve_terminal_path" ? { absolute_path: args.candidate, is_directory: false } : fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		const add = vi.spyOn(mdTabsStore, "add").mockReturnValue("linked-tab");
+		fireEvent.click(link);
+		await waitFor(() => expect(add).toHaveBeenCalledWith("/repo", "docs/next.md", "/repo"));
+	});
+
+	it("scrolls to a heading after the linked Markdown tab loads", async () => {
+		fileContent = "[next](./next.md#target-heading)";
+		mockInvoke.mockImplementation((command: string, args: { candidate?: string; file?: string }) => {
+			if (command === "resolve_terminal_path")
+				return Promise.resolve({ absolute_path: args.candidate, is_directory: false });
+			return Promise.resolve(args.file === "docs/next.md" ? "# Target Heading" : fileContent);
+		});
+		const scroll = vi.fn();
+		const original = HTMLElement.prototype.scrollIntoView;
+		HTMLElement.prototype.scrollIntoView = scroll;
+		try {
+			const tabId = mdTabsStore.add("/repo", "docs/review.md");
+			const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+			const link = await waitFor(() => {
+				const element = container.querySelector("a");
+				if (!element) throw new Error("Markdown link not rendered yet");
+				return element;
+			});
+			fireEvent.click(link);
+			const next = await waitFor(() => {
+				const tab = mdTabsStore.getActive();
+				if (tab?.type !== "file" || tab.filePath !== "docs/next.md") throw new Error("Linked tab not open yet");
+				return tab;
+			});
+			render(() => <MarkdownTab tab={next} />);
+			await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "start" }));
+		} finally {
+			HTMLElement.prototype.scrollIntoView = original;
+		}
 	});
 });
