@@ -214,6 +214,102 @@ impl RunStore {
         self.command_at(run_id, command_id, command, now_ms())
     }
 
+    /// Complete a previously reserved spawn effect in the same event that binds
+    /// the live managed session to its attempt.
+    pub fn bind_agent(
+        &self,
+        run_id: &str,
+        attempt_id: &str,
+        binding: AgentBinding,
+    ) -> Result<RunReceipt, String> {
+        self.command(
+            run_id,
+            &format!("bind-agent:{attempt_id}"),
+            RunCommand::BindAgent {
+                attempt_id: attempt_id.into(),
+                binding,
+            },
+        )
+    }
+
+    /// The caller session is resolved from the MCP connection, never from an
+    /// agent-supplied field. A stable command ID makes retries idempotent.
+    pub fn report_bound_agent(
+        &self,
+        report: AttemptReport,
+        caller_session: &str,
+    ) -> Result<RunReceipt, String> {
+        let run_id = report.run_id.clone();
+        let command_id = format!("agent-report:{}", report.attempt_id);
+        self.command(
+            &run_id,
+            &command_id,
+            RunCommand::ReportBoundAttempt {
+                caller_session: caller_session.into(),
+                report,
+            },
+        )
+    }
+
+    /// Process exit is an observation, never an outcome report. Fence it in the
+    /// same transaction as the event so a racing semantic report wins or loses
+    /// cleanly without converting an exit code into success.
+    pub fn interrupt_agent_session(&self, session_id: &str) -> Result<Vec<RunSnapshot>, String> {
+        validate_key("agent session", session_id)?;
+        let mut conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM workflow_runs WHERE status IN ('running','paused')")
+            .map_err(|error| format!("prepare agent exit lookup: {error}"))?;
+        let run_ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|error| format!("read agent exit runs: {error}"))?
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("read agent exit run: {error}"))?;
+        drop(stmt);
+        let mut changed = Vec::new();
+        for run_id in run_ids {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|error| format!("begin agent exit: {error}"))?;
+            let snapshot = read_snapshot(&tx, &run_id)?;
+            if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
+                continue;
+            }
+            let attempts: Vec<String> = snapshot
+                .attempts
+                .iter()
+                .filter(|attempt| {
+                    attempt.state == AttemptState::Running
+                        && attempt
+                            .agent
+                            .as_ref()
+                            .is_some_and(|agent| agent.session_id == session_id)
+                })
+                .map(|attempt| attempt.id.clone())
+                .collect();
+            let had_pending = !attempts.is_empty();
+            let mut current = snapshot;
+            for attempt_id in attempts {
+                let command_id = format!("agent-exit:{attempt_id}");
+                current = persist_event(
+                    &tx,
+                    current,
+                    &command_id,
+                    None,
+                    now_ms(),
+                    RunEventKind::AttemptInterrupted { attempt_id },
+                )?
+                .snapshot;
+            }
+            tx.commit()
+                .map_err(|error| format!("commit agent exit: {error}"))?;
+            if had_pending {
+                changed.push(current);
+            }
+        }
+        Ok(changed)
+    }
+
     pub fn command_expected(
         &self,
         run_id: &str,
@@ -561,7 +657,13 @@ fn choose_event(
     if expired
         && !matches!(
             command,
-            RunCommand::Cancel | RunCommand::Pause | RunCommand::ReportAttempt { .. }
+            RunCommand::Cancel
+                | RunCommand::Pause
+                | RunCommand::BindAgent { .. }
+                | RunCommand::MarkEffect { .. }
+                | RunCommand::ResolveUncertainEffect { .. }
+                | RunCommand::ReportAttempt { .. }
+                | RunCommand::ReportBoundAttempt { .. }
         )
     {
         return Ok(RunEventKind::Paused);
@@ -572,7 +674,16 @@ fn choose_event(
         .planning_fingerprint
         .as_deref()
         .is_some_and(|closed| closed != current_plan)
-        && !matches!(command, RunCommand::Cancel | RunCommand::Pause)
+        && !matches!(
+            command,
+            RunCommand::Cancel
+                | RunCommand::Pause
+                | RunCommand::BindAgent { .. }
+                | RunCommand::MarkEffect { .. }
+                | RunCommand::ResolveUncertainEffect { .. }
+                | RunCommand::ReportAttempt { .. }
+                | RunCommand::ReportBoundAttempt { .. }
+        )
     {
         return Ok(RunEventKind::PlanningReopened);
     }
@@ -582,7 +693,10 @@ fn choose_event(
             RunCommand::Resume
                 | RunCommand::Cancel
                 | RunCommand::ResolveUncertainEffect { .. }
+                | RunCommand::BindAgent { .. }
+                | RunCommand::MarkEffect { .. }
                 | RunCommand::ReportAttempt { .. }
+                | RunCommand::ReportBoundAttempt { .. }
         )
     {
         return Err("workflow is paused".into());
@@ -591,6 +705,57 @@ fn choose_event(
         RunCommand::ClosePlanning => Ok(RunEventKind::PlanningClosed {
             fingerprint: current_plan,
         }),
+        RunCommand::StartPlanAgent { node_id } => {
+            if snapshot.attempts.len() >= 512 {
+                return Err("workflow attempt budget exhausted".into());
+            }
+            let definition = WorkflowStore::open()?
+                .get_published(&snapshot.definition_id, snapshot.definition_revision)?;
+            if !definition.graph.nodes.iter().any(|node| {
+                node.id == node_id
+                    && matches!(
+                        node.kind,
+                        NodeKind::Agent {
+                            role: crate::workflows::AgentRole::Coordinator
+                                | crate::workflows::AgentRole::Planner,
+                            ..
+                        }
+                    )
+            }) {
+                return Err(
+                    "node is not a coordinator or planner in the pinned plan template".into(),
+                );
+            }
+            if snapshot.attempts.iter().any(|attempt| {
+                attempt.story_id == snapshot.plan_id
+                    && attempt.node_id == node_id
+                    && attempt.state == AttemptState::Running
+            }) {
+                return Err("plan node already has a running attempt".into());
+            }
+            let generation = snapshot
+                .attempts
+                .iter()
+                .filter(|attempt| {
+                    attempt.story_id == snapshot.plan_id && attempt.node_id == node_id
+                })
+                .map(|attempt| attempt.generation)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            Ok(RunEventKind::AttemptStarted {
+                attempt: NodeAttempt {
+                    id: Uuid::now_v7().to_string(),
+                    story_id: snapshot.plan_id.clone(),
+                    node_id,
+                    generation,
+                    state: AttemptState::Running,
+                    outcome: None,
+                    agent: None,
+                    report: None,
+                },
+            })
+        }
         RunCommand::StartAttempt { story_id, node_id } => {
             let story = stories
                 .iter()
@@ -640,6 +805,8 @@ fn choose_event(
                     generation,
                     state: AttemptState::Running,
                     outcome: None,
+                    agent: None,
+                    report: None,
                 },
             })
         }
@@ -653,6 +820,9 @@ fn choose_event(
                 .iter()
                 .find(|attempt| attempt.id == attempt_id)
                 .ok_or("node attempt not found")?;
+            if attempt.agent.is_some() {
+                return Err("bound agent must use a typed attempt report".into());
+            }
             if expired
                 || snapshot.status == RunStatus::Paused
                 || attempt.generation != generation
@@ -667,8 +837,140 @@ fn choose_event(
                     attempt_id,
                     generation,
                     outcome,
+                    report: None,
                 })
             }
+        }
+        RunCommand::BindAgent {
+            attempt_id,
+            binding,
+        } => {
+            validate_key("agent session", &binding.session_id)?;
+            validate_key("spawn effect", &binding.effect_id)?;
+            if binding.prompt_contract_version != crate::workflows::PROMPT_CONTRACT_VERSION
+                || binding.prompt_sha256.len() != 64
+                || !binding
+                    .prompt_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || binding.audit_preview.chars().count() > 2_000
+                || binding
+                    .task_id
+                    .as_ref()
+                    .is_some_and(|id| validate_key("task id", id).is_err())
+            {
+                return Err("invalid agent binding".into());
+            }
+            let attempt = snapshot
+                .attempts
+                .iter()
+                .find(|attempt| attempt.id == attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.state != AttemptState::Running || attempt.agent.is_some() {
+                return Err("node attempt cannot bind an agent".into());
+            }
+            if snapshot.attempts.iter().any(|existing| {
+                existing
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.session_id == binding.session_id)
+            }) {
+                return Err("agent session is already bound to a workflow attempt".into());
+            }
+            let effect = snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == binding.effect_id)
+                .ok_or("spawn effect not found")?;
+            if effect.kind != EffectKind::SpawnAgent
+                || effect.state != EffectState::Intended
+                || effect.key != format!("spawn:{attempt_id}")
+            {
+                return Err("spawn effect is not intended".into());
+            }
+            Ok(RunEventKind::AgentBound {
+                attempt_id,
+                binding,
+            })
+        }
+        RunCommand::ReportBoundAttempt {
+            caller_session,
+            report,
+        } => {
+            validate_key("agent session", &caller_session)?;
+            validate_key("run id", &report.run_id)?;
+            validate_key("story id", &report.story_id)?;
+            validate_key("attempt id", &report.attempt_id)?;
+            if report.contract_version != crate::workflows::PROMPT_CONTRACT_VERSION
+                || report.run_id != snapshot.id
+                || report.generation == 0
+                || report.story_revision < 0
+                || report.summary.trim().is_empty()
+                || report.summary.len() > 4_000
+                || report.evidence.len() > 32
+                || report
+                    .evidence
+                    .iter()
+                    .any(|item| item.trim().is_empty() || item.len() > 2_000)
+                || report.criterion_results.len() > 100
+                || report
+                    .criterion_results
+                    .iter()
+                    .any(|item| item.evidence.trim().is_empty() || item.evidence.len() > 2_000)
+            {
+                return Err("invalid typed attempt report".into());
+            }
+            let attempt = snapshot
+                .attempts
+                .iter()
+                .find(|attempt| attempt.id == report.attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.story_id != report.story_id
+                || attempt
+                    .agent
+                    .as_ref()
+                    .map(|agent| agent.session_id.as_str())
+                    != Some(caller_session.as_str())
+            {
+                return Err("agent does not own the attempt".into());
+            }
+            let mut seen = std::collections::HashSet::new();
+            if report.story_id == snapshot.plan_id {
+                if report.story_revision != 0 || !report.criterion_results.is_empty() {
+                    return Err("plan agent report cannot contain story criteria".into());
+                }
+            } else {
+                let story = stories
+                    .iter()
+                    .find(|story| story.id == report.story_id)
+                    .ok_or("story is not in plan")?;
+                if story.revision != report.story_revision {
+                    return Err("attempt report targets a stale story revision".into());
+                }
+                if report
+                    .criterion_results
+                    .iter()
+                    .any(|item| item.index >= story.criteria.len() || !seen.insert(item.index))
+                {
+                    return Err("invalid criterion result index".into());
+                }
+            }
+            if expired
+                || snapshot.status == RunStatus::Paused
+                || attempt.generation != report.generation
+                || attempt.state != AttemptState::Running
+            {
+                return Ok(RunEventKind::LateReportIgnored {
+                    attempt_id: report.attempt_id,
+                    generation: report.generation,
+                });
+            }
+            Ok(RunEventKind::AttemptReported {
+                attempt_id: report.attempt_id.clone(),
+                generation: report.generation,
+                outcome: report.outcome,
+                report: Some(report),
+            })
         }
         RunCommand::ReserveEffect { key, kind } => {
             validate_key("effect key", &key)?;

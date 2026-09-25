@@ -83,6 +83,44 @@ pub struct NodeAttempt {
     pub generation: u64,
     pub state: AttemptState,
     pub outcome: Option<AttemptOutcome>,
+    #[serde(default)]
+    pub agent: Option<AgentBinding>,
+    #[serde(default)]
+    pub report: Option<AttemptReport>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentBinding {
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub effect_id: String,
+    pub prompt_contract_version: u16,
+    pub prompt_sha256: String,
+    pub audit_preview: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CriterionResult {
+    pub index: usize,
+    pub satisfied: bool,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttemptReport {
+    pub contract_version: u16,
+    pub run_id: String,
+    pub story_id: String,
+    pub story_revision: i64,
+    pub attempt_id: String,
+    pub generation: u64,
+    pub outcome: AttemptOutcome,
+    pub summary: String,
+    pub criterion_results: Vec<CriterionResult>,
+    pub evidence: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -163,6 +201,12 @@ pub enum RunEventKind {
         attempt_id: String,
         generation: u64,
         outcome: AttemptOutcome,
+        #[serde(default)]
+        report: Option<AttemptReport>,
+    },
+    AgentBound {
+        attempt_id: String,
+        binding: AgentBinding,
     },
     LateReportIgnored {
         attempt_id: String,
@@ -212,10 +256,23 @@ pub enum RunCommand {
         story_id: String,
         node_id: String,
     },
+    StartPlanAgent {
+        node_id: String,
+    },
     ReportAttempt {
         attempt_id: String,
         generation: u64,
         outcome: AttemptOutcome,
+    },
+    /// Internal only: the public run transport rejects this command.
+    BindAgent {
+        attempt_id: String,
+        binding: AgentBinding,
+    },
+    /// Internal only: the public run transport rejects this command.
+    ReportBoundAttempt {
+        caller_session: String,
+        report: AttemptReport,
     },
     ReserveEffect {
         key: String,

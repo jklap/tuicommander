@@ -36,19 +36,21 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             {
                 return Err("duplicate node attempt".into());
             }
-            let story = snapshot
-                .stories
-                .iter_mut()
-                .find(|story| story.story_id == attempt.story_id);
-            if let Some(story) = story {
-                story.attempt_ids.push(attempt.id.clone());
-            } else {
-                snapshot.stories.push(StoryExecution {
-                    story_id: attempt.story_id.clone(),
-                    accepted: false,
-                    accepted_revision: None,
-                    attempt_ids: vec![attempt.id.clone()],
-                });
+            if attempt.story_id != snapshot.plan_id {
+                let story = snapshot
+                    .stories
+                    .iter_mut()
+                    .find(|story| story.story_id == attempt.story_id);
+                if let Some(story) = story {
+                    story.attempt_ids.push(attempt.id.clone());
+                } else {
+                    snapshot.stories.push(StoryExecution {
+                        story_id: attempt.story_id.clone(),
+                        accepted: false,
+                        accepted_revision: None,
+                        attempt_ids: vec![attempt.id.clone()],
+                    });
+                }
             }
             snapshot.attempts.push(attempt.clone());
         }
@@ -56,6 +58,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             attempt_id,
             generation,
             outcome,
+            report,
         } => {
             let attempt = snapshot
                 .attempts
@@ -67,6 +70,33 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             }
             attempt.state = AttemptState::Reported;
             attempt.outcome = Some(*outcome);
+            attempt.report = report.clone();
+        }
+        RunEventKind::AgentBound {
+            attempt_id,
+            binding,
+        } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.state != AttemptState::Running || attempt.agent.is_some() {
+                return Err("node attempt cannot bind an agent".into());
+            }
+            let effect = snapshot
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == binding.effect_id)
+                .ok_or("spawn effect not found")?;
+            if effect.kind != EffectKind::SpawnAgent
+                || effect.state != EffectState::Intended
+                || effect.key != format!("spawn:{attempt_id}")
+            {
+                return Err("spawn effect is not intended".into());
+            }
+            effect.state = EffectState::Succeeded;
+            attempt.agent = Some(binding.clone());
         }
         RunEventKind::LateReportIgnored { .. } => {}
         RunEventKind::AttemptInterrupted { attempt_id } => {
@@ -166,7 +196,23 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
         }
         RunEventKind::Paused => snapshot.status = RunStatus::Paused,
         RunEventKind::Resumed => snapshot.status = RunStatus::Running,
-        RunEventKind::Cancelled => snapshot.status = RunStatus::Cancelled,
+        RunEventKind::Cancelled => {
+            // A spawn may already be in flight outside this transaction. Keep
+            // its outcome explicit even though terminal runs cannot accept a
+            // later binding or reconciliation event.
+            for effect in &mut snapshot.effects {
+                if effect.state == EffectState::Intended {
+                    effect.state = EffectState::Uncertain;
+                }
+            }
+            for attempt in &mut snapshot.attempts {
+                if attempt.state == AttemptState::Running {
+                    attempt.state = AttemptState::Interrupted;
+                    attempt.outcome = Some(AttemptOutcome::Interrupted);
+                }
+            }
+            snapshot.status = RunStatus::Cancelled;
+        }
         RunEventKind::Completed => snapshot.status = RunStatus::Completed,
     }
     snapshot.sequence = event.sequence;
