@@ -48,11 +48,23 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                         story_id: attempt.story_id.clone(),
                         accepted: false,
                         accepted_revision: None,
+                        worktree_path: None,
                         attempt_ids: vec![attempt.id.clone()],
                     });
                 }
             }
             snapshot.attempts.push(attempt.clone());
+        }
+        RunEventKind::WorktreeAssigned { story_id, path } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if story.worktree_path.is_some() {
+                return Err("story worktree already assigned".into());
+            }
+            story.worktree_path = Some(path.clone());
         }
         RunEventKind::AttemptReported {
             attempt_id,
@@ -202,6 +214,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     story_id: story_id.clone(),
                     accepted: true,
                     accepted_revision: Some(*revision),
+                    worktree_path: None,
                     attempt_ids: vec![],
                 });
             }

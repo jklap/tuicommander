@@ -773,6 +773,38 @@ fn plan_stories(snapshot: &RunSnapshot) -> Result<Vec<Story>, String> {
     StoryStore::open()?.list_stories(&snapshot.plan_id)
 }
 
+/// Unknown, globbed or overlapping scopes cannot safely share a work wave.
+fn scopes_may_overlap(left: &[String], right: &[String]) -> bool {
+    fn normalized(path: &str) -> Option<String> {
+        let path = path.replace('\\', "/").to_ascii_lowercase();
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.starts_with('~')
+            || path.contains(':')
+            || path
+                .chars()
+                .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+            || path
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return None;
+        }
+        Some(path)
+    }
+    if left.is_empty() || right.is_empty() {
+        return true;
+    }
+    left.iter().any(|item| {
+        right.iter().any(|other| {
+            let (Some(a), Some(b)) = (normalized(item), normalized(other)) else {
+                return true;
+            };
+            a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
+        })
+    })
+}
+
 pub(super) fn ready_to_verify(snapshot: &RunSnapshot, stories: &[Story]) -> Result<(), String> {
     if snapshot.planning_fingerprint.is_none() {
         return Err("planning is still open".into());
@@ -862,6 +894,36 @@ fn choose_event(
         RunCommand::ClosePlanning => Ok(RunEventKind::PlanningClosed {
             fingerprint: current_plan,
         }),
+        RunCommand::AssignWorktree { story_id, path } => {
+            let story = snapshot
+                .stories
+                .iter()
+                .find(|story| story.story_id == story_id)
+                .ok_or("story execution not found")?;
+            if story.worktree_path.is_some() {
+                return Err("story worktree already assigned".into());
+            }
+            if !snapshot.attempts.iter().any(|attempt| {
+                attempt.story_id == story_id && attempt.state == AttemptState::Running
+            }) {
+                return Err("story has no running attempt".into());
+            }
+            if snapshot
+                .stories
+                .iter()
+                .any(|story| story.worktree_path.as_deref() == Some(&path))
+            {
+                return Err("worktree is assigned to another story".into());
+            }
+            let canonical = Path::new(&path)
+                .canonicalize()
+                .map_err(|error| format!("resolve story worktree: {error}"))?;
+            if canonical.to_string_lossy() != path || path == snapshot.project {
+                return Err("story worktree must be a canonical isolated path".into());
+            }
+            crate::worktree::validate_worktree_path(&snapshot.project, &path)?;
+            Ok(RunEventKind::WorktreeAssigned { story_id, path })
+        }
         RunCommand::StartPlanAgent { node_id } => {
             if snapshot.attempts.len() >= 512 {
                 return Err("workflow attempt budget exhausted".into());
@@ -924,6 +986,30 @@ fn choose_event(
                 StoryStatus::Ready | StoryStatus::InProgress | StoryStatus::Review
             ) {
                 return Err("story is not ready for a workflow attempt".into());
+            }
+            if !story.dependencies.is_empty() {
+                return Err("dependent story dispatch requires an integration receipt".into());
+            }
+            let active: Vec<_> = snapshot
+                .attempts
+                .iter()
+                .filter(|attempt| {
+                    attempt.story_id != snapshot.plan_id && attempt.state == AttemptState::Running
+                })
+                .collect();
+            if active.iter().any(|attempt| attempt.story_id == story_id) {
+                return Err("story already has a running attempt".into());
+            }
+            if active.len() >= usize::from(snapshot.limits.max_parallel_stories) {
+                return Err("parallel story limit reached".into());
+            }
+            if active.iter().any(|attempt| {
+                stories
+                    .iter()
+                    .find(|other| other.id == attempt.story_id)
+                    .is_none_or(|other| scopes_may_overlap(&story.file_scope, &other.file_scope))
+            }) {
+                return Err("story file scope overlaps active or unknown work".into());
             }
             if snapshot.attempts.len() >= 512 {
                 return Err("workflow attempt budget exhausted".into());

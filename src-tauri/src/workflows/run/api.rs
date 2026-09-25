@@ -135,9 +135,14 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             scoped_snapshot(&store, &owner, &run_id)?;
             if matches!(
                 command,
-                RunCommand::BindAgent { .. } | RunCommand::ReportBoundAttempt { .. }
+                RunCommand::BindAgent { .. }
+                    | RunCommand::ReportBoundAttempt { .. }
+                    | RunCommand::AssignWorktree { .. }
             ) {
-                return Err("agent binding and reports require a managed MCP session".into());
+                return Err(
+                    "agent binding, reports, and worktree assignment require a managed MCP session"
+                        .into(),
+                );
             }
             Ok(RunReply::Receipt(store.command_expected(
                 &run_id,

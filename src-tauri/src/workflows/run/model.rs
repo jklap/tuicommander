@@ -26,7 +26,13 @@ pub struct RunLimits {
     pub max_loops: u16,
     pub max_story_creations: u16,
     pub max_spawns: u16,
+    #[serde(default = "default_max_parallel_stories")]
+    pub max_parallel_stories: u16,
     pub max_duration_secs: u32,
+}
+
+const fn default_max_parallel_stories() -> u16 {
+    2
 }
 
 impl Default for RunLimits {
@@ -35,6 +41,7 @@ impl Default for RunLimits {
             max_loops: 8,
             max_story_creations: 100,
             max_spawns: 24,
+            max_parallel_stories: default_max_parallel_stories(),
             max_duration_secs: 86_400,
         }
     }
@@ -48,6 +55,8 @@ impl RunLimits {
             || self.max_story_creations > 100
             || self.max_spawns == 0
             || self.max_spawns > 100
+            || self.max_parallel_stories == 0
+            || self.max_parallel_stories > 8
             || self.max_duration_secs == 0
             || self.max_duration_secs > 604_800
         {
@@ -203,6 +212,8 @@ pub struct StoryExecution {
     pub accepted: bool,
     #[serde(default)]
     pub accepted_revision: Option<i64>,
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub attempt_ids: Vec<String>,
 }
 
@@ -242,6 +253,10 @@ pub enum RunEventKind {
     PlanningReopened,
     AttemptStarted {
         attempt: NodeAttempt,
+    },
+    WorktreeAssigned {
+        story_id: String,
+        path: String,
     },
     AttemptReported {
         attempt_id: String,
@@ -305,6 +320,11 @@ pub enum RunCommand {
     StartAttempt {
         story_id: String,
         node_id: String,
+    },
+    /// Internal only: a managed coordinator binds a registered worktree before spawn.
+    AssignWorktree {
+        story_id: String,
+        path: String,
     },
     StartPlanAgent {
         node_id: String,
