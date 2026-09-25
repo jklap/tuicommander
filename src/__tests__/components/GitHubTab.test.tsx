@@ -8,6 +8,7 @@ const h = vi.hoisted(() => {
 	// repoPath -> resolution DTO returned by github_resolve_repo
 	const resolutions: Record<string, unknown> = {};
 	const repos: Record<string, { path: string; displayName: string }> = {};
+	let circleCiStatus = { configured: false, source: "none" };
 	const rpc = vi.fn((cmd: string, args?: Record<string, unknown>) => {
 		switch (cmd) {
 			case "github_resolve_repos": {
@@ -54,6 +55,8 @@ const h = vi.hoisted(() => {
 					repos_not_found: [],
 					repos_monitored: 0,
 				});
+			case "circleci_token_status":
+				return Promise.resolve(circleCiStatus);
 			case "github_list_accounts":
 				return Promise.resolve([...accounts]);
 			case "github_start_login":
@@ -86,7 +89,7 @@ const h = vi.hoisted(() => {
 				return Promise.resolve(undefined);
 		}
 	});
-	return { rpc, accounts, resolutions, repos };
+	return { rpc, accounts, resolutions, repos, get circleCiStatus() { return circleCiStatus; }, set circleCiStatus(value) { circleCiStatus = value; } };
 });
 
 vi.mock("../../transport", () => ({ rpc: h.rpc, isTauri: () => true }));
@@ -118,6 +121,7 @@ function resetState() {
 	h.accounts.length = 0;
 	for (const k of Object.keys(h.resolutions)) delete h.resolutions[k];
 	for (const k of Object.keys(h.repos)) delete h.repos[k];
+	h.circleCiStatus = { configured: false, source: "none" };
 	h.rpc.mockClear();
 }
 
@@ -262,5 +266,29 @@ describe("GitHubTab — Repository bindings", () => {
 
 		fireEvent.click(getByText("Unbind"));
 		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("github_unbind_repo", { repoPath: "/work/proj" }));
+	});
+});
+
+describe("GitHubTab — CircleCI token", () => {
+	let GitHubTab: Awaited<ReturnType<typeof loadTab>>;
+	beforeEach(async () => {
+		resetState();
+		GitHubTab = await loadTab();
+	});
+
+	it("shows configured status and removes a stored token explicitly", async () => {
+		h.circleCiStatus = { configured: true, source: "vault" };
+		const { findByText, getByText } = render(() => <GitHubTab />);
+		expect(await findByText("Configured (vault)")).toBeTruthy();
+		fireEvent.click(getByText("Remove token"));
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("circleci_delete_token"));
+	});
+
+	it("does not save an empty CircleCI token", async () => {
+		const { findByText, getByText } = render(() => <GitHubTab />);
+		await findByText("CircleCI");
+		fireEvent.click(getByText("Save token"));
+		expect(await findByText("Enter a CircleCI token before saving")).toBeTruthy();
+		expect(h.rpc).not.toHaveBeenCalledWith("circleci_set_token", expect.anything());
 	});
 });

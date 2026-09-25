@@ -86,11 +86,19 @@ fn token_from_cli_config_file() -> Option<String> {
 }
 
 pub(crate) fn resolve_token() -> Result<(Option<String>, TokenSource), String> {
-    resolve_token_from_vault_result(
-        crate::credentials::get(crate::credentials::Credential::CircleCiToken),
+    resolve_token_with(
+        || crate::credentials::get(crate::credentials::Credential::CircleCiToken),
         std::env::var("CIRCLE_TOKEN").ok(),
         token_from_cli_config_file(),
     )
+}
+
+fn resolve_token_with(
+    vault: impl FnOnce() -> Result<Option<String>, String>,
+    env: Option<String>,
+    cli_config: Option<String>,
+) -> Result<(Option<String>, TokenSource), String> {
+    resolve_token_from_vault_result(vault(), env, cli_config)
 }
 
 fn resolve_token_from_vault_result(
@@ -198,7 +206,16 @@ pub(crate) async fn fetch_job_log(
     job: &CircleCiJob,
     token: &str,
 ) -> Result<String, String> {
-    let mut url = url::Url::parse("https://circleci.com/api/v1.1/project/").expect("static URL");
+    fetch_job_log_from_base(client, job, token, "https://circleci.com/api/v1.1/project/").await
+}
+
+async fn fetch_job_log_from_base(
+    client: &reqwest::Client,
+    job: &CircleCiJob,
+    token: &str,
+    api_base: &str,
+) -> Result<String, String> {
+    let mut url = url::Url::parse(api_base).map_err(|error| format!("Invalid CircleCI API base: {error}"))?;
     url.path_segments_mut().expect("static URL can hold path segments").extend([job.vcs.as_str(), job.org.as_str(), job.repo.as_str(), &job.build_num.to_string()]);
     // The credential must never follow a provider-controlled redirect. S3 log
     // downloads below deliberately use the shared client without this header.
@@ -356,6 +373,14 @@ mod tests {
     }
 
     #[test]
+    fn resolves_a_present_vault_token_through_the_injected_reader() {
+        assert_eq!(
+            super::resolve_token_with(|| Ok(Some("vault-token".into())), None, None),
+            Ok((Some("vault-token".into()), super::TokenSource::Vault))
+        );
+    }
+
+    #[test]
     fn vault_failure_is_not_reported_as_an_absent_token() {
         assert_eq!(
             super::resolve_token_from_vault_result(Err("keychain unavailable".into()), None, None),
@@ -397,5 +422,32 @@ mod tests {
             super::failed_actions(&detail),
             vec![("last".into(), "https://logs.example/last".into())]
         );
+    }
+
+    #[tokio::test]
+    async fn presigned_s3_download_never_receives_circleci_credentials() {
+        use mockito::{Matcher, Server};
+
+        let mut server = Server::new_async().await;
+        let output_url = format!("{}/output", server.url());
+        let _api = server
+            .mock("GET", "/api/v1.1/project/gh/acme/widget/42")
+            .match_header("circle-token", "secret")
+            .with_status(200)
+            .with_body(serde_json::json!({"steps":[{"name":"unit","actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .create_async()
+            .await;
+        let output = server
+            .mock("GET", "/output")
+            .match_header("circle-token", Matcher::Missing)
+            .match_header("authorization", Matcher::Missing)
+            .with_status(200)
+            .with_body("[{\"message\":\"failed\"}]")
+            .create_async()
+            .await;
+        let job = super::CircleCiJob { vcs: "gh".into(), org: "acme".into(), repo: "widget".into(), build_num: 42 };
+
+        assert!(super::fetch_job_log_from_base(&reqwest::Client::new(), &job, "secret", &(server.url() + "/api/v1.1/project/")).await.unwrap().contains("failed"));
+        output.assert_async().await;
     }
 }
