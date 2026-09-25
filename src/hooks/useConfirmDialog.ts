@@ -128,15 +128,10 @@ export function useConfirmDialog() {
 		});
 	}
 
-	/** Confirm force-removing a worktree that is locked by an active agent.
-	 *
-	 *  Pass `deleteBranch=true` when the branch ref will also be force-deleted —
-	 *  the dialog then warns that any unmerged/unpushed commits will be
-	 *  destroyed along with the worktree (force-remove uses `git branch -D`).
-	 */
+	/** Confirm overriding an agent's worktree lock. */
 	async function confirmRemoveLockedWorktree(branchName: string, deleteBranch: boolean = true): Promise<boolean> {
 		const branchWarning = deleteBranch
-			? `\n\nThe branch "${branchName}" will be force-deleted (\`git branch -D\`). Any unmerged or unpushed commits will be permanently lost.`
+			? `\n\nThe branch "${branchName}" will be deleted only if its commits are already integrated. Otherwise it will be kept and the result will explain why.`
 			: "";
 		return await confirm({
 			title: "Worktree is locked by an agent",

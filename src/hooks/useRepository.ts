@@ -106,12 +106,14 @@ export function useRepository() {
 		workspaceId: string,
 		deleteBranch: boolean,
 		force?: boolean,
+		overrideLock?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
 			workspaceId,
 			deleteBranch,
 			force: force ?? false,
+			overrideLock: overrideLock ?? false,
 		});
 	}
 

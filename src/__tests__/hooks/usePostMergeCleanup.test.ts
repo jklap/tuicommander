@@ -347,6 +347,39 @@ describe("executeCleanup", () => {
 		expect(onStepNote).toHaveBeenCalledWith("worktree", expect.stringContaining("unmerged commits"));
 	});
 
+	it("does not delete a branch that worktree cleanup kept after proof failed", async () => {
+		mockInvoke.mockResolvedValueOnce({ action: "deleted", branch_delete_warning: "branch has unmerged commits" });
+		const onStepNote = vi.fn();
+		const onStepDone = vi.fn();
+		await executeCleanup(makeConfig({
+			steps: [
+				{ id: "worktree", checked: true },
+				{ id: "delete-local", checked: true },
+			],
+			worktreeAction: "delete",
+			onStepNote,
+			onStepDone,
+		}));
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+		expect(onStepNote).toHaveBeenCalledWith("delete-local", expect.stringContaining("Branch kept"));
+		expect(onStepDone).toHaveBeenCalledWith("delete-local", "error", expect.stringContaining("Branch kept"));
+	});
+
+	it("stops cleanup when worktree state changes after confirmation", async () => {
+		mockInvoke.mockResolvedValueOnce({ action: "needs_confirmation" });
+		const onStepDone = vi.fn();
+		await executeCleanup(makeConfig({
+			steps: [
+				{ id: "worktree", checked: true },
+				{ id: "delete-local", checked: true },
+			],
+			worktreeAction: "delete",
+			onStepDone,
+		}));
+		expect(onStepDone).toHaveBeenCalledWith("worktree", "error", expect.stringContaining("changed"));
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+	});
+
 	it("calls finalize_merged_worktree with 'delete' action", async () => {
 		const config = makeConfig({
 			steps: [

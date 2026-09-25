@@ -63,6 +63,7 @@ export interface GitOperationsDeps {
 			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
+			overrideLock?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		createWorktree: (
 			baseRepo: string,

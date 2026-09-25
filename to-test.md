@@ -3810,3 +3810,7 @@ or credential is touched.
 ## CircleCI failure logs — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting the worktree build, open a failed CircleCI check on a remote-only PR, including a PR with a failed GitHub Actions job. Its Log button shows only that CircleCI check's log and the end of a long failed step, with a truncation marker when the beginning was dropped; a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart.
+
+## Safe linked-worktree removal — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart.

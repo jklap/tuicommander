@@ -12,6 +12,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
+			overrideLock?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
@@ -146,15 +147,14 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			if (reason.startsWith("worktree_locked:")) {
-				// Worktree is locked by a Claude agent — ask user to confirm force removal
+				// Worktree is locked by an agent — ask for a separate lock override.
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 				appLogger.warn("git", `handleRemoveWorkspace: worktree locked — showing confirmation dialog`, {
 					workspaceId,
 					reason,
 				});
-				// Pass deleteBranch so the dialog can warn about unmerged-commit loss
-				// when force=true causes `git branch -D` to run on a branch with
-				// unpushed work. Catch dialog rejection so the removingBranches
+				// Pass deleteBranch so the dialog can describe the requested cleanup.
+				// Catch dialog rejection so the removingBranches
 				// lock is released even when the modal subsystem errors out.
 				let forceConfirmed = false;
 				try {
@@ -177,7 +177,13 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				}
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
 				try {
-					const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true);
+					const outcome = await deps.repo.removeWorktree(
+						repoPath,
+						workspaceId,
+						deleteBranch,
+						lifecycle.removalSafety === "requires_force",
+						true,
+					);
 					appLogger.info("git", `handleRemoveWorkspace: force remove_worktree SUCCESS`, { workspaceId });
 					shouldRemoveFromStore = true;
 					shouldClearBranchLabel = !outcome?.branch_delete_warning;

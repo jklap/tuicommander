@@ -281,14 +281,16 @@ pub(super) struct CreateWorktreeRequest {
 pub(super) struct RemoveWorktreeQuery {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
-    /// When true, also delete the local branch. Defaults to true.
+    /// When true, also delete the local branch. Defaults to true unless force is true.
     #[serde(rename = "deleteBranch", default)]
     pub delete_branch: Option<bool>,
-    /// When true, force-remove a locked worktree (mirrors the desktop
-    /// confirmation dialog). Also switches the branch deletion from `git
-    /// branch -d` (safe) to `-D` (force). Defaults to false.
+    /// Permit discarding dirty workspace files. Does not override a lock or
+    /// bypass branch deletion proof.
     #[serde(default)]
     pub force: Option<bool>,
+    /// Explicit confirmation to remove a locked worktree.
+    #[serde(rename = "overrideLock", default)]
+    pub override_lock: Option<bool>,
 }
 
 #[derive(Deserialize)]

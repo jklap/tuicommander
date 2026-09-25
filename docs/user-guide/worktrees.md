@@ -51,7 +51,8 @@ cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
 For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
 `done` or `failed` before installing dependencies or building. When creation
-runs a configured setup script, it finishes before the copy starts.
+runs a configured setup script through HTTP or MCP, it finishes before the copy
+starts. Desktop setup and warming can overlap.
 
 Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*

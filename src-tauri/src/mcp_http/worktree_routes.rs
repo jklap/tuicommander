@@ -8,6 +8,24 @@ use std::sync::Arc;
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
+struct PendingWarmGuard {
+    destination: std::path::PathBuf,
+    token: u64,
+    armed: bool,
+}
+
+impl Drop for PendingWarmGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            crate::worktree::finish_warm(
+                &self.destination,
+                self.token,
+                serde_json::json!({"status": "failed", "reason": "creation request cancelled before warming started"}),
+            );
+        }
+    }
+}
+
 async fn run_setup_then_warm(
     script: Option<String>,
     source: std::path::PathBuf,
@@ -19,6 +37,11 @@ async fn run_setup_then_warm(
     Option<serde_json::Value>,
     tokio::task::JoinHandle<()>,
 ) {
+    let mut pending_guard = PendingWarmGuard {
+        destination: destination.clone(),
+        token,
+        armed: true,
+    };
     let mut setup_result = None;
     let mut setup_error = None;
     if let Some(script) = script {
@@ -32,6 +55,7 @@ async fn run_setup_then_warm(
         }
     }
     let task = crate::worktree::spawn_background_warm(source, destination, token, warm);
+    pending_guard.armed = false;
     (setup_result, setup_error, task)
 }
 
@@ -190,6 +214,11 @@ pub(super) async fn create_worktree_shared(
             let branch_name = workspace.branch.clone();
             let workspace_id = workspace.workspace_id.clone();
             let warm_token = crate::worktree::begin_warm(&workspace.path);
+            let mut pending_guard = PendingWarmGuard {
+                destination: workspace.path.clone(),
+                token: warm_token,
+                armed: true,
+            };
             // Built before the setup script runs: the payload describes what the
             // workspace ARRIVED with, and a script that installs something does
             // not change what was already warm.
@@ -210,6 +239,7 @@ pub(super) async fn create_worktree_shared(
             .await
             .ok()
             .flatten();
+            pending_guard.armed = false;
             let (setup_script, setup_script_error, _warm_task) = run_setup_then_warm(
                 script,
                 warm_source,
@@ -253,16 +283,19 @@ pub(super) async fn remove_worktree_http(
         return e.into_response();
     }
     let repo_path = q.repo_path.clone();
-    let delete_branch = q.delete_branch.unwrap_or(true);
     let force = q.force.unwrap_or(false);
+    let delete_branch = q.delete_branch.unwrap_or(!force);
+    let override_lock = q.override_lock.unwrap_or(false);
     let id_for_event = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::remove_worktree_by_workspace_id(
+        let archive = crate::worktree::resolve_archive_script(&repo_path);
+        crate::worktree::remove_worktree_by_workspace_id_with_lock(
             &repo_path,
             &workspace_id,
             delete_branch,
-            None,
+            archive.as_deref(),
             force,
+            override_lock,
         )
     })
     .await;
@@ -555,7 +588,10 @@ mod warm_tests {
             .run()
             .unwrap();
         std::fs::write(repo.join("README.md"), "base\n").unwrap();
-        crate::git_cli::git_cmd(&repo).args(["add", "."]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
         crate::git_cli::git_cmd(&repo)
             .args(["commit", "-m", "base"])
             .run()
@@ -602,22 +638,38 @@ mod warm_tests {
         let state_for_create = Arc::clone(&state);
         let repo_for_create = repo_path.clone();
         let create = tokio::spawn(async move {
-            create_worktree_shared(&state_for_create, repo_for_create, "pending-setup".into(), None)
-                .await
+            create_worktree_shared(
+                &state_for_create,
+                repo_for_create,
+                "pending-setup".into(),
+                None,
+            )
+            .await
         });
 
         wait_for_file(&started).await;
         let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
-        assert_eq!(paths["pending-setup"].warm_artifacts.as_ref().unwrap()["status"], "pending");
+        assert_eq!(
+            paths["pending-setup"].warm_artifacts.as_ref().unwrap()["status"],
+            "pending"
+        );
         std::fs::write(&gate, "release").unwrap();
-        let created = create.await.unwrap().unwrap_or_else(|(status, body)| panic!("{status}: {:?}", body.0));
+        let created = create
+            .await
+            .unwrap()
+            .unwrap_or_else(|(status, body)| panic!("{status}: {:?}", body.0));
         assert_eq!(created.instructions["warm_artifacts"]["status"], "pending");
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while crate::worktree::warm_status(&created.worktree.path)["status"] == "pending" {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
-        }).await.unwrap();
-        assert_eq!(crate::worktree::warm_status(&created.worktree.path)["status"], "done");
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::worktree::warm_status(&created.worktree.path)["status"],
+            "done"
+        );
         crate::worktree::clear_warm(&created.worktree.path);
     }
 
@@ -636,8 +688,13 @@ mod warm_tests {
         let state_for_create = Arc::clone(&state);
         let repo_for_create = repo_path.clone();
         let create = tokio::spawn(async move {
-            create_worktree_shared(&state_for_create, repo_for_create, "cancelled-setup".into(), None)
-                .await
+            create_worktree_shared(
+                &state_for_create,
+                repo_for_create,
+                "cancelled-setup".into(),
+                None,
+            )
+            .await
         });
 
         wait_for_file(&started).await;
@@ -646,9 +703,12 @@ mod warm_tests {
         assert_eq!(crate::worktree::warm_status(&path)["status"], "pending");
         create.abort();
         let _ = create.await;
-        assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
         std::fs::write(&gate, "release").unwrap();
         wait_for_file(&gate.with_extension("finished")).await;
+        // The marker is written just before the detached setup shell exits.
+        // Let it close its inherited test pipes before nextest checks for leaks.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
         crate::worktree::clear_warm(&path);
     }
 
