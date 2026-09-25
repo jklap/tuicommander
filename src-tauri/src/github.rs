@@ -3487,6 +3487,10 @@ fn sanitize_ci_logs(logs: &str) -> String {
         .collect()
 }
 
+fn format_ci_logs(logs: &str) -> String {
+    truncate_ci_logs(&sanitize_ci_logs(logs))
+}
+
 /// Return the failed job IDs and names from `gh run view --json jobs` output.
 fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
     value
@@ -3785,7 +3789,7 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         logs.push_str(&String::from_utf8_lossy(&logs_output.stdout));
     }
 
-    Ok(CiLogsOutcome::Logs(truncate_ci_logs(&logs)))
+    Ok(CiLogsOutcome::Logs(format_ci_logs(&logs)))
 }
 
 /// Tauri command: fetch failed-job logs for the branch's latest workflow head.
@@ -3834,7 +3838,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
                     }
                 }
             }
-            Ok(truncate_ci_logs(&sanitize_ci_logs(&logs)))
+            Ok(format_ci_logs(&logs))
         }
     }
 }
@@ -3913,6 +3917,11 @@ mod tests {
     #[test]
     fn sanitizes_provider_logs_for_http_and_mcp_consumers() {
         assert_eq!(sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"), "red\nkeepthis");
+    }
+
+    #[test]
+    fn formats_github_actions_logs_before_returning_them() {
+        assert_eq!(format_ci_logs("\u{1b}[31mGHA failure\u{1b}[0m\u{1b}]52;c;clipboard\u{7}"), "GHA failure");
     }
 
     // --- hex_to_rgba tests ---
