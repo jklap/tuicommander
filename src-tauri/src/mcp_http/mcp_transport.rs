@@ -12411,6 +12411,45 @@ mod tests {
         );
     }
 
+    /// The only message in the inbox, already read by a plain inbox poll, then
+    /// losing its PTY: the requeue must land beyond the stored cursor too, not
+    /// only beyond the other inbox entries (#868-1d12).
+    #[tokio::test]
+    async fn agent_wait_requeues_a_lone_terminal_failure_beyond_the_stored_cursor() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "lone-terminal-mail".into(),
+                from_tuic_session: TEST_UUID_A.into(),
+                from_name: "sender".into(),
+                content: "only mail, awaiting PTY delivery".into(),
+                timestamp: 100,
+                delivered_via_channel: false,
+            },
+        );
+        assert_eq!(
+            state.assign_agent_delivery(TEST_UUID_B, "lone-terminal-mail", true),
+            crate::state::AgentDeliveryAssignment::Terminal
+        );
+        state.agent_read_cursor.insert(TEST_UUID_B.to_string(), 100);
+
+        state.release_terminal_delivery(TEST_UUID_B, "lone-terminal-mail");
+
+        let recovered = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-recipient"),
+        )
+        .await;
+        assert_eq!(
+            recovered["messages"][0]["id"], "lone-terminal-mail",
+            "{recovered}"
+        );
+    }
+
     #[test]
     fn mcp_delivery_regression_inbox_only_preserves_completed_lifecycle() {
         let state = test_state();
