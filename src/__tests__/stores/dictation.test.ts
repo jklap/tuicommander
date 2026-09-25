@@ -1522,6 +1522,31 @@ describe("dictationStore", () => {
 			});
 		});
 
+		it("keeps voices for the current language when an older refresh resolves last", async () => {
+			let resolveItalian: (voices: { id: string; source: "default" }[]) => void;
+			let resolveGerman: (voices: { id: string; source: "default" }[]) => void;
+			const italian = new Promise<{ id: string; source: "default" }[]>((resolve) => {
+				resolveItalian = resolve;
+			});
+			const german = new Promise<{ id: string; source: "default" }[]>((resolve) => {
+				resolveGerman = resolve;
+			});
+			mockInvoke.mockImplementation((command: string, args?: { language?: string }) => {
+				if (command === "get_speech_voices") return args?.language === "it" ? italian : german;
+				return Promise.resolve(command === "get_dictation_config" ? {} : undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				const first = store.refreshSpeechVoices("it");
+				const second = store.refreshSpeechVoices("de");
+				resolveGerman!([{ id: "vera", source: "default" }]);
+				await second;
+				resolveItalian!([{ id: "giovanni", source: "default" }]);
+				await first;
+				expect(store.state.speechVoices).toEqual([{ id: "vera", source: "default" }]);
+			});
+		});
+
 		// Listen needs no hands-free conversation: the backend renders the
 		// sample with the voice it is given, without changing the saved voice.
 		it("previews a voice without saving it", async () => {
