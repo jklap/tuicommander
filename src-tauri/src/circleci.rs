@@ -98,10 +98,14 @@ pub(crate) async fn circleci_token_status() -> Result<serde_json::Value, String>
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn circleci_set_token(token: String) -> Result<(), String> {
     if token.trim().is_empty() {
-        crate::credentials::delete(crate::credentials::Credential::CircleCiToken)
-    } else {
-        crate::credentials::set(crate::credentials::Credential::CircleCiToken, &token)
+        return Err("CircleCI token must not be empty; use Remove token instead".to_string());
     }
+    crate::credentials::set(crate::credentials::Credential::CircleCiToken, &token)
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn circleci_delete_token() -> Result<(), String> {
+    crate::credentials::delete(crate::credentials::Credential::CircleCiToken)
 }
 
 fn resolve_token_from_sources(

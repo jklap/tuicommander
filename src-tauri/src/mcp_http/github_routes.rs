@@ -3,6 +3,11 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
+#[derive(serde::Deserialize)]
+pub(super) struct CircleCiSetTokenRequest {
+    token: String,
+}
+
 use super::types::{
     ChangelogQuery, CiChecksQuery, CiFailureLogsQuery, GithubAddAccountRequest,
     GithubBindRepoRequest, GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody,
@@ -418,13 +423,12 @@ pub(super) async fn circleci_token_status() -> Response {
     json_result(crate::circleci::circleci_token_status().await)
 }
 
-pub(super) async fn circleci_set_token(Json(body): Json<serde_json::Value>) -> Response {
-    let token = body
-        .get("token")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    json_result(crate::circleci::circleci_set_token(token).await)
+pub(super) async fn circleci_set_token(Json(body): Json<CircleCiSetTokenRequest>) -> Response {
+    json_result(crate::circleci::circleci_set_token(body.token).await)
+}
+
+pub(super) async fn circleci_delete_token() -> Response {
+    json_result(crate::circleci::circleci_delete_token().await)
 }
 
 pub(super) async fn github_set_hide_drafts(

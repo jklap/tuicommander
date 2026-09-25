@@ -1927,6 +1927,7 @@ pub fn run() {
             github::fetch_ci_failure_logs,
             circleci::circleci_token_status,
             circleci::circleci_set_token,
+            circleci::circleci_delete_token,
             github::get_all_issues,
             github::get_issue_detail,
             github::close_issue,

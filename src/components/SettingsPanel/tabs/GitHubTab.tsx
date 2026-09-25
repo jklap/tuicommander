@@ -104,6 +104,7 @@ export const GitHubTab: Component = () => {
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
 	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
 	const [circleCiToken, setCircleCiToken] = createSignal("");
+	const [circleCiError, setCircleCiError] = createSignal<string | null>(null);
 
 	// Additional accounts (beyond the ambient github.com default): extra
 	// github.com accounts added via device-flow, plus GitHub Enterprise (PAT).
@@ -139,13 +140,33 @@ export const GitHubTab: Component = () => {
 		fetchResolutions();
 		void rpc<CircleCiTokenStatus>("circleci_token_status")
 			.then(setCircleCiStatus)
-			.catch(() => {});
+			.catch((error) => {
+				appLogger.warn("github", "Failed to load CircleCI token status", error);
+				setCircleCiError(error instanceof Error ? error.message : String(error));
+			});
 	});
 
 	async function saveCircleCiToken() {
-		await rpc("circleci_set_token", { token: circleCiToken() });
-		setCircleCiToken("");
-		setCircleCiStatus(await rpc<CircleCiTokenStatus>("circleci_token_status"));
+		const token = circleCiToken().trim();
+		if (!token) return setCircleCiError("Enter a CircleCI token before saving");
+		try {
+			await rpc("circleci_set_token", { token });
+			setCircleCiToken("");
+			setCircleCiStatus(await rpc<CircleCiTokenStatus>("circleci_token_status"));
+			setCircleCiError(null);
+		} catch (error) {
+			setCircleCiError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	async function removeCircleCiToken() {
+		try {
+			await rpc("circleci_delete_token");
+			setCircleCiStatus(await rpc<CircleCiTokenStatus>("circleci_token_status"));
+			setCircleCiError(null);
+		} catch (error) {
+			setCircleCiError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	async function fetchAccounts() {
@@ -923,7 +944,11 @@ export const GitHubTab: Component = () => {
 					<button class={cx(g.btn, g.btnPrimary)} onClick={saveCircleCiToken}>
 						Save token
 					</button>
+					<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>
+						Remove token
+					</button>
 				</div>
+				<Show when={circleCiError()}>{(message) => <div class={s.error}>{message()}</div>}</Show>
 				<div class={g.tokenSource}>
 					{circleCiStatus()?.configured ? `Configured (${circleCiStatus()?.source})` : "Not configured"}
 				</div>
