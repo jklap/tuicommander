@@ -6712,11 +6712,15 @@ mod tests {
         assert_eq!(entries(), before, "fixture left an entry after normal drop");
 
         let mut panic_path = None;
+        // The panic is the point of the test; keep it off stderr.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let state = tests_support::make_test_app_state_in(scratch.path());
             panic_path = Some(state.data_dir.clone());
             panic!("exercise fixture cleanup during unwind");
         }));
+        std::panic::set_hook(hook);
         assert!(outcome.is_err());
         let panic_path = panic_path.expect("fixture was created before panic");
         assert!(
