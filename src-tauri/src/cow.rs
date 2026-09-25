@@ -177,13 +177,39 @@ pub(crate) struct WarmingReport {
 /// Ask git which directories are ignored. A git failure is a warning rather
 /// than an error: the worktree is complete and valid, it just starts cold.
 fn warming_candidates(src: &Path, dest: &Path) -> Result<Vec<PathBuf>, WarmingReport> {
-    ignored_directories(src).map_err(|reason| WarmingReport {
+    let mut candidates = ignored_directories(src).map_err(|reason| WarmingReport {
         warmed: 0,
         warnings: vec![format!(
             "could not ask git which directories are ignored, so '{}' starts cold: {reason}",
             dest.display()
         )],
-    })
+    })?;
+    candidates.extend(external_bin_candidates(src));
+    candidates.sort();
+    candidates.dedup();
+    Ok(candidates)
+}
+
+fn external_bin_candidates(src: &Path) -> Vec<PathBuf> {
+    let Ok(contents) = std::fs::read_to_string(src.join("src-tauri/tauri.conf.json")) else {
+        return Vec::new();
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return Vec::new();
+    };
+    let Some(entries) = config.pointer("/bundle/externalBin").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    entries.iter().filter_map(serde_json::Value::as_str).flat_map(|entry| {
+        let declared = Path::new(entry);
+        let (Some(name), Some(parent)) = (declared.file_name(), declared.parent()) else { return Vec::new(); };
+        let prefix = format!("{}-", name.to_string_lossy());
+        std::fs::read_dir(src.join("src-tauri").join(parent)).into_iter().flatten()
+            .filter_map(Result::ok)
+            .filter_map(|child| (child.path().is_file() && child.file_name().to_string_lossy().starts_with(&prefix))
+                .then(|| child.path().strip_prefix(src).ok().map(PathBuf::from)).flatten())
+            .collect()
+    }).collect()
 }
 
 /// Production wrapper. Probe once so a filesystem without clonefile support
@@ -244,7 +270,7 @@ fn warm_candidates(
         let from = src_root.join(&relative);
         let to = dest_root.join(&relative);
         match std::fs::symlink_metadata(&from) {
-            Ok(metadata) if metadata.is_dir() => {}
+            Ok(metadata) if metadata.is_dir() || metadata.is_file() => {}
             _ => continue,
         }
         if from.join(".git").exists()
@@ -587,6 +613,10 @@ mod tests {
     }
 
     fn plain_copy(from: &Path, to: &Path) -> Result<(), String> {
+        if from.is_file() {
+            std::fs::copy(from, to).map_err(|error| error.to_string())?;
+            return Ok(());
+        }
         std::fs::create_dir_all(to).map_err(|error| error.to_string())?;
         for entry in std::fs::read_dir(from).map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
@@ -632,6 +662,34 @@ mod tests {
         warm_worktree_with(&repo, &worktree, plain_copy);
 
         assert!(!worktree.join(".env").exists());
+    }
+
+    #[test]
+    fn warming_copies_sidecars_declared_by_tauri_config() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::write(repo.join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir_all(repo.join("src-tauri/binaries")).unwrap();
+        std::fs::write(
+            repo.join("src-tauri/tauri.conf.json"),
+            r#"{"bundle":{"externalBin":["binaries/bridge"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("src-tauri/binaries/bridge-aarch64-apple-darwin"),
+            "sidecar",
+        )
+        .unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert!(report.warnings.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(
+                worktree.join("src-tauri/binaries/bridge-aarch64-apple-darwin")
+            )
+            .unwrap(),
+            "sidecar"
+        );
     }
 
     #[test]
