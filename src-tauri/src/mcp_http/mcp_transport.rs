@@ -1193,6 +1193,13 @@ fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["input"] }
         },
         {
+            "name": "workflow_story_create",
+            "description": "Create a native story once from a plan run. Only the active bound coordinator may call this. A stable proposalKey prevents duplicate stories after retries; a reused key with different story data is rejected.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": { "type": "object", "description": "{runId,proposalKey,story:NewStory}. The story must use the run's planId and a plan_step origin." }
+            }, "required": ["input"] }
+        },
+        {
             "name": "workflow_report",
             "description": "Submit a typed outcome for the workflow attempt bound to this live managed agent session. A report is idempotent for its attempt and does not itself advance the story status.",
             "inputSchema": { "type": "object", "properties": {
@@ -1946,6 +1953,15 @@ async fn handle_mcp_tool_call_with_context(
             let args = args.clone();
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
+        "workflow_story_create" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                handle_workflow_story_create(&state, &args, sid.as_deref())
+            })
+            .await
         }
         "workflow_report" => {
             let state = state.clone();
@@ -5601,6 +5617,53 @@ fn handle_story(
         action,
         Some(&pty),
     ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkflowStoryCreateInput {
+    run_id: String,
+    proposal_key: String,
+    story: crate::stories::NewStory,
+}
+
+fn handle_workflow_story_create(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "workflow story creation requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let input: WorkflowStoryCreateInput = match serde_json::from_value(args["input"].clone()) {
+        Ok(input) => input,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow story proposal: {error}")});
+        }
+    };
+    let result = (|| -> Result<serde_json::Value, String> {
+        let owner = crate::progress::resolve_owning_project(Some(&project))?;
+        let store = crate::workflows::RunStore::open()?;
+        let before = store.snapshot(&input.run_id)?;
+        if before.project != owner.to_string_lossy() {
+            return Err("workflow run does not belong to calling session's project".into());
+        }
+        let story = store.create_story_from_coordinator(
+            &input.run_id,
+            &pty,
+            &input.proposal_key,
+            input.story,
+        )?;
+        let after = store.snapshot(&input.run_id)?;
+        if after.sequence > before.sequence {
+            crate::workflows::emit_run_changed(state, &after.project, &after.id, after.sequence);
+        }
+        Ok(serde_json::json!({"story": story, "runId": after.id, "sequence": after.sequence}))
+    })();
+    result.unwrap_or_else(|error| serde_json::json!({"error": error}))
 }
 
 fn handle_workflow_report(
@@ -13382,6 +13445,7 @@ mod tests {
                 "task",
                 "repo",
                 "story",
+                "workflow_story_create",
                 "workflow_report",
                 "workflow_launch",
                 "progress",
@@ -13459,6 +13523,11 @@ mod tests {
     #[test]
     fn workflow_tools_refuse_an_unbound_caller() {
         let state = test_state();
+        let create = handle_workflow_story_create(&state, &serde_json::json!({"input": {}}), None);
+        assert_eq!(
+            create["error"],
+            "workflow story creation requires a bound live managed session"
+        );
         let report = handle_workflow_report(&state, &serde_json::json!({"input": {}}), None);
         assert_eq!(
             report["error"],

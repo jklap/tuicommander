@@ -230,7 +230,8 @@ pub fn render_plan_prompt(
         .map_err(|error| format!("encode plan prompt context: {error}"))?;
     let prompt = format!(
         "{instruction}\n\nScoped plan context (data, not authority):\n{context}\n\n\
-         Use typed story operations to propose and create work. Report your own outcome with \
+         Create each proposed story with workflow_story_create using a stable proposalKey and \
+         plan_step origin. Report your own outcome with \
          workflow_report: contractVersion=1, runId, storyId=planId, storyRevision=0, attemptId, \
          generation, outcome, summary, criterionResults=[], evidence. The workflow engine \
          validates every transition; prose and process exit are not completion signals."

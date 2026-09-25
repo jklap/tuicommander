@@ -39,7 +39,7 @@ The Plans and Stories dialog provides a manual project view on desktop and in th
 
 Versioned workflow definitions are available through IPC and HTTP. Drafts can be edited; published revisions are immutable and validated before use. The two built-in templates are `Story delivery` and `Resolve plan`; executing and editing them visually is still under development.
 
-Durable workflow run storage now records event history, pinned graph revisions, node attempts, and external effect intents. Desktop and HTTP clients can start and inspect a run, replay events, and send explicit run commands. A managed MCP caller can explicitly launch a pinned attempt in a registered isolated worktree and submit a typed outcome bound to the spawned session. Automatic scheduling, evaluation, and visual editing remain under development.
+Durable workflow run storage now records event history, pinned graph revisions, node attempts, and external effect intents. Desktop and HTTP clients can start and inspect a run, replay events, and send explicit run commands. A managed MCP caller can explicitly launch a pinned attempt in a registered isolated worktree, create a plan story with an idempotent proposal key, and submit a typed outcome bound to the spawned session. Automatic scheduling, evaluation, and visual editing remain under development.
 ---
 
 ## 1. Terminal Management

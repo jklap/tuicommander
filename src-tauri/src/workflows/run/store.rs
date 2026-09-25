@@ -1,6 +1,6 @@
 use super::model::*;
 use super::reducer::apply_event;
-use crate::stories::{Story, StoryStatus, StoryStore};
+use crate::stories::{NewStory, Story, StoryOrigin, StoryStatus, StoryStore};
 use crate::workflows::{NodeKind, WorkflowKind, WorkflowStore};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -249,6 +249,140 @@ impl RunStore {
                 report,
             },
         )
+    }
+
+    /// Create plan work only for the run's bound coordinator. The reservation
+    /// and the story database each have a durable key, so a lost tool response
+    /// can be retried without creating another story.
+    pub fn create_story_from_coordinator(
+        &self,
+        run_id: &str,
+        caller_session: &str,
+        proposal_key: &str,
+        input: NewStory,
+    ) -> Result<Story, String> {
+        validate_key("agent session", caller_session)?;
+        if proposal_key.trim().is_empty() || proposal_key.len() > 64 || proposal_key.contains('\0')
+        {
+            return Err("invalid story proposal key".into());
+        }
+        if !matches!(&input.origin, StoryOrigin::PlanStep { .. }) {
+            return Err("workflow stories require a plan-step origin".into());
+        }
+        let snapshot = self.snapshot(run_id)?;
+        if input.plan_id != snapshot.plan_id
+            || !snapshot.attempts.iter().any(|attempt| {
+                attempt.story_id == snapshot.plan_id
+                    && attempt.state == AttemptState::Running
+                    && attempt
+                        .agent
+                        .as_ref()
+                        .is_some_and(|agent| agent.session_id == caller_session)
+            })
+        {
+            return Err("only the active run coordinator may create plan stories".into());
+        }
+        let effect_key = format!("create-story:{proposal_key}");
+        let effect = if let Some(effect) = snapshot
+            .effects
+            .iter()
+            .find(|effect| effect.key == effect_key)
+        {
+            if effect.kind != EffectKind::CreateStory || effect.state == EffectState::Failed {
+                return Err("story proposal effect cannot be retried".into());
+            }
+            effect.clone()
+        } else {
+            if snapshot.status != RunStatus::Running {
+                return Err("workflow run is not running".into());
+            }
+            let reserved = self.command(
+                run_id,
+                &format!("create-story-intent:{proposal_key}"),
+                RunCommand::ReserveEffect {
+                    key: effect_key,
+                    kind: EffectKind::CreateStory,
+                },
+            )?;
+            let RunEventKind::EffectReserved { effect } = reserved.event.kind else {
+                return Err("workflow state changed before story proposal".into());
+            };
+            effect
+        };
+        let story_store = StoryStore::open()?;
+        let creation = match effect.state {
+            EffectState::Intended => {
+                // Hold the run writer lock across the other database's story
+                // transaction. Cancel must either win first (no story is
+                // created) or observe a story committed before cancellation.
+                let mut conn = self.connect()?;
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .map_err(|error| format!("begin workflow story creation: {error}"))?;
+                let current = read_snapshot(&tx, run_id)?;
+                if current.status != RunStatus::Running
+                    || !current
+                        .effects
+                        .iter()
+                        .any(|entry| entry.id == effect.id && entry.state == EffectState::Intended)
+                    || !current.attempts.iter().any(|attempt| {
+                        attempt.story_id == current.plan_id
+                            && attempt.state == AttemptState::Running
+                            && attempt
+                                .agent
+                                .as_ref()
+                                .is_some_and(|agent| agent.session_id == caller_session)
+                    })
+                {
+                    return Err("workflow stopped before story creation".into());
+                }
+                let created = story_store.create_story_once(run_id, proposal_key, input);
+                tx.commit()
+                    .map_err(|error| format!("commit workflow story reservation: {error}"))?;
+                created
+            }
+            EffectState::Uncertain => {
+                return Err(
+                    "story proposal outcome is uncertain; operator reconciliation required".into(),
+                );
+            }
+            EffectState::Succeeded => story_store
+                .existing_story_for_proposal(run_id, proposal_key, &input)?
+                .ok_or("completed story proposal has no story receipt".into()),
+            EffectState::Failed => unreachable!(),
+        };
+        let story = match creation {
+            Ok(story) => story,
+            Err(error) => {
+                if effect.state == EffectState::Intended {
+                    let _ = self.command(
+                        run_id,
+                        &format!("create-story-failed:{proposal_key}"),
+                        RunCommand::MarkEffect {
+                            effect_id: effect.id,
+                            succeeded: false,
+                        },
+                    );
+                }
+                return Err(error);
+            }
+        };
+        let completed = match effect.state {
+            EffectState::Intended => Some(RunCommand::MarkEffect {
+                effect_id: effect.id,
+                succeeded: true,
+            }),
+            EffectState::Succeeded => None,
+            EffectState::Uncertain | EffectState::Failed => unreachable!(),
+        };
+        if let Some(command) = completed {
+            self.command(
+                run_id,
+                &format!("create-story-complete:{proposal_key}"),
+                command,
+            )?;
+        }
+        Ok(story)
     }
 
     /// Process exit is an observation, never an outcome report. Fence it in the
