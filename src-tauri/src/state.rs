@@ -4953,6 +4953,13 @@ impl VtLogBuffer {
         self.grid.logical_prefix_at_cursor()
     }
 
+    pub(crate) fn logical_line_at_row(
+        &self,
+        row: usize,
+    ) -> Option<crate::terminal_grid::LogicalPrefix> {
+        self.grid.logical_line_at_row(row)
+    }
+
     pub(crate) fn physical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
         self.grid.physical_prefix_at_cursor()
     }

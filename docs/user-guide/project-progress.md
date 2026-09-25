@@ -28,6 +28,10 @@ of every task — so even an agent that never calls the tool leaves a trail of
 what it set out to do. An agent cannot write an `intent` entry itself; the
 reporting tool refuses that kind.
 
+TUI agents can redraw an intent one word at a time. Progress waits for the
+completed line or turn boundary before saving it, so a growing preview appears
+as one entry rather than a series of partial entries.
+
 ## How an agent reports
 
 The MCP `progress` tool takes three fields.

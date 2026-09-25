@@ -993,7 +993,7 @@ impl TerminalGrid {
     /// Only terminal soft-wraps are followed. The bounded result is intended for
     /// structured-token parsing, not general scrollback reconstruction.
     pub(crate) fn logical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
-        const MAX_WRAP_TRANSITIONS: usize = 8;
+        const MAX_WRAP_TRANSITIONS: usize = 4;
         const MAX_BYTES: usize = 512;
 
         let grid = self.term.grid();
@@ -1054,13 +1054,17 @@ impl TerminalGrid {
         let mut start_row = row;
         let mut transitions = 0;
         while start_row > 0 && self.row_wrapped(Line(start_row as i32 - 1)) {
-            if transitions == MAX_WRAP_TRANSITIONS { return None; }
+            if transitions == MAX_WRAP_TRANSITIONS {
+                return None;
+            }
             start_row -= 1;
             transitions += 1;
         }
         let mut end_row = row;
         while end_row + 1 < grid.screen_lines() && self.row_wrapped(Line(end_row as i32)) {
-            if transitions == MAX_WRAP_TRANSITIONS { return None; }
+            if transitions == MAX_WRAP_TRANSITIONS {
+                return None;
+            }
             end_row += 1;
             transitions += 1;
         }
@@ -1068,12 +1072,20 @@ impl TerminalGrid {
         for line in start_row..=end_row {
             for col in 0..grid.columns() {
                 let cell = &grid[Line(line as i32)][Column(col)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) { continue; }
-                if text.len() + cell_text_utf8_len(cell) > MAX_BYTES { return None; }
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if text.len() + cell_text_utf8_len(cell) > MAX_BYTES {
+                    return None;
+                }
                 push_cell_text(&mut text, cell);
             }
         }
-        Some(LogicalPrefix { text, start_row, end_row })
+        Some(LogicalPrefix {
+            text,
+            start_row,
+            end_row,
+        })
     }
 
     /// Read only the current physical row through the cursor. This is the

@@ -938,6 +938,7 @@ pub(crate) fn shell_state_wire(state: u8) -> Option<&'static str> {
 
 // Re-export from chrome module for use by this module and tests.
 use crate::chrome::is_chrome_row;
+use alacritty_terminal::vte;
 
 /// Searches all changed rows (not just the last non-empty one) so a question row
 /// is found even when a mode/status line with a higher row index arrives in the same chunk.
@@ -1336,7 +1337,32 @@ fn decide(
 
 /// Shared state between the PTY reader thread and the silence-detection timer thread.
 #[derive(Clone)]
+struct OpenIntent {
+    text: String,
+    start_row: usize,
+    end_row: usize,
+}
+
+/// Counts only VTE line breaks. CSI cursor moves and CR are repaint operations.
+#[derive(Default)]
+struct IntentBreaks(bool);
+
+impl vte::Perform for IntentBreaks {
+    fn execute(&mut self, byte: u8) {
+        self.0 |= matches!(byte, b'\n' | 0x0b | 0x0c);
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.0 |= !ignore && intermediates.is_empty() && matches!(byte, b'D' | b'E');
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct SilenceState {
+    /// A title-less marker is kept until a real line or turn boundary closes it.
+    open_intent: Option<OpenIntent>,
+    /// Exact-value repaint dedup; a different value permits an earlier value again.
+    last_intent: Option<(String, Option<String>)>,
     /// When the last chunk of output was received from the PTY.
     pub(crate) last_output_at: std::time::Instant,
     /// The last line ending with `?` that hasn't been resolved yet.
@@ -1466,8 +1492,27 @@ pub(crate) struct SilenceState {
 }
 
 impl SilenceState {
+    fn close_open_intent(&mut self) -> Option<ParsedEvent> {
+        let open = self.open_intent.take()?;
+        self.accept_intent(open.text, None)
+    }
+
+    fn accept_intent(&mut self, text: String, title: Option<String>) -> Option<ParsedEvent> {
+        let value = (text, title);
+        if self.last_intent.as_ref() == Some(&value) {
+            return None;
+        }
+        self.last_intent = Some(value.clone());
+        Some(ParsedEvent::Intent {
+            text: value.0,
+            title: value.1,
+        })
+    }
+
     pub(crate) fn new() -> Self {
         Self {
+            open_intent: None,
+            last_intent: None,
             last_output_at: std::time::Instant::now(),
             pending_question_line: None,
             question_already_emitted: false,
@@ -4690,6 +4735,7 @@ fn spawn_silence_timer(
             // IDLE makes the frontend's `pendingSuggest` race impossible —
             // the event physically cannot reach the UI before idle.
             emit_pending_suggest_if_idle(&state, &silence, &session_id);
+            emit_open_intent_if_idle(&state, &silence, &session_id);
 
             // Retraction is a reconciliation loop, not part of the one-shot
             // question-emission gate. Once a low-confidence wait has fired,
@@ -4957,6 +5003,31 @@ fn emit_pending_suggest_if_idle(
     true
 }
 
+fn emit_open_intent_if_idle(
+    state: &AppState,
+    silence: &Arc<Mutex<SilenceState>>,
+    session_id: &str,
+) {
+    if !state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
+    {
+        return;
+    }
+    let turn_epoch = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch)
+        .unwrap_or(0);
+    let event = silence.lock().close_open_intent();
+    if let Some(event) = event {
+        publish_intent_event(state, session_id, &event, turn_epoch);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ChunkProcessor: shared output processing logic for desktop & headless readers
 // ---------------------------------------------------------------------------
@@ -5136,6 +5207,27 @@ fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
     }
 }
 
+fn publish_intent_event(state: &AppState, session_id: &str, event: &ParsedEvent, turn_epoch: u64) {
+    let ParsedEvent::Intent { text, .. } = event else {
+        return;
+    };
+    state.note_marker(session_id, crate::state::MarkerKind::Intent);
+    record_intent_in_journal(state, session_id, text);
+    if let Ok(mut json) = serde_json::to_value(event) {
+        if let Some(object) = json.as_object_mut() {
+            object.insert("_turn_epoch".to_string(), turn_epoch.into());
+        }
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json.into(),
+        });
+    }
+}
+
 /// Whether a heuristic `Question` event should be suppressed for this session.
 /// Hook-instrumented agents report awaiting via OSC 7770 (`state=awaiting`), so
 /// the silence/regex question heuristics would only double-fire. Only `Question`
@@ -5189,6 +5281,7 @@ fn rearm_awaiting_for_open_dialog(
 /// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
     parser: OutputParser,
+    intent_break_parser: vte::Parser,
     /// Dedup: only emit StatusLine when task_name actually changes *within a
     /// turn*, stored as `(turn_epoch, task_name)`. The epoch is part of the key
     /// because agents may name every turn identically — Codex always reports
@@ -5282,6 +5375,7 @@ impl ChunkProcessor {
     fn new(session_cwd: Option<String>, tuic_session: Option<String>) -> Self {
         Self {
             parser: OutputParser::new(),
+            intent_break_parser: vte::Parser::new(),
             last_status_task: None,
             last_question_text: None,
             raw_carry: String::new(),
@@ -5646,6 +5740,7 @@ impl ChunkProcessor {
             logical_prefix,
             physical_prefix,
             history_size,
+            intent_candidate,
         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let mut changed = vt.process(data.as_bytes());
@@ -5756,6 +5851,14 @@ impl ChunkProcessor {
             let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
             let physical_prefix = vt.physical_prefix_at_cursor();
+            let intent_candidate = agent_type.as_ref().and_then(|_| {
+                changed.iter().rev().find_map(|row| {
+                    let line = vt.logical_line_at_row(row.row_index)?;
+                    (crate::output_parser::structured_token_anchor(&line.text)
+                        == Some(crate::output_parser::StructuredTokenAnchor::Intent))
+                    .then_some(line)
+                })
+            });
 
             (
                 changed,
@@ -5767,6 +5870,7 @@ impl ChunkProcessor {
                 logical_prefix,
                 physical_prefix,
                 hist,
+                intent_candidate,
             )
         } else {
             (
@@ -5779,6 +5883,7 @@ impl ChunkProcessor {
                 None,
                 None,
                 0,
+                None,
             )
         };
 
@@ -5972,7 +6077,9 @@ impl ChunkProcessor {
                             } else {
                                 (payload.clone(), None)
                             };
-                            tuic_events.push(ParsedEvent::Intent { text, title });
+                            if let Some(event) = silence.lock().accept_intent(text, title) {
+                                tuic_events.push(event);
+                            }
                         }
                         "block" => {
                             let (action, exit_code) =
@@ -6058,11 +6165,68 @@ impl ChunkProcessor {
             .get(session_id)
             .map(|s| s.agent_type.is_some())
             .unwrap_or(false);
+        let mut breaks = IntentBreaks::default();
+        self.intent_break_parser
+            .advance(&mut breaks, data.as_bytes());
+        let mut intent_events = Vec::new();
+        if agent_active_for_parse {
+            let candidate = intent_candidate.and_then(|line| {
+                let ParsedEvent::Intent { text, title } =
+                    crate::output_parser::parse_intent(&line.text, true)?
+                else {
+                    return None;
+                };
+                Some((line, text, title))
+            });
+            let mut sl = silence.lock();
+            if let Some((line, text, title)) = candidate {
+                let compatible = sl.open_intent.as_ref().is_some_and(|open| {
+                    text.starts_with(&open.text) || open.text.starts_with(&text)
+                });
+                if sl.open_intent.is_some() && !compatible {
+                    if let Some(event) = sl.close_open_intent() {
+                        intent_events.push(event);
+                    }
+                }
+                if let Some(title) = title {
+                    sl.open_intent = None;
+                    if let Some(event) = sl.accept_intent(text, Some(title)) {
+                        intent_events.push(event);
+                    }
+                } else if sl.last_intent.as_ref() != Some(&(text.clone(), None)) {
+                    sl.open_intent = Some(OpenIntent {
+                        text,
+                        start_row: history_size + line.start_row,
+                        end_row: history_size + line.end_row,
+                    });
+                }
+            }
+            let close = sl.open_intent.as_ref().is_some_and(|open| {
+                let end_row = open.end_row.saturating_sub(history_size);
+                let prose_below = changed_rows.iter().any(|row| {
+                    row.row_index > end_row
+                        && !row.text.trim().is_empty()
+                        && !is_chrome_row(&row.text)
+                        && crate::output_parser::structured_token_anchor(&row.text).is_none()
+                });
+                let broken_line = breaks.0 && cursor_row.is_some_and(|row| row > end_row);
+                let replaced = changed_rows.iter().any(|row| {
+                    history_size + row.row_index == open.start_row
+                        && crate::output_parser::structured_token_anchor(&row.text)
+                            != Some(crate::output_parser::StructuredTokenAnchor::Intent)
+                });
+                prose_below || broken_line || replaced || explicit_idle_in_chunk
+            });
+            if close && let Some(event) = sl.close_open_intent() {
+                intent_events.push(event);
+            }
+        }
         // Cursor-completeness guard: parse a suggest token from the bounded grid
         // prefix through the cursor, never from stale cells to its right. When a
         // soft-wrapped continuation changes in a later chunk, replace its whole
         // physical range with one synthetic logical row so the unchanged anchor
-        // remains available to the existing parser. Intent deferral is unchanged.
+        // remains available to the existing parser. Intent capture is handled
+        // by the open state above.
         let mut structured_rows = None;
         let structured_prefix = logical_prefix
             .filter(|prefix| crate::output_parser::structured_token_anchor(&prefix.text).is_some())
@@ -6117,8 +6281,12 @@ impl ChunkProcessor {
             self.parser
                 .parse_clean_lines(rows, agent_active_for_parse)
                 .into_iter()
-                .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
+                .filter(|e| {
+                    !matches!(e, ParsedEvent::Intent { .. })
+                        && !suppress_heuristic_question(hook_instrumented, e)
+                }),
         );
+        events.extend(intent_events);
 
         // Heuristic agent-block detection for Claude Code tool calls.
         // CC renders tool calls as `⏺ ToolName(args)` — detect these and
@@ -6301,13 +6469,9 @@ impl ChunkProcessor {
             // suggest parked for a turn that ends early is still a marker the
             // agent produced (#4421).
             match event {
-                ParsedEvent::Intent { text, .. } => {
-                    state.note_marker(session_id, crate::state::MarkerKind::Intent);
-                    // The host's half of the Progress journal. The reporting
-                    // obligation is hours back in an `initialize` blob by the
-                    // time anything worth recording happens; this trigger fires
-                    // on every task, which is why it is the reliability floor.
-                    record_intent_in_journal(state, session_id, text);
+                ParsedEvent::Intent { .. } => {
+                    publish_intent_event(state, session_id, event, turn_epoch);
+                    continue;
                 }
                 ParsedEvent::Suggest { .. } => {
                     state.note_marker(session_id, crate::state::MarkerKind::Suggest)
@@ -7060,6 +7224,7 @@ type VtProcessResult = (
     Option<crate::terminal_grid::LogicalPrefix>,
     Option<crate::terminal_grid::LogicalPrefix>,
     usize,
+    Option<crate::terminal_grid::LogicalPrefix>,
 );
 
 /// Render one lifecycle payload as a single human-facing line, without the
