@@ -187,6 +187,8 @@ gix = { version = "0.85", default-features = false, features = [
 ] }
 parking_lot = "0.12"
 regex = "1"
+# github.rs sanitize_ci_logs strips terminal escapes from CI logs in production.
+strip-ansi-escapes = "0.2"
 lazy_static = "1"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 # Not test-only: `progress::export::atomic_replace` needs a uniquely named
@@ -423,4 +425,3 @@ tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 serial_test = "3"
 mockito = "1"
-strip-ansi-escapes = "0.2"
