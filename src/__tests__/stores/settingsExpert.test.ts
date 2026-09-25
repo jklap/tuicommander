@@ -86,6 +86,23 @@ describe("settingsExpertStore visibility within one Settings open", () => {
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
 	});
+
+	it("logs a defaults-load failure and keeps expert controls visible", async () => {
+		const failure = new Error("defaults unavailable");
+		const warn = vi.spyOn(appLogger, "warn");
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "get_config_defaults" ? Promise.reject(failure) : Promise.resolve(undefined),
+		);
+
+		await settingsExpertStore.open();
+
+		expect(settingsExpertStore.isVisible(KEY, true)).toBe(true);
+		expect(warn).toHaveBeenCalledWith(
+			"config",
+			"Failed to load config defaults; expert settings stay visible",
+			failure,
+		);
+	});
 });
 
 describe("settingsExpertStore default lookup", () => {
