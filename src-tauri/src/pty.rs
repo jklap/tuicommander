@@ -1341,21 +1341,54 @@ fn decide(
 #[derive(Clone)]
 struct OpenIntent {
     text: String,
+    /// The unjoined anchor line distinguishes a new intent from an Ink frame
+    /// that temporarily rewrites or moves its continuation rows.
+    anchor_text: String,
     start_row: usize,
     end_row: usize,
 }
 
+fn incomplete_intent_title(text: &str) -> bool {
+    text.rsplit_once('(')
+        .is_some_and(|(_, suffix)| !suffix.contains(')') && suffix.split_whitespace().count() <= 3)
+}
+
 /// Counts only VTE line breaks. CSI cursor moves and CR are repaint operations.
 #[derive(Default)]
-struct IntentBreaks(bool);
+struct IntentBreaks {
+    any: bool,
+    strong: bool,
+    previous_cr: bool,
+}
 
 impl vte::Perform for IntentBreaks {
     fn execute(&mut self, byte: u8) {
-        self.0 |= matches!(byte, b'\n' | 0x0b | 0x0c);
+        match byte {
+            b'\r' => self.previous_cr = true,
+            b'\n' => {
+                self.any = true;
+                self.strong |= self.previous_cr;
+                self.previous_cr = false;
+            }
+            0x0b | 0x0c => {
+                self.any = true;
+                self.strong = true;
+                self.previous_cr = false;
+            }
+            _ => self.previous_cr = false,
+        }
+    }
+
+    fn print(&mut self, _char: char) {
+        self.previous_cr = false;
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
-        self.0 |= !ignore && intermediates.is_empty() && matches!(byte, b'D' | b'E');
+        if !ignore && intermediates.is_empty() && matches!(byte, b'D' | b'E') {
+            self.any = true;
+            self.strong = true;
+        }
+        self.previous_cr = false;
     }
 }
 
@@ -5881,7 +5914,8 @@ impl ChunkProcessor {
                             {
                                 return None;
                             }
-                            let mut block = line.text.clone();
+                            let anchor_text = line.text.clone();
+                            let mut block = anchor_text.clone();
                             let mut continuation_ends = Vec::new();
                             let mut next = line.end_row + 1;
                             for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
@@ -5904,7 +5938,7 @@ impl ChunkProcessor {
                             }
                             (line.start_row..=line.end_row)
                                 .contains(&row.row_index)
-                                .then_some(line)
+                                .then_some((line, anchor_text))
                         })
                 })
             });
@@ -6225,36 +6259,59 @@ impl ChunkProcessor {
         }
         let mut intent_events = Vec::new();
         if agent_active_for_parse {
-            let candidate = intent_candidate.and_then(|line| {
+            let candidate = intent_candidate.and_then(|(line, anchor_text)| {
                 let ParsedEvent::Intent { text, title } =
                     crate::output_parser::parse_intent(&line.text, true)?
                 else {
                     return None;
                 };
-                Some((line, text, title))
+                Some((line, anchor_text, text, title))
             });
             let mut sl = silence.lock();
             let mut candidate_grew = false;
-            if let Some((line, text, title)) = candidate {
-                candidate_grew = sl.open_intent.as_ref().is_none_or(|open| {
+            let mut same_anchor_repaint = false;
+            if let Some((line, anchor_text, text, title)) = candidate {
+                candidate_grew = sl.open_intent.as_ref().map_or(!breaks.strong, |open| {
                     text.starts_with(&open.text) && text.len() > open.text.len()
                 });
+                same_anchor_repaint = sl
+                    .open_intent
+                    .as_ref()
+                    .is_some_and(|open| open.anchor_text == anchor_text);
                 let compatible = sl.open_intent.as_ref().is_some_and(|open| {
-                    text.starts_with(&open.text) || open.text.starts_with(&text)
+                    text.starts_with(&open.text)
+                        || open.text.starts_with(&text)
+                        || same_anchor_repaint
                 });
                 if sl.open_intent.is_some() && !compatible {
-                    if let Some(event) = sl.close_open_intent() {
+                    if sl
+                        .open_intent
+                        .as_ref()
+                        .is_some_and(|open| incomplete_intent_title(&open.text))
+                    {
+                        sl.open_intent = None;
+                    } else if let Some(event) = sl.close_open_intent() {
                         intent_events.push(event);
                     }
                 }
+                // Ink can erase the continuation row, briefly paint the next
+                // paragraph there, then move the intact anchor up one row and
+                // finish its title. Keep the longer candidate during that gap.
                 if let Some(title) = title {
                     sl.open_intent = None;
                     if let Some(event) = sl.accept_intent(text, Some(title)) {
                         intent_events.push(event);
                     }
-                } else if sl.last_intent.as_ref() != Some(&(text.clone(), None)) {
+                } else if sl.last_intent.as_ref() != Some(&(text.clone(), None))
+                    && !(same_anchor_repaint
+                        && sl
+                            .open_intent
+                            .as_ref()
+                            .is_some_and(|open| !text.starts_with(&open.text)))
+                {
                     sl.open_intent = Some(OpenIntent {
                         text,
+                        anchor_text,
                         start_row: intent_origin + line.start_row,
                         end_row: intent_origin + line.end_row,
                     });
@@ -6263,20 +6320,24 @@ impl ChunkProcessor {
             let close = sl.open_intent.as_ref().is_some_and(|open| {
                 let end_row = open.end_row.saturating_sub(intent_origin);
                 let prose_below = !candidate_grew
+                    && !same_anchor_repaint
                     && changed_rows.iter().any(|row| {
                         row.row_index > end_row
                             && !row.text.trim().is_empty()
                             && !is_chrome_row(&row.text)
                             && crate::output_parser::structured_token_anchor(&row.text).is_none()
                     });
-                let broken_line =
-                    breaks.0 && !candidate_grew && cursor_row.is_some_and(|row| row > end_row);
+                let broken_line = breaks.any
+                    && !candidate_grew
+                    && !same_anchor_repaint
+                    && cursor_row.is_some_and(|row| row > end_row);
                 let replaced = changed_rows.iter().any(|row| {
                     intent_origin + row.row_index == open.start_row
                         && crate::output_parser::structured_token_anchor(&row.text)
                             != Some(crate::output_parser::StructuredTokenAnchor::Intent)
                 });
-                prose_below || broken_line || replaced || explicit_idle_in_chunk
+                (prose_below || broken_line || replaced) && !incomplete_intent_title(&open.text)
+                    || explicit_idle_in_chunk
             });
             if close && let Some(event) = sl.close_open_intent() {
                 intent_events.push(event);
@@ -7301,7 +7362,7 @@ type VtProcessResult = (
     Option<crate::terminal_grid::LogicalPrefix>,
     usize,
     usize,
-    Option<crate::terminal_grid::LogicalPrefix>,
+    Option<(crate::terminal_grid::LogicalPrefix, String)>,
 );
 
 /// Render one lifecycle payload as a single human-facing line, without the

@@ -442,6 +442,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hand_off.target_name.as_deref().unwrap().chars().count(), 80);
+        let unicode_name = "é".repeat(81);
+        let unicode_hand_off = ProgressStore::open()
+            .unwrap()
+            .record_hand_off(
+                &project.path().canonicalize().unwrap().to_string_lossy(),
+                &NewProgressEntry {
+                    kind: ProgressKind::Message,
+                    text: "Review this".into(),
+                    step: None,
+                    agent_name: None,
+                },
+                Some("pty-a"),
+                Some("pty-b"),
+                Some(&unicode_name),
+            )
+            .unwrap();
+        let expected_name = "é".repeat(80);
+        assert_eq!(
+            unicode_hand_off.target_name.as_deref(),
+            Some(expected_name.as_str())
+        );
     }
 
     /// Collection off means the journal does not grow — not that it grows more

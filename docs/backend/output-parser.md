@@ -243,7 +243,9 @@ hard-wrap rows before parsing. It journals on a closed `(title)`, a VTE hard
 line break that did not grow the candidate, subsequent prose below the line,
 replacement of the line, or an idle turn boundary after output has gone quiet.
 Cursor moves, carriage returns, and growing Ink frame repaints do not close an
-intent. A pending intent is flushed when its session is removed. Repainting the
+intent. A repaint that keeps the anchor line while temporarily replacing its
+continuation also keeps the open candidate until the completed marker arrives.
+A pending intent is flushed when its session is removed. Repainting the
 last recorded value adds no journal row; a different intervening intent lets
 the earlier value be recorded again.
 
