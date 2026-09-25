@@ -338,7 +338,12 @@ export const TerminalTab: Component = () => {
 			);
 			return;
 		}
-		if (customPtyEnv().some((e) => e.key === key)) {
+		// Case-insensitive: Windows env var names collide case-insensitively at
+		// the OS level even though this UI (and Unix) would otherwise treat
+		// "PATH" and "Path" as two distinct entries, silently discarding one at
+		// spawn time with no indication which. Block the ambiguity outright
+		// rather than let it depend on platform.
+		if (customPtyEnv().some((e) => e.key.toLowerCase() === key.toLowerCase())) {
 			setEnvKeyError(t("terminal.customEnv.duplicateKey", "This variable is already in the list"));
 			return;
 		}
@@ -554,7 +559,7 @@ export const TerminalTab: Component = () => {
 			<p class={s.hint}>
 				{t(
 					"terminal.hint.customEnv",
-					"Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable.",
+					"Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable, including PATH — setting PATH here replaces it entirely rather than prepending to it.",
 				)}
 			</p>
 

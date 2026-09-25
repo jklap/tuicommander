@@ -1649,5 +1649,25 @@ describe("settingsStore", () => {
 				expect(store.state.customPtyEnv).toEqual([{ key: "GOOD_KEY", value: "1" }]);
 			});
 		});
+
+		it("collapses a case-variant duplicate key (Windows env vars collide case-insensitively)", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+				custom_pty_env: [
+					{ key: "Path", value: "first" },
+					{ key: "PATH", value: "second, should be dropped" },
+				],
+			});
+			mockInvoke.mockResolvedValueOnce({ primary_agent: "claude" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.customPtyEnv).toEqual([{ key: "Path", value: "first" }]);
+			});
+		});
 	});
 });

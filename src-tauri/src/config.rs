@@ -1088,12 +1088,17 @@ pub(crate) struct CustomEnvVarEntry {
 }
 
 /// Structural validation only — no name denylist (no blocked `PATH`/`LD_PRELOAD`/etc).
-/// Unlike `copy_paths`/`additional_readable_dirs`, `AppConfig`/`config.json` is a
-/// local, per-machine file with no sync or repo-influence path, so "any env var the
-/// user wants" is honored literally. Rejects what the OS itself cannot represent as
-/// an env var name, not what a policy might want to discourage — do not add a
-/// denylist here without a concrete new exploitation path (this file has no repo
-/// tier to be exploited through in the first place).
+/// `AppConfig`/`config.json` has no `.tuic.json`/repo tier at all (unlike
+/// `copy_paths`/`additional_readable_dirs`, which specifically avoid a repo-file
+/// tier a committed branch could abuse), so "any env var the user wants" is
+/// honored literally. This setting is reachable the same way every other
+/// `AppConfig` field already is — a local caller, or an authenticated remote one
+/// through the same `require_local_or_auth` gate `save_config`'s route uses — and
+/// `AgentRunConfig::env`/`AgentSettings::env_flags` already grant an equal or
+/// broader capability (zero validation at all) through that identical gate, so
+/// this doesn't cross any new trust boundary. Rejects what the OS itself cannot
+/// represent as an env var name, not what a policy might want to discourage — do
+/// not add a denylist here without a concrete new exploitation path.
 pub(crate) fn valid_custom_env_key(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
