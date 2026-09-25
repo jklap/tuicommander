@@ -7720,17 +7720,28 @@ pub(crate) fn prefill_agent_input(
 /// coalesced into one read and the CR is swallowed as part of the typed buffer,
 /// so the message just sits at the prompt unsubmitted (verified live against
 /// Codex: back-to-back hangs, CR after a gap submits).
-/// 50ms comfortably clears the child's read-scheduling latency while staying
-/// imperceptible for a wake message.
+/// 50ms clears the child's read-scheduling latency for other agents. Codex
+/// suppresses Enter for 120ms after rapid payload characters, so it needs a
+/// 200ms post-payload gap. Ctrl-U is a control key before those characters.
+/// See https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs.
 ///
 /// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
 /// gap for free — its two `writeFn` calls are separate IPC round-trips". It does
 /// NOT: a Tauri IPC round-trip completes well inside the child's read latency,
 /// so both writes land in one `read()` and a clicked suggestion renders as a
-/// newline instead of submitting. `sendCommand.ts` now waits the same 50ms
-/// (`AGENT_ENTER_GAP_MS`) whenever an agent is attached. Keep the two constants
-/// in step — separate flushes never guaranteed separate reads, only time does.
+/// newline instead of submitting. `sendCommand.ts` waits 50ms after Ctrl-U
+/// and before non-Codex Enter. Keep both frontend
+/// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
+const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+
+fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
+    if agent_type == Some("codex") {
+        CODEX_ENTER_GAP
+    } else {
+        INJECT_ENTER_GAP
+    }
+}
 
 /// One piece of injection work, handed off by a caller that must not block.
 type InjectionJob = Box<dyn FnOnce() + Send + 'static>;
@@ -7895,7 +7906,13 @@ fn write_agent_command_with_boundary(
     // sequence this guard protects. A caller that must not block therefore does
     // not shorten the gap — it stops being the thread that waits, by handing the
     // whole sequence to `INJECTION_QUEUE`.
-    std::thread::sleep(INJECT_ENTER_GAP);
+    let enter_gap = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .map(|session| injection_enter_gap(session.agent_type.as_deref()))
+        .unwrap_or(INJECT_ENTER_GAP);
+    std::thread::sleep(enter_gap);
 
     // Exclude payload echo already observable before Enter. The async handler
     // checks this boundary only after the complete Enter write returns; movement

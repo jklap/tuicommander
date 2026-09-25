@@ -8,6 +8,10 @@
 
 # To Test
 
+## Codex dictation auto-send (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check.
+
 ## File browser default (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected.

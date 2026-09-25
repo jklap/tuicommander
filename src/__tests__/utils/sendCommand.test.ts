@@ -166,7 +166,15 @@ describe("sendCommand", () => {
 		await sendCommand(writeFn, "run the tests", "codex", "posix");
 		expect(stamps.length).toBe(3);
 		// setTimeout never fires early; allow a small scheduler tolerance.
+		// Codex keeps Enter in newline mode for 120ms after the last burst char.
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(195);
+	});
+
+	it("keeps the existing Enter gap for Claude", async () => {
+		const stamps: number[] = [];
+		await sendCommand(async () => { stamps.push(performance.now()); }, "run tests", "claude", "posix");
 		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+		expect(stamps[2] - stamps[1]).toBeLessThan(120);
 	});
 
 	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {

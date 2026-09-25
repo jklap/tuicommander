@@ -47,7 +47,8 @@ Maps GitHub merge state and review decision to display labels with CSS classes. 
 `sendCommand(writeFn, text, agentType, shellFamily, submit?)` is the single
 frontend path for terminal command insertion and submission. It applies
 platform-aware line clearing, bracketed paste for multi-line text, and the
-agent-specific delay before Enter. Passing `submit=false` keeps the text
+agent-specific delay before Enter (200 ms for Codex to clear its 120 ms paste
+suppression window; 50 ms for other agents). Passing `submit=false` keeps the text
 editable and does not write Enter.
 
 ### terminalFilter.ts
