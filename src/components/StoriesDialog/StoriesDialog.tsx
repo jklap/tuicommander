@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, For, on, onMount, Show } from "solid-js";
+import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
@@ -33,8 +34,43 @@ type Reply =
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
 
-const MISSING_BACKEND_MESSAGE =
-	"Restart TUICommander to load Plans and Stories. The running app needs a newer backend.";
+const missingBackendMessage = () =>
+	t(
+		"stories.error.missingBackend",
+		"Restart TUICommander to load Plans and Stories. The running app needs a newer backend.",
+	);
+
+const statusLabel = (status: Status): string => {
+	switch (status) {
+		case "backlog":
+			return t("stories.status.backlog", "Backlog");
+		case "ready":
+			return t("stories.status.ready", "Ready");
+		case "in_progress":
+			return t("stories.status.inProgress", "In progress");
+		case "review":
+			return t("stories.status.review", "Review");
+		case "done":
+			return t("stories.status.done", "Done");
+		case "blocked":
+			return t("stories.status.blocked", "Blocked");
+		case "wontfix":
+			return t("stories.status.wontFix", "Won't fix");
+	}
+};
+
+const planStateLabel = (state: string): string => {
+	switch (state) {
+		case "draft":
+			return t("stories.planState.draft", "Draft");
+		case "active":
+			return t("stories.planState.active", "Active");
+		case "done":
+			return t("stories.planState.done", "Done");
+		default:
+			return state;
+	}
+};
 
 export interface StoriesDialogProps {
 	project: string;
@@ -60,6 +96,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [scopeText, setScopeText] = createSignal("");
 	const [priority, setPriority] = createSignal(2);
 	const [dependencyId, setDependencyId] = createSignal("");
+	let closeButton: HTMLButtonElement | undefined;
 	let request = 0;
 	// A dependency choice belongs to the story it was made for.
 	createEffect(on(storyId, () => setDependencyId("")));
@@ -83,14 +120,14 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		appLogger.warn("store", "Stories: action failed", { error: message });
 		setError(
 			message.includes("story_action_command") && /(?:not found|unknown command|failed: 404)/i.test(message)
-				? MISSING_BACKEND_MESSAGE
+				? missingBackendMessage()
 				: message,
 		);
 	};
 	const call = async (action: Record<string, unknown>): Promise<Reply> => {
 		const reply = await invoke<unknown>("story_action_command", { project: props.project, action });
 		if (typeof reply === "string" && /^\s*<!doctype html|^\s*<html/i.test(reply)) {
-			throw new Error(MISSING_BACKEND_MESSAGE);
+			throw new Error(missingBackendMessage());
 		}
 		return reply as Reply;
 	};
@@ -101,7 +138,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setError("");
 		try {
 			const list = await call({ action: "list_plans" });
-			if (list.type !== "plans") throw new Error("Invalid plan response");
+			if (list.type !== "plans") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			const nextPlan = list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null;
 			let nextStories: Story[] = [];
 			let nextState = "draft";
@@ -110,7 +147,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					call({ action: "list_stories", plan_id: nextPlan }),
 					call({ action: "plan_state", plan_id: nextPlan }),
 				]);
-				if (rows.type !== "stories" || state.type !== "plan_state") throw new Error("Invalid story response");
+				if (rows.type !== "stories" || state.type !== "plan_state")
+					throw new Error(t("stories.error.invalidStory", "Invalid story response"));
 				nextStories = rows.value;
 				nextState = state.value;
 			}
@@ -160,7 +198,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setError("");
 		try {
 			const reply = await call({ action: "create_plan", title: planTitle().trim(), source: planSource().trim() });
-			if (reply.type !== "plan") throw new Error("Invalid plan response");
+			if (reply.type !== "plan") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			await refresh(reply.value.id, null);
 			return true;
 		} catch (cause) {
@@ -184,7 +222,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			.map((line) => line.trim())
 			.filter(Boolean);
 		if (criteria.length === 0) {
-			setError("Add at least one acceptance criterion.");
+			setError(t("stories.error.criteriaRequired", "Add at least one acceptance criterion."));
 			return;
 		}
 		setBusy(true);
@@ -201,7 +239,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					fileScope,
 				},
 			});
-			if (reply.type !== "story") throw new Error("Invalid story response");
+			if (reply.type !== "story") throw new Error(t("stories.error.invalidStory", "Invalid story response"));
 			await refresh(currentPlan, reply.value.id);
 			setNewStory(false);
 			setStoryTitle("");
@@ -244,7 +282,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		});
 	}
 
-	onMount(() => void refresh());
+	onMount(() => {
+		closeButton?.focus();
+		void refresh();
+	});
 
 	return (
 		<div class={d.overlay} onClick={props.onClose}>
@@ -252,15 +293,21 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				class={s.dialog}
 				role="dialog"
 				aria-modal="true"
-				aria-label="Plans and Stories"
+				aria-label={t("stories.title", "Plans and Stories")}
 				onClick={(event) => event.stopPropagation()}
 			>
 				<header class={s.header}>
 					<div>
-						<h2>Plans and Stories</h2>
+						<h2>{t("stories.title", "Plans and Stories")}</h2>
 						<span class={s.project}>{props.project}</span>
 					</div>
-					<button type="button" class={s.iconButton} aria-label="Close Plans and Stories" onClick={props.onClose}>
+					<button
+						ref={closeButton}
+						type="button"
+						class={s.iconButton}
+						aria-label={t("stories.close", "Close Plans and Stories")}
+						onClick={props.onClose}
+					>
 						<svg
 							viewBox="0 0 16 16"
 							width="15"
@@ -278,32 +325,34 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					<div class={s.error} role="alert">
 						{error()}{" "}
 						<button type="button" onClick={() => void refresh()}>
-							Retry
+							{t("stories.retry", "Retry")}
 						</button>
 					</div>
 				</Show>
 				<Show when={loading()}>
 					<div class={s.message} role="status">
-						Loading plans and stories…
+						{t("stories.loading", "Loading plans and stories…")}
 					</div>
 				</Show>
 				<div class={s.content}>
-					<aside class={s.planColumn} aria-label="Plans">
+					<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 						<div class={s.columnHeader}>
-							<h3>Plans</h3>
+							<h3>{t("stories.plans", "Plans")}</h3>
 							<button type="button" onClick={() => setNewPlan(!newPlan())}>
-								New plan
+								{t("stories.newPlan", "New plan")}
 							</button>
 						</div>
 						<Show when={selectedPlan() && wontFixCount() > 0}>
 							<p class={s.planNotice}>
-								{wontFixCount() === stories().length ? "All cancelled" : `${wontFixCount()} won't fix`}
+								{wontFixCount() === stories().length
+									? t("stories.allCancelled", "All cancelled")
+									: t("stories.wontFixCount", "{count} won't fix", { count: String(wontFixCount()) })}
 							</p>
 						</Show>
 						<Show when={newPlan()}>
 							<form class={s.form} onSubmit={(event) => void createPlan(event)}>
 								<label>
-									Title
+									{t("stories.titleLabel", "Title")}
 									<input
 										required
 										maxlength="200"
@@ -312,16 +361,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									/>
 								</label>
 								<label>
-									Plan document or link
+									{t("stories.planSource", "Plan document or link")}
 									<input required value={planSource()} onInput={(event) => setPlanSource(event.currentTarget.value)} />
 								</label>
 								<button type="submit" disabled={busy()}>
-									Create plan
+									{t("stories.createPlan", "Create plan")}
 								</button>
 							</form>
 						</Show>
 						<Show when={!loading() && plans().length === 0}>
-							<p class={s.empty}>Create a plan to begin.</p>
+							<p class={s.empty}>{t("stories.emptyPlans", "Create a plan to begin.")}</p>
 						</Show>
 						<nav class={s.items}>
 							<For each={plans()}>
@@ -338,17 +387,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							</For>
 						</nav>
 					</aside>
-					<section class={s.storyColumn} aria-label="Stories">
+					<section class={s.storyColumn} aria-label={t("stories.stories", "Stories")}>
 						<div class={s.columnHeader}>
-							<h3>Stories</h3>
+							<h3>{t("stories.stories", "Stories")}</h3>
 							<button type="button" disabled={!planId()} onClick={() => setNewStory(!newStory())}>
-								New story
+								{t("stories.newStory", "New story")}
 							</button>
 						</div>
 						<Show when={newStory() && planId()}>
 							<form class={s.form} onSubmit={(event) => void createStory(event)}>
 								<label>
-									Title
+									{t("stories.titleLabel", "Title")}
 									<input
 										required
 										maxlength="200"
@@ -357,7 +406,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									/>
 								</label>
 								<label>
-									Acceptance criteria, one per line
+									{t("stories.criteriaInput", "Acceptance criteria, one per line")}
 									<textarea
 										required
 										value={criteriaText()}
@@ -365,11 +414,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									/>
 								</label>
 								<label>
-									File scope, one relative path per line
+									{t("stories.scopeInput", "File scope, one relative path per line")}
 									<textarea value={scopeText()} onInput={(event) => setScopeText(event.currentTarget.value)} />
 								</label>
 								<label>
-									Priority
+									{t("stories.priority", "Priority")}
 									<select value={priority()} onChange={(event) => setPriority(Number(event.currentTarget.value))}>
 										<option value="1">P1</option>
 										<option value="2">P2</option>
@@ -377,12 +426,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									</select>
 								</label>
 								<button type="submit" disabled={busy()}>
-									Create story
+									{t("stories.createStory", "Create story")}
 								</button>
 							</form>
 						</Show>
 						<Show when={!loading() && planId() && stories().length === 0}>
-							<p class={s.empty}>This plan has no stories.</p>
+							<p class={s.empty}>{t("stories.emptyStories", "This plan has no stories.")}</p>
 						</Show>
 						<nav class={s.items}>
 							<For each={stories()}>
@@ -394,22 +443,29 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										onClick={() => setStoryId(story.id)}
 									>
 										<span>{story.title}</span>
-										<small>{story.status.replaceAll("_", " ")}</small>
+										<small>{statusLabel(story.status)}</small>
 									</button>
 								)}
 							</For>
 						</nav>
 					</section>
-					<section class={s.detail} aria-label="Story details">
+					<section class={s.detail} aria-label={t("stories.details", "Story details")}>
 						<Show
 							when={selectedStory()}
 							fallback={
-								<Show when={selectedPlan()} fallback={<p class={s.empty}>Select or create a plan.</p>}>
+								<Show
+									when={selectedPlan()}
+									fallback={<p class={s.empty}>{t("stories.selectPlan", "Select or create a plan.")}</p>}
+								>
 									{(plan) => (
 										<div class={s.planDetail}>
 											<h3>{plan().title}</h3>
-											<p>Source: {plan().source}</p>
-											<p>State: {planState()}</p>
+											<p>
+												{t("stories.source", "Source")}: {plan().source}
+											</p>
+											<p>
+												{t("stories.state", "State")}: {planStateLabel(planState())}
+											</p>
 										</div>
 									)}
 								</Show>
@@ -419,15 +475,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<>
 									<div class={s.detailHeader}>
 										<div>
-											<span class={s.eyebrow}>Story · P{story().priority}</span>
+											<span class={s.eyebrow}>
+												{t("stories.story", "Story")} · P{story().priority}
+											</span>
 											<h3>{story().title}</h3>
 										</div>
 										<span class={s.status} data-status={story().status}>
-											{story().status.replaceAll("_", " ")}
+											{statusLabel(story().status)}
 										</span>
 									</div>
 									<section>
-										<h4>Acceptance criteria</h4>
+										<h4>{t("stories.criteria", "Acceptance criteria")}</h4>
 										<ul class={s.criteria}>
 											<For each={story().criteria}>
 												{(criterion, index) => (
@@ -451,8 +509,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										</ul>
 									</section>
 									<section>
-										<h4>Dependencies</h4>
-										<Show when={story().dependencies.length} fallback={<p class={s.muted}>None</p>}>
+										<h4>{t("stories.dependencies", "Dependencies")}</h4>
+										<Show
+											when={story().dependencies.length}
+											fallback={<p class={s.muted}>{t("stories.none", "None")}</p>}
+										>
 											<ul>
 												<For each={story().dependencies}>
 													{(id) => {
@@ -460,17 +521,22 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 														return (
 															<li class={s.dependencyRow}>
 																<span>
-																	{dependency?.title ?? id} · {dependency?.status.replaceAll("_", " ") ?? "unknown"}
-																	{dependency && abandoned(dependency) ? " · abandoned" : ""}
+																	{dependency?.title ?? id} ·{" "}
+																	{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
+																	{dependency && abandoned(dependency)
+																		? ` · ${t("stories.abandoned", "abandoned")}`
+																		: ""}
 																</span>
 																<Show when={story().status === "backlog" && dependency?.status === "wontfix"}>
 																	<button
 																		type="button"
 																		disabled={busy()}
-																		aria-label={`Remove ${dependency?.title}`}
+																		aria-label={t("stories.removeNamedDependency", "Remove {title}", {
+																			title: dependency?.title ?? id,
+																		})}
 																		onClick={() => removeDependency(id)}
 																	>
-																		Remove
+																		{t("stories.remove", "Remove")}
 																	</button>
 																</Show>
 															</li>
@@ -482,11 +548,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<Show when={story().status === "ready" || story().status === "backlog"}>
 											<div class={s.inline}>
 												<select
-													aria-label="Add dependency"
+													aria-label={t("stories.addDependency", "Add dependency")}
 													value={dependencyId()}
 													onChange={(event) => setDependencyId(event.currentTarget.value)}
 												>
-													<option value="">Select story</option>
+													<option value="">{t("stories.selectStory", "Select story")}</option>
 													<For
 														each={stories().filter(
 															(candidate) =>
@@ -497,14 +563,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 													</For>
 												</select>
 												<button type="button" disabled={!dependencyId() || busy()} onClick={addDependency}>
-													Add dependency
+													{t("stories.addDependency", "Add dependency")}
 												</button>
 											</div>
 										</Show>
 									</section>
 									<section>
-										<h4>File scope</h4>
-										<Show when={story().fileScope.length} fallback={<p class={s.muted}>Unspecified</p>}>
+										<h4>{t("stories.fileScope", "File scope")}</h4>
+										<Show
+											when={story().fileScope.length}
+											fallback={<p class={s.muted}>{t("stories.unspecified", "Unspecified")}</p>}
+										>
 											<ul>
 												<For each={story().fileScope}>{(path) => <li class={s.path}>{path}</li>}</For>
 											</ul>
@@ -513,35 +582,35 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<div class={s.actions}>
 										<Show when={story().status === "ready"}>
 											<button type="button" disabled={busy()} onClick={() => transition("start_manual")}>
-												Start work
+												{t("stories.startWork", "Start work")}
 											</button>
 										</Show>
 										<Show when={story().status === "in_progress"}>
 											<button type="button" disabled={busy()} onClick={() => transition("submit_review")}>
-												Submit for review
+												{t("stories.submitReview", "Submit for review")}
 											</button>
 										</Show>
 										<Show when={story().status === "review"}>
 											<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-												Approve
+												{t("stories.approve", "Approve")}
 											</button>
 											<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
-												Request changes
+												{t("stories.requestChanges", "Request changes")}
 											</button>
 										</Show>
 										<Show when={["ready", "in_progress", "review"].includes(story().status)}>
 											<button type="button" disabled={busy()} onClick={() => transition("block")}>
-												Block
+												{t("stories.block", "Block")}
 											</button>
 										</Show>
 										<Show when={story().status === "blocked"}>
 											<button type="button" disabled={busy()} onClick={() => transition("unblock")}>
-												Unblock
+												{t("stories.unblock", "Unblock")}
 											</button>
 										</Show>
 										<Show when={story().status !== "done" && story().status !== "wontfix"}>
 											<button type="button" class={s.danger} disabled={busy()} onClick={() => transition("wont_fix")}>
-												Won't fix
+												{t("stories.status.wontFix", "Won't fix")}
 											</button>
 										</Show>
 									</div>
