@@ -19,6 +19,7 @@ pub(crate) enum TokenSource {
 
 const MAX_FAILED_ACTIONS: usize = 5;
 const MAX_LOG_BODY_BYTES: usize = 64 * 1024;
+const MAX_LOG_DOWNLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 fn allowed_log_url(value: &str, api_base: &str) -> bool {
     let Ok(url) = url::Url::parse(value) else {
@@ -412,10 +413,21 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
         Ok::<_, String>(tail)
     });
     let mut stream = response.bytes_stream();
+    let mut downloaded = 0usize;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk
             .map(|bytes| bytes.to_vec())
             .map_err(|error| error.without_url().to_string());
+        if let Ok(bytes) = &chunk {
+            downloaded = downloaded.saturating_add(bytes.len());
+            if downloaded > MAX_LOG_DOWNLOAD_BYTES {
+                drop(sender);
+                let _ = parser.await;
+                return Err(format!(
+                    "CircleCI action output exceeds {MAX_LOG_DOWNLOAD_BYTES} bytes"
+                ));
+            }
+        }
         if sender.send(chunk).await.is_err() {
             break;
         }
@@ -643,6 +655,28 @@ mod tests {
         .unwrap();
         assert!(logs.ends_with("last failure\n\n"));
         assert!(logs.len() <= super::MAX_LOG_BODY_BYTES + 100);
+    }
+
+    #[tokio::test]
+    async fn circleci_action_download_has_a_finite_ceiling() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+        let body = format!(
+            "[{{\"message\":\"{}\"}}]",
+            "x".repeat(super::MAX_LOG_DOWNLOAD_BYTES)
+        );
+        let _output = server
+            .mock("GET", "/output")
+            .with_body(body)
+            .create_async()
+            .await;
+        let response = reqwest::Client::new()
+            .get(format!("{}/output", server.url()))
+            .send()
+            .await
+            .unwrap();
+        let error = super::parse_log_tail(response).await.unwrap_err();
+        assert!(error.contains("exceeds"));
     }
 
     #[tokio::test]
