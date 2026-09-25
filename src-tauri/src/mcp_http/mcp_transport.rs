@@ -3428,8 +3428,11 @@ fn create_session_in_dir(state: &Arc<AppState>, cwd: &str) -> Result<String, Str
     })
 }
 
-fn worktree_remove_success_response(branch_delete_warning: Option<String>) -> serde_json::Value {
-    let mut response = serde_json::json!({"ok": true});
+fn worktree_remove_success_response(
+    branch_delete_warning: Option<String>,
+    removal_rule: &str,
+) -> serde_json::Value {
+    let mut response = serde_json::json!({"ok": true, "removal_rule": removal_rule});
     insert_optional_value(
         response
             .as_object_mut()
@@ -3581,7 +3584,10 @@ async fn handle_worktree(
                         workspace_id: workspace_id.clone(),
                         branch: outcome.branch,
                     });
-                    worktree_remove_success_response(outcome.branch_delete_warning)
+                    worktree_remove_success_response(
+                        outcome.branch_delete_warning,
+                        &outcome.removal_rule,
+                    )
                 }
                 Ok(Err(e)) => serde_json::json!({"error": e}),
                 Err(e) => serde_json::json!({
@@ -7994,11 +8000,15 @@ mod tests {
 
     #[test]
     fn worktree_remove_success_omits_absent_warning() {
-        let clean = worktree_remove_success_response(None);
+        let clean = worktree_remove_success_response(None, "ancestry");
         assert_eq!(clean["ok"], true);
+        assert_eq!(clean["removal_rule"], "ancestry");
         assert!(clean.get("branch_delete_warning").is_none());
 
-        let warned = worktree_remove_success_response(Some("branch retained".to_string()));
+        let warned = worktree_remove_success_response(
+            Some("branch retained".to_string()),
+            "patch_equivalence",
+        );
         assert_eq!(warned["branch_delete_warning"], "branch retained");
     }
 

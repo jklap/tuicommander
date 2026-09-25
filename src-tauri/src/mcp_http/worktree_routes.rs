@@ -287,6 +287,7 @@ pub(super) async fn remove_worktree_http(
             Json(serde_json::json!({
                 "ok": true,
                 "branch_delete_warning": outcome.branch_delete_warning,
+                "removal_rule": outcome.removal_rule,
             })),
         )
             .into_response(),
