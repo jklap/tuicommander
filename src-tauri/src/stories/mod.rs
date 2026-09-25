@@ -661,4 +661,145 @@ mod tests {
         assert_eq!(cancelled_view.wont_fix_count, 3);
         assert!(cancelled_view.all_cancelled);
     }
+
+    #[test]
+    fn repeated_wontfix_is_rejected_without_revision_change() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Discard".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let cancelled = store
+            .transition(&story.id, story.revision, StoryCommand::WontFix)
+            .expect("cancel");
+        assert!(
+            store
+                .transition(&story.id, cancelled.revision, StoryCommand::WontFix)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_story(&story.id).expect("unchanged").revision,
+            cancelled.revision
+        );
+    }
+
+    #[test]
+    fn removal_rejects_a_non_backlog_dependent_even_with_cancelled_edge() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let create = |title: &str| {
+            store
+                .create_story(NewStory {
+                    plan_id: plan.id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![],
+                })
+                .expect("story")
+        };
+        let target = create("Target");
+        let dependent = create("Dependent");
+        let dependent = store
+            .add_dependency(&dependent.id, &target.id, dependent.revision)
+            .expect("edge");
+        store
+            .transition(&target.id, target.revision, StoryCommand::WontFix)
+            .expect("cancel target");
+        let dropped = store
+            .transition(&dependent.id, dependent.revision, StoryCommand::WontFix)
+            .expect("discard dependent");
+        assert!(
+            store
+                .remove_dependency(&dropped.id, &target.id, dropped.revision, None)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_story(&dropped.id).expect("unchanged").revision,
+            dropped.revision
+        );
+        // A legacy record can be Ready while retaining an abandoned edge: the guard applies there too.
+        let mut ready = dropped.clone();
+        ready.status = StoryStatus::Ready;
+        rusqlite::Connection::open(&db)
+            .expect("connection")
+            .execute(
+                "UPDATE stories SET document=?1,status='ready' WHERE id=?2",
+                rusqlite::params![serde_json::to_string(&ready).expect("document"), ready.id],
+            )
+            .expect("legacy ready record");
+        assert!(
+            store
+                .remove_dependency(&ready.id, &target.id, ready.revision, None)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_story(&ready.id).expect("unchanged").revision,
+            ready.revision
+        );
+    }
+
+    #[test]
+    fn managed_caller_cannot_remove_an_otherwise_valid_cancelled_edge() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let create = |title: &str| {
+            store
+                .create_story(NewStory {
+                    plan_id: plan.id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![],
+                })
+                .expect("story")
+        };
+        let target = create("Target");
+        let dependent = create("Dependent");
+        let dependent = store
+            .add_dependency(&dependent.id, &target.id, dependent.revision)
+            .expect("edge");
+        store
+            .transition(&target.id, target.revision, StoryCommand::WontFix)
+            .expect("cancel target");
+        let error = store
+            .remove_dependency(&dependent.id, &target.id, dependent.revision, Some("agent"))
+            .expect_err("managed caller refused");
+        assert!(error.contains("user action"), "{error}");
+        assert_eq!(
+            store.get_story(&dependent.id).expect("unchanged").revision,
+            dependent.revision
+        );
+    }
 }

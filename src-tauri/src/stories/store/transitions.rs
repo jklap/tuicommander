@@ -178,6 +178,9 @@ impl StoryStore {
                 if story.status == StoryStatus::Done {
                     return Err("completed story cannot be discarded".into());
                 }
+                if story.status == StoryStatus::WontFix {
+                    return Err("story is already cancelled".into());
+                }
                 story.status = StoryStatus::WontFix;
                 story.claim_session = None;
             }
