@@ -115,3 +115,7 @@ ORCHESTRATOR.md
 
 # Vitest run cache
 .vitest/
+
+# Mutation test artifacts
+/reports/mutation/
+/.stryker-tmp/

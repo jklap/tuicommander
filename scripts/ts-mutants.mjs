@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 function run(args, env = process.env) {
-  const result = spawnSync(pnpm, args, { stdio: "inherit", env });
+  const result = spawnSync(pnpm, args, { stdio: "inherit", env, shell: process.platform === "win32" });
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
     process.exit(1);
