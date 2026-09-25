@@ -3432,6 +3432,7 @@ mod tests {
         fs::create_dir(&docs).unwrap();
         fs::write(docs.join("review.md"), "").unwrap();
         fs::write(docs.join("a#b.md"), "").unwrap();
+        fs::write(docs.join("Makefile"), "").unwrap();
         let root = dir.path().to_string_lossy().to_string();
         let result = resolve_markdown_link_impl(&root, "docs/review.md", "a%23b.md?view=1#section");
         assert!(
@@ -3455,6 +3456,14 @@ mod tests {
                 line: Some(42),
                 ..
             }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "Makefile:42"),
+            MarkdownLinkTarget::File {
+                open_path,
+                line: Some(42),
+                ..
+            } if open_path == "docs/Makefile"
         ));
         assert!(matches!(
             resolve_markdown_link_impl(&root, "docs/review.md", "./"),
