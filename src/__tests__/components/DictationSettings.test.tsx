@@ -884,6 +884,8 @@ describe("DictationSettings – expert controls", () => {
 			hands_free_hold_back_ms: 1500,
 			hands_free_notify_model: true,
 			hands_free_start_notice: "",
+			speech_volume_db: -18,
+			speech_levelling: 0.67,
 		},
 	};
 
@@ -898,6 +900,8 @@ describe("DictationSettings – expert controls", () => {
 		["Hold-back before sending", "handsFreeHoldBackMs", 0],
 		["Notify model when hands-free changes", "notifyModelOnHandsFree", false],
 		["Start notice", "handsFreeStartNotice", "Speak Italian."],
+		["Voice volume", "speechVolumeDb", -24],
+		["Levelling", "speechLevelling", 0.2],
 	];
 	const BASIC = ["Enable Dictation", "Hotkey", "Whisper Model", "Language", "Activation phrase", "Earcons"];
 
