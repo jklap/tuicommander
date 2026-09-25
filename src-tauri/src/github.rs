@@ -3480,6 +3480,13 @@ fn truncate_ci_logs(logs: &str) -> String {
     )
 }
 
+fn sanitize_ci_logs(logs: &str) -> String {
+    String::from_utf8_lossy(&strip_ansi_escapes::strip(logs.as_bytes()))
+        .chars()
+        .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
+        .collect()
+}
+
 /// Return the failed job IDs and names from `gh run view --json jobs` output.
 fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
     value
@@ -3818,7 +3825,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
                     &crate::circleci::fetch_job_log(&state.http_client, &job, &token).await?,
                 );
             }
-            Ok(truncate_ci_logs(&logs))
+            Ok(truncate_ci_logs(&sanitize_ci_logs(&logs)))
         }
     }
 }
@@ -3892,6 +3899,11 @@ mod tests {
         assert!(
             circleci_token_not_configured_error(&checks).contains("CircleCI token not configured")
         );
+    }
+
+    #[test]
+    fn sanitizes_provider_logs_for_http_and_mcp_consumers() {
+        assert_eq!(sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"), "red\nkeep\tthis");
     }
 
     // --- hex_to_rgba tests ---
