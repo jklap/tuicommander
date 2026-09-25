@@ -475,9 +475,16 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		if (/^(https?:|mailto:)/i.test(href)) {
 			handleOpenUrl(href);
 		} else if (
+			// A bare name:42 can be an extensionless file; Rust resolves the target.
+			// Keep known URL schemes out of that ambiguous file-line form.
 			/^[a-z][a-z\d+.-]*:/i.test(href) &&
 			!/^[a-z]:[\\/]/i.test(href) &&
-			!/^(?:[^:/\\]*[./\\][^:]*):[1-9]\d*$/.test(href)
+			!(
+				/^[^:/\\]+:[1-9]\d*$/.test(href) &&
+				!/^(?:javascript|vbscript|data|file|blob|about|ftp|https?|mailto|tel|sms|callto|cid|xmpp|asset|tauri|wss?):/i.test(
+					href,
+				)
+			)
 		) {
 			appLogger.debug("app", "Blocked Markdown link scheme", { href });
 		} else if (props.onLinkClick) {
