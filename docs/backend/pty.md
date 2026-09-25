@@ -249,6 +249,8 @@ Without this enforcement a single BSU whose ESU is delayed or lost freezes the t
 
 ### Headless Reader Thread
 
+The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
+
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
 
 Named agent sessions propagate their stable `display_name` through the

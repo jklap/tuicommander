@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENTS } from "../../agents";
-import { buildAgentLaunchCommand, buildResumeCommand, verifyAndBuildResumeCommand } from "../../utils/agentSession";
+import {
+	buildAgentLaunchCommand,
+	buildResumeCommand,
+	supportsAgentNoAltScreen,
+	verifyAndBuildResumeCommand,
+} from "../../utils/agentSession";
 
 const { mockAgentConfigsStore } = vi.hoisted(() => ({
 	mockAgentConfigsStore: {
@@ -25,6 +30,25 @@ vi.mock("../../transport", () => ({
 }));
 
 describe("buildAgentLaunchCommand", () => {
+	it("keeps native scrollback for supported Codex and Grok launches", () => {
+		expect(buildAgentLaunchCommand("codex", null, "codex", true)).toBe("codex --no-alt-screen");
+		expect(buildAgentLaunchCommand("grok --model fast", null, "grok", true)).toBe("grok --no-alt-screen --model fast");
+		expect(buildAgentLaunchCommand("opencode", null, "opencode", true)).toBe("opencode --mini");
+	});
+
+	it("does not duplicate a flag or override explicit screen choices", () => {
+		expect(buildAgentLaunchCommand("codex --no-alt-screen", null, "codex", true)).toBe("codex --no-alt-screen");
+		expect(buildAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN=1 grok", null, "grok", true)).toBe(
+			"TUIC_ALLOW_ALT_SCREEN=1 grok",
+		);
+		expect(buildAgentLaunchCommand("codex", null, "codex", true, true)).toBe("codex");
+		expect(buildAgentLaunchCommand("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0 claude", null, "claude")).toBe(
+			"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0 claude",
+		);
+	});
+	it("does not pass a flag to a CLI without the capability", () => {
+		expect(buildAgentLaunchCommand("codex", null, "codex", false)).toBe("codex");
+	});
 	it("injects --session-id for claude when UUID provided", () => {
 		expect(buildAgentLaunchCommand("claude", "abc-123")).toBe("claude --session-id abc-123");
 	});
@@ -81,6 +105,17 @@ describe("buildResumeCommand", () => {
 
 	it("returns id-based resume for codex with UUID", () => {
 		expect(buildResumeCommand("codex", "abc-123")).toBe("codex resume abc-123");
+		expect(buildResumeCommand("codex", "abc-123", null, null, true)).toBe("codex --no-alt-screen resume abc-123");
+	});
+	it("respects a run config's alternate-screen opt-out on resume", () => {
+		const config = {
+			command: "codex",
+			args: [],
+			env: { TUIC_ALLOW_ALT_SCREEN: "1" },
+			is_default: true,
+		};
+		mockAgentConfigsStore.getDefaultConfig.mockReturnValueOnce(config).mockReturnValueOnce(config);
+		expect(buildResumeCommand("codex", "abc-123", null, null, true)).toBe("codex resume abc-123");
 	});
 
 	it("falls back to static resume for codex without UUID", () => {
@@ -163,6 +198,22 @@ describe("sessionDiscovery in AgentConfig", () => {
 
 	it("opencode has null sessionDiscovery (SQLite, not implemented)", () => {
 		expect(AGENTS.opencode.sessionDiscovery).toBeNull();
+	});
+});
+
+describe("supportsAgentNoAltScreen", () => {
+	beforeEach(() => mockRpc.mockReset());
+	it("uses the probed direct binary and rejects a wrapper or older version", async () => {
+		mockRpc.mockResolvedValue({ path: "/opt/bin/codex", supports_no_alt_screen: true });
+		expect(await supportsAgentNoAltScreen("codex", "codex --model fast")).toBe(true);
+		expect(await supportsAgentNoAltScreen("codex", "/opt/bin/codex --model fast")).toBe(true);
+		expect(await supportsAgentNoAltScreen("codex", "my-codex-wrapper")).toBe(false);
+		mockRpc.mockResolvedValue({ path: "/opt/bin/codex", supports_no_alt_screen: false });
+		expect(await supportsAgentNoAltScreen("codex", "codex")).toBe(false);
+	});
+	it("does not pass an unverified flag when binary detection fails", async () => {
+		mockRpc.mockRejectedValueOnce(new Error("offline"));
+		expect(await supportsAgentNoAltScreen("grok", "grok")).toBe(false);
 	});
 });
 

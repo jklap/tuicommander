@@ -3,6 +3,7 @@ use portable_pty::{CommandBuilder, PtySize};
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, State};
@@ -581,6 +582,30 @@ pub(crate) fn detect_installed_ides() -> Vec<String> {
 pub(crate) struct AgentBinaryDetection {
     pub(crate) path: Option<String>,
     pub(crate) version: Option<String>,
+    pub(crate) supports_no_alt_screen: bool,
+}
+
+/// Probe a direct CLI once per executable. Older releases may reject the flag.
+pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
+    let flag = match agent_type {
+        "codex" | "grok" => "--no-alt-screen",
+        "opencode" => "--mini",
+        _ => return false,
+    };
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let key = format!("{agent_type}:{path}");
+    if let Some(supported) = cache.lock().get(&key).copied() {
+        return supported;
+    }
+    let mut cmd = Command::new(path);
+    cmd.arg("--help");
+    crate::cli::apply_no_window(&mut cmd);
+    let supported = cmd.output().ok().is_some_and(|output| {
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains(flag)
+    });
+    cache.lock().insert(key, supported);
+    supported
 }
 
 /// Agent binaries TUIC knows how to launch — the Rust-side mirror of `AGENTS` in
@@ -665,9 +690,11 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
         let path = path.lines().next().unwrap_or("").to_string();
         if !path.is_empty() && std::path::Path::new(&path).exists() {
             let version = get_binary_version(&path);
+            let supports_no_alt_screen = supports_no_alt_screen(&binary, &path);
             return AgentBinaryDetection {
                 path: Some(path),
                 version,
+                supports_no_alt_screen,
             };
         }
     }
@@ -679,6 +706,7 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
             return AgentBinaryDetection {
                 path: Some(candidate.clone()),
                 version,
+                supports_no_alt_screen: supports_no_alt_screen(&binary, candidate),
             };
         }
     }
@@ -686,6 +714,7 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
     AgentBinaryDetection {
         path: None,
         version: None,
+        supports_no_alt_screen: false,
     }
 }
 
@@ -778,6 +807,7 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
             return AgentBinaryDetection {
                 path: Some(path),
                 version: None,
+                supports_no_alt_screen: false,
             };
         }
     }
@@ -787,6 +817,7 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
             return AgentBinaryDetection {
                 path: Some(candidate.clone()),
                 version: None,
+                supports_no_alt_screen: false,
             };
         }
     }
@@ -794,6 +825,7 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
     AgentBinaryDetection {
         path: None,
         version: None,
+        supports_no_alt_screen: false,
     }
 }
 
@@ -962,10 +994,16 @@ pub(crate) async fn spawn_agent(
                 launch_args.push(spawn_agent_config.prompt.clone());
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
+            let allow_alt_screen = spawn_pty_config
+                .env
+                .get("TUIC_ALLOW_ALT_SCREEN")
+                .is_some_and(|value| value == "1");
             for arg in crate::agent_hook_launch::augment_args(
                 agent_type,
+                &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
+                allow_alt_screen,
             ) {
                 cmd.arg(arg);
             }

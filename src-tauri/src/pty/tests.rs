@@ -8,6 +8,54 @@ use crate::state::VtLogBuffer;
 use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
 use crate::test_support::{agent_session, insert_recording_session};
 
+#[test]
+fn agent_alternate_screen_warning_is_once_per_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "agent-alt-screen-warning";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    assert!(!processor.alt_screen_warned);
+    processor.process_chunk("\x1b[?1049h", &silence, session_id, &state);
+    assert!(processor.alt_screen_warned);
+    processor.process_chunk("\x1b[?1049l\x1b[?1049h", &silence, session_id, &state);
+    assert!(processor.alt_screen_warned);
+    assert!(!processor.should_warn_alt_screen(None, true));
+    assert!(!processor.should_warn_alt_screen(Some("codex"), false));
+    assert!(!processor.should_warn_alt_screen(Some("codex"), true));
+}
+
+#[test]
+fn pty_identity_defaults_claude_to_native_scrollback() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut cmd, "screen-default", None);
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "0");
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("0"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prefill_agent_input_preserves_partial_input_and_accumulates_grabs() {

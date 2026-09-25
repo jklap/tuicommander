@@ -14,6 +14,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
+import { buildAgentLaunchCommand, supportsAgentNoAltScreen } from "../../utils/agentSession";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isAlreadyMerged, mergeWithFallback } from "../../utils/prMerge";
 import { prContextVariables } from "../../utils/promptContext";
@@ -112,7 +113,11 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			pr_url: p.url ?? null,
 		};
 		const args = reviewCfg.args.map((a) => interpolateTemplate(a, vars)).join(" ");
-		return `${reviewCfg.command}${args ? " " + args : ""}`;
+		return {
+			agentType,
+			command: `${reviewCfg.command}${args ? " " + args : ""}`,
+			allowAltScreen: reviewCfg.env?.TUIC_ALLOW_ALT_SCREEN === "1",
+		};
 	});
 
 	const isOnBaseBranch = () => {
@@ -401,10 +406,22 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 										<Show when={reviewCommand()}>
 											<button
 												class={s.viewDiffBtn}
-												onClick={() => {
-													const cmd = reviewCommand();
-													if (cmd && props.onReview) {
-														props.onReview(props.repoPath, props.branch, cmd);
+												onClick={async () => {
+													const launch = reviewCommand();
+													if (launch && props.onReview) {
+														const supported = await supportsAgentNoAltScreen(
+															launch.agentType,
+															launch.command,
+															props.repoPath,
+														);
+														const command = buildAgentLaunchCommand(
+															launch.command,
+															null,
+															launch.agentType,
+															supported,
+															launch.allowAltScreen,
+														);
+														props.onReview(props.repoPath, props.branch, command);
 														props.onClose();
 													}
 												}}
