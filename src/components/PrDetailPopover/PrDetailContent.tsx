@@ -1,8 +1,8 @@
 import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
-import { invoke } from "../../invoke";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
+import { rpc } from "../../transport";
 import { flattenReviewFindings, postableFindings, prReviewStore, type SelectableFinding } from "../../stores/prReview";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
@@ -112,13 +112,21 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const checkSummary = () => githubStore.getCheckSummary(props.repoPath, props.branch);
 	const checkDetails = () => githubStore.getCheckDetails(props.repoPath, props.branch);
 	const [expandedCircleCiLog, setExpandedCircleCiLog] = createSignal<string | null>(null);
-	const [circleCiLog, setCircleCiLog] = createSignal("");
+	const [circleCiLogs, setCircleCiLogs] = createSignal<Record<string, { text?: string; error?: string; loading?: boolean }>>({});
 	const isCircleCiFailure = (check: { state: string; html_url: string }) =>
 		getCiClass(check.state) === "failure" && /(^|\/\/)(app\.)?circleci\.com\//.test(check.html_url);
 	const toggleCircleCiLog = async (url: string) => {
 		if (expandedCircleCiLog() === url) return setExpandedCircleCiLog(null);
 		setExpandedCircleCiLog(url);
-		setCircleCiLog(await invoke<string>("fetch_circleci_logs", { url }));
+		if (circleCiLogs()[url]?.text || circleCiLogs()[url]?.loading) return;
+		setCircleCiLogs((logs) => ({ ...logs, [url]: { loading: true } }));
+		try {
+			const text = await rpc<string>("fetch_ci_failure_logs", { repoPath: props.repoPath, branch: props.branch });
+			setCircleCiLogs((logs) => ({ ...logs, [url]: { text } }));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setCircleCiLogs((logs) => ({ ...logs, [url]: { error: message } }));
+		}
 	};
 
 	// AI-review state lives in prReviewStore keyed by repo+PR, not in local
@@ -374,11 +382,13 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 											<span class={s.checkName}>{check.context}</span>
 											<span class={cx(s.checkStatus, CI_CLASSES[getCiClass(check.state)])}>{check.state}</span>
 											<Show when={isCircleCiFailure(check)}>
-												<button type="button" onClick={(event) => { event.stopPropagation(); void toggleCircleCiLog(check.html_url); }}>Log</button>
-											</Show>
-											<Show when={expandedCircleCiLog() === check.html_url}>
-												<pre>{stripAnsi(circleCiLog())}</pre>
-											</Show>
+											<button type="button" onClick={(event) => { event.stopPropagation(); void toggleCircleCiLog(check.html_url); }}>{t("prDetail.circleCiLog", "Log")}</button>
+										</Show>
+										<Show when={expandedCircleCiLog() === check.html_url}>
+											<Show when={circleCiLogs()[check.html_url]?.loading}><span>Loading…</span></Show>
+											<Show when={circleCiLogs()[check.html_url]?.error}><span>{circleCiLogs()[check.html_url]?.error}</span></Show>
+											<Show when={circleCiLogs()[check.html_url]?.text}><pre>{stripAnsi(circleCiLogs()[check.html_url]?.text ?? "")}</pre></Show>
+										</Show>
 										</div>
 									);
 								}}
