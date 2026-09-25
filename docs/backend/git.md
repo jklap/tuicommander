@@ -160,6 +160,20 @@ Submodules initialise from the parent checkout first (with the configured remote
 as fallback), so unpublished pinned objects remain usable; failures are returned
 as workspace warnings.
 
+HTTP and MCP creation return while copy-on-write warming is pending. Their
+instructions say to wait before running a build; `GET /worktrees/paths?path=<repo>`
+and IPC `get_worktree_paths` report each workspace's `warm_artifacts.status`
+(`pending`, `done`, or `failed`). A configured setup script runs before the warm,
+so it cannot write the same cache tree concurrently. Desktop IPC creation waits
+for warming and returns `done`. Removing a worktree clears its warm state; a
+late result from its old copy cannot update a new worktree at the same path.
+
+Non-force removal checks the default branch's ancestry first. A clean branch
+whose commits were squash- or rebase-merged can also pass when `git cherry`
+reports no unique patches. A branch with an unmerged merge commit is refused:
+`git cherry` does not compare changes made by merge resolution. The removal
+result names the matching rule.
+
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per
 ignored directory. The probe and copy primitive share `COW_COPY_FLAGS` (macOS

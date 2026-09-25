@@ -1054,6 +1054,7 @@ pub(crate) fn get_worktrees_dir(
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RemoveWorktreeOutcome {
     pub(crate) branch_delete_warning: Option<String>,
+    pub(crate) removal_rule: String,
     /// Branch the removed workspace was on, read off the record before removal.
     /// Callers need it for branch-keyed follow-up work (config labels, logs) and
     /// cannot re-resolve it: the id stops resolving the moment the worktree is
@@ -1070,6 +1071,7 @@ pub(crate) fn remove_worktree_by_workspace_id(
 ) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
+    let mut removal_rule = if force { "force" } else { "kept_branch" };
 
     tracing::info!(
         source = "worktree",
@@ -1096,16 +1098,47 @@ pub(crate) fn remove_worktree_by_workspace_id(
         let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
         match lifecycle.commit_status {
             WorkspaceCommitStatus::Unmerged => {
-                return Err(format!(
-                    "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                ));
+                if lifecycle.dirty_files != Some(0) {
+                    return Err(format!(
+                        "Cannot remove {branch_name}: the worktree has uncommitted changes"
+                    ));
+                }
+                let default_branch = get_remote_default_branch(repo_path)?;
+                // `git cherry` omits merge commits, including their resolution
+                // changes. Require every commit on this path to be comparable.
+                let merges = git_cmd(&base_repo)
+                    .args([
+                        "rev-list",
+                        "--merges",
+                        &format!("{default_branch}..{branch_name}"),
+                    ])
+                    .run()
+                    .map_err(|e| format!("Cannot check merge commits for {branch_name}: {e}"))?;
+                if !merges.stdout.trim().is_empty() {
+                    return Err(format!(
+                        "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                    ));
+                }
+                let cherry = git_cmd(&base_repo)
+                    .args(["cherry", &default_branch, branch_name])
+                    .run()
+                    .map_err(|e| {
+                        format!("Cannot check patch equivalence for {branch_name}: {e}")
+                    })?;
+                if cherry.stdout.lines().any(|line| !line.starts_with("- ")) {
+                    return Err(format!(
+                        "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                    ));
+                }
+                removal_rule = "patch_equivalence";
             }
             WorkspaceCommitStatus::Unknown => {
                 return Err(lifecycle.error.unwrap_or_else(|| {
                     format!("Cannot verify whether {branch_name} can be safely removed")
                 }));
             }
-            WorkspaceCommitStatus::InSync | WorkspaceCommitStatus::Merged => {}
+            WorkspaceCommitStatus::InSync => removal_rule = "in_sync",
+            WorkspaceCommitStatus::Merged => removal_rule = "ancestry",
         }
     }
 
@@ -1140,7 +1173,11 @@ pub(crate) fn remove_worktree_by_workspace_id(
     // Only when the caller passes `force=true` (e.g. the locked-worktree
     // confirmation dialog already warned the user) do we use `-D`.
     if delete_branch {
-        let flag = if force { "-D" } else { "-d" };
+        let flag = if force || removal_rule == "patch_equivalence" {
+            "-D"
+        } else {
+            "-d"
+        };
         // `--` separates flags from positional args so a branch name beginning
         // with `-` (e.g. `-D`, `--force`) cannot be misparsed as a git option.
         match git_cmd(&worktree.base_repo)
@@ -1174,6 +1211,7 @@ pub(crate) fn remove_worktree_by_workspace_id(
     );
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
+        removal_rule: removal_rule.to_string(),
         branch: branch_name.to_string(),
     })
 }
@@ -3835,8 +3873,10 @@ mod tests {
         create_worktree_internal(&worktrees_dir, &config, None).expect("Failed to create worktree");
 
         // Remove with delete_branch=true
-        remove_worktree_by_workspace_id(&repo_path, "feat-delete-branch", true, None, false)
-            .expect("Failed to remove worktree");
+        let outcome =
+            remove_worktree_by_workspace_id(&repo_path, "feat-delete-branch", true, None, false)
+                .expect("Failed to remove worktree");
+        assert_eq!(outcome.removal_rule, "in_sync");
 
         // Branch should be gone
         let out = git_cmd(repo.path())
@@ -5487,6 +5527,10 @@ branch refs/heads/feat
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(status.dirty_files, Some(0));
         assert!(worktree.exists());
+        let outcome =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "trails", true, None, false)
+                .unwrap();
+        assert_eq!(outcome.removal_rule, "ancestry");
     }
 
     #[test]
@@ -5499,6 +5543,109 @@ branch refs/heads/feat
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    #[test]
+    fn squash_merged_clean_workspace_is_removed_by_patch_equivalence() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "squashed");
+        commit_file(&worktree, "same.txt", "same patch\n");
+        fs::write(repo.join("same.txt"), "same patch\n").unwrap();
+        git_cmd(&repo).args(["add", "same.txt"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "squash equivalent"])
+            .run()
+            .unwrap();
+
+        let outcome =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "squashed", true, None, false)
+                .unwrap();
+
+        assert_eq!(outcome.removal_rule, "patch_equivalence");
+        assert!(!worktree.exists());
+        assert!(
+            git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/squashed"])
+                .run_silent()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rebase_merged_clean_workspace_is_removed_by_patch_equivalence() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "rebased");
+        commit_file(&worktree, "same.txt", "same patch\n");
+        commit_file(&repo, "advance.txt", "advance\n");
+        git_cmd(&repo)
+            .args(["cherry-pick", "rebased"])
+            .run()
+            .unwrap();
+
+        let outcome =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "rebased", true, None, false)
+                .unwrap();
+
+        assert_eq!(outcome.removal_rule, "patch_equivalence");
+        assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn unique_patch_still_refuses_non_force_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "unique-patch");
+        commit_file(&worktree, "unique.txt", "only on the worktree\n");
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "unique-patch",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unmerged commits"), "{error}");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn a_unique_merge_resolution_is_not_hidden_by_git_cherry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        commit_file(&repo, "base.txt", "base\n");
+        let worktree = add_worktree(&repo, "merge-resolution");
+        commit_file(&repo, "advance.txt", "advance\n");
+        let default_branch = get_remote_default_branch(&repo.to_string_lossy()).unwrap();
+        git_cmd(&worktree)
+            .args(["merge", "--no-ff", &default_branch, "-m", "merge upstream"])
+            .run()
+            .unwrap();
+        fs::write(worktree.join("resolution.txt"), "only in the merge\n").unwrap();
+        git_cmd(&worktree)
+            .args(["add", "resolution.txt"])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args(["commit", "--amend", "--no-edit"])
+            .run()
+            .unwrap();
+        let cherry = git_cmd(&repo)
+            .args(["cherry", &default_branch, "merge-resolution"])
+            .run()
+            .unwrap();
+        assert!(cherry.stdout.trim().is_empty(), "{}", cherry.stdout);
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "merge-resolution",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unmerged commits"), "{error}");
+        assert!(worktree.exists());
     }
 
     #[test]

@@ -2200,7 +2200,12 @@ Query parameters:
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
-Returns `{ "ok": true, "branch_delete_warning": null }` on full success. When
+Returns `{ "ok": true, "branch_delete_warning": null, "removal_rule": "ancestry" }`
+on full success. `removal_rule` names the rule that allowed removal:
+`in_sync`, `ancestry`, `patch_equivalence`, `kept_branch`, or `force`.
+A clean branch whose commits were squash- or rebase-merged can use
+`patch_equivalence` when `git cherry` finds no unique patches. Merge commits
+are refused because `git cherry` does not compare their resolution changes. When
 `deleteBranch=true` and `git branch -d`
 refuses to delete the branch after a linked worktree is removed, the request
 still succeeds with `branch_delete_warning` set so clients can report the
