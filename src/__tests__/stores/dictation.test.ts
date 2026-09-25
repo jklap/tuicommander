@@ -1562,6 +1562,17 @@ describe("dictationStore", () => {
 			});
 		});
 
+		it("previews an Italian voice with an Italian sample", async () => {
+			await testInScopeAsync(async () => {
+				await store.previewSpeechVoice("it", "giovanni");
+				expect(mockInvoke).toHaveBeenCalledWith("preview_speech_voice", {
+					language: "it",
+					voice: "giovanni",
+					text: "Questa è la voce delle risposte.",
+				});
+			});
+		});
+
 		it("returns why a preview was refused", async () => {
 			mockInvoke.mockImplementation((command: string) =>
 				command === "preview_speech_voice"
