@@ -3,13 +3,57 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
+use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Cookie name used to persist the session after successful Basic Auth.
 /// The browser sends cookies automatically in fetch() calls (unlike stored Basic Auth),
 /// which is why we need this: JS API calls would otherwise fail with 401 every time.
 const SESSION_COOKIE: &str = "tui-session";
+
+/// Failed header digests retained for one IP and one rate-limit window.
+const MAX_CACHED_FAILURES_PER_IP: usize = 64;
+
+type CredentialDigest = [u8; 32];
+
+/// One IP's admission state. The mutex covers only state transitions; bcrypt
+/// always runs after it is released.
+pub(crate) struct AuthRateLimit {
+    state: Mutex<AuthRateLimitState>,
+}
+
+struct AuthRateLimitState {
+    attempts: u32,
+    window_start: Instant,
+    config_digest: CredentialDigest,
+    failed: VecDeque<CredentialDigest>,
+    verifying: HashSet<CredentialDigest>,
+}
+
+impl AuthRateLimit {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(AuthRateLimitState {
+                attempts: 0,
+                window_start: Instant::now(),
+                config_digest: [0; 32],
+                failed: VecDeque::new(),
+                verifying: HashSet::new(),
+            }),
+        }
+    }
+}
+
+enum AuthAdmission {
+    Verify,
+    CachedFailure,
+    Limited(Duration),
+    Wait,
+}
 
 /// Result of checking Basic Auth credentials against a config.
 pub(super) enum AuthResult {
@@ -282,29 +326,63 @@ pub async fn basic_auth_middleware(
     };
     let client_ip = addr.ip();
 
-    // Fallback: Basic Auth (if username+password are configured). A correct
-    // credential must be allowed to repair a stale mobile session even after
-    // prior mistakes filled the per-IP failure window.
+    // Fallback: Basic Auth. Admission happens before bcrypt so a full IP
+    // window remains a brute-force bound, while known stale credentials do
+    // not consume it repeatedly.
     let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    let config_digest = auth_config_digest(&username, &hash);
+    let credential_digest = failed_credential_digest(auth_header.as_deref(), &config_digest);
+    let limit = state
+        .auth_rate_limits
+        .entry(client_ip)
+        .or_insert_with(|| Arc::new(AuthRateLimit::new()))
+        .clone();
 
-    // bcrypt::verify is CPU-intensive (~100ms). Run it on a blocking thread to
-    // avoid stalling the single-threaded tokio runtime for the entire server.
-    let result = tokio::task::spawn_blocking(move || {
-        validate_basic_auth(auth_header.as_deref(), &username, &hash)
-    })
-    .await
-    .unwrap_or_else(|e| {
-        tracing::error!(source = "auth", error = %e, "spawn_blocking for bcrypt panicked or was cancelled");
-        AuthResult::Invalid
-    });
+    let result = loop {
+        let admission = admit_auth_attempt(
+            &limit,
+            credential_digest,
+            config_digest,
+            rate_max,
+            rate_window_secs,
+        );
+        match admission {
+            AuthAdmission::CachedFailure => break AuthResult::Invalid,
+            AuthAdmission::Limited(retry_after) => return rate_limited_response(retry_after),
+            // A duplicate is already in bcrypt. Yield briefly instead of
+            // blocking a Tokio worker; the result is then served from cache.
+            AuthAdmission::Wait => tokio::time::sleep(Duration::from_millis(1)).await,
+            AuthAdmission::Verify => {
+                // bcrypt::verify is CPU-intensive (~100ms). Run it on a blocking
+                // thread to avoid stalling the single-threaded tokio runtime.
+                let result = tokio::task::spawn_blocking({
+                    let auth_header = auth_header.clone();
+                    let username = username.clone();
+                    let hash = hash.clone();
+                    move || validate_basic_auth(auth_header.as_deref(), &username, &hash)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(source = "auth", error = %e, "spawn_blocking for bcrypt panicked or was cancelled");
+                    AuthResult::Invalid
+                });
+                finish_auth_attempt(
+                    &limit,
+                    credential_digest,
+                    matches!(result, AuthResult::Invalid),
+                );
+                break result;
+            }
+        }
+    };
 
     match result {
         AuthResult::Ok => {
-            // Successful auth clears rate limit counter for this IP
+            // A success supersedes every stale failure for this IP.
             state.auth_rate_limits.remove(&client_ip);
             let mut response = next.run(req).await;
             if let Ok(val) =
@@ -314,71 +392,117 @@ pub async fn basic_auth_middleware(
             }
             response
         }
-        AuthResult::MissingHeader | AuthResult::NotConfigured => (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Basic realm=\"TUICommander\"")],
-            "Scan the QR code or authenticate with Basic Auth",
-        )
-            .into_response(),
+        AuthResult::MissingHeader | AuthResult::NotConfigured => {
+            unauthorized_response("Scan the QR code or authenticate with Basic Auth")
+        }
         AuthResult::Invalid => {
-            if rate_max > 0
-                && let Some(entry) = state.auth_rate_limits.get(&client_ip)
-            {
-                let (count, window_start) = *entry;
-                let window = std::time::Duration::from_secs(rate_window_secs);
-                let elapsed = window_start.elapsed();
-                if elapsed < window && count >= rate_max {
-                    let retry_after = window.saturating_sub(elapsed).as_secs() + 1;
-                    tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
-                    return (
-                        StatusCode::TOO_MANY_REQUESTS,
-                        [(header::RETRY_AFTER, retry_after.to_string())],
-                        "Too many failed authentication attempts",
-                    )
-                        .into_response();
-                }
-            }
             tracing::warn!(source = "auth", ip = %client_ip, "Failed auth attempt");
-            record_auth_failure(&state.auth_rate_limits, client_ip, rate_window_secs);
-            (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+            unauthorized_response("Invalid credentials")
         }
     }
 }
 
-/// Record a failed auth attempt for rate limiting.
-fn record_auth_failure(
-    rate_limits: &dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
-    ip: std::net::IpAddr,
+fn auth_config_digest(username: &str, password_hash: &str) -> CredentialDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"tuicommander-auth-config-v1\0");
+    digest.update(username.as_bytes());
+    digest.update(b"\0");
+    digest.update(password_hash.as_bytes());
+    digest.finalize().into()
+}
+
+fn failed_credential_digest(
+    auth_header: Option<&str>,
+    config_digest: &CredentialDigest,
+) -> CredentialDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"tuicommander-failed-basic-v1\0");
+    digest.update(config_digest);
+    digest.update(b"\0");
+    digest.update(auth_header.unwrap_or("").as_bytes());
+    digest.finalize().into()
+}
+
+fn admit_auth_attempt(
+    limit: &AuthRateLimit,
+    credential: CredentialDigest,
+    config: CredentialDigest,
+    rate_max: u32,
     window_secs: u64,
-) {
-    let window = std::time::Duration::from_secs(window_secs);
-    let now = std::time::Instant::now();
-    rate_limits
-        .entry(ip)
-        .and_modify(|(count, start)| {
-            if start.elapsed() >= window {
-                *count = 1;
-                *start = now;
-            } else {
-                *count += 1;
-            }
-        })
-        .or_insert((1, now));
+) -> AuthAdmission {
+    let window = Duration::from_secs(window_secs);
+    let mut state = limit.state.lock();
+    if state.window_start.elapsed() >= window || state.config_digest != config {
+        state.attempts = 0;
+        state.window_start = Instant::now();
+        state.config_digest = config;
+        state.failed.clear();
+        state.verifying.clear();
+    }
+    if state.failed.contains(&credential) {
+        return AuthAdmission::CachedFailure;
+    }
+    if state.verifying.contains(&credential) {
+        return AuthAdmission::Wait;
+    }
+    if rate_max > 0 && state.attempts >= rate_max {
+        return AuthAdmission::Limited(window.saturating_sub(state.window_start.elapsed()));
+    }
+    state.attempts += 1;
+    state.verifying.insert(credential);
+    AuthAdmission::Verify
+}
+
+fn finish_auth_attempt(limit: &AuthRateLimit, credential: CredentialDigest, failed: bool) {
+    let mut state = limit.state.lock();
+    state.verifying.remove(&credential);
+    if failed && !state.failed.contains(&credential) {
+        if state.failed.len() == MAX_CACHED_FAILURES_PER_IP {
+            state.failed.pop_front();
+        }
+        state.failed.push_back(credential);
+    }
+}
+
+fn unauthorized_response(message: &'static str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"TUICommander\"")],
+        message,
+    )
+        .into_response()
+}
+
+fn rate_limited_response(retry_after: Duration) -> Response {
+    let retry_after = retry_after.as_secs() + 1;
+    tracing::warn!(
+        source = "auth",
+        retry_after,
+        "Rate limited — too many failed auth attempts"
+    );
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            (header::RETRY_AFTER, retry_after.to_string()),
+            (
+                header::WWW_AUTHENTICATE,
+                "Basic realm=\"TUICommander\"".to_string(),
+            ),
+        ],
+        "Too many failed authentication attempts",
+    )
+        .into_response()
 }
 
 /// Evict rate-limit entries whose window has fully elapsed. Called periodically
-/// by the background reaper so the map can't grow unbounded for IPs that fail
-/// once and never return (scanners cycling IPs, trivial over IPv6). An expired
-/// entry carries no rate-limiting value — the next failure resets it anyway
-/// (see `record_auth_failure`), and the rate check treats an elapsed window as
-/// not-limited — so dropping it is safe. Returns the number of entries removed.
+/// by the background reaper so the per-IP failure cache cannot outlive its TTL.
 pub(super) fn sweep_expired_rate_limits(
-    rate_limits: &dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
+    rate_limits: &dashmap::DashMap<std::net::IpAddr, Arc<AuthRateLimit>>,
     window_secs: u64,
 ) -> usize {
-    let window = std::time::Duration::from_secs(window_secs);
+    let window = Duration::from_secs(window_secs);
     let before = rate_limits.len();
-    rate_limits.retain(|_, (_, start)| start.elapsed() < window);
+    rate_limits.retain(|_, limit| limit.state.lock().window_start.elapsed() < window);
     before - rate_limits.len()
 }
 
@@ -619,42 +743,41 @@ mod tests {
     // --- rate limiting tests ---
 
     #[test]
-    fn rate_limit_records_failures() {
-        let map = dashmap::DashMap::new();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        record_auth_failure(&map, ip, 300);
-        assert_eq!(map.get(&ip).unwrap().0, 1);
-        record_auth_failure(&map, ip, 300);
-        assert_eq!(map.get(&ip).unwrap().0, 2);
-    }
-
-    #[test]
-    fn rate_limit_resets_after_window() {
-        let map = dashmap::DashMap::new();
-        let ip: IpAddr = "10.0.0.2".parse().unwrap();
-        // Insert with a past timestamp
-        map.insert(
-            ip,
-            (
-                5,
-                std::time::Instant::now() - std::time::Duration::from_secs(301),
-            ),
-        );
-        record_auth_failure(&map, ip, 300);
-        assert_eq!(map.get(&ip).unwrap().0, 1);
-    }
-
-    #[test]
-    fn rate_limit_different_ips_independent() {
-        let map = dashmap::DashMap::new();
-        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
-        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
-        for _ in 0..3 {
-            record_auth_failure(&map, ip1, 300);
+    fn repeated_failed_header_is_admitted_once_per_window() {
+        let limit = AuthRateLimit::new();
+        let config = auth_config_digest("boss", "hash");
+        let credential = failed_credential_digest(Some("Basic stale"), &config);
+        assert!(matches!(
+            admit_auth_attempt(&limit, credential, config, 2, 300),
+            AuthAdmission::Verify
+        ));
+        finish_auth_attempt(&limit, credential, true);
+        for _ in 0..20 {
+            assert!(matches!(
+                admit_auth_attempt(&limit, credential, config, 2, 300),
+                AuthAdmission::CachedFailure
+            ));
         }
-        record_auth_failure(&map, ip2, 300);
-        assert_eq!(map.get(&ip1).unwrap().0, 3);
-        assert_eq!(map.get(&ip2).unwrap().0, 1);
+        assert_eq!(limit.state.lock().attempts, 1);
+    }
+
+    #[test]
+    fn unseen_candidates_exhaust_the_ip_budget() {
+        let limit = AuthRateLimit::new();
+        let config = auth_config_digest("boss", "hash");
+        for header in ["Basic wrong-a", "Basic wrong-b"] {
+            let credential = failed_credential_digest(Some(header), &config);
+            assert!(matches!(
+                admit_auth_attempt(&limit, credential, config, 2, 300),
+                AuthAdmission::Verify
+            ));
+            finish_auth_attempt(&limit, credential, true);
+        }
+        let correct = failed_credential_digest(Some("Basic correct"), &config);
+        assert!(matches!(
+            admit_auth_attempt(&limit, correct, config, 2, 300),
+            AuthAdmission::Limited(_)
+        ));
     }
 
     #[test]
@@ -662,16 +785,10 @@ mod tests {
         let map = dashmap::DashMap::new();
         let expired: IpAddr = "10.0.0.1".parse().unwrap();
         let fresh: IpAddr = "10.0.0.2".parse().unwrap();
-        // Expired entry: window_start is older than the 300s window.
-        map.insert(
-            expired,
-            (
-                7,
-                std::time::Instant::now() - std::time::Duration::from_secs(301),
-            ),
-        );
-        // Fresh entry: still inside the window.
-        map.insert(fresh, (2, std::time::Instant::now()));
+        let expired_limit = Arc::new(AuthRateLimit::new());
+        expired_limit.state.lock().window_start = Instant::now() - Duration::from_secs(301);
+        map.insert(expired, expired_limit);
+        map.insert(fresh, Arc::new(AuthRateLimit::new()));
 
         let removed = sweep_expired_rate_limits(&map, 300);
 
@@ -683,7 +800,7 @@ mod tests {
 
     #[test]
     fn sweep_empty_map_is_noop() {
-        let map: dashmap::DashMap<IpAddr, (u32, std::time::Instant)> = dashmap::DashMap::new();
+        let map: dashmap::DashMap<IpAddr, Arc<AuthRateLimit>> = dashmap::DashMap::new();
         assert_eq!(sweep_expired_rate_limits(&map, 300), 0);
     }
 
@@ -732,12 +849,11 @@ mod tests {
         assert!(cookie.contains("Max-Age=86400"), "got {cookie}");
     }
 
-    /// A stale mobile cookie causes the browser to ask for Basic credentials
-    /// again. A few mistyped attempts must not make the next, correct reply
-    /// impossible: a reload can still carry the QR token and currently clears
-    /// the limiter, but the Basic Auth retry has no such escape hatch.
+    /// A browser may replay its stale Basic header while it waits for a new
+    /// challenge. Those replays must not exhaust the whole IP budget before
+    /// the user can provide the correct password.
     #[tokio::test]
-    async fn correct_basic_auth_recovers_after_previous_failures() {
+    async fn stale_basic_header_is_challenged_once_then_correct_login_succeeds() {
         use tower::ServiceExt;
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
@@ -757,7 +873,7 @@ mod tests {
             ));
         let remote = ConnectInfo(SocketAddr::from(([203, 0, 113, 5], 51234)));
 
-        for _ in 0..2 {
+        for _ in 0..20 {
             let response = app
                 .clone()
                 .oneshot(
@@ -770,20 +886,13 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                response.headers().get(header::WWW_AUTHENTICATE),
+                Some(&header::HeaderValue::from_static(
+                    "Basic realm=\"TUICommander\""
+                ))
+            );
         }
-
-        let blocked_wrong_password = app
-            .clone()
-            .oneshot(
-                Request::get("/ping")
-                    .header(header::AUTHORIZATION, basic_header("boss", "wrong"))
-                    .extension(remote)
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(blocked_wrong_password.status(), StatusCode::TOO_MANY_REQUESTS);
 
         let response = app
             .oneshot(
@@ -801,14 +910,21 @@ mod tests {
     }
 
     #[test]
-    fn successful_auth_clears_rate_limit() {
-        let map = dashmap::DashMap::new();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        for _ in 0..3 {
-            record_auth_failure(&map, ip, 300);
-        }
-        assert_eq!(map.get(&ip).unwrap().0, 3);
-        map.remove(&ip);
-        assert!(map.get(&ip).is_none());
+    fn config_change_invalidates_cached_failures() {
+        let limit = AuthRateLimit::new();
+        let old_config = auth_config_digest("boss", "old-hash");
+        let old_header = failed_credential_digest(Some("Basic old"), &old_config);
+        assert!(matches!(
+            admit_auth_attempt(&limit, old_header, old_config, 1, 300),
+            AuthAdmission::Verify
+        ));
+        finish_auth_attempt(&limit, old_header, true);
+
+        let new_config = auth_config_digest("boss", "new-hash");
+        let new_header = failed_credential_digest(Some("Basic new"), &new_config);
+        assert!(matches!(
+            admit_auth_attempt(&limit, new_header, new_config, 1, 300),
+            AuthAdmission::Verify
+        ));
     }
 }
