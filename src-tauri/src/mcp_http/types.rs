@@ -306,8 +306,6 @@ pub(super) struct NameQuery {
 #[derive(Deserialize)]
 pub(super) struct BranchQuery {
     pub branch: String,
-    #[serde(rename = "checkUrl")]
-    pub check_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -603,6 +601,8 @@ pub(super) struct CiFailureLogsQuery {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
     pub branch: String,
+    #[serde(rename = "checkUrl")]
+    pub check_url: Option<String>,
 }
 
 #[derive(Deserialize)]

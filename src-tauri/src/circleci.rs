@@ -19,6 +19,20 @@ pub(crate) enum TokenSource {
 
 const MAX_FAILED_ACTIONS: usize = 5;
 const MAX_LOG_BODY_BYTES: usize = 64 * 1024;
+
+fn allowed_log_url(value: &str, api_base: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    let provider_host = host == "amazonaws.com" || host.ends_with(".amazonaws.com");
+    (url.scheme() == "https"
+        && provider_host
+        && url.port().is_none_or(|port| port == 443)
+        && url.username().is_empty()
+        && url.password().is_none())
+        || (cfg!(test) && url::Url::parse(api_base).is_ok_and(|base| base.origin() == url.origin()))
+}
 /// Bounds a half-open credential-bearing API connection without constraining S3 downloads.
 const CIRCLECI_API_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Bounds the complete CircleCI API request so callers cannot leave healing active indefinitely.
@@ -28,7 +42,9 @@ fn is_safe_segment(value: &str) -> bool {
     !value.is_empty()
         && value != "."
         && value != ".."
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn vcs_slug(segment: &str) -> Option<&'static str> {
@@ -81,7 +97,12 @@ fn token_from_cli_config(config: &str) -> Option<String> {
     if host.is_some_and(|host| host.trim_end_matches('/').ne("https://circleci.com")) {
         return None;
     }
-    mapping.get("token").and_then(serde_yaml::Value::as_str).map(str::trim).filter(|token| !token.is_empty()).map(ToOwned::to_owned)
+    mapping
+        .get("token")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn token_from_cli_config_file() -> Option<String> {
@@ -206,20 +227,27 @@ pub(crate) fn failed_actions(detail: &serde_json::Value) -> Vec<(String, String)
 /// actions. CircleCI v2 does not expose step output, so keep this v1.1 detail
 /// contained here for a future adapter replacement.
 pub(crate) async fn fetch_job_log(
-    client: &reqwest::Client,
     job: &CircleCiJob,
     token: &str,
+    expected_sha: &str,
 ) -> Result<String, String> {
-    fetch_job_log_from_base(client, job, token, "https://circleci.com/api/v1.1/project/").await
+    fetch_job_log_from_base(
+        job,
+        token,
+        "https://circleci.com/api/v1.1/project/",
+        expected_sha,
+    )
+    .await
 }
 
 async fn fetch_job_log_from_base(
-    client: &reqwest::Client,
     job: &CircleCiJob,
     token: &str,
     api_base: &str,
+    expected_sha: &str,
 ) -> Result<String, String> {
-    let mut url = url::Url::parse(api_base).map_err(|error| format!("Invalid CircleCI API base: {error}"))?;
+    let mut url =
+        url::Url::parse(api_base).map_err(|error| format!("Invalid CircleCI API base: {error}"))?;
     url.path_segments_mut()
         .expect("static URL can hold path segments")
         .pop_if_empty()
@@ -230,7 +258,7 @@ async fn fetch_job_log_from_base(
             &job.build_num.to_string(),
         ]);
     // The credential must never follow a provider-controlled redirect. S3 log
-    // downloads below deliberately use the shared client without this header.
+    // downloads below use a separate client without this header.
     let api_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CIRCLECI_API_CONNECT_TIMEOUT)
@@ -251,49 +279,149 @@ async fn fetch_job_log_from_base(
         .map_err(|error| format!("Failed to parse CircleCI job: {error}"))?;
 
     let actions = failed_actions(&detail);
+    if detail
+        .get("vcs_revision")
+        .and_then(serde_json::Value::as_str)
+        != Some(expected_sha)
+    {
+        return Err("CircleCI job revision does not match the branch head".to_string());
+    }
     if actions.is_empty() {
         return Err("CircleCI job contains no failed action logs".to_string());
     }
 
+    let log_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CIRCLECI_API_CONNECT_TIMEOUT)
+        .timeout(CIRCLECI_API_TIMEOUT)
+        .build()
+        .map_err(|error| format!("Failed to build CircleCI log client: {error}"))?;
     let mut output = String::new();
     for (step, output_url) in actions {
         // output_url is a pre-signed S3 bearer URL: never attach Circle-Token
         // and never log it.
-        let response = client
+        if !allowed_log_url(&output_url, api_base) {
+            return Err(format!("CircleCI log URL for {step} has an untrusted host"));
+        }
+        let response = log_client
             .get(&output_url)
             .send()
             .await
-            .map_err(|error| format!("CircleCI log fetch failed for {step}: {}", error.without_url()))?
+            .map_err(|error| {
+                format!(
+                    "CircleCI log fetch failed for {step}: {}",
+                    error.without_url()
+                )
+            })?
             .error_for_status()
-            .map_err(|error| format!("CircleCI log API error for {step}: {}", error.without_url()))?;
-        if response.content_length().is_some_and(|length| length as usize > MAX_LOG_BODY_BYTES) {
-            return Err(format!("CircleCI log for {step} exceeds {MAX_LOG_BODY_BYTES} bytes"));
-        }
-        use futures_util::StreamExt;
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|error| format!("CircleCI log fetch failed for {step}: {}", error.without_url()))?;
-            if bytes.len() + chunk.len() > MAX_LOG_BODY_BYTES {
-                return Err(format!("CircleCI log for {step} exceeds {MAX_LOG_BODY_BYTES} bytes"));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        let chunks: Vec<serde_json::Value> = serde_json::from_slice(&bytes)
+            .map_err(|error| {
+                format!("CircleCI log API error for {step}: {}", error.without_url())
+            })?;
+        let messages = parse_log_tail(response)
+            .await
             .map_err(|error| format!("Failed to parse CircleCI log for {step}: {error}"))?;
         output.push_str(&format!("===== FAILED STEP: {step} =====\n"));
-        for chunk in chunks {
-            output.push_str(
-                chunk
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default(),
-            );
-        }
+        output.push_str(&messages);
         output.push('\n');
     }
 
     Ok(output)
+}
+
+/// Parse the provider's JSON array incrementally. Only the most recent output
+/// bytes are retained, even when the response has no Content-Length.
+async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
+    use futures_util::StreamExt;
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let parser = tokio::task::spawn_blocking(move || {
+        struct BodyReader {
+            receiver: tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+            current: Vec<u8>,
+            offset: usize,
+        }
+        impl std::io::Read for BodyReader {
+            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+                if target.is_empty() {
+                    return Ok(0);
+                }
+                while self.offset == self.current.len() {
+                    match self.receiver.blocking_recv() {
+                        Some(Ok(bytes)) => {
+                            self.current = bytes;
+                            self.offset = 0;
+                        }
+                        Some(Err(error)) => return Err(std::io::Error::other(error)),
+                        None => return Ok(0),
+                    }
+                }
+                let count = target.len().min(self.current.len() - self.offset);
+                target[..count].copy_from_slice(&self.current[self.offset..self.offset + count]);
+                self.offset += count;
+                Ok(count)
+            }
+        }
+        struct TailVisitor;
+        impl<'de> serde::de::Visitor<'de> for TailVisitor {
+            type Value = String;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a CircleCI action output array")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<String, A::Error> {
+                let mut tail = String::new();
+                while let Some(chunk) = sequence.next_element::<serde_json::Value>()? {
+                    if let Some(message) = chunk.get("message").and_then(serde_json::Value::as_str)
+                    {
+                        tail.push_str(message);
+                        if tail.len() > MAX_LOG_BODY_BYTES {
+                            let mut cut = tail.len() - MAX_LOG_BODY_BYTES;
+                            while !tail.is_char_boundary(cut) {
+                                cut += 1;
+                            }
+                            tail.drain(..cut);
+                        }
+                    }
+                }
+                Ok(tail)
+            }
+        }
+        let reader = BodyReader {
+            receiver,
+            current: Vec::new(),
+            offset: 0,
+        };
+        let mut deserializer = serde_json::Deserializer::from_reader(reader);
+        // DeserializeSeed is used because this visitor returns the retained text.
+        use serde::de::DeserializeSeed;
+        struct TailSeed;
+        impl<'de> DeserializeSeed<'de> for TailSeed {
+            type Value = String;
+            fn deserialize<D: serde::de::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<String, D::Error> {
+                deserializer.deserialize_seq(TailVisitor)
+            }
+        }
+        let tail = TailSeed
+            .deserialize(&mut deserializer)
+            .map_err(|error| error.to_string())?;
+        deserializer.end().map_err(|error| error.to_string())?;
+        Ok::<_, String>(tail)
+    });
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| error.without_url().to_string());
+        if sender.send(chunk).await.is_err() {
+            break;
+        }
+    }
+    drop(sender);
+    parser.await.map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -448,7 +576,7 @@ mod tests {
             .mock("GET", "/api/v1.1/project/gh/acme/widget/42")
             .match_header("circle-token", "secret")
             .with_status(200)
-            .with_body(serde_json::json!({"steps":[{"name":"unit","actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .with_body(serde_json::json!({"vcs_revision":"head-sha","steps":[{"name":"unit","actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
             .create_async()
             .await;
         let output = server
@@ -459,10 +587,142 @@ mod tests {
             .with_body("[{\"message\":\"failed\"}]")
             .create_async()
             .await;
-        let job = super::CircleCiJob { vcs: "gh".into(), org: "acme".into(), repo: "widget".into(), build_num: 42 };
+        let job = super::CircleCiJob {
+            vcs: "gh".into(),
+            org: "acme".into(),
+            repo: "widget".into(),
+            build_num: 42,
+        };
 
-        assert!(super::fetch_job_log_from_base(&reqwest::Client::new(), &job, "secret", &(server.url() + "/api/v1.1/project/")).await.unwrap().contains("failed"));
+        assert!(
+            super::fetch_job_log_from_base(
+                &job,
+                "secret",
+                &(server.url() + "/api/v1.1/project/"),
+                "head-sha"
+            )
+            .await
+            .unwrap()
+            .contains("failed")
+        );
         _api.assert_async().await;
         output.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn oversized_circleci_action_keeps_the_last_messages() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+        let output_url = format!("{}/output", server.url());
+        let _api = server.mock("GET", "/api/v1.1/project/gh/acme/widget/42")
+            .with_body(serde_json::json!({"vcs_revision":"head-sha","steps":[{"name":"unit","actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .create_async().await;
+        let body = serde_json::json!([
+            {"message": "old".repeat(super::MAX_LOG_BODY_BYTES)},
+            {"message": "last failure\n"}
+        ])
+        .to_string();
+        let _output = server
+            .mock("GET", "/output")
+            .with_body(body)
+            .create_async()
+            .await;
+        let job = super::CircleCiJob {
+            vcs: "gh".into(),
+            org: "acme".into(),
+            repo: "widget".into(),
+            build_num: 42,
+        };
+        let logs = super::fetch_job_log_from_base(
+            &job,
+            "token",
+            &(server.url() + "/api/v1.1/project/"),
+            "head-sha",
+        )
+        .await
+        .unwrap();
+        assert!(logs.ends_with("last failure\n\n"));
+        assert!(logs.len() <= super::MAX_LOG_BODY_BYTES + 100);
+    }
+
+    #[tokio::test]
+    async fn mismatched_revision_never_downloads_the_action_log() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+        let output_url = format!("{}/output", server.url());
+        let _api = server.mock("GET", "/api/v1.1/project/gh/acme/widget/42")
+            .with_body(serde_json::json!({"vcs_revision":"fork-sha","steps":[{"actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .create_async().await;
+        let output = server.mock("GET", "/output").expect(0).create_async().await;
+        let job = super::CircleCiJob {
+            vcs: "gh".into(),
+            org: "acme".into(),
+            repo: "widget".into(),
+            build_num: 42,
+        };
+        let error = super::fetch_job_log_from_base(
+            &job,
+            "token",
+            &(server.url() + "/api/v1.1/project/"),
+            "local-sha",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("revision does not match"));
+        output.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn presigned_log_redirect_is_not_followed() {
+        use mockito::Server;
+        let mut server = Server::new_async().await;
+        let output_url = format!("{}/output", server.url());
+        let _api = server.mock("GET", "/api/v1.1/project/gh/acme/widget/42")
+            .with_body(serde_json::json!({"vcs_revision":"local-sha","steps":[{"actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .create_async().await;
+        let _output = server
+            .mock("GET", "/output")
+            .with_status(302)
+            .with_header("location", "/private")
+            .create_async()
+            .await;
+        let private = server
+            .mock("GET", "/private")
+            .expect(0)
+            .create_async()
+            .await;
+        let job = super::CircleCiJob {
+            vcs: "gh".into(),
+            org: "acme".into(),
+            repo: "widget".into(),
+            build_num: 42,
+        };
+        assert!(
+            super::fetch_job_log_from_base(
+                &job,
+                "token",
+                &(server.url() + "/api/v1.1/project/"),
+                "local-sha"
+            )
+            .await
+            .is_err()
+        );
+        private.assert_async().await;
+    }
+
+    #[test]
+    fn rejects_non_provider_log_hosts() {
+        assert!(!super::allowed_log_url(
+            "http://169.254.169.254/latest/meta-data",
+            "https://circleci.com/api/v1.1/project/"
+        ));
+        assert!(!super::allowed_log_url(
+            "https://s3.amazonaws.com.evil.test/log",
+            "https://circleci.com/api/v1.1/project/"
+        ));
+        assert!(super::allowed_log_url(
+            "https://bucket.s3.amazonaws.com/log",
+            "https://circleci.com/api/v1.1/project/"
+        ));
     }
 }

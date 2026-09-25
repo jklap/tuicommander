@@ -949,7 +949,7 @@ router only (the headless `tuic-remote` daemon does not expose GitHub).
 
 ```
 GET  /github/viewer-login                       -> string (login)
-GET  /repo/ci-failure-logs?repoPath=&branch=    -> string (logs)
+GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=    -> string (logs; checkUrl optional)
 POST /github/pr-hide-drafts   { hide }          -> null
 POST /github/auth/start                         -> DeviceCodeResponse
 POST /github/auth/poll        { deviceCode }    -> PollResult
