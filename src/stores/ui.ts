@@ -295,6 +295,7 @@ function createUIStore() {
 		},
 
 		setEditorWrap(kind: "text" | "code", enabled: boolean): void {
+			// Wrapping is a per-client view preference; backend UI prefs require a Rust restart.
 			setState(kind === "text" ? "editorWrapText" : "editorWrapCode", enabled);
 			try {
 				localStorage.setItem(
@@ -538,6 +539,8 @@ registerDebugSnapshot("ui", () => {
 		gitPanelVisible: s.gitPanelVisible,
 		aiChatPanelVisible: s.aiChatPanelVisible,
 		diffViewMode: s.diffViewMode,
+		editorWrapText: s.editorWrapText,
+		editorWrapCode: s.editorWrapCode,
 		isLoading: s.isLoading,
 	};
 });
