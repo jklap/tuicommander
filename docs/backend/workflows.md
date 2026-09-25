@@ -6,7 +6,7 @@ The graph contains stable node IDs and directed edges. Node kinds are Start, Age
 
 The first list or explicit seed action inserts `Story delivery` and `Resolve plan` once per project. The latter pins revision 1 of the former. Both remain editable as drafts; a new published revision does not rewrite an older one.
 
-Desktop IPC command `workflow_definition_action` and HTTP `POST /workflows/definition/action?path=<project>` call the same Rust service. Actions: `seed_templates`, `create_draft`, `list_drafts`, `get_draft`, `update_draft`, `publish`, `get_published`. The action is a JSON object tagged by `action`; replies are tagged `{ type, value }`. Graph editing, scheduler, coordinator, and execution APIs are separate later slices.
+Desktop IPC command `workflow_definition_action` and HTTP `POST /workflows/definition/action?path=<project>` call the same Rust service. Actions: `seed_templates`, `create_draft`, `list_drafts`, `get_draft`, `update_draft`, `publish`, `get_published`. The action is a JSON object tagged by `action`; replies are tagged `{ type, value }`. The Plans and Stories dialog has a Designer tab for draft selection, drag/drop or button-based node addition, edge connection, node inspection, saving and publishing. The backend remains the authority for graph validation at publication.
 
 ## Durable runs
 
