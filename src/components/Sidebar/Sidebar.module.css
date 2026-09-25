@@ -805,6 +805,10 @@
   flex-shrink: 1;
 }
 
+.branchSubAgentIcon {
+  vertical-align: -1px;
+}
+
 .branchAgentTime {
   color: var(--fg-muted);
   font-size: var(--font-2xs);

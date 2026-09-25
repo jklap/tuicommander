@@ -45,7 +45,7 @@ per cell and the configured history limit still apply.
 ### 1.0 Design Mode for agent terminals
 
 - Start from an agent terminal's tab context menu or the Command Palette (the palette acts on the active terminal only). While the repository is armed, both offer Stop instead. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
-- Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, rectangle, source location when development metadata permits, and an optional PNG reference.
+- Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, the design tokens (CSS custom properties) its matching rules reference with their resolved values, rectangle, source location when development metadata permits, and an optional PNG reference.
 - The grab is appended to the bound agent's draft without submitting it; repeated grabs and the user's existing text remain editable. Starting from another agent terminal in the same repository rebinds the Chrome window.
 - The tab indicator follows Design Mode status. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
 
@@ -62,7 +62,7 @@ per cell and the configured history limit still apply.
 - Pause/resume PTY output (`pause_pty` / `resume_pty` Tauri commands) — suspends reader thread without killing the session
 
 ### 1.2 Tab Bar
-- Create: `Cmd+T`, `+` button (click = new tab, right-click = split options)
+- Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)
 - Close: `Cmd+W`, middle-click, context menu
 - Reopen last closed: `Cmd+Shift+T` (remembers last 10 closed tabs)
 - Switch: `Cmd+1` through `Cmd+9`, `Ctrl+Tab` / `Ctrl+Shift+Tab`
@@ -81,7 +81,7 @@ per cell and the configured history limit still apply.
   - Closing the floating window automatically returns the tab to the main window
   - Requires an active PTY session (disabled for tabs without a session)
 - Overflow menu on scroll arrows (right-click) shows clipped tabs; the `+` button always stays visible regardless of scroll position
-- `+` button: click opens a terminal in the active branch; right-click offers New Tab / Split; long press (500 ms) lists the enabled agents (with a submenu per run config) and opens a new tab running the chosen one
+- `+` button: click opens a terminal in the active branch; right-click or long press (500 ms) lists the enabled agents (with a submenu per run config) and opens a new tab running the chosen one
 - Tab pinning: pinned tabs are visible across all branches (not scoped to branch key)
 
 ### 1.3 Split Panes
@@ -262,6 +262,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Click: switch to branch (shows its terminals, creates worktree if needed)
 - Double-click branch name: rename branch
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
+- `+` button: click opens a terminal in that branch; long press (500 ms) lists the enabled agents and opens a tab running the chosen one (a shell row has no agents, so there a long press acts as it did before: a click, or the row menu on touch); right-click opens the row menu
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
 - Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
@@ -495,7 +496,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 ### 3.12 Activity Dashboard (`Cmd+Shift+A`)
 - Real-time view of all active terminal sessions in a compact list
 - Each row shows: terminal name, project name badge (last segment of CWD), agent type, status, last activity time
-- A PTY spawned by another agent (`agent action=spawn`) carries a `↳ <parent tab name>` tag, also on its nested sidebar row; the tag reads `sub` when the parent has no tab
+- A PTY spawned by another agent (`agent action=spawn`) carries a `↳ <parent tab name>` tag; its nested sidebar row shows a monochrome agent icon whose tooltip and accessible name read `Spawned by <parent tab name>`. The tag reads `sub` when the parent has no tab
 - Sub-rows (up to one shown per terminal, in priority order):
   - `currentTask` (gear icon) — current agent task from status-line parsing (e.g. "Reading files"). Suppressed for Claude Code (spinner verbs are decorative)
   - `agentIntent` (crosshair icon) — LLM-declared intent via `intent:` token
@@ -809,7 +810,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 **The conversation lives in ego, not in TUICommander.** There is no LLM client
 here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
-`plans/ego-integration/plan.md` section 1.
+`plans/ego-integration/archive/plan.md` section 1.
 
 - **Bound to a repository and a session, never to a terminal.** A turn ego runs
   outlives any tab and may touch files no tab is showing. Switching repository
@@ -1130,6 +1131,9 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Downloads report progress, can be cancelled, and install **atomically** — the bytes land in a staging directory, are verified there, and only then replace the installed version. An interrupted or corrupt download never appears ready.
 - Three states, told apart on purpose: `absent` offers a download, `incomplete` names the files that are missing, `ready` is the only one a language can be spoken from.
 - Replacing or deleting a language waits for any reply being spoken to finish, then unloads its graphs. The 125 MB an engine holds resident is released on deletion and at shutdown.
+- **Every voice.** Each language has 26 Kyutai voices. One ships in the language bundle; the other 25 are separate downloads (about 6 MB each, 25 MB for French) that the user chooses in Settings > Voice > Voices, grouped as Installed, Downloadable and Yours.
+- **Your own voice files.** "Add voice file…" imports a `.safetensors` voice into the current language. The file is checked against that language's model before it is stored, and a file that does not fit is refused with the reason. TUICommander does not create or clone voices.
+- **Listen** plays a short sample of the selected voice on this machine's speaker, without a hands-free conversation and without changing the saved voice. It is refused while a hands-free reply is being spoken.
 - Sources and licensing: the graphs come from a public Hugging Face export of Kyutai's Pocket TTS weights; the voices come from Kyutai's ungated repository without the voice-cloning weights. Both are CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 
 ### 9.8 Spoken Replies
@@ -1137,6 +1141,7 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - **The user can talk over a reply.** Speaking stops the moment the capture loop hears them, and their words land in the new turn rather than behind the sentence they interrupted. Echo cancellation runs first, so a reply never interrupts itself on its own voice coming back through the microphone.
 - **Accepting a reply is not the user hearing it.** Every reply gets an id and one of six fates: `queued`, `rendering`, `speaking`, `finished`, `interrupted` or `failed`. Only `finished` means somebody heard it to the end, and only the audio device going quiet can produce it.
 - A reply written for a turn the user has already talked over is **refused, not spoken** over whatever they said next.
+- **Every reply is at one level.** A loudness stage levels each reply, brings it to the **Voice volume** (-30 to -12 dB, default -18) and limits the peaks to -1 dBFS, so no slider position clips. **Levelling** (Off to Strong, default 67%) sets how much the quiet and loud words of one reply are evened out. A change applies to the next reply and does not stop speech.
 - Speech belongs to a conversation, not to the application. A model reaches it through the `voice` MCP tool and may drive only the conversation armed for its own terminal; a connection bound to no terminal is refused rather than allowed to speak into whichever conversation happens to be armed.
 - The `voice` tool is always listed, on every build, and answers `available: false` with a reason when it cannot speak — discovery does not depend on tool-list change notifications, which not every client acts on.
 
@@ -1825,6 +1830,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
 - Search/filter in output: text search bar filters visible log lines in real time
 - Rich header: agent intent line (italic), current task line, progress bar, usage percentage (red above 80%)

@@ -23,6 +23,60 @@
 ## Old config.json keeps `config`/`debug` MCP tools disabled (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, with a `config.json` that has no `disabled_native_tools` key (use `TUIC_APP_INSTANCE=<id>` and remove the key from that instance's config), the `config` and `debug` MCP tools are absent from `tools/list` and show as disabled in Settings.
+## Agent list on the `+` buttons (2026-09-25) — frontend, HMR
+
+- [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu.
+
+## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
+
+- [ ] [VISUAL] Spawn a sub-agent from an agent tab. Its sidebar row shows a small monochrome agent icon, aligned with the row text, instead of "↳ Parent". Hovering the icon shows "Spawned by <parent>". Take a screenshot (MCP maccontrol has no Screen Recording permission on 2026-09-25).
+
+## Mobile terminal prose reflow (2026-09-24) — frontend, refresh PWA
+
+- [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment.
+
+## Voice library, voice files, Listen and loudness sliders (2026-09-24) — Rust + frontend, needs `make dev` restart
+
+Settings > Voice > Spoken replies, with the Italian bundle and the runtime downloaded:
+
+- [ ] [VISUAL] Downloadable starts collapsed as "DOWNLOADABLE (n)" with a disclosure marker; Tab focuses it, Enter or Space opens it, and the Voice volume and Levelling sliders are visible without scrolling past the catalogue.
+- [ ] [VISUAL] Take a screenshot of the Spoken replies section. The group titles (Installed, Downloadable, Yours), the voice rows, the Listen button beside the voice picker and the two slider labels follow `docs/frontend/STYLE_GUIDE.md`.
+- [ ] Download one catalogue voice from Downloadable. The progress bar moves; when it ends, the row moves to Installed and the voice appears in the voice picker.
+- [ ] Click "Add voice file…" and choose a valid Italian `.safetensors` voice. It appears under Yours and in the picker, and it speaks when selected. Choose a 24-layer (French) voice or a file that is not a voice: the reason shows under the button and nothing is added. The × on a Yours row deletes the file. Add a file with the same name as a voice under Yours: it is refused with "You already have a voice called … delete it first or choose another name", and the stored voice still speaks as before.
+- [ ] [HUMAN] With no hands-free conversation, click Listen and listen: the sample is audible, in the selected voice, at the Voice volume level, and the saved voice does not change. Start hands-free, let the agent speak a reply, and click Listen while it plays: the refusal shows inline. _(2026-09-24 isolated instance voice0924: `POST /dictation/speech/voices/preview` with hands-free not armed returned 200 for giovanni, alba and an imported voice, and the output device accepted the audio; UI Listen with alba showed no error. Nobody listened, so audibility is unverified.)_
+- [ ] Move Voice volume and Levelling and release. The next reply is louder or quieter and more or less even, without a restart. At -12 dB with Strong there is no clipping.
+
+HTTP import and delete (use the test instance on `:9877`):
+
+- [ ] `POST /dictation/speech/voices/import` with `{"language":"it","name":"nonna","dataBase64":"<base64 of an Italian .safetensors>"}` succeeds. Voice choice then accepts `speech_voice` `"nonna"`, and a reply speaks in it.
+- [ ] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`.
+- [ ] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing.
+- [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak.
+- [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language".
+- Note: an isolated `TUIC_APP_INSTANCE` debug instance binds no TCP port while remote access is off; reach it with `curl --unix-socket <tuic-mcp-*.sock>` (the path is in its log).
+
+## Side panels follow an agent click to another repo (2026-09-24) — frontend, HMR
+
+- [ ] Open the Notes, Git and Files panels on repo A. In the sidebar, click an agent row under repo B. All three panels now show repo B, as they do after a click on B's branch row.
+
+## Spoken replies at one level (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping.
+- [ ] Set `speech_volume_db` to -24 in `dictation-config.json` through the settings save (`set_dictation_config`) while a reply is queued. The queued reply is not cut off, and the next reply is quieter. The same change is also available from the Voice volume slider in Settings > Voice > Spoken replies.
+- [ ] An existing `dictation-config.json` with neither field loads with -18 dB and 0.67 levelling (`GET /dictation/config` or `get_dictation_config`).
+
+## MCP `session action=rename` and leaner output/spawn responses (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately.
+- [ ] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename.
+- [ ] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched.
+- [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there.
+- [ ] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`.
+
+## No duplicated agent rows after a WebView reload (2026-09-24) — frontend via HMR
+
+- [ ] Open an agent tab that shows the Context bar. Reload the WebView (`POST localhost:9876/debug/reload_webview`). Scroll up: the last reply must appear once. Before the fix, each reload added 1–2 copies of its top rows.
+- [ ] Check without the eye: `GET /sessions/{id}/raw-ring`. Each Claude full repaint (`ESC[2K` run) after the reload must clear exactly the tab's row count, not 1–2 more.
 
 ## Hands-free turns reach a busy agent at once (2026-09-23) — Rust, needs `make dev` restart
 
@@ -180,6 +234,14 @@ that checkout merely to run this check.
       submitting. Check selector, path, style subset, rectangle, HTML snippet,
       nearby text, source location when the dev build supplies one, and a valid
       `[image: …]` PNG path.
+- [ ] On a page whose CSS uses custom properties (for example a Tailwind v4
+      or shadcn app), select a themed button. The grab carries a `tokens:` line
+      with only the `--…` variables that button's rules reference, resolved to
+      their values, and not the whole theme.
+- [ ] On a page built from web components (open shadow roots with their own
+      `<style>` or `adoptedStyleSheets`), select a button inside a component.
+      The `tokens:` line lists the component's own `--…` variables. jsdom has no
+      `ShadowRoot.styleSheets`, so no unit test covers this.
 - [ ] Start Design Mode from another agent terminal in the same repository.
       Confirm the existing Chrome window is reused and subsequent grabs go to
       the newly bound terminal. Close that terminal, then Chrome: the status

@@ -16,6 +16,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { makeTerminal } from "../helpers/store";
@@ -46,8 +47,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 		},
 		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
-		setCurrentRepoPath: vi.fn(),
-		setCurrentBranch: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
 		getDefaultFontSize: () => 14,
@@ -131,8 +130,6 @@ describe("initApp", () => {
 		});
 
 		expect(repositoriesStore.state.activeRepoPath).toBe(targetRepo);
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith(targetRepo);
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		const activeTab = mdTabsStore.getActive();
 		expect(activeTab).toMatchObject({ repoPath: targetRepo, filePath: "reports/comparison.md" });
 		expect(mdTabsStore.getVisibleIds(`${targetRepo}|main`)).toContain(activeTab!.id);
@@ -241,9 +238,32 @@ describe("initApp", () => {
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi.fn().mockResolvedValue([
-					{ session_id: "spawned", cwd: "/repo", display_name: "call-map", display_name_is_custom: false, display_name_from_spawn: true, is_remote: true, state: { agent_type: "claude" } },
-					{ session_id: "osc-synced", cwd: "/repo", display_name: "main-wise-beacon", display_name_is_custom: false, display_name_from_spawn: false, is_remote: true, state: { agent_type: "claude" } },
-					{ session_id: "renamed", cwd: "/repo", display_name: "mine", display_name_is_custom: true, is_remote: true, state: { agent_type: "claude" } },
+					{
+						session_id: "spawned",
+						cwd: "/repo",
+						display_name: "call-map",
+						display_name_is_custom: false,
+						display_name_from_spawn: true,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
+					{
+						session_id: "osc-synced",
+						cwd: "/repo",
+						display_name: "main-wise-beacon",
+						display_name_is_custom: false,
+						display_name_from_spawn: false,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
+					{
+						session_id: "renamed",
+						cwd: "/repo",
+						display_name: "mine",
+						display_name_is_custom: true,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
 					{ session_id: "unnamed", cwd: "/repo", is_remote: true, state: { agent_type: "claude" } },
 				]),
 				close: vi.fn().mockResolvedValue(undefined),
@@ -318,6 +338,36 @@ describe("initApp", () => {
 		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
 		expect(bySession("sess-aliased")?.alias).toBe("tu-23");
 		expect(bySession("sess-plain")?.alias).toBeNull();
+	});
+
+	// The Context bar above an agent tab renders only once intent or prompt is
+	// known. Left to the later lifecycle sync, it appears after the terminal has
+	// measured, so the pane shrinks and the PTY sees a transient taller height:
+	// Claude repaints for it, and the shrink back pushes those rows into history
+	// a second time — duplicated scrollback after every WebView reload.
+	it("re-adopts a surviving session with the intent and prompt the backend holds", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "sess-context",
+						cwd: "/repo",
+						state: { agent_type: "claude", agent_intent: "Answering a question", last_prompt: "what is the role" },
+					},
+					{ session_id: "sess-bare", cwd: "/repo", state: { agent_type: "claude" } },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
+		expect(bySession("sess-context")).toMatchObject({
+			agentIntent: "Answering a question",
+			lastPrompt: "what is the role",
+		});
+		expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null });
 	});
 
 	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {
@@ -413,6 +463,86 @@ describe("initApp", () => {
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.terminals).toHaveLength(1);
 		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-nested");
+	});
+
+	it("re-adopts repo-root sessions under main when the active workspace is a linked worktree", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "feature-one", { worktreePath: "/repo__wt/feature-one" });
+		repositoriesStore.setWorkspace("/repo", "feature-two", { worktreePath: "/repo__wt/feature-two" });
+		repositoriesStore.setWorkspace("/repo", "feature-three", { worktreePath: "/repo__wt/feature-three" });
+		repositoriesStore.setActiveWorkspace("/repo", "feature-three");
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "root-one", cwd: "/repo" },
+					{ session_id: "root-two", cwd: "/repo/src" },
+					{ session_id: "worktree-one", cwd: "/repo__wt/feature-one" },
+					{ session_id: "worktree-two", cwd: "/repo__wt/feature-two/src" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const repo = repositoriesStore.get("/repo")!;
+		expect(repo.workspaces.main.terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"root-one",
+			"root-two",
+		]);
+		expect(repo.workspaces["feature-one"].terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"worktree-one",
+		]);
+		expect(repo.workspaces["feature-two"].terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"worktree-two",
+		]);
+		expect(repo.workspaces["feature-three"].terminals).toEqual([]);
+	});
+
+	it("keeps an already-adopted repo-root session under main when a new worktree is added", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "root", cwd: "/repo/src" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		repositoriesStore.setWorkspace("/repo", "new-worktree", { worktreePath: "/repo__wt/new-worktree" });
+		repositoriesStore.setActiveWorkspace("/repo", "new-worktree");
+		reconcileTerminalOwnership();
+
+		const repo = repositoriesStore.get("/repo")!;
+		expect(repo.workspaces.main.terminals).toHaveLength(1);
+		expect(repo.workspaces["new-worktree"].terminals).toEqual([]);
+	});
+
+	it("parks a surviving session whose sibling worktree no longer exists", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "current", { worktreePath: "/repo__wt/current" });
+		repositoriesStore.setActiveWorkspace("/repo", "current");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "removed", cwd: "/repo__wt/removed/src" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		const id = terminalsStore.getIds()[0]!;
+		expect(terminalsStore.get(id)?.repoPath).toBeNull();
+		expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toEqual([]);
+		expect(repositoriesStore.get("/repo")?.workspaces.current.terminals).toEqual([]);
 	});
 
 	it("assigns a surviving session to the most-specific nested repo", async () => {
@@ -670,8 +800,7 @@ describe("initApp", () => {
 		const deps = createMockDeps();
 		await initApp(deps);
 
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith("/repo");
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
+		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
 		// Eagerly restore terminals so pane layout IDs match
 		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
 	});
@@ -730,6 +859,24 @@ describe("initApp", () => {
 			return () => cb;
 		}
 
+		// An MCP rename starts in the backend, so only this push can tell the tab
+		// bar and sidebar about it (#869-e5da).
+		it("applies a session-renamed event to the bound terminal", async () => {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string; is_custom: boolean } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			await initApp(createMockDeps());
+			const id = terminalsStore.add(makeTerminal({ name: "Old name" }));
+			terminalsStore.setSessionId(id, "sess-renamed");
+
+			cb!({ payload: { session_id: "sess-renamed", name: "Foo", is_custom: true } });
+
+			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
+		});
+
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
 			const getCb = captureAliasAssigned();
 			const deps = createMockDeps();
@@ -766,7 +913,9 @@ describe("initApp", () => {
 			const getCb = captureAliasAssigned();
 			await initApp(createMockDeps());
 
-			getCb()!({ payload: { session_id: "sess-mirrored", alias: "tc-11", __tuic_origin: { connection: "mac-mint" } } as never });
+			getCb()!({
+				payload: { session_id: "sess-mirrored", alias: "tc-11", __tuic_origin: { connection: "mac-mint" } } as never,
+			});
 			const id = terminalsStore.add(makeTerminal({ name: "Local tab" }));
 			terminalsStore.setSessionId(id, "sess-mirrored");
 			expect(terminalsStore.get(id)?.alias).toBeNull();
@@ -830,8 +979,7 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith("/repo");
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
+		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
 		// Should activate an existing terminal, not call handleBranchSelect
 		const ids = terminalsStore.getIds();
 		expect(ids.length).toBe(1);
@@ -1700,7 +1848,8 @@ describe("initApp", () => {
 
 			getCreated()!({ payload: { session_id: "child", cwd: null, agent_type: "claude", parent_session: "tuic-lead" } });
 			getCreated()!({ payload: { session_id: "plain", cwd: null, agent_type: "claude" } });
-			const byPty = (sid: string) => terminalsStore.get(terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === sid)!);
+			const byPty = (sid: string) =>
+				terminalsStore.get(terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === sid)!);
 
 			// The sidebar and Activity Dashboard tag a tab only from this field.
 			expect(byPty("child")?.parentSession).toBe("tuic-lead");

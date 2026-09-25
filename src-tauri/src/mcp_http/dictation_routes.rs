@@ -117,6 +117,87 @@ pub(super) async fn delete_speech_asset_http(
     ))
 }
 
+/// `language` is a Whisper code, the same as the IPC twin's argument.
+#[derive(serde::Deserialize)]
+pub(super) struct SpeechVoicesQuery {
+    pub language: String,
+}
+
+pub(super) async fn get_speech_voices_http(
+    axum::extract::Query(query): axum::extract::Query<SpeechVoicesQuery>,
+) -> Response {
+    json_result(dictation::commands::get_speech_voices(query.language))
+}
+
+/// The same keys as the IPC twin's arguments, which Tauri spells in
+/// camelCase (`dataBase64`). It is the whole voice file, which is why its
+/// route has a larger body limit than the rest (see
+/// `SPEECH_VOICE_IMPORT_BODY_BYTES`).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ImportSpeechVoiceRequest {
+    pub language: String,
+    pub name: String,
+    pub data_base64: String,
+}
+
+pub(super) async fn import_speech_voice_http(
+    Json(body): Json<ImportSpeechVoiceRequest>,
+) -> Response {
+    // Decoding and checking up to 64 MB is disk and CPU work; keep it off the
+    // async workers.
+    let result = tokio::task::spawn_blocking(move || {
+        dictation::commands::import_speech_voice(body.language, body.name, body.data_base64)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("importing the voice failed: {error}")));
+    json_result(result)
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct DeleteSpeechVoiceRequest {
+    pub language: String,
+    pub name: String,
+}
+
+pub(super) async fn delete_speech_voice_http(
+    Json(body): Json<DeleteSpeechVoiceRequest>,
+) -> Response {
+    json_result(dictation::commands::delete_speech_voice(
+        body.language,
+        body.name,
+    ))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct PreviewSpeechVoiceRequest {
+    pub language: String,
+    pub voice: String,
+    pub text: String,
+}
+
+pub(super) async fn preview_speech_voice_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PreviewSpeechVoiceRequest>,
+) -> Response {
+    let Some(app) = state.app_handle.read().clone() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    // Synthesis takes seconds; keep it off the async workers, as the IPC
+    // twin keeps it off the main thread.
+    let result = tokio::task::spawn_blocking(move || {
+        dictation::commands::preview_voice(
+            &app.state::<DictationState>(),
+            &body.language,
+            &body.voice,
+            &body.text,
+        )
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("previewing the voice failed: {error}")));
+    json_result(result)
+}
+
 /// `turn` is optional on the wire and on IPC: omitting it means "the turn that
 /// is current now", which is what a caller answering immediately wants.
 #[derive(serde::Deserialize)]

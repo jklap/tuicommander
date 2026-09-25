@@ -461,6 +461,140 @@ describe("Sidebar", () => {
 			expect(onAddTerminal).toHaveBeenCalledWith("/repo1", "main");
 		});
 
+		describe("add terminal button agent list", () => {
+			const agentItems = (launch: () => void) => () => [
+				{ label: "Add Agent", action: () => {}, children: [{ label: "Claude Code", action: launch }] },
+			];
+			const menuLabels = (container: HTMLElement) =>
+				Array.from(container.querySelectorAll(".menu .label")).map((l) => l.textContent);
+			const clickLabel = (container: HTMLElement, label: string) => {
+				const el = Array.from(container.querySelectorAll(".menu .label")).find((l) => l.textContent === label)!;
+				fireEvent.click(el.closest(".item") ?? el);
+			};
+
+			it("a long press lists the agents of that branch instead of opening a terminal", () => {
+				const onAddTerminal = vi.fn();
+				const launch = vi.fn();
+				const buildAgentMenuItems = vi.fn(agentItems(launch));
+				const { container } = render(() => <Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems })} />);
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(500);
+				fireEvent.pointerUp(addBtn);
+				fireEvent.click(addBtn);
+
+				expect(onAddTerminal).not.toHaveBeenCalled();
+				expect(buildAgentMenuItems).toHaveBeenCalledWith("/repo1", "main");
+				clickLabel(container, "Claude Code");
+				expect(launch).toHaveBeenCalledTimes(1);
+			});
+
+			it("a right click still opens the branch row menu", () => {
+				// The agent list on right click is withheld until Boss approves a change
+				// to a sidebar click (AGENTS.md "Sidebar clicks"). Only the long press has it.
+				const onAddTerminal = vi.fn();
+				const buildAgentMenuItems = vi.fn(agentItems(() => {}));
+				const { container } = render(() => <Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems })} />);
+				fireEvent.contextMenu(container.querySelector(".branchAddBtn")!);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+				expect(onAddTerminal).not.toHaveBeenCalled();
+			});
+
+			it("a right click during a pending left press still opens the branch row menu", () => {
+				// A mouse right click is button 2; a touch long press's contextmenu is not (#882-e5a7).
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(200);
+				fireEvent.contextMenu(addBtn, { button: 2 });
+				vi.advanceTimersByTime(1000);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+			});
+
+			it("a macOS Ctrl+click opens the branch row menu, not the agent list", () => {
+				// WebKit reports Ctrl+click's contextmenu as button 0, on mousedown,
+				// while the press timer is pending: ctrlKey is what marks it (#882-e5a7).
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0, ctrlKey: true });
+				fireEvent.contextMenu(addBtn, { button: 0, ctrlKey: true });
+				vi.advanceTimersByTime(1000);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+				expect(onAddTerminal).not.toHaveBeenCalled();
+			});
+
+			it("a touch long press whose native contextmenu beats the timer opens the agent list", () => {
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(450);
+				fireEvent.contextMenu(addBtn);
+				fireEvent.pointerUp(addBtn);
+				fireEvent.click(addBtn);
+				vi.advanceTimersByTime(1000);
+
+				expect(menuLabels(container)).toContain("Claude Code");
+				expect(menuLabels(container)).not.toContain("Add Terminal");
+				expect(onAddTerminal).not.toHaveBeenCalled();
+			});
+
+			it("a short press still opens a plain terminal", () => {
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(200);
+				fireEvent.pointerUp(addBtn);
+				fireEvent.click(addBtn);
+				vi.advanceTimersByTime(1000);
+
+				expect(onAddTerminal).toHaveBeenCalledWith("/repo1", "main");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+			});
+
+			it("a shell row has no agents, so a right click falls through to the row menu", () => {
+				setRepos({
+					"/repo1": makeRepo({
+						workspaces: {
+							shell: {
+								branchName: "shell",
+								isMain: true,
+								isShell: true,
+								worktreePath: "/repo1",
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+						activeWorkspaceId: "shell",
+					}),
+				});
+				const buildAgentMenuItems = vi.fn(agentItems(() => {}));
+				const { container } = render(() => <Sidebar {...defaultProps({ buildAgentMenuItems })} />);
+				fireEvent.contextMenu(container.querySelector(".branchAddBtn")!);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+			});
+		});
+
 		it("main branch has no remove button", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const removeBtn = container.querySelector(".branchRemoveBtn");
@@ -1708,7 +1842,10 @@ describe("Sidebar", () => {
 
 			// Only the spawned worker says who launched it; the orchestrator row stays plain.
 			expect(rows[0].querySelector(".branchSubAgentTag")).toBeNull();
-			expect(rows[1].querySelector(".branchSubAgentTag")?.textContent).toBe("↳ Orchestrator");
+			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("title")).toBe("Spawned by Orchestrator");
+			expect(rows[1].querySelector(".branchSubAgentTag svg")).not.toBeNull();
+			// The name is on the tag itself, so a screen reader announces it.
+			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("aria-label")).toBe("Spawned by Orchestrator");
 		});
 
 		it("renders the activity card for a single terminal", () => {

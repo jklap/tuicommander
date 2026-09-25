@@ -692,6 +692,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
+| `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
@@ -1632,6 +1633,13 @@ POST /dictation/speech/assets/cancel    { "asset": "..." }
                                                     -> "<cancellation message>"
 POST /dictation/speech/assets/delete    { "asset": "..." }
                                                     -> "<deletion message>"
+GET  /dictation/speech/voices?language=it           -> VoiceChoice[]
+POST /dictation/speech/voices/import    { "language": "it", "name": "...", "dataBase64": "..." }
+                                                    -> "<import message>"
+POST /dictation/speech/voices/delete    { "language": "it", "name": "..." }
+                                                    -> "<deletion message>"
+POST /dictation/speech/voices/preview   { "language": "it", "voice": "...", "text": "..." }
+                                                    -> null
 POST /dictation/speech/speak     { "text": "...", "turn": 3 }
                                                     -> SpokenReply
 POST /dictation/speech/stop                         -> SpeechStatus
@@ -1672,8 +1680,33 @@ download beside it pushes `dictation-download-progress` with the same body minus
 unlike `SpeechStatus` and `HandsFreeStatus` beside it. Its `language` is the
 **Whisper language code** (`"it"`), null for the runtime library: the same
 alphabet as `DictationConfig.language` and `SpeechStatus.language`, so a client
-can join an asset to the configured language directly. `voices` lists the names
-`speech_voice` may be set to.
+can join an asset to the configured language directly. For a language, `voices`
+lists the voice it ships. `get_speech_assets` also lists every catalogue voice
+(`kind: "voice"`, `language` = its language's code, `voice` = the voice name),
+which the download routes above accept like any other asset.
+
+### Voices
+
+`language` is the Whisper code on all four routes.
+
+- `GET /dictation/speech/voices?language=` answers the voices the language can
+  speak with now — the values `speech_voice` may be set to — as
+  `[{ id, source }]`, `source` being `"default"`, `"downloaded"` or `"user"`.
+  It is `[]` while the language itself is not fully downloaded.
+- `POST /dictation/speech/voices/import` stores a voice file the user chose. The
+  body carries the whole file as base64 under `dataBase64`, the same camelCase
+  key as the IPC argument. **This route alone accepts a body of about 85 MiB**
+  (`SPEECH_VOICE_IMPORT_BODY_BYTES`: a 64 MB file in base64 plus 64 KiB); every
+  other route keeps the 2 MB limit. The server checks the name, the size and
+  whether the file fits the language's model before it stores anything, and
+  refuses with the reason otherwise.
+- `POST /dictation/speech/voices/delete` removes a user voice file. Absent is
+  success.
+- `POST /dictation/speech/voices/preview` speaks `text` (at most 200 characters)
+  in `voice` on the speaker of the machine that runs TUICommander, with the saved
+  loudness settings. It needs no hands-free conversation and does not change the
+  saved voice. It is refused, not queued, while a hands-free reply is queued,
+  rendering or playing.
 
 ### Spoken replies
 

@@ -91,6 +91,8 @@ export interface ActiveSessionInfo {
 		shell_state?: "busy" | "idle";
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 		agent_type?: string | null;
+		agent_intent?: string | null;
+		last_prompt?: string | null;
 		background_work?: boolean;
 		queued_commands?: number;
 	} | null;

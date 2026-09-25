@@ -6,6 +6,7 @@ import {
 	type LogLine,
 	lineMatchesNeedle,
 	normalizeLogLine,
+	reflowDisplayLines,
 	sameLine,
 	spanStyle,
 } from "../utils/logLine";
@@ -226,7 +227,9 @@ export function OutputView(props: OutputViewProps) {
 		containerEl?.removeEventListener("touchend", handleTouchEnd);
 	});
 
-	const allLines = createMemo(() => [...logLines(), ...screenRows()]);
+	// Reflow before filtering: it joins rows by their adjacency on the source
+	// terminal, which a search filter no longer preserves.
+	const allLines = createMemo(() => reflowDisplayLines([...logLines(), ...screenRows()]));
 
 	const displayedLines = createMemo(() => {
 		const q = props.searchQuery;

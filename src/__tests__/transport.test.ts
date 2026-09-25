@@ -512,6 +512,8 @@ describe("transport", () => {
 				// and a caller polling its own utterance still wants to know
 				// whether speech is available at all.
 				["get_speech_status", { utterance: "7" }, "GET", "/dictation/speech/status?utterance=7"],
+				// The language is a Whisper code, as for every other speech command.
+				["get_speech_voices", { language: "it" }, "GET", "/dictation/speech/voices?language=it"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],
@@ -552,6 +554,29 @@ describe("transport", () => {
 					{ asset: "italian" },
 				],
 				["delete_speech_asset", { asset: "italian" }, "POST", "/dictation/speech/assets/delete", { asset: "italian" }],
+				// The voice file travels as base64 so the body is the same JSON on
+				// both transports; `dataBase64` is how Tauri spells `data_base64`.
+				[
+					"import_speech_voice",
+					{ language: "it", name: "nonna", dataBase64: "AAAA" },
+					"POST",
+					"/dictation/speech/voices/import",
+					{ language: "it", name: "nonna", dataBase64: "AAAA" },
+				],
+				[
+					"delete_speech_voice",
+					{ language: "it", name: "nonna" },
+					"POST",
+					"/dictation/speech/voices/delete",
+					{ language: "it", name: "nonna" },
+				],
+				[
+					"preview_speech_voice",
+					{ language: "it", voice: "giovanni", text: "Ciao." },
+					"POST",
+					"/dictation/speech/voices/preview",
+					{ language: "it", voice: "giovanni", text: "Ciao." },
+				],
 				// `turn` rides in the body rather than being derived: a reply
 				// written for a turn the user has already talked over must be
 				// refusable, and only the caller knows which turn it answered.

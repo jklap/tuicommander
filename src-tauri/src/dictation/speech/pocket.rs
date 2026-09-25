@@ -43,7 +43,7 @@ macro_rules! ort_try {
     };
 }
 
-mod bundle;
+pub(super) mod bundle;
 mod engine;
 mod tokenizer;
 
@@ -76,7 +76,7 @@ const DEFAULT_TEMPERATURE: f32 = 0.7;
 
 /// Where a bundle keeps its voices, relative to the bundle directory. Declared
 /// by the catalogue, which is what puts them there.
-use super::assets::VOICES_SUBDIR;
+use super::assets::{DOWNLOADED_VOICES_SUBDIR, USER_VOICES_SUBDIR, VOICES_SUBDIR, is_voice_name};
 
 pub struct PocketSpeech {
     dir: PathBuf,
@@ -127,22 +127,38 @@ impl PocketSpeech {
     /// something that is not a voice and fail much further in, with an error
     /// about tensor names.
     fn voice_path(&self, voice: &str) -> Result<PathBuf> {
-        let plain = !voice.is_empty()
-            && voice
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        if !plain {
+        if !is_voice_name(voice) {
             return Err(SpeechError::UnknownVoice(voice.to_string()));
         }
-        let path = self
-            .dir
-            .join(VOICES_SUBDIR)
-            .join(format!("{voice}.safetensors"));
-        if path.exists() {
-            Ok(path)
-        } else {
-            Err(SpeechError::UnknownVoice(voice.to_string()))
-        }
+        let file = format!("{voice}.safetensors");
+        // The voice the language ships with, then one downloaded on its own
+        // into `<speech>/voices/<language>/` (see `assets::Kind::Voice`), then
+        // one the user imported into `<speech>/user-voices/<language>/`.
+        let shipped = self.dir.join(VOICES_SUBDIR).join(&file);
+        let beside = |subdir: &str| {
+            self.dir
+                .parent()
+                .zip(self.dir.file_name())
+                .map(|(speech, language)| speech.join(subdir).join(language).join(&file))
+        };
+        std::iter::once(shipped)
+            .chain(beside(DOWNLOADED_VOICES_SUBDIR))
+            .chain(beside(USER_VOICES_SUBDIR))
+            .find(|path| path.exists())
+            .ok_or_else(|| SpeechError::UnknownVoice(voice.to_string()))
+    }
+
+    /// Check that a voice file fits this language's model, as an import must
+    /// before it stores anything: see [`bundle::check_voice`].
+    pub fn validate_voice(&self, bytes: &[u8]) -> std::result::Result<(), String> {
+        let manifest = bundle::Bundle::load(&self.dir).map_err(|error| match error {
+            SpeechError::ModelUnavailable { .. } => {
+                "download this language first; a voice is checked against its model".to_string()
+            }
+            other => other.to_string(),
+        })?;
+        let voice = bundle::VoiceState::from_bytes(bytes)?;
+        bundle::check_voice(&voice, &manifest.flow_lm_state_manifest)
     }
 
     /// Load the onnxruntime library that travels with the models, before
@@ -350,6 +366,56 @@ mod tests {
         // Underscores and digits are real voice names upstream.
         voice(&speech, "expresso_02");
         assert!(speech.voice_path("expresso_02").is_ok());
+    }
+
+    #[test]
+    fn a_downloaded_voice_resolves_from_outside_the_bundle() {
+        // Downloaded voices live in `<speech>/voices/<language>/`, where
+        // replacing the language directory cannot reach them.
+        let (dir, speech) = adapter();
+        let downloaded = dir.path().join(DOWNLOADED_VOICES_SUBDIR).join("italian");
+        std::fs::create_dir_all(&downloaded).unwrap();
+        std::fs::write(downloaded.join("jean.safetensors"), b"x").unwrap();
+        assert_eq!(
+            speech.voice_path("jean").unwrap(),
+            downloaded.join("jean.safetensors")
+        );
+        // Another language's download is not this language's voice.
+        let german = dir.path().join(DOWNLOADED_VOICES_SUBDIR).join("german");
+        std::fs::create_dir_all(&german).unwrap();
+        std::fs::write(german.join("vera.safetensors"), b"x").unwrap();
+        assert_eq!(
+            speech.voice_path("vera").unwrap_err(),
+            SpeechError::UnknownVoice("vera".into())
+        );
+    }
+
+    #[test]
+    fn a_user_voice_path_resolves_from_user_voices() {
+        let (dir, speech) = adapter();
+        let imported = dir.path().join(USER_VOICES_SUBDIR).join("italian");
+        std::fs::create_dir_all(&imported).unwrap();
+        std::fs::write(imported.join("nonna.safetensors"), b"x").unwrap();
+        assert_eq!(
+            speech.voice_path("nonna").unwrap(),
+            imported.join("nonna.safetensors")
+        );
+    }
+
+    #[test]
+    fn the_shipped_voice_wins_over_a_download_of_the_same_name() {
+        let (dir, speech) = adapter();
+        voice(&speech, "giovanni");
+        let downloaded = dir.path().join(DOWNLOADED_VOICES_SUBDIR).join("italian");
+        std::fs::create_dir_all(&downloaded).unwrap();
+        std::fs::write(downloaded.join("giovanni.safetensors"), b"x").unwrap();
+        assert_eq!(
+            speech.voice_path("giovanni").unwrap(),
+            speech
+                .bundle_dir()
+                .join(VOICES_SUBDIR)
+                .join("giovanni.safetensors")
+        );
     }
 
     #[test]

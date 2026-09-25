@@ -43,6 +43,7 @@ import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
 import type { ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
+import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
 import s from "./TabBar.module.css";
 import { DiffTabView, EditorTabView, MarkdownTabView, TerminalTabView } from "./TabViews";
 
@@ -55,8 +56,6 @@ export interface TabBarProps {
 	onNewTab: () => void;
 	/** Agents a long press on the + button offers; each opens a new tab running that agent. */
 	getNewAgentMenuItems?: () => ContextMenuItem[];
-	onSplitVertical?: () => void;
-	onSplitHorizontal?: () => void;
 	onReorder?: (fromIndex: number, toIndex: number) => void;
 	onDetachTab?: (id: string) => void;
 	onReattachTab?: (id: string) => void;
@@ -104,9 +103,6 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const tabMenu = createContextMenu();
 	const [contextTabId, setContextTabId] = createSignal<string | null>(null);
 
-	// Context menu for new tab + button
-	const newTabMenu = createContextMenu();
-
 	// Context menu for overflow tabs (right-click on scroll arrows)
 	const overflowMenu = createContextMenu();
 
@@ -115,74 +111,13 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		const root = paneLayoutStore.getRoot();
 		return root ? computeLeafRects(root) : [];
 	});
-	const getNewTabMenuItems = (): ContextMenuItem[] => [
-		{ label: t("tabBar.newTab", "New Tab"), shortcut: keyFor("new-terminal"), action: () => props.onNewTab() },
-		{ label: "", separator: true, action: () => {} },
-		{
-			label: t("tabBar.splitVertical", "Split Vertically"),
-			shortcut: keyFor("split-vertical"),
-			action: () => props.onSplitVertical?.(),
-			disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId,
-		},
-		{
-			label: t("tabBar.splitHorizontal", "Split Horizontally"),
-			shortcut: keyFor("split-horizontal"),
-			action: () => props.onSplitHorizontal?.(),
-			disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId,
-		},
-	];
-
-	const openNewTabMenu = (e: MouseEvent) => {
-		e.stopPropagation();
-		// A touch long press also fires the native contextmenu. A right click
-		// never starts the timer (button 0 only), so a pending or fired press
-		// means this event belongs to the agent list, not to the split menu.
-		if (longPressTimer !== undefined || longPressFired) {
-			e.preventDefault();
-			return;
-		}
-		const btn = e.currentTarget as HTMLElement;
-		const rect = btn.getBoundingClientRect();
-		newTabMenu.openAt(rect.left, rect.bottom + 4);
-	};
-
-	// Long press on + lists the agents, so a tab can open straight into one
-	// instead of a shell. A press that opened the menu must not also open a tab.
-	const NEW_AGENT_LONG_PRESS_MS = 500;
-	const newAgentMenu = createContextMenu();
-	const [newAgentItems, setNewAgentItems] = createSignal<ContextMenuItem[]>([]);
-	let longPressTimer: ReturnType<typeof setTimeout> | undefined;
-	let longPressFired = false;
-
-	const cancelNewTabLongPress = () => {
-		clearTimeout(longPressTimer);
-		longPressTimer = undefined;
-	};
-
-	const startNewTabLongPress = (e: PointerEvent) => {
-		longPressFired = false;
-		if (e.button !== 0 || !props.getNewAgentMenuItems) return;
-		const btn = e.currentTarget as HTMLElement;
-		longPressTimer = setTimeout(() => {
-			longPressTimer = undefined;
-			const items = props.getNewAgentMenuItems?.() ?? [];
-			if (items.length === 0) return;
-			longPressFired = true;
-			setNewAgentItems(items);
-			const rect = btn.getBoundingClientRect();
-			newAgentMenu.openAt(rect.left, rect.bottom + 4);
-		}, NEW_AGENT_LONG_PRESS_MS);
-	};
+	// Long press or right click on + lists the agents (see createAgentLaunchMenu).
+	const newAgentMenu = createAgentLaunchMenu(() => props.getNewAgentMenuItems?.() ?? []);
 
 	const handleNewTabClick = () => {
-		if (longPressFired) {
-			longPressFired = false;
-			return;
-		}
+		if (newAgentMenu.consumeClick()) return;
 		props.onNewTab();
 	};
-
-	onCleanup(cancelNewTabLongPress);
 
 	const getTabContextMenuItems = (): ContextMenuItem[] => {
 		const id = contextTabId();
@@ -1055,10 +990,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			<button
 				class={s.newBtn}
 				onClick={handleNewTabClick}
-				onPointerDown={startNewTabLongPress}
-				onPointerUp={cancelNewTabLongPress}
-				onPointerLeave={cancelNewTabLongPress}
-				onContextMenu={openNewTabMenu}
+				{...newAgentMenu.buttonHandlers}
 				title={`${t("tabBar.newTab", "New Tab")} (${keyFor("new-terminal")})`}
 			>
 				+
@@ -1072,23 +1004,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				onClose={tabMenu.close}
 			/>
 			<ContextMenu
-				items={getNewTabMenuItems()}
-				x={newTabMenu.position().x}
-				y={newTabMenu.position().y}
-				visible={newTabMenu.visible()}
-				onClose={newTabMenu.close}
-			/>
-			<ContextMenu
-				items={newAgentItems()}
+				items={newAgentMenu.items()}
 				x={newAgentMenu.position().x}
 				y={newAgentMenu.position().y}
 				visible={newAgentMenu.visible()}
-				onClose={() => {
-					// A release off the button fires no click, so the flag would
-					// otherwise swallow the next keyboard activation of +.
-					longPressFired = false;
-					newAgentMenu.close();
-				}}
+				onClose={newAgentMenu.close}
 			/>
 			<ContextMenu
 				items={overflowItems()}

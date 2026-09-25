@@ -255,13 +255,18 @@ impl VoiceState {
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)
             .map_err(|e| SpeechError::UnknownVoice(format!("{} ({e})", path.display())))?;
-        let file = safetensors::SafeTensors::deserialize(&bytes)
-            .map_err(|e| failed(format!("reading {}: {e}", path.display())))?;
+        Self::from_bytes(&bytes).map_err(|e| failed(format!("reading {}: {e}", path.display())))
+    }
+
+    /// Parse a voice from the bytes of a safetensors file.
+    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, String> {
+        let file = safetensors::SafeTensors::deserialize(bytes)
+            .map_err(|e| format!("not a safetensors voice file: {e}"))?;
         let mut tensors = HashMap::new();
         for name in file.names() {
             let view = file
                 .tensor(name)
-                .map_err(|e| failed(format!("reading {name}: {e}")))?;
+                .map_err(|e| format!("reading {name}: {e}"))?;
             tensors.insert(
                 name.to_string(),
                 (view.shape().to_vec(), view.data().to_vec()),
@@ -293,6 +298,72 @@ fn i64_from_bytes(bytes: &[u8]) -> Vec<i64> {
         .copied()
         .map(i64::from_le_bytes)
         .collect()
+}
+
+/// Whether a voice was made for the model this manifest describes.
+///
+/// [`state_from_voice`] is tolerant on purpose: it skips a tensor the model
+/// has no slot for and leaves a slot the voice does not fill at its default.
+/// That tolerance is what makes a voice for another model load cleanly and
+/// then fail as sound — the French voices at 8843db76 carry a `self_attn/pad`
+/// per layer and end their speech on the first frame. A voice a user imports
+/// is checked here first, strictly:
+///
+/// - every tensor it carries has a slot in the manifest (`offset` counts as
+///   the slot for `step`, the name the reference runtime derives it from);
+/// - it primes every module the manifest has, not a subset;
+/// - no tensor is larger than its slot in any dimension.
+pub fn check_voice(voice: &VoiceState, manifest: &[StateEntry]) -> std::result::Result<(), String> {
+    let slot = |module: &str, key: &str| {
+        manifest
+            .iter()
+            .find(|entry| entry.module == module && entry.key == key)
+    };
+    let mut names: Vec<&String> = voice.tensors.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        let (shape, _) = &voice.tensors[name];
+        let (module, key) = name.split_once('/').unwrap_or((name.as_str(), ""));
+        let Some(entry) =
+            slot(module, key).or_else(|| (key == "offset").then(|| slot(module, "step")).flatten())
+        else {
+            return Err(format!(
+                "the voice carries {name}, which this language's model has no place for; it was made for a different model"
+            ));
+        };
+        if entry.key == "step" {
+            continue;
+        }
+        if shape.len() != entry.shape.len()
+            || shape
+                .iter()
+                .zip(&entry.shape)
+                .any(|(have, room)| have > room)
+        {
+            return Err(format!(
+                "the voice's {name} is {shape:?}, which does not fit this language's model ({:?}); it was made for a different model",
+                entry.shape
+            ));
+        }
+    }
+    let modules: std::collections::BTreeSet<&str> =
+        manifest.iter().map(|e| e.module.as_str()).collect();
+    let primed = modules
+        .iter()
+        .filter(|module| {
+            voice
+                .tensors
+                .keys()
+                .any(|name| name.split_once('/').is_some_and(|(m, _)| m == **module))
+        })
+        .count();
+    if primed != modules.len() {
+        return Err(format!(
+            "the voice primes {primed} of {} layers of this language's model; it was made for a different model",
+            modules.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Build the flow LM's starting state from a saved voice.
@@ -337,6 +408,95 @@ pub fn state_from_voice(voice: &VoiceState, manifest: &[StateEntry]) -> Result<S
         state.insert(entry.input_name.clone(), value);
     }
     Ok(state)
+}
+
+/// Bundles and voices shaped like the real ones, small enough to build in a
+/// test: `layers` attention modules, each with a `cache`, `current_end` and
+/// `step` in the manifest, and a `cache` plus `offset` in the voice — which
+/// is exactly what the shipped 6- and 24-layer voices carry.
+#[cfg(test)]
+pub mod fixture {
+    use safetensors::tensor::{Dtype, TensorView};
+
+    const CACHE: [usize; 5] = [2, 1, 8, 2, 4];
+
+    fn module(layer: usize) -> String {
+        format!("transformer.layers.{layer}.self_attn")
+    }
+
+    /// A `bundle.json` whose flow manifest has `layers` modules.
+    pub fn bundle_json(layers: usize) -> String {
+        let mut entries = Vec::new();
+        for layer in 0..layers {
+            for (key, dtype, fill, shape) in [
+                ("cache", "float32", "zeros", CACHE.to_vec()),
+                ("current_end", "int64", "zeros", vec![0]),
+                ("step", "int64", "zeros", vec![1]),
+            ] {
+                entries.push(serde_json::json!({
+                    "index": entries.len(),
+                    "input_name": format!("state_{}", entries.len()),
+                    "module": module(layer),
+                    "key": key,
+                    "dtype": dtype,
+                    "fill": fill,
+                    "shape": shape,
+                }));
+            }
+        }
+        serde_json::json!({
+            "sample_rate": 24000,
+            "frame_rate": 12.5,
+            "latent_dim": 32,
+            "conditioning_dim": 1024,
+            "tokenizer_file": "tokenizer.model",
+            "flow_lm_state_manifest": entries,
+            "mimi_state_manifest": [],
+        })
+        .to_string()
+    }
+
+    /// A voice for a `layers`-module model, its cache `seq` frames long.
+    /// `extra` adds one more tensor per module, like the `self_attn/pad` of
+    /// the French voices at 8843db76.
+    pub fn voice_bytes(layers: usize, seq: usize, extra: Option<&str>) -> Vec<u8> {
+        let offset = 3i64.to_le_bytes().to_vec();
+        let mut owned: Vec<(String, Dtype, Vec<usize>, Vec<u8>)> = Vec::new();
+        for layer in 0..layers {
+            let cache_shape = vec![2, 1, seq, 2, 4];
+            let len = cache_shape.iter().product::<usize>() * 4;
+            owned.push((
+                format!("{}/cache", module(layer)),
+                Dtype::F32,
+                cache_shape,
+                vec![0u8; len],
+            ));
+            owned.push((
+                format!("{}/offset", module(layer)),
+                Dtype::I64,
+                vec![1],
+                offset.clone(),
+            ));
+            if let Some(key) = extra {
+                owned.push((
+                    format!("{}/{key}", module(layer)),
+                    Dtype::I64,
+                    vec![1],
+                    offset.clone(),
+                ));
+            }
+        }
+        let views: Vec<(String, TensorView<'_>)> = owned
+            .iter()
+            .map(|(name, dtype, shape, data)| {
+                (
+                    name.clone(),
+                    TensorView::new(*dtype, shape.clone(), data).unwrap(),
+                )
+            })
+            .collect();
+        safetensors::serialize(views, None).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -487,5 +647,77 @@ mod tests {
             matches!(error, SpeechError::ModelUnavailable { .. }),
             "got {error:?}"
         );
+    }
+    fn manifest(layers: usize) -> Vec<StateEntry> {
+        let bundle: Bundle = serde_json::from_str(&fixture::bundle_json(layers)).unwrap();
+        bundle.flow_lm_state_manifest
+    }
+
+    fn voice(bytes: &[u8]) -> VoiceState {
+        VoiceState::from_bytes(bytes).expect("a safetensors voice")
+    }
+
+    #[test]
+    fn a_speech_voice_made_for_the_model_fits_its_manifest() {
+        // The shape of every shipped voice: a shorter cache than the manifest
+        // declares, and `offset` where the manifest says `step`.
+        let bytes = fixture::voice_bytes(6, 4, None);
+        assert_eq!(check_voice(&voice(&bytes), &manifest(6)), Ok(()));
+    }
+
+    #[test]
+    fn a_speech_voice_that_is_not_safetensors_is_refused() {
+        assert!(VoiceState::from_bytes(b"not a voice at all").is_err());
+    }
+
+    #[test]
+    fn a_speech_voice_with_a_tensor_the_model_does_not_have_is_refused() {
+        // The French voices at 8843db76: one `pad` per layer, which both
+        // loaders ignore and which then ends the speech on the first frame.
+        let bytes = fixture::voice_bytes(24, 4, Some("pad"));
+        let error = check_voice(&voice(&bytes), &manifest(24)).unwrap_err();
+        assert!(error.contains("pad"), "{error}");
+    }
+
+    #[test]
+    fn a_speech_voice_for_a_larger_model_is_refused() {
+        // A 24-layer voice brings modules a 6-layer model does not have.
+        let bytes = fixture::voice_bytes(24, 4, None);
+        let error = check_voice(&voice(&bytes), &manifest(6)).unwrap_err();
+        assert!(error.contains("has no place for"), "{error}");
+    }
+
+    #[test]
+    fn a_speech_voice_for_a_smaller_model_is_refused() {
+        // A 6-layer voice leaves 18 of a 24-layer model's layers unprimed.
+        let bytes = fixture::voice_bytes(6, 4, None);
+        let error = check_voice(&voice(&bytes), &manifest(24)).unwrap_err();
+        assert!(error.contains("6 of 24"), "{error}");
+    }
+
+    #[test]
+    fn a_speech_voice_whose_cache_is_longer_than_the_model_allows_is_refused() {
+        let bytes = fixture::voice_bytes(6, 9, None);
+        let error = check_voice(&voice(&bytes), &manifest(6)).unwrap_err();
+        assert!(error.contains("cache"), "{error}");
+    }
+    /// Against real files: a bundle directory and a voice file, and whether
+    /// the voice should be accepted. Ignored because it needs downloads, like
+    /// the other real-bundle tests. Run with `--run-ignored all` and
+    /// `TUIC_POCKET_BUNDLE_DIR`, `TUIC_POCKET_VOICE_FILE`,
+    /// `TUIC_POCKET_VOICE_EXPECT=accepted|refused`.
+    #[test]
+    #[ignore = "needs a downloaded Pocket TTS bundle and voice: set TUIC_POCKET_BUNDLE_DIR"]
+    fn a_real_speech_voice_is_checked_against_a_real_bundle() {
+        let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"));
+        let bundle = Bundle::load(Path::new(&env("TUIC_POCKET_BUNDLE_DIR"))).unwrap();
+        let bytes = std::fs::read(env("TUIC_POCKET_VOICE_FILE")).unwrap();
+        let verdict = check_voice(&voice(&bytes), &bundle.flow_lm_state_manifest);
+        match env("TUIC_POCKET_VOICE_EXPECT").as_str() {
+            "accepted" => assert_eq!(verdict, Ok(())),
+            "refused" => assert!(verdict.is_err(), "accepted a voice expected to be refused"),
+            other => panic!("TUIC_POCKET_VOICE_EXPECT={other}"),
+        }
+        eprintln!("verdict: {verdict:?}");
     }
 }

@@ -559,7 +559,9 @@ mod tests {
         let reply: Vec<f32> = (0..SAMPLE_RATE as usize * 6)
             .map(|n| (n % 1_000) as f32 + 1.0)
             .collect();
-        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+        probe
+            .guard
+            .note_rendered(&audio(reply.clone(), SAMPLE_RATE));
 
         probe.guard.clean(&vec![0.0; reply.len()]);
 
@@ -594,7 +596,9 @@ mod tests {
         let pending = 3 * FRAME_SAMPLES;
         let mut probe = probe_with_backlog(pending);
         let reply = ramp(2 * FRAME_SAMPLES);
-        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+        probe
+            .guard
+            .note_rendered(&audio(reply.clone(), SAMPLE_RATE));
 
         probe.guard.clean(&vec![0.0; pending + reply.len()]);
 
@@ -610,7 +614,9 @@ mod tests {
         let mut probe = probe_with_backlog(0);
         probe.guard.clean(&[0.0; 40]);
         let reply = ramp(FRAME_SAMPLES);
-        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+        probe
+            .guard
+            .note_rendered(&audio(reply.clone(), SAMPLE_RATE));
 
         probe.guard.clean(&vec![0.0; 2 * FRAME_SAMPLES - 40]);
 
@@ -628,8 +634,12 @@ mod tests {
         let mut probe = probe_with_backlog(pending);
         let first = ramp(FRAME_SAMPLES);
         let second: Vec<f32> = first.iter().map(|s| -s).collect();
-        probe.guard.note_rendered(&audio(first.clone(), SAMPLE_RATE));
-        probe.guard.note_rendered(&audio(second.clone(), SAMPLE_RATE));
+        probe
+            .guard
+            .note_rendered(&audio(first.clone(), SAMPLE_RATE));
+        probe
+            .guard
+            .note_rendered(&audio(second.clone(), SAMPLE_RATE));
 
         probe.guard.clean(&vec![0.0; pending + 2 * FRAME_SAMPLES]);
 
@@ -700,5 +710,82 @@ mod tests {
         let seen = probe.far_end_seen();
         assert_eq!(seen[..FRAME_SAMPLES], vec![1.0; FRAME_SAMPLES][..]);
         assert_eq!(seen[FRAME_SAMPLES..], vec![2.0; FRAME_SAMPLES][..]);
+    }
+
+    /// Renders half a second of a quiet tone at the capture rate, so the far
+    /// end needs no conversion and can be compared sample for sample.
+    struct QuietTone;
+
+    impl super::super::speech::Speech for QuietTone {
+        fn synthesize(
+            &self,
+            _text: &str,
+            _voice: &str,
+            _cancel: &super::super::speech::SpeechCancel,
+        ) -> Result<SpeechAudio, super::super::speech::SpeechError> {
+            let phase = 2.0 * std::f32::consts::PI * 440.0 / SAMPLE_RATE as f32;
+            Ok(audio(
+                (0..SAMPLE_RATE as usize / 2)
+                    .map(|n| 0.03 * (phase * n as f32).sin())
+                    .collect(),
+                SAMPLE_RATE,
+            ))
+        }
+    }
+
+    /// Remembers what the device was handed.
+    #[derive(Default)]
+    struct PlayedOutput(parking_lot::Mutex<Vec<f32>>);
+
+    impl super::super::speaker::Output for PlayedOutput {
+        fn play(&self, audio: &SpeechAudio) -> Result<(), String> {
+            self.0.lock().extend_from_slice(&audio.samples);
+            Ok(())
+        }
+        fn stop(&self) {}
+        fn is_speaking(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_far_end_is_the_audio_played_after_the_loudness_stage() {
+        // The speaker changes the level of every reply. A reference taken
+        // before that change would be a different signal from the one in the
+        // room, and the canceller would subtract the wrong thing.
+        use super::super::loudness::Loudness;
+        use super::super::speaker::Speaker;
+        use std::sync::Arc;
+
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let guard = Arc::new(parking_lot::Mutex::new(EchoGuard::new(Box::new(Tee(
+            Arc::clone(&seen),
+        )))));
+        let device = Arc::new(PlayedOutput::default());
+        let tapped = Arc::new(FarEndTap::new(Arc::clone(&device) as _, Arc::clone(&guard)));
+        let speaker = Speaker::new(Arc::new(QuietTone), tapped, 0);
+        speaker.set_loudness(Loudness {
+            volume_db: -18.0,
+            levelling: 0.67,
+        });
+
+        speaker.say(0, "ciao", "").expect("queued");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while device.0.lock().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "nothing was played");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let played = device.0.lock().clone();
+        guard.lock().clean(&vec![0.0; played.len()]);
+
+        let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
+        assert_eq!(far_end.len(), played.len());
+        assert_eq!(far_end, played, "the reference is not what was played");
+        let input_peak = 0.03;
+        let played_peak = played.iter().fold(0f32, |m, &x| m.max(x.abs()));
+        assert!(
+            played_peak > input_peak * 2.0,
+            "the loudness stage did not run, so this proves nothing: peak {played_peak}"
+        );
     }
 }

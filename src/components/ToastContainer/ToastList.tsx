@@ -3,65 +3,63 @@ import { type Toast, toastsStore } from "../../stores/toasts";
 import { onClickKeyDown } from "../../utils/a11y";
 import styles from "./ToastContainer.module.css";
 
+/** "Go to repo": `onClick` returns false when it could not navigate, and the toast stays. */
+export type RepoAction = { label: string; onClick: () => boolean };
+type ToastAction = RepoAction | NonNullable<Toast["action"]>;
+
 interface ToastListProps {
 	onDismiss: (toast: Toast) => void;
 	repoName: (toast: Toast) => string | null;
-	repoAction?: (toast: Toast) => { label: string; onClick: () => void } | null;
+	repoAction?: (toast: Toast) => RepoAction | null;
 }
 
 /** Shared toast presentation. Navigation stays in the shell-specific wrapper. */
-export const ToastList: Component<ToastListProps> = (props) => (
-	<div class={styles.container}>
-		<For each={toastsStore.toasts}>
-			{(toast) => (
-				<div
-					class={styles.toast}
-					data-level={toast.level}
-					role="button"
-					tabIndex={0}
-					onClick={() => props.onDismiss(toast)}
-					onKeyDown={onClickKeyDown(() => props.onDismiss(toast))}
-				>
-					<span class={styles.level} data-level={toast.level} />
-					<span class={styles.body}>
-						<span class={styles.titleRow}>
-							<Show when={props.repoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
-							<span class={styles.title}>{toast.title}</span>
+export const ToastList: Component<ToastListProps> = (props) => {
+	function toastActions(toast: Toast): ToastAction[] {
+		const repoAction = props.repoAction?.(toast);
+		return [...(repoAction ? [repoAction] : []), ...(toast.action ? [toast.action] : [])];
+	}
+
+	return (
+		<div class={styles.container}>
+			<For each={toastsStore.toasts}>
+				{(toast) => (
+					<div
+						class={styles.toast}
+						data-level={toast.level}
+						role="button"
+						tabIndex={0}
+						onClick={() => props.onDismiss(toast)}
+						onKeyDown={onClickKeyDown(() => props.onDismiss(toast))}
+					>
+						<span class={styles.level} data-level={toast.level} />
+						<span class={styles.body}>
+							<span class={styles.titleRow}>
+								<Show when={props.repoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
+								<span class={styles.title}>{toast.title}</span>
+							</span>
+							{toast.message && <span class={styles.message}>{toast.message}</span>}
 						</span>
-						{toast.message && <span class={styles.message}>{toast.message}</span>}
-					</span>
-					<span class={styles.actions}>
-						<Show when={toast.action} keyed>
-							{(action) => (
-								<button
-									class={styles.action}
-									onClick={(event) => {
-										event.stopPropagation();
-										action.onClick();
-										toastsStore.remove(toast.id);
-									}}
-								>
-									{action.label}
-								</button>
-							)}
-						</Show>
-						<Show when={props.repoAction?.(toast)} keyed>
-							{(action) => (
-								<button
-									class={`${styles.action} ${styles.repoAction}`}
-									onClick={(event) => {
-										event.stopPropagation();
-										action.onClick();
-										toastsStore.remove(toast.id);
-									}}
-								>
-									{action.label}
-								</button>
-							)}
-						</Show>
-					</span>
-				</div>
-			)}
-		</For>
-	</div>
-);
+						<span class={styles.actions}>
+							<For each={toastActions(toast)}>
+								{(action) => (
+									<button
+										class={action === toast.action ? styles.action : `${styles.action} ${styles.repoAction}`}
+										onClick={(event) => {
+											event.stopPropagation();
+											// A toast's own action always dismisses it; only the repo action reports failure.
+											const navigated = action.onClick();
+											if (action === toast.action || navigated !== false) toastsStore.remove(toast.id);
+										}}
+									>
+										{action.label}
+									</button>
+								)}
+							</For>
+						</span>
+					</div>
+				)}
+			</For>
+		</div>
+	);
+};

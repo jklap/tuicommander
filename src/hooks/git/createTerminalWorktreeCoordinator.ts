@@ -1,4 +1,4 @@
-import { batch, type Setter } from "solid-js";
+import { batch } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
@@ -6,8 +6,6 @@ import { pathStartsWith } from "../../utils/pathUtils";
 
 interface TerminalWorktreeCoordinatorDeps {
 	refreshBranches: () => Promise<void>;
-	setCurrentBranch: Setter<string | null>;
-	setCurrentRepoPath: Setter<string | undefined>;
 	writePty: (sessionId: string, data: string) => Promise<void>;
 }
 
@@ -19,7 +17,7 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 	 *
 	 *  A linked worktree directory names its workspace. A match at the repo root
 	 *  does not — what is checked out there changes under the user's feet — so the
-	 *  root resolves through `activeWorkspaceId` at the moment we need it. */
+	 *  root resolves at the moment we need it, through `placementWorkspaceFor`. */
 	const findWorkspaceForCwd = (cwd: string): { repoPath: string; workspaceId: string } | null => {
 		const owner = resolveRepoOwner(cwd);
 		if (!owner) return null;
@@ -67,14 +65,8 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 
 			if (terminalsStore.state.activeId === terminalId) {
 				repositoriesStore.setActiveWorkspace(target.repoPath, target.workspaceId);
-				// `currentBranch` is displayed and fed to git, so it is the BRANCH the
-				// target workspace has checked out, rather than inferring it from its id.
-				const targetBranch =
-					repositoriesStore.get(target.repoPath)?.workspaces[target.workspaceId]?.branchName ?? target.workspaceId;
-				deps.setCurrentBranch(targetBranch);
 				if (target.repoPath !== currentRepoPath) {
 					repositoriesStore.setActive(target.repoPath);
-					deps.setCurrentRepoPath(target.repoPath);
 				}
 			}
 		});
