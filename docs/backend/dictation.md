@@ -1108,12 +1108,13 @@ increases the gain slowly during the first words and boosts the silence.
    on the samples above the gate only, so the silence next to a sentence does
    not pull the level down. A gated sample never gets more than unity gain, so
    the noise floor between sentences does not increase.
-3. **rodio's `Limit`**, with its threshold at -1 dBFS, for the peaks that the gain
-   moved near full scale.
+3. **A look-ahead limiter** at -1 dBFS, for the peaks that the gain moved near
+   full scale. It is not rodio's `Limit`, which is a streaming limiter.
 4. **A hard clamp at -1 dBFS**, because a limiter with an attack time can let the
    first samples of a transient through.
 
-`Loudness { volume_db, levelling }` takes `volume_db` in dBFS (-30 to -12) and
+`Loudness { volume_db, levelling }` takes `volume_db` in dBFS (-30 to -12; the
+config clamps a stored value into that range) and
 `levelling` from 0 to 1. The envelopes use a running sum, so the cost is O(n).
 The test `a_thirty_second_reply_is_processed_within_budget` holds 30 s of audio
 at 24 kHz to 5 ms in release (50 ms in debug). Empty audio, a zero sample rate
