@@ -1351,6 +1351,7 @@ struct OpenIntent {
 #[cfg(test)]
 thread_local! {
     static INTENT_CANDIDATE_GRID_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static INTENT_CONTINUATION_GRID_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn incomplete_intent_title(text: &str) -> bool {
@@ -5905,7 +5906,9 @@ impl ChunkProcessor {
             let logical_prefix = vt.logical_prefix_at_cursor();
             let physical_prefix = vt.physical_prefix_at_cursor();
             let intent_candidate = agent_type.as_ref().and_then(|_| {
-                let mut visited = std::collections::HashSet::new();
+                // A repaint can change many rows below the same anchor. Cache
+                // its result for this tick, including rejected candidates.
+                let mut cache = std::collections::HashMap::new();
                 changed.iter().rev().find_map(|row| {
                     // A later read may update only an indented continuation.
                     // Search its bounded predecessors for the unchanged anchor.
@@ -5914,59 +5917,34 @@ impl ChunkProcessor {
                         ..=row.row_index)
                         .rev()
                         .find_map(|anchor_row| {
-                            if !visited.insert(anchor_row)
-                                || screen_ref.is_some_and(|screen| {
-                                    !screen
-                                        .get(anchor_row)
-                                        .is_some_and(|text| text.contains("intent:"))
-                                })
-                            {
+                            if screen_ref.is_some_and(|screen| {
+                                !screen
+                                    .get(anchor_row)
+                                    .is_some_and(|text| text.contains("intent:"))
+                            }) {
                                 return None;
                             }
-                            #[cfg(test)]
-                            INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(reads.get() + 1));
-                            let mut line = vt.logical_line_at_row(anchor_row)?;
-                            if crate::output_parser::structured_token_anchor(&line.text)
-                                != Some(crate::output_parser::StructuredTokenAnchor::Intent)
-                            {
-                                return None;
-                            }
-                            let anchor_text = line.text.clone();
-                            let mut block = anchor_text.clone();
-                            let mut continuation_ends = Vec::new();
-                            let mut physical_widths = Vec::new();
-                            physical_widths.push(
-                                screen_ref
-                                    .and_then(|screen| screen.get(line.end_row))
-                                    .map_or_else(
-                                        || {
-                                            unicode_width::UnicodeWidthStr::width(
-                                                anchor_text.as_str(),
-                                            )
-                                        },
-                                        |row| unicode_width::UnicodeWidthStr::width(row.trim_end()),
-                                    ),
-                            );
-                            let mut next = line.end_row + 1;
-                            // DEFERRED (2026-09-25) — Stop at the chrome cutoff once a
-                            // production-path test captures a task panel under an intent.
-                            for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
-                                let Some(continuation) = vt.logical_line_at_row(next) else {
-                                    break;
-                                };
-                                if continuation.start_row != next {
-                                    break;
+                            let cached = cache.entry(anchor_row).or_insert_with(|| {
+                                #[cfg(test)]
+                                INTENT_CANDIDATE_GRID_READS
+                                    .with(|reads| reads.set(reads.get() + 1));
+                                let mut line = vt.logical_line_at_row(anchor_row)?;
+                                if crate::output_parser::structured_token_anchor(&line.text)
+                                    != Some(crate::output_parser::StructuredTokenAnchor::Intent)
+                                {
+                                    return None;
                                 }
-                                block.push('\n');
-                                block.push_str(&continuation.text);
-                                continuation_ends.push(continuation.end_row);
+                                let anchor_text = line.text.clone();
+                                let mut block = anchor_text.clone();
+                                let mut continuation_ends = Vec::new();
+                                let mut physical_widths = Vec::new();
                                 physical_widths.push(
                                     screen_ref
-                                        .and_then(|screen| screen.get(continuation.end_row))
+                                        .and_then(|screen| screen.get(line.end_row))
                                         .map_or_else(
                                             || {
                                                 unicode_width::UnicodeWidthStr::width(
-                                                    continuation.text.as_str(),
+                                                    anchor_text.as_str(),
                                                 )
                                             },
                                             |row| {
@@ -5976,24 +5954,72 @@ impl ChunkProcessor {
                                             },
                                         ),
                                 );
-                                next = continuation.end_row + 1;
-                            }
-                            let (dewrapped, absorbed) =
-                                crate::output_parser::dewrap_intent_continuation_with_rows(
-                                    &block,
-                                    Some((vt.grid_columns(), &physical_widths)),
-                                );
-                            line.text = dewrapped.lines().next().unwrap_or_default().to_string();
-                            if absorbed > 0 {
-                                line.end_row = continuation_ends[absorbed - 1];
-                            }
-                            if !(line.start_row..=line.end_row).contains(&row.row_index) {
-                                // A changed prose row can search past the anchor first.
-                                // Let the anchor's own changed row inspect it again.
-                                visited.remove(&anchor_row);
-                                return None;
-                            }
-                            Some((line, anchor_text))
+                                let mut next = line.end_row + 1;
+                                // DEFERRED (2026-09-25) — Stop at the chrome cutoff once a
+                                // production-path test captures a task panel under an intent.
+                                for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
+                                    if crate::output_parser::intent_row_is_complete(&block) {
+                                        break;
+                                    }
+                                    #[cfg(test)]
+                                    INTENT_CONTINUATION_GRID_READS
+                                        .with(|reads| reads.set(reads.get() + 1));
+                                    let Some(continuation) = vt.logical_line_at_row(next) else {
+                                        break;
+                                    };
+                                    if continuation.start_row != next {
+                                        break;
+                                    }
+                                    block.push('\n');
+                                    block.push_str(&continuation.text);
+                                    continuation_ends.push(continuation.end_row);
+                                    physical_widths.push(
+                                        screen_ref
+                                            .and_then(|screen| screen.get(continuation.end_row))
+                                            .map_or_else(
+                                                || {
+                                                    unicode_width::UnicodeWidthStr::width(
+                                                        continuation.text.as_str(),
+                                                    )
+                                                },
+                                                |row| {
+                                                    unicode_width::UnicodeWidthStr::width(
+                                                        row.trim_end(),
+                                                    )
+                                                },
+                                            ),
+                                    );
+                                    let (joined, absorbed) =
+                                        crate::output_parser::dewrap_intent_continuation_with_rows(
+                                            &block,
+                                            Some((vt.grid_columns(), &physical_widths)),
+                                        );
+                                    if absorbed != continuation_ends.len() {
+                                        break;
+                                    }
+                                    if crate::output_parser::intent_row_is_complete(
+                                        joined.lines().next().unwrap_or_default(),
+                                    ) {
+                                        break;
+                                    }
+                                    next = continuation.end_row + 1;
+                                }
+                                let (dewrapped, absorbed) =
+                                    crate::output_parser::dewrap_intent_continuation_with_rows(
+                                        &block,
+                                        Some((vt.grid_columns(), &physical_widths)),
+                                    );
+                                line.text =
+                                    dewrapped.lines().next().unwrap_or_default().to_string();
+                                if absorbed > 0 {
+                                    line.end_row = continuation_ends[absorbed - 1];
+                                }
+                                Some((line, anchor_text))
+                            });
+                            let (line, anchor_text) = cached.as_ref()?;
+                            (line.start_row..=line.end_row)
+                                .contains(&row.row_index)
+                                .then(|| (line.clone(), anchor_text.clone()))
                         })
                 })
             });
@@ -6339,13 +6365,7 @@ impl ChunkProcessor {
                         || same_anchor_repaint
                 });
                 if sl.open_intent.is_some() && !compatible {
-                    if sl
-                        .open_intent
-                        .as_ref()
-                        .is_some_and(|open| incomplete_intent_title(&open.text))
-                    {
-                        sl.open_intent = None;
-                    } else if let Some(event) = sl.close_open_intent() {
+                    if let Some(event) = sl.close_open_intent() {
                         intent_events.push(event);
                     }
                 }

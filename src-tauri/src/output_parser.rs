@@ -1597,7 +1597,7 @@ lazy_static::lazy_static! {
 
 /// Keep pathological narrow-pane output bounded while allowing long intents.
 pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 64;
-const MAX_INTENT_CANDIDATE_CHARS: usize = 2048;
+pub(crate) const MAX_INTENT_CANDIDATE_CHARS: usize = 2048;
 
 /// Rejoin an `intent:` token that the agent hard-wrapped across physical rows.
 ///
@@ -1679,7 +1679,7 @@ pub(crate) fn dewrap_intent_continuation_with_rows<'a>(
 
 /// True when the row ends in a closed `(title)` — the protocol's only
 /// end-of-token marker, and therefore the signal that nothing wrapped.
-fn intent_row_is_complete(row: &str) -> bool {
+pub(crate) fn intent_row_is_complete(row: &str) -> bool {
     INTENT_TITLE_RE.is_match(row.trim_end())
 }
 
