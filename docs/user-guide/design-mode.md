@@ -23,4 +23,4 @@ agent-browser --session design-mode --cdp <port> snapshot
 
 For example, replace `<port>` with `9222` if the file's first line is `9222`. This attaches to the existing Chrome instead of launching a second browser. The port is bound to loopback on the host running TUICommander. Browser/PWA clients can request Design Mode, but its Chrome window opens on that host's screen.
 
-The selected page is untrusted input. TUICommander limits the grab text, drops event-handler attributes and unsafe URLs, redacts recognised secrets, and removes terminal control characters before inserting the draft. Screenshot capture can fail or exceed its size limit; in that case the text is still inserted without an image line.
+The selected page is untrusted input. TUICommander limits the grab text, drops event-handler attributes and unsafe URLs, redacts recognised secrets, removes terminal control characters, and encodes field delimiters in page-controlled attribute, style, and token values before inserting the draft. Screenshot capture can fail or exceed its size limit; in that case the text is still inserted without an image line.
