@@ -4160,15 +4160,81 @@ pub(crate) fn save_keybindings(config: serde_json::Value) -> Result<(), String> 
 }
 
 // Agents config
+
+/// `(path, mtime, len)`-keyed cache for `load_agents_config` — same staleness-key
+/// shape as `session_review.rs`'s transcript cache. `load_agents_config` is called
+/// synchronously from the OSC-title hot path (`osc_title::should_skip`), which fires
+/// on every terminal title repaint — some agents repaint at ~8Hz while their tab has
+/// an active intent — so an uncached call did a blocking `read_to_string` + JSON parse
+/// of `agents.json` at that same rate, for every such session. A stat-only cache hit
+/// (this struct) turns that into a single `fs::metadata` call, and picks up a write
+/// from another instance sharing the same config dir the moment the mtime/len changes.
+///
+/// `save_agents_config` ALSO explicitly clears this cache on every successful write
+/// (see there) — mtime/len alone is not quite enough for THIS process's own writes:
+/// two saves landing within the same filesystem mtime tick (a coarse-mtime mount, or
+/// simply two writes fast enough to share one tick) can produce an identical
+/// `(mtime, len)` if the two JSON payloads happen to be the same length, which would
+/// let a stale cache entry survive a real write. Clearing on save removes any stale
+/// entry unconditionally, independent of whether the new stat happens to collide.
+struct AgentsConfigCache {
+    path: PathBuf,
+    mtime: std::time::SystemTime,
+    len: u64,
+    config: AgentsConfig,
+}
+
+static AGENTS_CONFIG_CACHE: std::sync::Mutex<Option<AgentsConfigCache>> =
+    std::sync::Mutex::new(None);
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_agents_config() -> AgentsConfig {
-    load_json_config(AGENTS_CONFIG_FILE)
+    let path = config_dir().join(AGENTS_CONFIG_FILE);
+    let Ok(meta) = std::fs::metadata(&path) else {
+        // Missing/unreadable: `load_json_config_from_path` already handles this
+        // cheaply (an `exists()` check, no read attempt) — nothing to cache.
+        return load_json_config_from_path(&path);
+    };
+    let (Ok(mtime), len) = (meta.modified(), meta.len()) else {
+        return load_json_config_from_path(&path);
+    };
+
+    {
+        let cache = AGENTS_CONFIG_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cache.as_ref()
+            && entry.path == path
+            && entry.mtime == mtime
+            && entry.len == len
+        {
+            return entry.config.clone();
+        }
+    }
+
+    let config: AgentsConfig = load_json_config_from_path(&path);
+    *AGENTS_CONFIG_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(AgentsConfigCache {
+        path,
+        mtime,
+        len,
+        config: config.clone(),
+    });
+    config
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
-    file.save(&config)
+    file.save(&config)?;
+    // Unconditional clear, not a repopulate: see `AGENTS_CONFIG_CACHE`'s doc
+    // comment for why an (mtime, len) match alone can't be trusted to catch
+    // this process's own just-written change.
+    *AGENTS_CONFIG_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+    Ok(())
 }
 
 // AI prompts
@@ -6219,6 +6285,76 @@ mod tests {
     fn agents_config_missing_file_returns_default() {
         let cfg: AgentsConfig = load_json_config("nonexistent-agents-12345.json");
         assert!(cfg.agents.is_empty());
+    }
+
+    /// `load_agents_config`'s `(path, mtime, len)`-keyed cache exists purely to
+    /// avoid re-reading/re-parsing `agents.json` on every call from the OSC-title
+    /// hot path — it must never let a caller observe a value staler than the
+    /// most recent `save_agents_config` write. `#[serial_test::serial]`: shares
+    /// the global config-dir override with every other such test.
+    #[test]
+    #[serial_test::serial]
+    fn load_agents_config_picks_up_a_second_write_not_a_stale_cache() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut first = AgentsConfig::default();
+        first.headless_agent = Some("claude".to_string());
+        save_agents_config(first).expect("save first agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("claude".to_string())
+        );
+
+        // A second write must be observed on the very next read — the cache
+        // must not serve the first write's now-stale value.
+        let mut second = AgentsConfig::default();
+        second.headless_agent = Some("codex".to_string());
+        save_agents_config(second).expect("save second agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("codex".to_string())
+        );
+
+        // Repeated reads with no intervening write stay consistent (a cache hit
+        // must return the same value as a cache miss would have).
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("codex".to_string())
+        );
+    }
+
+    /// A code-review finding (2026-09-24) on the cache above: two writes whose
+    /// resulting JSON happens to be the same LENGTH (as these two agent names
+    /// are, both 6 bytes) can — on a coarse-mtime filesystem, or simply two
+    /// writes fast enough to land in the same mtime tick — produce an
+    /// `(mtime, len)` collision with the first write's now-stale cache entry.
+    /// `save_agents_config`'s unconditional clear (not a repopulate) closes
+    /// this for this process's own writes regardless of whether the new stat
+    /// happens to collide, since there's no entry left to falsely match
+    /// against — this test can't force an actual mtime collision portably,
+    /// but it does exercise the same-length case the finding was about.
+    #[test]
+    #[serial_test::serial]
+    fn load_agents_config_picks_up_a_second_write_of_equal_length_content() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut first = AgentsConfig::default();
+        first.headless_agent = Some("claude".to_string());
+        save_agents_config(first).expect("save first agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("claude".to_string())
+        );
+
+        let mut second = AgentsConfig::default();
+        second.headless_agent = Some("gemini".to_string()); // same length as "claude"
+        save_agents_config(second).expect("save second agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("gemini".to_string())
+        );
     }
 
     // -- Worktree config tests --

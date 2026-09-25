@@ -324,6 +324,12 @@
   vertical-align: middle;
 }
 
+.captureBadge {
+  color: var(--error);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 /* Awaiting input — override tabIcon to show state via left dot.
  * `.awaitingInput` only ever pairs with `.awaitingQuestion` or
  * `.awaitingError` (AwaitingInputType has no other non-null value), so

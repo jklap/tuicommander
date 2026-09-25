@@ -28,6 +28,7 @@ panel-resync-request
 panel-window-closed
 plugin-changed
 progress-recorded
+pty-capture-changed
 pty-clipboard-store
 pty-description-changed
 pty-open-url

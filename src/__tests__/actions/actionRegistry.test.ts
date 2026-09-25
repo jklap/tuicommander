@@ -1,7 +1,10 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
 
 function createMockHandlers(): ShortcutHandlers {
 	return {
@@ -178,6 +181,53 @@ describe("actionRegistry", () => {
 			const zoomIn = handlerEntries.find((e) => e.id === "zoom-in");
 			zoomIn?.execute();
 			expect(handlers.zoomIn).toHaveBeenCalled();
+		});
+	});
+
+	describe("toggle-diagnostics-capture (debug-only action)", () => {
+		let originalPerfDebug: boolean;
+
+		beforeAll(() => {
+			originalPerfDebug = isPerfDebug();
+		});
+
+		afterAll(() => {
+			setPerfDebug(originalPerfDebug);
+		});
+
+		it("is present when isPerfDebug() is on", () => {
+			setPerfDebug(true);
+			const ids = getActionEntries(createMockHandlers()).map((e) => e.id);
+			expect(ids).toContain("toggle-diagnostics-capture");
+		});
+
+		it("is absent when isPerfDebug() is off", () => {
+			setPerfDebug(false);
+			const ids = getActionEntries(createMockHandlers()).map((e) => e.id);
+			expect(ids).not.toContain("toggle-diagnostics-capture");
+		});
+
+		// Regression: executing this with no active terminal (a freshly-spawned
+		// tab whose PTY has no sessionId yet, or a non-terminal active tab) used
+		// to silently no-op — every other failure path in this store surfaces a
+		// toast, so a user invoking it via the palette had no idea whether
+		// anything happened.
+		it("toasts instead of silently no-op'ing when there is no active session", () => {
+			setPerfDebug(true);
+			// toastsStore.add() arms a real dismiss timer (toasts.ts) plus an
+			// activity-mirror save timer (activityStore.ts) — fake timers keep
+			// both from leaking past this test.
+			vi.useFakeTimers();
+			const addSpy = vi.spyOn(toastsStore, "add");
+			const activeSpy = vi.spyOn(terminalsStore, "getActive").mockReturnValue(undefined);
+
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-diagnostics-capture");
+			entry?.execute();
+
+			expect(addSpy).toHaveBeenCalledWith("Diagnostics capture", "No active terminal session to capture.", "warn");
+			activeSpy.mockRestore();
+			addSpy.mockRestore();
+			vi.useRealTimers();
 		});
 	});
 

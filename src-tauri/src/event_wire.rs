@@ -64,6 +64,7 @@ pub(crate) fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::WorktreeWarmCompleted { .. } => "worktree-warm-completed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
         AppEvent::SessionStandby { .. } => "session-standby",
+        AppEvent::PtyCaptureChanged { .. } => "pty-capture-changed",
         AppEvent::AiSuggestion { .. } => "ai-suggestion",
         AppEvent::WatcherStatusChanged { .. } => "watcher-status",
         AppEvent::ThemesChanged => "themes-changed",
@@ -429,6 +430,12 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "standby": standby })
         }
+        AppEvent::PtyCaptureChanged {
+            enabled,
+            session_filter,
+        } => {
+            serde_json::json!({ "enabled": enabled, "session_filter": session_filter })
+        }
         AppEvent::AiSuggestion {
             session_id,
             trigger_reason,
@@ -606,6 +613,14 @@ mod tests {
                 "session-closed",
                 vec!["agent_type", "reason", "session_id"],
             ),
+            (
+                AppEvent::PtyCaptureChanged {
+                    enabled: true,
+                    session_filter: Some("s".into()),
+                },
+                "pty-capture-changed",
+                vec!["enabled", "session_filter"],
+            ),
         ];
 
         for (event, expected_name, expected_keys) in cases {
@@ -641,6 +656,7 @@ mod tests {
             "themes-changed",
             "pty-clipboard-store",
             "term-alias-assigned",
+            "pty-capture-changed",
         ];
         // `event_wire.rs` (this file) legitimately names every one of these in
         // its own match arms/doc comments; `state.rs` owns `emit_dual` itself,

@@ -51,6 +51,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore, type TabOrderingMode } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { ptyCaptureStore } from "../../utils/ptyCapture";
 
 describe("TabBar", () => {
 	beforeEach(() => {
@@ -1662,6 +1663,75 @@ describe("TabBar", () => {
 			fireEvent.click(featureItem!);
 
 			expect(handleMove).toHaveBeenCalledWith(termId, "/repo-wt/feature-a");
+		});
+	});
+
+	describe("diagnostics capture badge", () => {
+		afterEach(() => {
+			// ptyCaptureStore's status signal is module-level state, not reset by
+			// the outer beforeEach (which only clears terminal/repo/tab stores) —
+			// clear it here so a capture "on" from one test can't leak into the next.
+			ptyCaptureStore.applyStatus({ enabled: false });
+		});
+
+		it("shows the badge on the exact filtered session, not on others", () => {
+			const capturedId = addTerminal({ name: "Captured", sessionId: "sess-captured" });
+			const otherId = addTerminal({ name: "Other", sessionId: "sess-other" });
+			ptyCaptureStore.applyStatus({ enabled: true, session_filter: "sess-captured" });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+			const capturedTab = container.querySelector(`[data-tab-id="${capturedId}"]`) as HTMLElement;
+			const otherTab = container.querySelector(`[data-tab-id="${otherId}"]`) as HTMLElement;
+			expect(capturedTab.querySelector('[title="Diagnostics capture recording"]')).not.toBeNull();
+			expect(otherTab.querySelector('[title="Diagnostics capture recording"]')).toBeNull();
+		});
+
+		it("shows the badge on every tab when the tap has no session filter", () => {
+			const idA = addTerminal({ name: "A", sessionId: "sess-a" });
+			const idB = addTerminal({ name: "B", sessionId: "sess-b" });
+			ptyCaptureStore.applyStatus({ enabled: true, session_filter: null });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+			const tabA = container.querySelector(`[data-tab-id="${idA}"]`) as HTMLElement;
+			const tabB = container.querySelector(`[data-tab-id="${idB}"]`) as HTMLElement;
+			expect(tabA.querySelector('[title="Diagnostics capture recording"]')).not.toBeNull();
+			expect(tabB.querySelector('[title="Diagnostics capture recording"]')).not.toBeNull();
+		});
+
+		it("shows no badge when the tap is disabled", () => {
+			const id = addTerminal({ name: "Idle", sessionId: "sess-idle" });
+			ptyCaptureStore.applyStatus({ enabled: false });
+
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+			const tab = container.querySelector(`[data-tab-id="${id}"]`) as HTMLElement;
+			expect(tab.querySelector('[title="Diagnostics capture recording"]')).toBeNull();
 		});
 	});
 });
