@@ -22,6 +22,7 @@
 - [ ] After the native-stories backend rebuild, add a dependency to a story, reload Plans and Stories, and confirm the story list and derived plan state agree. This checks the reused SQLite connection and status aggregation in the rebuilt app.
 - [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction.
 - [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state.
+- [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story.
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 

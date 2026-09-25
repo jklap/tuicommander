@@ -28,4 +28,6 @@ Changes to an existing story take its current `revision` as `expected_revision`;
 
 To remove a cancelled prerequisite, send `{"action":"remove_dependency","story_id":"DEPENDENT_ID","dependency_id":"CANCELLED_ID","expected_revision":2}` as a user action. Session-bound agent calls, stale revisions, non-Backlog dependents, and prerequisites other than Won't fix are rejected.
 
+This follows the native workflow trust model: a managed MCP call carries a session identity and cannot remove a dependency. CLI and HTTP requests without a session identity are treated as user actions. This is a local workflow convention, not an authentication or security boundary; a local caller can omit a session identity.
+
 The same records are available through desktop IPC, authenticated HTTP, and the `story` MCP tool. Import, export, and external sync are not part of this feature.
