@@ -8,8 +8,13 @@ const mockGithubStore = vi.hoisted(() => ({
 	getCheckDetails: vi.fn(() => []),
 	loadCheckDetails: vi.fn(() => Promise.resolve()),
 }));
+const mockRpc = vi.hoisted(() => vi.fn());
 
 vi.mock("../../stores/github", () => ({ githubStore: mockGithubStore }));
+vi.mock("../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../transport")>()),
+	rpc: mockRpc,
+}));
 
 import { PrDetailContent } from "../../components/PrDetailPopover/PrDetailContent";
 
@@ -70,10 +75,11 @@ describe("PrDetailContent — ego review result metadata", () => {
 		mockGithubStore.getCheckDetails.mockReturnValue([
 			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
 		]);
-		mockInvoke.mockResolvedValue("\u001b[31mfailed step\u001b[0m");
-		const { getByText, findByText } = render(() => <PrDetailContent repoPath={nextRepo()} branch="feature" />);
+		mockRpc.mockResolvedValue("\u001b[31mfailed step\u001b[0m");
+		const repo = nextRepo();
+		const { getByText, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
 		fireEvent.click(getByText("Log"));
-		expect(mockInvoke).toHaveBeenCalledWith("fetch_circleci_logs", { url: "https://circleci.com/gh/acme/widget/42" });
+		expect(mockRpc).toHaveBeenCalledWith("fetch_ci_failure_logs", { repoPath: repo, branch: "feature" });
 		expect(await findByText("failed step")).toBeTruthy();
 	});
 
