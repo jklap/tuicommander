@@ -1,4 +1,4 @@
-import { type Component, lazy, Show } from "solid-js";
+import { type Component, lazy, Show, Suspense } from "solid-js";
 import { diffTabsStore } from "../stores/diffTabs";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { progressStore } from "../stores/progress";
@@ -93,7 +93,11 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 			</Show>
 			<Show when={storiesUi.visible()}>
 				<Show when={storiesUi.project()} keyed>
-					{(project) => <StoriesDialog project={project} onClose={() => storiesUi.close()} />}
+					{(project) => (
+						<Suspense>
+							<StoriesDialog project={project} onClose={() => storiesUi.close()} />
+						</Suspense>
+					)}
 				</Show>
 			</Show>
 		</>

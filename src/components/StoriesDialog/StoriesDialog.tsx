@@ -1,5 +1,6 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
 import s from "./StoriesDialog.module.css";
@@ -57,9 +58,16 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [priority, setPriority] = createSignal(2);
 	const [dependencyId, setDependencyId] = createSignal("");
 	let request = 0;
+	// A dependency choice belongs to the story it was made for.
+	createEffect(on(storyId, () => setDependencyId("")));
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
+	const fail = (cause: unknown): void => {
+		const message = String(cause);
+		appLogger.warn("store", "Stories: action failed", { error: message });
+		setError(message);
+	};
 	const call = (action: Record<string, unknown>) =>
 		invoke<Reply>("story_action_command", { project: props.project, action });
 
@@ -89,7 +97,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setPlanState(nextState);
 			setStoryId(nextStories.find((story) => story.id === preferredStory)?.id ?? nextStories[0]?.id ?? null);
 		} catch (cause) {
-			if (current === request) setError(String(cause));
+			if (current === request) fail(cause);
 		} finally {
 			if (current === request) setLoading(false);
 		}
@@ -107,7 +115,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			await refresh(preferredPlan, preferredStory);
 			return result;
 		} catch (cause) {
-			setError(String(cause));
+			fail(cause);
 			return undefined;
 		} finally {
 			setBusy(false);
@@ -132,7 +140,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			await refresh(reply.value.id, null);
 			return true;
 		} catch (cause) {
-			setError(String(cause));
+			fail(cause);
 			return false;
 		} finally {
 			setBusy(false);
@@ -176,7 +184,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setCriteriaText("");
 			setScopeText("");
 		} catch (cause) {
-			setError(String(cause));
+			fail(cause);
 		} finally {
 			setBusy(false);
 		}
