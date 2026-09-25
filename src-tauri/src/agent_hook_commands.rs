@@ -195,6 +195,45 @@ pub(crate) fn set_agent_native_status_signals(
     crate::config::save_agents_config(base, config)
 }
 
+/// `None` here means "ask when detected" — see `AgentSettings::wrap_user_function`'s
+/// own doc comment. Unlike `get_agent_native_status_signals`, this one does NOT
+/// collapse to a bool default: the caller (Settings UI) needs to render three
+/// distinct states, not two.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn get_agent_wrap_user_function(agent_type: String) -> Option<bool> {
+    crate::agent_hook_launch::wrap_user_function(&agent_type)
+}
+
+/// Settings → Agents choice for a user's own same-named shell function.
+///
+/// Consent to WRAP is only ever recorded by the prompt (`agent_wrap_prompt`),
+/// for one exact function fingerprint. So this setter never attaches a
+/// fingerprint: `Some(true)` keeps an existing fingerprint only when the
+/// stored decision is already "wrap" (a no-op re-save), otherwise it records
+/// "wrap" with no fingerprint — which the shell treats as "ask", so the user
+/// still sees the prompt for the actual function before anything is wrapped.
+/// `Some(false)` (leave alone) and `None` (ask) clear the fingerprint.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn set_agent_wrap_user_function(
+    agent_type: String,
+    value: Option<bool>,
+) -> Result<(), String> {
+    if !crate::agent_wrap_prompt::is_wrappable_agent(&agent_type) {
+        return Err(format!(
+            "wrapping a user-defined shell function is unsupported for '{agent_type}'"
+        ));
+    }
+    let mut config = crate::config::load_agents_config();
+    let base = config.clone();
+    let settings = config.agents.entry(agent_type).or_default();
+    let keep_hash = value == Some(true) && settings.wrap_user_function == Some(true);
+    settings.wrap_user_function = value;
+    if !keep_hash {
+        settings.wrap_user_function_hash = None;
+    }
+    crate::config::save_agents_config(base, config)
+}
+
 /// Startup migration: re-install hooks for every agent that already has
 /// `hook_instrumentation` enabled but whose installed commands no longer
 /// match the current map (e.g. a version bump moved the shell-hook generator

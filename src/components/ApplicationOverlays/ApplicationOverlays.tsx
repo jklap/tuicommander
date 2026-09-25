@@ -7,6 +7,7 @@ import { invoke } from "../../invoke";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { AgentWrapPromptHost } from "../AgentWrapPromptHost/AgentWrapPromptHost";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type createContextMenu } from "../ContextMenu";
 import { McpConfirmHost } from "../McpConfirmHost/McpConfirmHost";
@@ -328,6 +329,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			/>
 			<GitDialogOverlays contract={props.git} />
 			<McpConfirmHost />
+			<AgentWrapPromptHost />
 			<PtyOpenUrlHost />
 			<Suspense>
 				<StateExplainHost />

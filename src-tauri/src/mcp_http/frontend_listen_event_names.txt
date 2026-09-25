@@ -3,6 +3,8 @@
 # Read by event_wire::tests::frontend_listen_event_names_all_have_an_sse_arm_or_are_allowlisted.
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
 acp-notice
+agent-wrap-prompt
+agent-wrap-prompt-resolved
 close-html-tabs
 content-search-batch
 content-search-error

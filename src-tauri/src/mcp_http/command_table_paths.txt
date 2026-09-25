@@ -24,6 +24,7 @@
 /acp/connections/x/sessions/x/resume-turn
 /acp/one-shot
 /acp/workspace
+/agent-wrap-prompt/response
 /agent/claude-project-dir
 /agent/discover-session
 /agent/open-in-custom
@@ -66,6 +67,7 @@
 /config/agents
 /config/agents/x/hook-instrumentation
 /config/agents/x/native-status-signals
+/config/agents/x/wrap-user-function
 /config/branch-label
 /config/clear-caches
 /config/clear-repo-caches

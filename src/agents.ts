@@ -424,6 +424,15 @@ export interface AgentSettingsConfig {
 	prevent_alt_screen?: boolean;
 	/** Accept the startup trust picker for managed MCP spawns. Undefined means enabled. */
 	skip_trust_dialog?: boolean;
+	/**
+	 * zsh only. What to do when the user's shell already defines its own
+	 * `claude`/`codex`/`goose` function, which otherwise silently skips
+	 * TUIC's launch-flag injection for that agent. `null`/undefined = ask
+	 * when detected; `true` = wrap the user's function and append TUIC's
+	 * launch flag; `false` = leave the user's function alone, never ask
+	 * again.
+	 */
+	wrap_user_function?: boolean | null;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */

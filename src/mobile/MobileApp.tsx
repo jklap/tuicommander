@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
 import { PtyOpenUrlHost } from "../components/PtyOpenUrlHost/PtyOpenUrlHost";
 import { invoke } from "../invoke";
+import { pendingAgentWrapPrompts, subscribeAgentWrapPrompt } from "../stores/agentWrapPrompt";
 import { appLogger } from "../stores/appLogger";
 import { ideasStore } from "../stores/ideas";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
@@ -22,6 +23,12 @@ const MobileChatScreen = lazy(() =>
 	import("./screens/MobileChatScreen").then((m) => ({ default: m.MobileChatScreen })),
 );
 const FilesScreen = lazy(() => import("./screens/FilesScreen").then((m) => ({ default: m.FilesScreen })));
+// Lazy: only mounted while a "wrap my shell function?" prompt is pending, so the
+// dialog and the agent config store stay out of the mobile entry bundle. The
+// subscription itself is eager (onMount below).
+const AgentWrapPromptHost = lazy(() =>
+	import("../components/AgentWrapPromptHost/AgentWrapPromptHost").then((m) => ({ default: m.AgentWrapPromptHost })),
+);
 const ProgressDialog = lazy(() => import("../components/ProgressDialog").then((m) => ({ default: m.ProgressDialog })));
 const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
 const SessionDetailScreen = lazy(() =>
@@ -50,6 +57,13 @@ export default function MobileApp() {
 	// Track visualViewport height and offsetTop to resize and reposition
 	// the fixed shell. html/body are height:auto so the document has no
 	// scrollable content — iOS can't scroll the page on keyboard open.
+	onMount(() => {
+		const unsubscribeWrapPrompt = subscribeAgentWrapPrompt();
+		onCleanup(() => {
+			unsubscribeWrapPrompt.then((fn) => fn()).catch(() => {});
+		});
+	});
+
 	onMount(() => {
 		void import("./mobileTheme")
 			.then(({ loadMobileTheme }) => loadMobileTheme())
@@ -274,6 +288,9 @@ export default function MobileApp() {
 			</Show>
 			<MobileToastContainer />
 			<McpConfirmHost />
+			<Show when={pendingAgentWrapPrompts().length > 0}>
+				<AgentWrapPromptHost subscribe={false} />
+			</Show>
 			<PtyOpenUrlHost />
 		</div>
 	);

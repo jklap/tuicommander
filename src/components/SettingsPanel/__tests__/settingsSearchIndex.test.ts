@@ -89,8 +89,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target. The per-agent "Track agent intent" and "Show
-	// suggested follow-ups" tri-state toggles sit in that same collapsed card.
-	agents: { dynamic: 10, orphans: 4 },
+	// suggested follow-ups" tri-state toggles sit in that same collapsed card,
+	// as does the "If your shell already defines its own <agent> function"
+	// wrap-user-function select (runtime label naming the agent).
+	agents: { dynamic: 11, orphans: 4 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

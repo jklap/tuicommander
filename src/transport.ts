@@ -409,6 +409,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { request_id: args.requestId, confirmed: args.confirmed },
 		}),
 	},
+	// Same reasoning as mcp_confirm_response: a client away from the desktop
+	// must still be able to answer this.
+	agent_wrap_prompt_response: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agent-wrap-prompt/response",
+			body: {
+				request_id: args.requestId,
+				agent_type: args.agentType,
+				decision: args.decision,
+			},
+		}),
+	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",

@@ -2179,6 +2179,22 @@ pub(crate) struct AgentSettings {
     /// Missing means enabled; user-opened terminals retain the CLI's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_trust_dialog: Option<bool>,
+    /// zsh only. What to do when the user's shell already defines its own
+    /// `claude`/`codex`/`goose` function, which otherwise silently skips
+    /// TUIC's launch-flag injection for that agent (see `shell_integration.rs`'s
+    /// module doc comment). `None` = ask when detected; `Some(true)` = wrap
+    /// the user's function and add TUIC's launch flag — ONLY for the function
+    /// whose fingerprint is `wrap_user_function_hash`; `Some(false)` = leave
+    /// the user's function alone (for that fingerprint, or for any function
+    /// when no fingerprint is recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wrap_user_function: Option<bool>,
+    /// Fingerprint (`cksum` CRC-length of the function body, computed by the
+    /// zsh integration) of the user function `wrap_user_function` was decided
+    /// for. Recorded only from the consent prompt; a different or missing
+    /// fingerprint means a `Some(true)` is NOT applied (the user is asked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wrap_user_function_hash: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -2199,6 +2215,8 @@ impl Default for AgentSettings {
             native_status_signals: None,
             prevent_alt_screen: None,
             skip_trust_dialog: None,
+            wrap_user_function: None,
+            wrap_user_function_hash: None,
         }
     }
 }
@@ -7375,11 +7393,13 @@ mod tests {
                 suggest_followups: None,
                 prefer_tuic_messaging: Some(false),
                 prefer_tuic_spawning: Some(true),
-                hook_instrumentation: None,
-                native_status_signals: None,
+                hook_instrumentation: Some(true),
+                native_status_signals: Some(false),
                 prevent_alt_screen: None,
                 skip_trust_dialog: Some(false),
                 progress_tracking: Some(false),
+                wrap_user_function: Some(true),
+                wrap_user_function_hash: Some("123-45".into()),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
@@ -7404,6 +7424,25 @@ mod tests {
         assert_eq!(claude.prefer_tuic_messaging, Some(false));
         assert_eq!(claude.prefer_tuic_spawning, Some(true));
         assert_eq!(claude.progress_tracking, Some(false));
+        // Non-default values so the round trip proves each field survives,
+        // not just that an absent field defaults back to `None`.
+        assert_eq!(claude.hook_instrumentation, Some(true));
+        assert_eq!(claude.native_status_signals, Some(false));
+        assert_eq!(claude.wrap_user_function, Some(true));
+        assert_eq!(claude.wrap_user_function_hash.as_deref(), Some("123-45"));
+    }
+
+    #[test]
+    fn agents_config_wrap_user_function_defaults_to_none_for_old_json() {
+        // Forward-compat, same shape as the sibling test for
+        // prefer_tuic_messaging/prefer_tuic_spawning: an agents.json written
+        // before this field existed must still deserialize, with the field
+        // defaulting to None (i.e. "ask when detected").
+        let old_json = r#"{"agents":{"claude":{"run_configs":[],"intent_tab_title":true}}}"#;
+        let loaded: AgentsConfig = serde_json::from_str(old_json).unwrap();
+        let claude = loaded.agents.get("claude").unwrap();
+        assert_eq!(claude.wrap_user_function, None);
+        assert_eq!(claude.wrap_user_function_hash, None);
     }
 
     #[test]
