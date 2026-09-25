@@ -2977,15 +2977,24 @@ impl AppState {
                 // mail at the end of the logical stream before releasing terminal
                 // ownership, so an omitted-since wait can recover this failed PTY
                 // delivery. The id stays stable for recipient-side deduplication.
+                // Beyond the stored read cursor as well as the other entries: a
+                // plain inbox poll may already have read this very message.
+                let cursor = self
+                    .agent_read_cursor
+                    .get(tuic_session)
+                    .map(|entry| *entry.value());
                 let requeued = self
                     .agent_inbox
                     .get_mut(tuic_session)
                     .and_then(|mut inbox| {
                         let index = inbox.iter().position(|message| message.id == message_id)?;
                         let mut message = inbox.remove(index)?;
-                        message.timestamp = inbox
-                            .back()
-                            .map(|message| message.timestamp.saturating_add(1))
+                        let after_newest = inbox.back().map(|m| m.timestamp.saturating_add(1));
+                        let after_cursor = cursor.map(|c| c.saturating_add(1));
+                        message.timestamp = [Some(message.timestamp), after_newest, after_cursor]
+                            .into_iter()
+                            .flatten()
+                            .max()
                             .unwrap_or(message.timestamp);
                         inbox.push_back(message);
                         Some(())
@@ -2996,6 +3005,15 @@ impl AppState {
                     gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
                     let revision = gate.inbox_revision;
                     gate.inbox_events.send_replace(revision);
+                } else {
+                    // The inbox no longer holds it (evicted at capacity, or the
+                    // recipient is gone): the failed delivery cannot be recovered.
+                    tracing::warn!(
+                        source = "agent",
+                        recipient = %tuic_session,
+                        message_id = %message_id,
+                        "failed terminal mail could not be requeued; it is no longer in the inbox"
+                    );
                 }
             }
         }
