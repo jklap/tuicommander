@@ -16,6 +16,10 @@
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use `agent action=spawn` to start Claude and direct Codex in never-trusted folders under `~/Gits/.tmp/`. Confirm each reaches the agent prompt and receives the task without a manual trust keypress. Turn **Accept workspace trust for managed spawns** off for each agent and confirm its normal trust question remains. User-opened agent terminals must retain normal trust behavior. The current running backend cannot load this Rust change until restart.
 
+## MCP config ownership (story 988-d1a1) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, confirm startup leaves a sandboxed agent MCP config unchanged. The current live backend cannot load the ownership guard without a restart. Do not restart Boss's running instance or use his real agent configs for this check.
+
 ## Plan picker (2026-09-26) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, open Plans and Stories in a repository with `plans/*.md`. Confirm the document choices are visible, the selected plan title matches its heading or front matter, and **Add from path or link** stays collapsed until opened. The running backend cannot serve `list_plan_sources` or `add_plan_source` until restart. Targeted Rust and Vitest tests cover discovery and dialog behavior; the visual layout needs the rebuilt app.

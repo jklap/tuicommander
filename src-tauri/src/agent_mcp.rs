@@ -1488,14 +1488,29 @@ fn ensure_spec_entry(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str)
 /// home directory with configs for tools the user never had. Settings > Agents
 /// still installs on demand — that is an explicit request, not a guess.
 pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
-    let bridge = std::env::current_exe().ok().and_then(|exe| {
+    let Ok(exe) = std::env::current_exe() else {
+        tracing::warn!(
+            source = "mcp",
+            "Skipping agent MCP config updates: executable path unavailable"
+        );
+        return;
+    };
+    if !launch_owns_agent_configs(&exe) {
+        tracing::info!(
+            source = "mcp",
+            "Skipping agent MCP config updates from a secondary instance"
+        );
+        return;
+    }
+    let bridge = {
         if !bridge_location_is_stable(&exe) {
             tracing::warn!(source = "mcp", executable = %exe.display(),
                     "Skipping agent MCP config updates from a temporary or mounted app");
-            return None;
+            None
+        } else {
+            exe.parent().and_then(bridge_beside)
         }
-        exe.parent().and_then(bridge_beside)
-    });
+    };
     ensure_mcp_configs_for(
         disabled,
         bridge.as_deref(),
@@ -1503,6 +1518,32 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
             .iter()
             .filter_map(|agent| get_mcp_config_spec(agent).map(|spec| (*agent, spec))),
     );
+}
+
+fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
+    if std::env::var("TUIC_MCP_CONFIG_OWNER").as_deref() == Ok("1") {
+        return true;
+    }
+    if !crate::app_instance::current_app_instance().is_default() {
+        return false;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    !in_linked_worktree(exe) && !in_linked_worktree(&cwd)
+}
+
+fn in_linked_worktree(path: &std::path::Path) -> bool {
+    for dir in path.ancestors() {
+        let git = dir.join(".git");
+        if git.is_file() {
+            return true;
+        }
+        if git.is_dir() {
+            return false;
+        }
+    }
+    false
 }
 
 fn ensure_mcp_configs_for<'a>(
@@ -3411,6 +3452,169 @@ mod tests {
         }
         let _config = with_temp_config_dir();
         ensure_mcp_configs(&[]);
+    }
+
+    fn run_sandboxed_mcp_launch(
+        exe: &std::path::Path,
+        home: &std::path::Path,
+        cwd: &std::path::Path,
+        instance: Option<&str>,
+        owner_override: Option<&str>,
+        disable_claude: bool,
+    ) {
+        let mut command = std::process::Command::new(exe);
+        command
+            .args(["--exact", "agent_mcp::tests::secondary_launch_child"])
+            .current_dir(cwd)
+            .env("HOME", home)
+            .env("TUIC_MCP_TEST_HOME", home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("CODEX_HOME", home.join(".codex"))
+            .env("APPDATA", home.join("AppData"))
+            .env("USERPROFILE", home)
+            .env("PATH", exe.parent().unwrap())
+            .env_remove("PI_CODING_AGENT_DIR")
+            .env_remove("TUIC_APP_INSTANCE")
+            .env_remove("TUIC_MCP_CONFIG_OWNER")
+            .env_remove("TUIC_MCP_TEST_DISABLED");
+        if let Some(instance) = instance {
+            command.env("TUIC_APP_INSTANCE", instance);
+        }
+        if let Some(owner_override) = owner_override {
+            command.env("TUIC_MCP_CONFIG_OWNER", owner_override);
+        }
+        if disable_claude {
+            command.env("TUIC_MCP_TEST_DISABLED", "claude");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn secondary_launch_leaves_agent_config_unchanged() {
+        let common_dir = std::process::Command::new("git")
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .output()
+            .unwrap();
+        assert!(common_dir.status.success());
+        let git_dir = PathBuf::from(String::from_utf8(common_dir.stdout).unwrap().trim());
+        let main_root = git_dir.parent().unwrap();
+        let sandbox_root = main_root.join(".tmp");
+        std::fs::create_dir_all(&sandbox_root).unwrap();
+        let sandbox = tempfile::tempdir_in(sandbox_root).unwrap();
+        let runner_name = if cfg!(windows) {
+            "tuic-test-runner.exe"
+        } else {
+            "tuic-test-runner"
+        };
+        let bridge_name = if cfg!(windows) {
+            "tuic-bridge.exe"
+        } else {
+            "tuic-bridge"
+        };
+        let exe = sandbox.path().join(runner_name);
+        std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
+        std::fs::hard_link(&exe, sandbox.path().join(bridge_name)).unwrap();
+        let linked_worktree = sandbox.path().join("linked");
+        std::fs::create_dir_all(&linked_worktree).unwrap();
+        std::fs::write(linked_worktree.join(".git"), b"gitdir: isolated-fixture").unwrap();
+
+        let original = r#"{"mcpServers":{"tuicommander":{"type":"stdio","command":"/missing/bridge","args":[],"env":{}}}}"#;
+        let cases = [
+            ("named", Some("tuic-test"), main_root, false, false),
+            ("worktree", None, linked_worktree.as_path(), false, false),
+            ("default", None, main_root, false, true),
+            ("named-override", Some("tuic-test"), main_root, true, true),
+            (
+                "worktree-override",
+                None,
+                linked_worktree.as_path(),
+                true,
+                true,
+            ),
+        ];
+        for (name, instance, cwd, override_owner, should_write) in cases {
+            let home = sandbox.path().join(name);
+            std::fs::create_dir_all(home.join(".claude")).unwrap();
+            std::fs::write(home.join(".claude/installed"), b"present").unwrap();
+            let config = home.join(".claude.json");
+            std::fs::write(&config, original).unwrap();
+
+            run_sandboxed_mcp_launch(
+                &exe,
+                &home,
+                cwd,
+                instance,
+                override_owner.then_some("1"),
+                false,
+            );
+            let after = std::fs::read_to_string(&config).unwrap();
+            if should_write {
+                let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+                assert_eq!(
+                    parsed["mcpServers"]["tuicommander"]["command"],
+                    sandbox.path().join(bridge_name).to_str().unwrap(),
+                    "{name}"
+                );
+            } else {
+                assert_eq!(after, original, "{name}");
+            }
+        }
+
+        // A disabled integration in the owning instance must stay removed when
+        // a named instance launches with its own, different disabled list.
+        let removed_home = sandbox.path().join("removed");
+        std::fs::create_dir_all(removed_home.join(".claude")).unwrap();
+        std::fs::write(removed_home.join(".claude/installed"), b"present").unwrap();
+        let removed_config = removed_home.join(".claude.json");
+        for (instance, disabled) in [(None, true), (Some("tuic-test"), false)] {
+            run_sandboxed_mcp_launch(&exe, &removed_home, main_root, instance, None, disabled);
+            assert!(
+                !removed_config.exists(),
+                "removed integration was reinstalled"
+            );
+        }
+
+        let worktree_tmp = linked_worktree.join(".tmp");
+        std::fs::create_dir_all(&worktree_tmp).unwrap();
+        let worktree_sandbox = tempfile::tempdir_in(worktree_tmp).unwrap();
+        let worktree_exe = worktree_sandbox.path().join(runner_name);
+        std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
+        std::fs::hard_link(&worktree_exe, worktree_sandbox.path().join(bridge_name)).unwrap();
+        let home = sandbox.path().join("worktree-binary");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/installed"), b"present").unwrap();
+        let config = home.join(".claude.json");
+        std::fs::write(&config, original).unwrap();
+        run_sandboxed_mcp_launch(&worktree_exe, &home, main_root, None, None, false);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn secondary_launch_child() {
+        let Some(expected_home) = std::env::var_os("TUIC_MCP_TEST_HOME") else {
+            return;
+        };
+        assert_eq!(home(), PathBuf::from(expected_home));
+        for agent in SUPPORTED_AGENTS {
+            assert!(
+                get_mcp_config_spec(agent)
+                    .unwrap()
+                    .config_path
+                    .starts_with(home())
+            );
+        }
+        crate::app_instance::select_app_instance_from_env().unwrap();
+        let _config = with_temp_config_dir();
+        let disabled = std::env::var("TUIC_MCP_TEST_DISABLED")
+            .ok()
+            .into_iter()
+            .collect::<Vec<_>>();
+        ensure_mcp_configs(&disabled);
     }
 
     #[test]
