@@ -402,5 +402,48 @@ describe("CanvasTerminal mouse gestures — pinned behavior (Phase 0)", () => {
 			expect(within(mounted.container).queryByText("Open")).toBeNull();
 			await mounted.dispose();
 		});
+
+		it("right-clicking a plain word with no detected link opens the smart-selection menu with its rule's actions", async () => {
+			// "foo" isn't a detected link, but the built-in "iterm-word" rule
+			// (`\S+`, always enabled, always present in the default rule set)
+			// matches any whitespace-bounded token — so this menu is smart-match-only,
+			// not the Open/Copy-link pair the two tests above cover.
+			const mounted = await mountCanvasTerminal({ sessionId: "s15", terminalId: "t15" });
+			fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+			const point = cellPoint(1, 0); // inside "foo"
+			fireEvent.contextMenu(mounted.canvas, point);
+
+			await waitFor(() => expect(within(mounted.container).getByText("Word bounded by whitespace")).toBeTruthy());
+			expect(within(mounted.container).getByText("Copy")).toBeTruthy();
+			expect(within(mounted.container).queryByText("Open")).toBeNull();
+			await mounted.dispose();
+		});
+
+		it("right-clicking whitespace with no link or smart match opens no menu at all", async () => {
+			const mounted = await mountCanvasTerminal({ sessionId: "s16", terminalId: "t16" });
+			fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+			const point = cellPoint(3, 0); // the space between "foo" and "bar"
+			fireEvent.contextMenu(mounted.canvas, point);
+
+			expect(within(mounted.container).queryByText("Copy")).toBeNull();
+			expect(within(mounted.container).queryByText("Open")).toBeNull();
+			await mounted.dispose();
+		});
+
+		it("pressing Escape closes the smart-selection menu opened by a right-click", async () => {
+			const mounted = await mountCanvasTerminal({ sessionId: "s17", terminalId: "t17" });
+			fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+			const point = cellPoint(1, 0); // inside "foo"
+			fireEvent.contextMenu(mounted.canvas, point);
+			await waitFor(() => expect(within(mounted.container).getByText("Copy")).toBeTruthy());
+
+			fireEvent.keyDown(document, { key: "Escape" });
+			await waitFor(() => expect(within(mounted.container).queryByText("Copy")).toBeNull());
+
+			await mounted.dispose();
+		});
 	});
 });

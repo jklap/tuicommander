@@ -875,6 +875,56 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 		}
+
+		// Solid underline for the smart-selection match under an open right-click
+		// menu — same visual as the Ctrl/Cmd-hover underline above (independent of
+		// `visuals.solid`/modifier state), so opening the menu confirms which text
+		// its actions will operate on.
+		if (smartMenuMatch()) {
+			for (const span of smartMenuMatchSpans()) {
+				if (span.row >= 0 && span.row < maxRow) {
+					const x = span.colStart * m.cellWidth;
+					const w = (span.colEnd - span.colStart) * m.cellWidth;
+					const y = span.row * m.cellHeight + m.cellHeight - 1 + 0.5;
+					octx.beginPath();
+					octx.moveTo(x, y);
+					octx.lineTo(x + w, y);
+					octx.stroke();
+				}
+			}
+		}
+	}
+
+	/** Converts `smartMenuMatch()`'s absolute start/end coords into per-viewport-row
+	 *  underline spans, the same shape `hoveredLink.spans` uses — mirrors
+	 *  `paintSelection`'s abs-row iteration/multi-row handling for a match that
+	 *  spans a soft-wrap boundary. */
+	function smartMenuMatchSpans(): { row: number; colStart: number; colEnd: number }[] {
+		const match = smartMenuMatch();
+		if (!match) return [];
+		const absStartRow = Math.min(match.startCoord.row, match.endCoord.row);
+		const absEndRow = Math.max(match.startCoord.row, match.endCoord.row);
+		const startFirst = match.startCoord.row <= match.endCoord.row;
+		const startCol = startFirst ? match.startCoord.col : match.endCoord.col;
+		const endCol = startFirst ? match.endCoord.col : match.startCoord.col;
+		const spans: { row: number; colStart: number; colEnd: number }[] = [];
+		for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
+			const vpRow = absRowToViewport(absRi);
+			if (vpRow === null) continue;
+			const row =
+				overlayScrollOffset != null ? rowCache.get((currentFrame?.historyBase ?? 0) + absRi) : rowMap.get(vpRow);
+			if (!row) continue;
+			if (absStartRow === absEndRow) {
+				spans.push({ row: vpRow, colStart: startCol, colEnd: endCol + 1 });
+			} else if (absRi === absStartRow) {
+				spans.push({ row: vpRow, colStart: startCol, colEnd: row.count });
+			} else if (absRi === absEndRow) {
+				spans.push({ row: vpRow, colStart: 0, colEnd: endCol + 1 });
+			} else {
+				spans.push({ row: vpRow, colStart: 0, colEnd: row.count });
+			}
+		}
+		return spans;
 	}
 
 	function scrollToMatch(match: { row: number; col_start: number; col_end: number }) {
@@ -3561,6 +3611,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				setLinkMenuTarget(null);
 			}
 			if (!linkMenuTarget() && !hasSmartActions) return;
+			const m = metrics();
+			if (currentFrame && m) repaintOverlay(currentFrame, m);
 			linkMenu.openAt(e.clientX, e.clientY);
 		});
 
@@ -4363,6 +4415,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				onClose={() => {
 					linkMenu.close();
 					setSmartMenuMatch(null);
+					const m = metrics();
+					if (currentFrame && m) repaintOverlay(currentFrame, m);
 				}}
 			/>
 		</div>

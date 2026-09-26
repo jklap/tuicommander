@@ -9,7 +9,7 @@
  * same technique `mountCanvasTerminal.tsx`'s own helpers use elsewhere.
  */
 
-import { waitFor } from "@solidjs/testing-library";
+import { fireEvent, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTerminal } from "../../../__tests__/helpers/store";
 import { settingsStore } from "../../../stores/settings";
@@ -107,6 +107,15 @@ function overlayCtx(
 	const ctx = contexts.get(overlay);
 	if (!ctx) throw new Error("overlay canvas has no captured 2D context");
 	return ctx;
+}
+
+/** Center-of-cell client coordinates for grid (col, row), matching canvasToGrid's math
+ *  — same formula `canvasTerminalGestures.pin.test.ts`'s own `cellPoint` uses. */
+function cellPoint(col: number, row: number) {
+	return {
+		clientX: GUTTER_PX + col * FIXED_CELL_METRICS.cellWidth + FIXED_CELL_METRICS.cellWidth / 2,
+		clientY: row * FIXED_CELL_METRICS.cellHeight + FIXED_CELL_METRICS.cellHeight / 2,
+	};
 }
 
 function makeBlock(overrides: Partial<CommandBlock> = {}): CommandBlock {
@@ -329,6 +338,65 @@ describe("paintBlockTimestamps (Command Blocks relative-time labels)", () => {
 		const ctx = overlayCtx(mounted.container, env.contexts);
 		const textCalls = vi.mocked(ctx.fillText).mock.calls;
 		expect(textCalls.some(([text]) => typeof text === "string" && /^\d+[smhd]$/.test(text))).toBe(false);
+
+		await mounted.dispose();
+	});
+});
+
+describe("paintLinkUnderline (smart-selection right-click highlight)", () => {
+	// "foo" isn't a detected link, but the built-in "iterm-word" rule (`\S+`)
+	// always matches it, spanning cols 0-2 on row 0 — same span math as
+	// `paintLinkUnderline`'s pre-existing hovered-link solid underline.
+	const EXPECTED_Y = 0 * FIXED_CELL_METRICS.cellHeight + FIXED_CELL_METRICS.cellHeight - 1 + 0.5;
+	const EXPECTED_X0 = 0;
+	const EXPECTED_X1 = 3 * FIXED_CELL_METRICS.cellWidth;
+
+	it("draws a solid underline under the smart-match span while its context menu is open", async () => {
+		terminalsStore.register(TERM_ID, makeTerminal({ sessionId: SESSION_ID }));
+		const mounted = await mountAndPaint(["foo bar baz", "row1", "row2", "row3", "row4"]);
+		const ctx = overlayCtx(mounted.container, env.contexts);
+
+		fireEvent.contextMenu(mounted.canvas, cellPoint(1, 0)); // inside "foo"
+		await waitFor(() => expect(within(mounted.container).getByText("Copy")).toBeTruthy());
+
+		await waitFor(() => {
+			const moveToCalls = vi.mocked(ctx.moveTo).mock.calls;
+			const lineToCalls = vi.mocked(ctx.lineTo).mock.calls;
+			expect(moveToCalls.some(([x, y]) => x === EXPECTED_X0 && y === EXPECTED_Y)).toBe(true);
+			expect(lineToCalls.some(([x, y]) => x === EXPECTED_X1 && y === EXPECTED_Y)).toBe(true);
+		});
+
+		await mounted.dispose();
+	});
+
+	it("stops drawing the underline once the context menu closes", async () => {
+		terminalsStore.register(TERM_ID, makeTerminal({ sessionId: SESSION_ID }));
+		const mounted = await mountAndPaint(["foo bar baz", "row1", "row2", "row3", "row4"]);
+		const ctx = overlayCtx(mounted.container, env.contexts);
+
+		fireEvent.contextMenu(mounted.canvas, cellPoint(1, 0)); // inside "foo"
+		await waitFor(() => expect(within(mounted.container).getByText("Copy")).toBeTruthy());
+		await waitFor(() => {
+			expect(vi.mocked(ctx.moveTo).mock.calls.some(([x, y]) => x === EXPECTED_X0 && y === EXPECTED_Y)).toBe(true);
+		});
+
+		const clearRectCallsBeforeClose = vi.mocked(ctx.clearRect).mock.calls.length;
+		fireEvent.keyDown(document, { key: "Escape" });
+		await waitFor(() => expect(within(mounted.container).queryByText("Copy")).toBeNull());
+		await waitFor(() =>
+			expect(vi.mocked(ctx.clearRect).mock.calls.length).toBeGreaterThan(clearRectCallsBeforeClose),
+		);
+
+		// The mock records every draw call cumulatively across every repaint, so
+		// "no longer drawn" must be checked against calls made AFTER the repaint
+		// that followed the menu closing — not the (still-present) calls from
+		// while it was open.
+		const lastClearRectOrder = Math.max(...vi.mocked(ctx.clearRect).mock.invocationCallOrder);
+		const moveToOrders = vi.mocked(ctx.moveTo).mock.invocationCallOrder;
+		const moveToCallsAfterClose = vi.mocked(ctx.moveTo).mock.calls.filter(
+			(_, i) => moveToOrders[i] > lastClearRectOrder,
+		);
+		expect(moveToCallsAfterClose.some(([x, y]) => x === EXPECTED_X0 && y === EXPECTED_Y)).toBe(false);
 
 		await mounted.dispose();
 	});
