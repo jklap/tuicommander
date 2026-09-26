@@ -1378,6 +1378,10 @@ pub(crate) struct AgentSettings {
     /// Prefer native terminal scrollback for supported agent CLIs. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) prevent_alt_screen: Option<bool>,
+    /// Accept the agent's workspace trust dialog on MCP-managed spawns only.
+    /// Missing means enabled; user-opened terminals retain the CLI's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skip_trust_dialog: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -5060,12 +5064,14 @@ mod tests {
                 hook_instrumentation: None,
                 native_status_signals: None,
                 prevent_alt_screen: None,
+                skip_trust_dialog: Some(false),
                 progress_tracking: Some(false),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
         assert_eq!(loaded.agents.len(), 1);
         let claude = loaded.agents.get("claude").unwrap();
+        assert_eq!(claude.skip_trust_dialog, Some(false));
         assert_eq!(claude.run_configs.len(), 2);
         assert_eq!(claude.run_configs[0].name, "Default");
         assert!(claude.run_configs[0].is_default);

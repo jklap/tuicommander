@@ -5344,6 +5344,75 @@ fn rearm_awaiting_for_open_dialog(
     })
 }
 
+/// Only the first, default-No workspace trust picker of a managed Claude child.
+/// Require the question and both choices on the rendered screen so ordinary
+/// permission prompts, chat text and a manually changed selection stay intact.
+fn managed_claude_trust_dialog(screen: &[String]) -> bool {
+    let text = screen.join(" ");
+    if !text.contains("Quick safety check:")
+        || !text.contains("Is this a project you created or one you trust?")
+    {
+        return false;
+    }
+    let yes = screen
+        .iter()
+        .position(|row| row.trim_start().starts_with("Yes,"));
+    let selected_no = screen.iter().position(|row| {
+        let row = row.trim_start();
+        let choice = row
+            .strip_prefix('❯')
+            .or_else(|| row.strip_prefix('›'))
+            .or_else(|| row.strip_prefix('>'));
+        choice.is_some_and(|choice| choice.trim_start().contains("No, exit"))
+    });
+    matches!((yes, selected_no), (Some(yes), Some(no)) if yes < no)
+}
+
+#[cfg(test)]
+mod managed_claude_trust_tests {
+    use super::managed_claude_trust_dialog;
+
+    #[test]
+    fn leaves_other_questions_and_changed_selections_untouched() {
+        for rows in [
+            vec!["Allow this command?", "  Yes, allow", "❯ No, exit"],
+            vec![
+                "Quick safety check: Is this a project you created or one you trust?",
+                "❯ Yes, I trust this folder",
+                "  No, exit",
+            ],
+            vec![
+                "Quick safety check: Is this a project you created or one you trust?",
+                "❯ No, exit",
+                "  Yes, I trust this folder",
+            ],
+        ] {
+            assert!(
+                !managed_claude_trust_dialog(
+                    &rows.into_iter().map(str::to_string).collect::<Vec<_>>()
+                ),
+                "must not answer a different or manually changed choice"
+            );
+        }
+    }
+}
+
+fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Result<(), String> {
+    let writer = state
+        .pty_writer(session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let mut writer = writer.lock();
+    writer
+        .write_all(b"\x1b[A")
+        .and_then(|()| writer.flush())
+        .map_err(|error| format!("Trust selection failed: {error}"))?;
+    std::thread::sleep(INJECT_ENTER_GAP);
+    writer
+        .write_all(b"\r")
+        .and_then(|()| writer.flush())
+        .map_err(|error| format!("Trust confirmation failed: {error}"))
+}
+
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
@@ -6068,6 +6137,17 @@ impl ChunkProcessor {
                 None,
             )
         };
+
+        if screen_present
+            && agent_type.as_deref() == Some("claude")
+            && state.managed_trust_dialogs.contains(session_id)
+            && managed_claude_trust_dialog(&screen_buf)
+            && state.managed_trust_dialogs.remove(session_id).is_some()
+        {
+            if let Err(error) = accept_managed_claude_trust_dialog(state, session_id) {
+                tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
+            }
+        }
 
         if unexpected_alt_screen {
             let agent = agent_type.unwrap_or_else(|| "unknown".to_string());
@@ -7342,6 +7422,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     }
     state.pending_injections.remove(session_id);
     state.pending_initial_prompts.remove(session_id);
+    state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
     state.peer_agents.remove(session_id);
     state.orchestrator_peers.remove(session_id);

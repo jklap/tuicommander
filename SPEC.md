@@ -673,6 +673,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Terminal context menu > Agents submenu with run configs
 - [x] Agent binary detection and version display
 - [x] Per-agent native scrollback preference applies to supported CLI launches and commands typed in TUIC shells
+- [x] Managed Claude and direct Codex spawns accept new workspace trust by default without editing the agents' saved trust files; per-agent opt-out leaves their normal question in place
 - [x] agents.json persistence for run configurations
 
 ### Completed (P3)

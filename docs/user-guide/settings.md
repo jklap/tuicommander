@@ -64,7 +64,7 @@ never all expert: in basic mode it would show an empty page.
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
-| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Prevent alternate screen, Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |

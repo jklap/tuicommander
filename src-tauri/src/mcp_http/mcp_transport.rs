@@ -4121,6 +4121,38 @@ fn handle_agent_with_parent_cwd(
                     &crate::config::config_dir(),
                 );
             }
+            let skip_trust_dialog = effective_agent_type
+                .as_deref()
+                .and_then(|agent_type| agents_cfg.agents.get(agent_type))
+                .and_then(|settings| settings.skip_trust_dialog)
+                .unwrap_or(true);
+            if skip_trust_dialog && is_direct_codex_executable(&binary_path) {
+                let cwd = effective_cwd
+                    .as_deref()
+                    .map(crate::cli::expand_tilde)
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| std::env::current_dir().ok());
+                let Some(cwd) = cwd else {
+                    return serde_json::json!({"error": "Cannot resolve Codex spawn cwd for trust override"});
+                };
+                let cwd = match std::fs::canonicalize(&cwd) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        return serde_json::json!({"error": format!("Cannot resolve Codex spawn cwd for trust override: {error}")});
+                    }
+                };
+                launch_args.insert(0, "-c".to_string());
+                launch_args.insert(
+                    1,
+                    format!(
+                        "projects.{}.trust_level=\"trusted\"",
+                        serde_json::to_string(&crate::fs::portable_spelling(
+                            &cwd.to_string_lossy()
+                        ))
+                        .expect("path serializes")
+                    ),
+                );
+            }
             for arg in launch_args {
                 cmd.arg(arg);
             }
@@ -4250,6 +4282,9 @@ fn handle_agent_with_parent_cwd(
                 }
             }
             state.set_pty_description(&session_id, pty_description);
+            if skip_trust_dialog && effective_agent_type.as_deref() == Some("claude") {
+                state.managed_trust_dialogs.insert(session_id.clone());
+            }
             spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
             // Every managed child is a peer immediately, independent of whether
@@ -18745,6 +18780,278 @@ mod tests {
     // -----------------------------------------------------------------------
     // resolve_run_config tests
     // -----------------------------------------------------------------------
+
+    /// A direct Codex child must trust only its launch cwd. Its normal config
+    /// stays untouched; the fake executable records argv as the external oracle.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_spawn_trusts_its_new_cwd_without_writing_user_config() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-trust-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let script = root.path().join("codex");
+        let argv = root.path().join("argv");
+        let submitted = root.path().join("submitted");
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nstty -echo\nprintf 'Starting Codex\\n'\nsleep 0.1\nprintf '› \\n'\nIFS= read -r text\nprintf '%s' \"$text\" > '{}'\nexec cat >/dev/null\n", argv.display(), submitted.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            std::process::Command::new(&script)
+                .arg("--version")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let state = test_state();
+        // The production boot runs this reconciler before a Codex ready screen can release BUSY.
+        crate::pty::spawn_process_snapshot_refresher(state.clone());
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn", "agent_type": "codex", "binary_path": script,
+                "cwd": cwd, "prompt": "say READY",
+                "args": ["--no-alt-screen"],
+            }),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let actual = std::fs::read_to_string(&argv);
+        let prompt = std::fs::read_to_string(&submitted);
+        let output = handle_session(
+            &state,
+            &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
+            None,
+        );
+        let queued = state.pending_initial_prompts.contains_key(sid);
+        let shell = state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .map(|value| value.load(std::sync::atomic::Ordering::Relaxed));
+        let idle_confirmed = state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .map(|value| value.lock().idle_confirmed());
+        let blocked = crate::pty::blocked_on_confident_question(&state, sid);
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        let actual = actual.expect("agent must record launch argv");
+        let expected = format!(
+            "projects.{}.trust_level=\"trusted\"",
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        );
+        assert!(
+            actual
+                .lines()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-c", expected.as_str()]),
+            "launch must scope trust to the new cwd: {actual}"
+        );
+        assert!(
+            prompt.as_deref().unwrap_or_default().contains("say READY"),
+            "spawn prompt must be submitted: prompt={prompt:?}; queued={queued}; shell={shell:?}; idle_confirmed={idle_confirmed:?}; blocked={blocked}; output={output}"
+        );
+        assert!(!root.path().join("codex-config/config.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_trust_opt_out_preserves_normal_launch() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-opt-out-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let script = root.path().join("codex");
+        let argv = root.path().join("argv");
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec cat >/dev/null\n", argv.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            std::process::Command::new(&script)
+                .arg("--version")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                skip_trust_dialog: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"codex", "binary_path":script, "cwd":cwd, "prompt":"say READY"}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !argv.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let actual = std::fs::read_to_string(&argv);
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        let actual = actual.expect("agent must record launch argv");
+        assert!(
+            !actual.contains("trust_level"),
+            "opt-out must preserve Codex trust behavior: {actual}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-claude-trust-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let script = root.path().join("claude");
+        let accepted = root.path().join("accepted");
+        let observed_keys = root.path().join("keys");
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            std::process::Command::new(&script)
+                .arg("--version")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn", "agent_type": "claude", "binary_path": script,
+                "cwd": cwd, "prompt": "say READY", "cols": 120,
+            }),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !accepted.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let task = std::fs::read_to_string(&accepted);
+        let output = handle_session(
+            &state,
+            &serde_json::json!({"action":"output", "session_id":sid, "format":"raw", "limit": 4096}),
+            None,
+        );
+        let armed = state.managed_trust_dialogs.contains(sid);
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        let task = task.unwrap_or_else(|error| panic!("managed child must pass trust dialog without manual input: {error}; armed={armed}; keys={:?}; output={output}", std::fs::read_to_string(&observed_keys)));
+        assert!(
+            task.contains("say READY"),
+            "spawn prompt must remain submitted: {task}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-claude-opt-out-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let script = root.path().join("claude");
+        let observed_keys = root.path().join("keys");
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", observed_keys.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            std::process::Command::new(&script)
+                .arg("--version")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "claude".into(),
+            crate::config::AgentSettings {
+                skip_trust_dialog: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":120}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !observed_keys.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let keys = std::fs::read_to_string(&observed_keys);
+        let output = handle_session(
+            &state,
+            &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
+            None,
+        );
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        assert_eq!(
+            keys.expect("agent must sample trust-dialog input"),
+            "",
+            "opt-out must not answer Claude's trust question"
+        );
+        assert!(
+            output["data"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("No, exit"),
+            "trust dialog must remain visible: {output}"
+        );
+    }
 
     fn make_agents_config() -> crate::config::AgentsConfig {
         use crate::config::{AgentRunConfig, AgentSettings, AgentsConfig};
