@@ -279,13 +279,13 @@ Creates a git worktree and a PTY session in one call.
 POST /sessions/agent
 Content-Type: application/json
 
-{ "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"], "env": { "TUIC_ALLOW_ALT_SCREEN": "1" } }
+{ "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"] }
 ```
 
 Spawns an AI agent in a PTY session. The request is flat; browser transport merges
 the desktop `pty_config` and `agent_config` objects. The optional `env` map is
 applied to the agent process. By default, supported interactive CLIs use native
-scrollback; `TUIC_ALLOW_ALT_SCREEN=1` opts out for this spawn.
+scrollback according to the agent's `prevent_alt_screen` setting.
 
 ### Write to Session
 
@@ -1098,7 +1098,7 @@ under `/repo/`.
 
 `install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
 
-`GET`/`PUT /config/agents` read and write `agents.json`. The route is in `shared_routes()`, so the `tuic-remote` daemon serves it too: a remote repository's agents run with that machine's `agents.json`, and the frontend loads it per connection. The `/config/agents/{agent}/…` sub-routes below stay desktop-only.
+`GET`/`PUT /config/agents` read and write `agents.json`, including each agent's optional `prevent_alt_screen` override (`false` disables TUIC's screen control; absent means enabled). The route is in `shared_routes()`, so the `tuic-remote` daemon serves it too: a remote repository's agents run with that machine's `agents.json`, and the frontend loads it per connection. The `/config/agents/{agent}/…` sub-routes below stay desktop-only.
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
@@ -1614,7 +1614,7 @@ Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen"
 POST /agents/launch-args
 Content-Type: application/json
 
-{ "agentType": "codex", "binaryPath": "codex", "args": ["resume"], "allowAltScreen": false }
+{ "agentType": "codex", "binaryPath": "codex", "args": ["resume"] }
 ```
 
 Returns the argument array with the agent's supported native-scrollback option inserted before an interactive subcommand. An explicit option, an alternate-screen opt-out, or a non-interactive subcommand leaves the array unchanged. The desktop `prepare_agent_launch_args` command uses the same Rust builder. Remote HTTP callers must authenticate.

@@ -799,6 +799,8 @@ Custom keyboard shortcut overrides.
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
+Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
+
 **Type:** `AgentsConfig`
 
 Per-agent run configurations (custom commands, arguments, environment variables).
@@ -814,6 +816,7 @@ struct AgentRunConfig {
 
 struct AgentSettings {
     run_configs: Vec<AgentRunConfig>,
+    prevent_alt_screen: Option<bool>, // absent = true
 }
 
 struct AgentsConfig {

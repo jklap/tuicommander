@@ -47,7 +47,7 @@ describe("PrDetailPopover", () => {
 
 	it.each([
 		{ env: {}, expected: "codex --no-alt-screen" },
-		{ env: { TUIC_ALLOW_ALT_SCREEN: "1" }, expected: "codex" },
+		{ env: { TUIC_ALLOW_ALT_SCREEN: "1" }, expected: "codex --no-alt-screen" },
 	])("launches the PR review agent with the configured screen mode ($expected)", async ({ env, expected }) => {
 		vi.useRealTimers();
 		mockGetBranchPrData.mockReturnValue({
@@ -63,8 +63,8 @@ describe("PrDetailPopover", () => {
 		vi.spyOn(agentConfigsStore, "getRunConfigs").mockReturnValue([
 			{ name: "Review", command: "codex", args: [], env },
 		] as never);
-		mockInvoke.mockImplementation(async (command: string, args: { allowAltScreen?: boolean }) =>
-			command === "prepare_agent_launch_args" ? (args.allowAltScreen ? [] : ["--no-alt-screen"]) : null,
+		mockInvoke.mockImplementation(async (command: string) =>
+			command === "prepare_agent_launch_args" ? ["--no-alt-screen"] : null,
 		);
 		const onReview = vi.fn();
 		const { getByText } = render(() => <PrDetailPopover {...defaultProps} onReview={onReview} />);

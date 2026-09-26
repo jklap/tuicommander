@@ -254,8 +254,8 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
 | `save_keybindings` | `config` | `()` | Save keybinding overrides |
-| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs |
-| `save_agents_config` | `config` | `()` | Save per-agent run configs |
+| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs and `prevent_alt_screen` overrides |
+| `save_agents_config` | `config` | `()` | Save per-agent run configs and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
 | `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |
@@ -310,7 +310,7 @@ remote daemon.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary name in PATH or an exact absolute path, version, and cached `supports_no_alt_screen` help probe |
-| `prepare_agent_launch_args` | `agent_type, binary_path, args, allow_alt_screen` | `Vec<String>` | Add a supported native-scrollback flag to interactive launch args; probes in a blocking worker with a deadline. HTTP parity: `POST /agents/launch-args` |
+| `prepare_agent_launch_args` | `agent_type, binary_path, args` | `Vec<String>` | Add a supported native-scrollback flag according to the agent setting; probes in a blocking worker with a deadline. HTTP parity: `POST /agents/launch-args` |
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |

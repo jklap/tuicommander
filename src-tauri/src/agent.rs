@@ -684,10 +684,8 @@ pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
         .strip_suffix(".exe")
         .or_else(|| binary_name.strip_suffix(".cmd"))
         .unwrap_or(&binary_name);
-    let flag = match binary_name {
-        "codex" | "grok" => "--no-alt-screen",
-        "opencode" => "--mini",
-        _ => return false,
+    let Some((flag, _)) = crate::agent_hook_launch::screen_policy(binary_name) else {
+        return false;
     };
     type Entry = Arc<Mutex<ScreenProbeState>>;
     static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Entry>>> = OnceLock::new();
@@ -1171,16 +1169,11 @@ pub(crate) async fn spawn_agent(
                 launch_args.push(spawn_agent_config.prompt.clone());
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
-            let allow_alt_screen = spawn_pty_config
-                .env
-                .get("TUIC_ALLOW_ALT_SCREEN")
-                .is_some_and(|value| value == "1");
             for arg in crate::agent_hook_launch::augment_args(
                 agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-                allow_alt_screen,
             ) {
                 cmd.arg(arg);
             }

@@ -56,7 +56,6 @@ pub(super) async fn prepare_agent_launch_args_http(
             body.agent_type,
             body.binary_path,
             body.args,
-            body.allow_alt_screen,
         )
         .await,
     )
@@ -311,9 +310,6 @@ pub(super) async fn spawn_agent_session(
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
     let spawn_env = body.env.clone();
-    let allow_alt_screen = spawn_env
-        .get("TUIC_ALLOW_ALT_SCREEN")
-        .is_some_and(|value| value == "1");
     let spawn_agent_type = body
         .agent_type
         .clone()
@@ -352,7 +348,6 @@ pub(super) async fn spawn_agent_session(
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-                allow_alt_screen,
             ) {
                 cmd.arg(arg);
             }
@@ -504,7 +499,6 @@ mod tests {
             agent_type: "codex".into(),
             binary_path: script.to_string_lossy().into_owned(),
             args: vec!["resume".into()],
-            allow_alt_screen: false,
         };
         let response =
             prepare_agent_launch_args_http(ConnectInfo(loopback()), None, Json(request)).await;
@@ -518,7 +512,6 @@ mod tests {
             agent_type: "codex".into(),
             binary_path: script.to_string_lossy().into_owned(),
             args: vec!["resume".into()],
-            allow_alt_screen: false,
         };
         let response =
             prepare_agent_launch_args_http(ConnectInfo(lan()), None, Json(forbidden)).await;
@@ -526,7 +519,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_agent_spawn_respects_explicit_alt_screen_choice() {
+    async fn http_agent_spawn_uses_per_agent_screen_setting_despite_legacy_env() {
         let script = crate::test_support::fake_ssh_script(
             "http-agent-screen-choice",
             "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\n' \"$*\"; fi",
@@ -568,8 +561,7 @@ mod tests {
         })
         .await
         .expect("fake agent output");
-        assert!(output.contains("ARGS=resume"), "{output}");
-        assert!(!output.contains("--no-alt-screen"), "{output}");
+        assert!(output.contains("ARGS=--no-alt-screen resume"), "{output}");
     }
 
     async fn response_json(response: Response) -> serde_json::Value {

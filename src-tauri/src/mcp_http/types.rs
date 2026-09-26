@@ -260,8 +260,6 @@ pub(super) struct PrepareAgentLaunchArgsRequest {
     pub binary_path: String,
     #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
-    pub allow_alt_screen: bool,
 }
 
 #[derive(Deserialize)]

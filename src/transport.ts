@@ -1677,7 +1677,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				agentType: args.agentType,
 				binaryPath: args.binaryPath,
 				args: args.args,
-				allowAltScreen: args.allowAltScreen,
 			},
 		}),
 	},

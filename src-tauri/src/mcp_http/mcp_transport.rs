@@ -3900,11 +3900,6 @@ fn handle_agent_with_parent_cwd(
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-            let allow_alt_screen = resolved.as_ref().is_some_and(|rc| {
-                rc.env
-                    .get("TUIC_ALLOW_ALT_SCREEN")
-                    .is_some_and(|value| value == "1")
-            });
             let empty_env = std::collections::HashMap::new();
             let screen_env = resolved.as_ref().map(|rc| &rc.env).unwrap_or(&empty_env);
             crate::pty::apply_agent_screen_env(&mut cmd, screen_env);
@@ -4049,7 +4044,6 @@ fn handle_agent_with_parent_cwd(
                     &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
-                    allow_alt_screen,
                 );
             }
             for arg in launch_args {

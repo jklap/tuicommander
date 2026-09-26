@@ -42,6 +42,7 @@ interface AgentConfigsState {
 			suggest_followups?: boolean;
 			hook_instrumentation?: boolean;
 			native_status_signals?: boolean;
+			prevent_alt_screen?: boolean;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
@@ -367,6 +368,21 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 					else s.agents[type].native_status_signals = false;
 				}),
 			);
+		},
+
+		getPreventAltScreen(type: AgentType): boolean {
+			return state.agents[type]?.prevent_alt_screen ?? true;
+		},
+
+		async setPreventAltScreen(type: AgentType, enabled: boolean): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					if (enabled) delete s.agents[type].prevent_alt_screen;
+					else s.agents[type].prevent_alt_screen = false;
+				}),
+			);
+			await saveToDisk();
 		},
 
 		/** Get all env flags for an agent */

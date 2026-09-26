@@ -251,7 +251,7 @@ Without this enforcement a single BSU whose ESU is delayed or lost freezes the t
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
-PTY identity defaults Claude to primary-screen mode. `apply_agent_screen_env` then applies the same `TUIC_ALLOW_ALT_SCREEN=1` override for IPC, HTTP and MCP spawns before explicit caller environment values are installed. The agent argument builder is also shared by structured spawns and commands typed into an existing terminal; its CLI help probe is bounded and retried when inconclusive.
+PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and subcommand exclusions into its environment. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
 

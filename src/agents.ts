@@ -375,6 +375,8 @@ export interface AgentSettingsConfig {
 	hook_instrumentation?: boolean;
 	/** Launch-scoped native status signals. Undefined means enabled. */
 	native_status_signals?: boolean;
+	/** Prevent alternate screen when a verified agent control exists. Undefined means enabled. */
+	prevent_alt_screen?: boolean;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */

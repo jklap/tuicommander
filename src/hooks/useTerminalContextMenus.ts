@@ -34,17 +34,11 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 	buildSidebarAgentMenuItems: (repoPath: string, branchName: string) => ContextMenuItem[];
 	getContextMenuItems: () => ContextMenuItem[];
 } {
-	const launchAgentInActiveTerminal = async (agentType: AgentType, command: string, allowAltScreen = false) => {
+	const launchAgentInActiveTerminal = async (agentType: AgentType, command: string) => {
 		const active = terminalsStore.getActive();
 		if (!active?.ref || !active.sessionId) return;
 		const agentSessionId = agentType === "claude" ? null : (active.tuicSession ?? null);
-		const finalCommand = await prepareAgentLaunchCommand(
-			command,
-			agentSessionId,
-			agentType,
-			allowAltScreen,
-			active.cwd,
-		);
+		const finalCommand = await prepareAgentLaunchCommand(command, agentSessionId, agentType, active.cwd);
 		const shellFamily = await getShellFamily(active.sessionId);
 		await sendCommand(
 			(data) => invoke("write_pty", { sessionId: active.sessionId, data }),
@@ -86,11 +80,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 						children: runConfigs.map((runConfig) => ({
 							label: runConfig.name + (runConfig.is_default ? " (Default)" : ""),
 							action: () =>
-								launchAgentInActiveTerminal(
-									agent.type,
-									[runConfig.command, ...runConfig.args].join(" "),
-									runConfig.env?.TUIC_ALLOW_ALT_SCREEN === "1",
-								),
+								launchAgentInActiveTerminal(agent.type, [runConfig.command, ...runConfig.args].join(" ")),
 						})),
 					};
 				}
@@ -98,8 +88,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 					runConfigs.length === 1 ? [runConfigs[0].command, ...runConfigs[0].args].join(" ") : config.binary;
 				return {
 					label: config.name,
-					action: () =>
-						launchAgentInActiveTerminal(agent.type, command, runConfigs[0]?.env?.TUIC_ALLOW_ALT_SCREEN === "1"),
+					action: () => launchAgentInActiveTerminal(agent.type, command),
 				};
 			});
 
@@ -117,18 +106,12 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		const buildAgentEntry = (agent: (typeof enabled)[0]) => {
 			const config = AGENTS[agent.type];
 			const runConfigs = machineConfigs.getRunConfigs(agent.type);
-			const launchAgent = async (command: string, allowAltScreen = false) => {
+			const launchAgent = async (command: string) => {
 				const termId = await options.gitOps.handleAddTerminalToWorkspace(repoPath, branchName);
 				if (!termId) return;
 				const term = terminalsStore.get(termId);
 				const agentSessionId = agent.type === "claude" ? null : (term?.tuicSession ?? null);
-				const pendingInitCommand = await prepareAgentLaunchCommand(
-					command,
-					agentSessionId,
-					agent.type,
-					allowAltScreen,
-					repoPath,
-				);
+				const pendingInitCommand = await prepareAgentLaunchCommand(command, agentSessionId, agent.type, repoPath);
 				terminalsStore.update(termId, {
 					name: config.name,
 					nameIsCustom: true,
@@ -141,11 +124,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 				runConfigs.length > 0
 					? runConfigs.map((runConfig) => ({
 							label: runConfig.name + (runConfig.is_default ? " (Default)" : ""),
-							action: () =>
-								launchAgent(
-									[runConfig.command, ...runConfig.args].join(" "),
-									runConfig.env?.TUIC_ALLOW_ALT_SCREEN === "1",
-								),
+							action: () => launchAgent([runConfig.command, ...runConfig.args].join(" ")),
 						}))
 					: [{ label: "(Default)", action: () => launchAgent(config.binary) }];
 			return { config, children };

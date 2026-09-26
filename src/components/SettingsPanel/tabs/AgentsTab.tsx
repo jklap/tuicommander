@@ -824,6 +824,25 @@ const AgentRow: Component<{
 						</div>
 					</ExpertSetting>
 
+					<ExpertSetting
+						configKey="agent_settings.prevent_alt_screen"
+						value={configStore.state.agents[props.agentType]?.prevent_alt_screen ?? null}
+					>
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									checked={configStore.getPreventAltScreen(props.agentType)}
+									onChange={() =>
+										configStore.setPreventAltScreen(props.agentType, !configStore.getPreventAltScreen(props.agentType))
+									}
+								/>
+								<span>Prevent alternate screen</span>
+							</label>
+							<p class={s.hint}>Use native terminal scrollback when this agent supports it. Applies to new launches.</p>
+						</div>
+					</ExpertSetting>
+
 					<Show when={supportsLaunchSignals()}>
 						<ExpertSetting
 							configKey="agent_settings.native_status_signals"
