@@ -8,6 +8,10 @@
 
 # To Test
 
+## Linked-worktree warming excludes MDKB (2026-09-26) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a disposable worktree from a repository that ignores and contains `.mdkb/`. Confirm the new worktree has no `.mdkb` while an ignored build directory still arrives warm. The live backend cannot load this Rust change without a restart.
+
 ## Native scrollback capture fixtures (2026-09-25) — after mcp-config-guard lands
 
 - [ ] Only after story 949-0421 (mcp-config-guard) is on main: with `TUIC_CAPTURE_DIR=$HOME/Gits/.tmp/no-alt-screen/captures`, record a `codex --no-alt-screen` session (approval prompt, a resize, the idle footer) and an `opencode --mini` session, add both `.tcap` files to `src-tauri/src/fixtures/agent_prompts/`, and assert terminal mode, the chrome-cutoff anchor, and no BUSY edge on resize-only chunks (story 939-475b).

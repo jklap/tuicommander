@@ -187,7 +187,7 @@ fn warming_candidates(src: &Path, dest: &Path) -> Result<Vec<PathBuf>, WarmingRe
     candidates.retain(|candidate| {
         !candidate
             .components()
-            .any(|component| component.as_os_str() == ".tmp")
+            .any(|component| component.as_os_str() == ".tmp" || component.as_os_str() == ".mdkb")
     });
     candidates.extend(external_bin_candidates(src));
     candidates.sort();
@@ -757,6 +757,23 @@ mod tests {
 
         assert!(report.warnings.is_empty(), "{report:?}");
         assert!(!worktree.join(".tmp").exists());
+    }
+
+    #[test]
+    fn warming_excludes_mdkb_directories() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::write(repo.join(".gitignore"), "build/\n.mdkb/\n").unwrap();
+        std::fs::create_dir_all(repo.join(".mdkb/store")).unwrap();
+        std::fs::write(repo.join(".mdkb/store/data"), "index").unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert!(report.warnings.is_empty(), "{report:?}");
+        assert!(!worktree.join(".mdkb").exists());
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
+            "warm"
+        );
     }
 
     #[test]

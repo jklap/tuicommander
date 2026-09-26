@@ -36,7 +36,8 @@ ignored build directory is missing and the first build is a full one.
 TUICommander asks git which directories the parent ignores and copies them into
 the new worktree copy-on-write, at the same near-zero disk cost. It is
 language-agnostic — `node_modules`, `target`, `.venv`, `dist`, `vendor` and
-anything else your `.gitignore` covers — and it copies **directories only**: an
+anything else your `.gitignore` covers, except `.tmp` and `.mdkb` directories —
+and it copies **directories only**: an
 ignored *file* such as `.env` stays where it is, because materialising a
 credential into a new workspace is not a convenience.
 
