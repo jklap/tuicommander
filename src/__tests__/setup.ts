@@ -119,3 +119,14 @@ Object.defineProperty(globalThis, "WebSocket", {
 	writable: true,
 	configurable: true,
 });
+
+// Unmocked browser-mode RPCs must fail locally instead of reaching
+// happy-dom's default origin (http://localhost:3000). Tests that exercise
+// HTTP install a response mock for the request they expect.
+Object.defineProperty(globalThis, "fetch", {
+	value: (input: RequestInfo | URL) => {
+		throw new Error(`unmocked fetch in Vitest: ${String(input)}`);
+	},
+	writable: true,
+	configurable: true,
+});
