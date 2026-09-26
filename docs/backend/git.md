@@ -180,7 +180,7 @@ uses it only after checking submodule status and rechecking dirtiness immediatel
 before removal. A separate, confirmed lock override bypasses the lock during
 removal; dirty-file `force` alone does not bypass a lock. Before removal, every
 initialized submodule's HEAD and refs are copied into preserved refs in the
-main checkout's module repository under a unique namespace; if this fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing checkout is pruned only after any registered submodule module repositories are preserved. An
+main checkout's module repository under a unique namespace; if this fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing registered checkout requires force confirmation before preserving module refs and pruning its registration; a lock still needs a separate override. The normal workspace list hides missing checkouts. An
 uninitialized submodule without Git state is safe to remove. Force confirmation
 can carry a fingerprint of checkout status per path, HEAD, and submodule refs, rechecked
 under the removal lock. The status portion records Git's per-path porcelain
