@@ -74,7 +74,8 @@ normal runtime temporary directory.
 Mutation testing runs on a change, not on the tree: `make mutants RANGE=<base>`
 (default `HEAD~1`) needs `cargo install --locked cargo-mutants` and reports the
 mutants of the changed Rust lines that no test caught. A surviving mutant is a
-missing test.
+missing test. Pass cargo-mutants filters through `MUTANTS_ARGS`, for example
+`make mutants RANGE=<base> MUTANTS_ARGS='--re parse_clean_lines'`.
 
 The Makefile prefixes each gate with `rtk`, an optional output compactor, when
 it is on your `PATH`. It is not a project dependency: with `rtk` absent every
