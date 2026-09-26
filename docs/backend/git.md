@@ -152,7 +152,7 @@ the probe does on unix.
 
 Every managed workspace is a linked Git worktree. After Git creates the clean
 checkout, `cow.rs` asks Git for ignored directories and copy-on-write copies
-those directories from the parent. It excludes every `.tmp` path component,
+those directories from the parent. It excludes every `.tmp` or `.mdkb` path component,
 tracked paths, ignored files, nested repositories, and any directory containing
 the destination. Tauri `bundle.externalBin` entries additionally select their
 target-triple sidecar files by configuration, rather than by hard-coded names.
