@@ -68,8 +68,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
 	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
-	// text includes a runtime count.
-	mcp: { dynamic: 1, orphans: 0 },
+	// text includes a runtime count, and each server row's `ConnectionStatusBadge
+	// label={…}` (a runtime status, not a setting).
+	mcp: { dynamic: 2, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteServersTab's merged editor: the "Named instance"/"Manual port" radio
 	// labels and the "Compress the channel" / "Connect automatically on startup"

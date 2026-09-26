@@ -544,6 +544,7 @@ export const RemoteAccessPanel: Component = () => {
 							<div class={s.group}>
 								<label>{t("services.label.tailscaleStatus", "Status")}</label>
 								<div class={s.mcpStatusRow}>
+									<span class={cx(s.mcpStatusDot, ts.state === "Running" && ts.https_enabled && s.running)} />
 									<span class={s.mcpStatusText}>{statusText}</span>
 									<button
 										class={s.testBtn}
@@ -590,38 +591,37 @@ export const RemoteAccessPanel: Component = () => {
 						<>
 							<h3>{t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}</h3>
 							<div class={s.group}>
-								<div class={s.row}>
-									<span class={s.label}>{t("services.label.selfSignedStatus", "Status")}</span>
-									<span class={s.value}>
-										{statusText}
-										<button
-											class={s.inlineBtn}
-											disabled={regeneratingCert()}
-											onClick={async () => {
-												setRegeneratingCert(true);
-												try {
-													await rpc("regenerate_self_signed_cert");
-													// Server restart is async server-side; give it a moment before polling status.
-													setTimeout(refresh, 500);
-												} catch (e) {
-													appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
-												} finally {
-													setRegeneratingCert(false);
-												}
-											}}
-											title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
-										>
-											{regeneratingCert()
-												? t("services.action.regenerating", "Regenerating…")
-												: t("services.action.regenerate", "Regenerate")}
-										</button>
-									</span>
+								<label>{t("services.label.selfSignedStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
+									<span class={s.mcpStatusText}>{statusText}</span>
+									<button
+										class={s.testBtn}
+										disabled={regeneratingCert()}
+										onClick={async () => {
+											setRegeneratingCert(true);
+											try {
+												await rpc("regenerate_self_signed_cert");
+												// Server restart is async server-side; give it a moment before polling status.
+												setTimeout(refresh, 500);
+											} catch (e) {
+												appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
+											} finally {
+												setRegeneratingCert(false);
+											}
+										}}
+										title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
+									>
+										{regeneratingCert()
+											? t("services.action.regenerating", "Regenerating…")
+											: t("services.action.regenerate", "Regenerate")}
+									</button>
 								</div>
 								<Show when={ss.fingerprint_sha256}>
 									{(fingerprint) => (
-										<div class={s.row}>
-											<span class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</span>
-											<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
+										<div class={s.group}>
+											<label>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
+											<span class={s.mcpStatusText} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
 												{fingerprint()
 													.match(/.{1,2}/g)
 													?.join(":")}
