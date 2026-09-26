@@ -85,6 +85,8 @@ These appear as regular commands in the palette — type "Search" to find them.
 ## Activity Dashboard
 
 Open with `Cmd+Shift+A`. A real-time overview of all your terminal sessions.
+The overlay stays compact in the main window and fits narrow windows; detaching
+it keeps the same list in a separate window.
 
 ### What You See
 

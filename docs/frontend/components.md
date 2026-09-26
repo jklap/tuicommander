@@ -70,7 +70,7 @@ App.tsx (central orchestrator)
 ├── PromptOverlay/            # Agent prompt interception
 ├── PromptDrawer/             # Prompt library management
 ├── CommandPalette/           # Cmd+P / browser-toolbar palette with transport-safe actions
-├── ActivityDashboard/        # Activity center (bell dropdown)
+├── ActivityDashboard/        # Compact inline or detached terminal activity list
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
