@@ -220,7 +220,7 @@ host.registerOutputWatcher({
 
 **Where the matching runs.** The registry sends the pattern source and flags of every
 watcher to Rust (`set_plugin_output_watchers`). The PTY reader thread assembles the
-lines, cleans them (`output_watchers.rs`, a port of `stripAnsi` plus the backtick strip),
+lines, cleans them (`tuic-terminal/src/output_watchers.rs`, a port of `stripAnsi` plus the backtick strip),
 and tests them against the compiled patterns. Rust is the only line assembler: the
 WebView reassembles nothing, so a watcher that registers halfway through a line still
 sees that line whole. The WebView is only woken for a line that matched: it receives that

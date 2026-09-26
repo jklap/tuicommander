@@ -116,7 +116,7 @@ pub(crate) async fn create_pty(
         .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
+    let grid_watch_tx = crate::grid_watch::new_grid_watch();
     state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
         .session_maps
@@ -282,7 +282,7 @@ pub(crate) async fn create_pty_with_worktree(
         .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
+    let grid_watch_tx = crate::grid_watch::new_grid_watch();
     state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
         .session_maps

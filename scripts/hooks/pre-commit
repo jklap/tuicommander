@@ -68,7 +68,7 @@ fi
 fixtures_dir='src-tauri/src/fixtures/agent_prompts'
 
 # chrome.rs is the bottom-zone cutoff and nothing else — any code line counts.
-chrome_file='src-tauri/src/chrome.rs'
+chrome_file='src-tauri/crates/tuic-terminal/src/chrome.rs'
 
 # Multi-purpose files: a changed code line must name a detection symbol.
 scoped_files='
@@ -76,20 +76,28 @@ src-tauri/src/pty.rs
 src-tauri/src/pty/commands.rs
 src-tauri/src/pty/tests.rs
 src-tauri/src/state.rs
-src-tauri/src/output_parser.rs
+src-tauri/crates/tuic-terminal/src/output_parser.rs
 src-tauri/src/relay_client.rs
 src-tauri/src/mcp_http/session.rs
 '
 
 # The awaiting set/clear sites, the parsers they read, and the OSC that feeds
 # them. 7770 is the TUIC hook's state sequence.
-detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|find_scrollback_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|7770'
+detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|7770'
 
 # A capture staged alongside satisfies the gate, whatever else changed.
 staged_fixtures="$(git diff --cached --name-only --diff-filter=ACMR -- "$fixtures_dir" 2>/dev/null || true)"
 [ -n "$staged_fixtures" ] && exit 0
 
-staged_diff() { git diff --cached -U0 --diff-filter=ACMR -- "$1" 2>/dev/null || true; }
+staged_diff() {
+  case "$1" in
+    src-tauri/crates/tuic-terminal/src/*)
+      local old_path="src-tauri/src/${1#src-tauri/crates/tuic-terminal/src/}"
+      git diff --cached --find-renames -U0 --diff-filter=ACMR -- "$old_path" "$1" 2>/dev/null || true
+      ;;
+    *) git diff --cached -U0 --diff-filter=ACMR -- "$1" 2>/dev/null || true ;;
+  esac
+}
 
 # Added/removed lines, minus diff headers, blanks and comments.
 code_changes() {
@@ -102,7 +110,23 @@ code_changes() {
 
 # The function enclosing each hunk, off the `@@ ... @@ <ctx>` header. Without it
 # an edit to the *body* of a detection function names no symbol and slips past.
-hunk_contexts() { printf '%s\n' "$1" | sed -nE 's/^@@ [^@]*@@ ?//p' || true; }
+hunk_contexts() {
+  printf '%s\n' "$1" | awk '
+    function flush() { if (in_hunk && !declaration) print context }
+    /^@@/ {
+      flush()
+      in_hunk = 1
+      declaration = 0
+      context = $0
+      sub(/^.*@@ ?/, "", context)
+      next
+    }
+    /^[-+]/ && $0 !~ /^(\+\+\+|---) / {
+      if ($0 ~ /^[+-][[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]/) declaration = 1
+    }
+    END { flush() }
+  ' || true
+}
 
 offenders=()                     # "path — symbol symbol" lines to report
 

@@ -125,8 +125,8 @@ check: test-shell
 	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
-	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc -q && echo "  rust tests ✓"
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --release -- -D warnings && echo "  clippy ✓"
+	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
@@ -138,7 +138,7 @@ check: test-shell
 # included), so expect several minutes. Doctests are not measured
 # (doctest coverage requires nightly).
 cov:
-	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov nextest
+	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov nextest --workspace
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --html
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"

@@ -90,7 +90,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 6. Write to `OutputRingBuffer` (2 MB circular buffer for MCP access — `OUTPUT_RING_BUFFER_CAPACITY`)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
-9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
+9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`crates/tuic-terminal/src/output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
 
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
@@ -185,7 +185,7 @@ the fixed cell core stays 11 bytes. The fork's existing nine-mark bound remains.
 Search matches exact stored codepoints; buffer-search results use UTF-16 string
 offsets, while terminal highlight coordinates remain grid columns.
 
-**Delivery gate (`grid_gate.rs`).** A frame is a *delta*, so a dropped one strands
+**Delivery gate (`grid_gate.rs` and `grid_watch.rs`).** A frame is a *delta*, so a dropped one strands
 rows that exist nowhere else. Both transports are guarded, and both count rather
 than flag:
 

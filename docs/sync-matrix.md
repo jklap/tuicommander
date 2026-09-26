@@ -24,7 +24,7 @@ When modifying PluginHost API, capabilities, manifest schema, Tauri commands use
 | `src/plugins/pluginRegistry.ts` | Implementation in `buildHost()` |
 | `src/components/PluginPanel/pluginBaseStyles.ts` | Base CSS classes available to all plugin panels |
 | `src-tauri/src/plugins.rs` | `KNOWN_CAPABILITIES` list (new capabilities); `set_plugin_output_watchers` sync |
-| `src-tauri/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
+| `src-tauri/crates/tuic-terminal/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
 | `src-tauri/src/lib.rs` | Register new Tauri commands in `invoke_handler` |
 | `docs/backend/command-threading.md` | Where a new command runs (`fn` = macOS main thread). Update the audit when a command changes placement |
 | `docs/plugins.md` | Plugin developer guide (API reference, capabilities table, **Panel CSS Design Strategy** section, examples) |
@@ -132,8 +132,8 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
-| `src-tauri/src/chrome.rs` | Bottom-zone cutoff — anything at or below the input box must stay unparsed |
+| `src-tauri/crates/tuic-terminal/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
+| `src-tauri/crates/tuic-terminal/src/chrome.rs` | Bottom-zone cutoff — anything at or below the input box must stay unparsed |
 | `src-tauri/src/pty.rs` | `raw_stream_events` composition + `suppress_heuristic_question` gating |
 | `src-tauri/src/state.rs` | `apply_event_to_session_state` — the arms that SET and CLEAR `awaiting_input`. A signal nothing retracts latches the badge |
 | `src/components/Terminal/Terminal.tsx` | The frontend twin of those arms (`terminalsStore` awaiting flags) |
@@ -286,7 +286,7 @@ engine. `pty.rs` reads them, so they kept the `ai_agent/` module path:
 | `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
 | `src-tauri/src/lib.rs` | spawn_persist_task at boot |
 | `src-tauri/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
-| `src-tauri/src/terminal_grid.rs` | Grid reader methods: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `state.rs` |
+| `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` | Grid reader methods in `tuic-terminal`: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `vt_log.rs` |
 
 ### What #784-0aec removed, and where it comes back
 These areas had sections here and no longer have any code to sync. They are

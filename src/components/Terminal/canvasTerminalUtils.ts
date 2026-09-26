@@ -17,7 +17,7 @@ export const ATTR_DEFAULT_FG = 0x40;
 export const ATTR_DEFAULT_BG = 0x80;
 
 /** Bit 15 of the wire `col_count`: this row continues onto the next display row.
- *  Mirrors `ROW_WRAPPED_FLAG` in src-tauri/src/terminal_grid.rs — the grid is the
+ *  Mirrors `ROW_WRAPPED_FLAG` in src-tauri/crates/tuic-terminal/src/terminal_grid.rs — the grid is the
  *  only place that knows a line wrapped, and the overlay needs it to mask a
  *  wrapped `suggest:` block (#8fc7). */
 const ROW_WRAPPED_FLAG = 0x8000;
@@ -25,7 +25,7 @@ const ROW_WRAPPED_FLAG = 0x8000;
 /** Bit 14 of the wire `col_count`: this row carries only its damaged columns.
  *  A `start_col: u16` follows the count and the payload is `count` cells from
  *  that column; `decodeBinaryFrame` merges them into the row already on screen.
- *  Mirrors `ROW_PARTIAL_FLAG` in src-tauri/src/terminal_grid.rs, which documents
+ *  Mirrors `ROW_PARTIAL_FLAG` in src-tauri/crates/tuic-terminal/src/terminal_grid.rs, which documents
  *  why this is a flag and not a header version. A backend that predates it never
  *  sets the bit, so this decoder keeps taking the whole-row path unchanged. */
 const ROW_PARTIAL_FLAG = 0x4000;

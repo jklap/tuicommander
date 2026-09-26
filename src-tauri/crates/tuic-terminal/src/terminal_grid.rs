@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// Process-wide rather than per-session because the theme is: every terminal in
 /// the window paints from the same palette, and the event listener that answers
-/// the query has no `AppState` to reach into.
+/// the query handler has no application context to reach into.
 ///
 /// The defaults are a placeholder for the window between startup and the
 /// frontend's first [`set_terminal_palette`]. They are deliberately dark: an app
@@ -30,10 +30,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// gets NO answer never concludes at all. See the doc on the `ColorRequest` arm
 /// below for why silence is the expensive failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TerminalPalette {
-    pub(crate) foreground: (u8, u8, u8),
-    pub(crate) background: (u8, u8, u8),
-    pub(crate) cursor: (u8, u8, u8),
+pub struct TerminalPalette {
+    pub foreground: (u8, u8, u8),
+    pub background: (u8, u8, u8),
+    pub cursor: (u8, u8, u8),
 }
 
 impl Default for TerminalPalette {
@@ -54,7 +54,7 @@ static PALETTE: parking_lot::RwLock<TerminalPalette> = parking_lot::RwLock::new(
 
 /// Tell the emulator what the terminal is actually painted with. Called by the
 /// frontend whenever the resolved theme changes.
-pub(crate) fn set_terminal_palette(palette: TerminalPalette) {
+pub fn set_terminal_palette(palette: TerminalPalette) {
     *PALETTE.write() = palette;
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn set_terminal_palette(palette: TerminalPalette) {
 /// palette is write-then-answer in production, and the colour-query tests use
 /// this to save and restore the shared value around a case.
 #[cfg(test)]
-pub(crate) fn terminal_palette() -> TerminalPalette {
+pub fn terminal_palette() -> TerminalPalette {
     *PALETTE.read()
 }
 
@@ -71,8 +71,7 @@ pub(crate) fn terminal_palette() -> TerminalPalette {
 /// Channels are taken as `[u8; 3]` rather than a CSS string on purpose: the
 /// frontend already has to resolve `getComputedStyle` to numbers, and a parser
 /// here would be a second place for a colour to be interpreted differently.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn set_terminal_theme_colors(
+pub fn set_terminal_theme_colors(
     foreground: [u8; 3],
     background: [u8; 3],
     cursor: [u8; 3],
@@ -125,7 +124,7 @@ pub enum TermEvent {
 }
 
 #[derive(Clone)]
-pub(crate) struct TermEventCollector {
+pub struct TermEventCollector {
     bell: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<TermEvent>>>,
 }
@@ -228,7 +227,7 @@ impl Dimensions for GridSize {
     }
 }
 
-use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
+use crate::vt_log::{ChangedRow, LogColor, LogLine, LogSpan};
 
 /// An OSC 133 shell integration marker detected in the PTY stream.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -260,7 +259,7 @@ pub struct BufferSearchMatch {
 
 /// Bounded logical line prefix ending at the current cursor position.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LogicalPrefix {
+pub struct LogicalPrefix {
     pub text: String,
     pub start_row: usize,
     pub end_row: usize,
@@ -279,7 +278,7 @@ pub(crate) struct LogicalPrefix {
 /// Without it the frontend cannot tell a wrapped continuation from a fresh line,
 /// which is what left a wrapped `suggest:` block unmasked on screen (#8fc7):
 /// the grid is the only place that knows.
-pub(crate) const ROW_WRAPPED_FLAG: u16 = 0x8000;
+pub const ROW_WRAPPED_FLAG: u16 = 0x8000;
 
 /// Bit 14 of the wire `col_count`: this row carries only the columns alacritty
 /// reported as damaged, not the whole line. When set, a `start_col: u16` follows
@@ -302,7 +301,7 @@ pub(crate) const ROW_WRAPPED_FLAG: u16 = 0x8000;
 /// alacritty under-reports damage on in-place TUI redraws (see the `[dup]` heal in
 /// CanvasTerminal), so a periodic full-frame reconcile already exists and bounds a
 /// missed column to the same ~250ms-1s window it bounds a missed row.
-pub(crate) const ROW_PARTIAL_FLAG: u16 = 0x4000;
+pub const ROW_PARTIAL_FLAG: u16 = 0x4000;
 
 const ATTR_BOLD: u8 = 0b0000_0001;
 const ATTR_ITALIC: u8 = 0b0000_0010;
@@ -853,7 +852,7 @@ impl TerminalGrid {
     }
 
     #[cfg(test)]
-    pub(crate) fn full_screen_reads(&self) -> usize {
+    pub fn full_screen_reads(&self) -> usize {
         self.full_screen_reads
     }
 
@@ -862,7 +861,7 @@ impl TerminalGrid {
     /// oracle for the parse-damage fast path — `process_damage_matches_full_diff`
     /// asserts the two produce identical `ChangedRow`s across an input matrix.
     #[cfg(test)]
-    pub(crate) fn process_full(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+    pub fn process_full(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.processor.advance(&mut self.term, data);
         self.term.reset_parse_damage();
         let curr_rows = self.read_screen_text();
@@ -930,7 +929,7 @@ impl TerminalGrid {
     }
 
     /// Monotonic screen origin, including lines evicted from capped scrollback.
-    pub(crate) fn screen_origin(&self) -> usize {
+    pub fn screen_origin(&self) -> usize {
         self.term.grid().total_scrolled()
     }
 
@@ -997,7 +996,7 @@ impl TerminalGrid {
     ///
     /// Only terminal soft-wraps are followed. The bounded result is intended for
     /// structured-token parsing, not general scrollback reconstruction.
-    pub(crate) fn logical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
+    pub fn logical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
         const MAX_WRAP_TRANSITIONS: usize = 4;
         const MAX_BYTES: usize = 512;
 
@@ -1049,7 +1048,7 @@ impl TerminalGrid {
 
     /// Reconstruct the complete soft-wrapped logical line containing `row`.
     /// This remains valid after an agent returns the cursor to its composer.
-    pub(crate) fn logical_line_at_row(&self, row: usize) -> Option<LogicalPrefix> {
+    pub fn logical_line_at_row(&self, row: usize) -> Option<LogicalPrefix> {
         const MAX_WRAP_TRANSITIONS: usize = 8;
         // The parser accepts 2048 Unicode scalars; UTF-8 can use four bytes
         // per scalar, including cells in soft-wrapped rows before trimming.
@@ -1098,7 +1097,7 @@ impl TerminalGrid {
     /// Read only the current physical row through the cursor. This is the
     /// bounded fallback for a self-contained structured token when reconstructing
     /// the preceding soft-wrap chain is intentionally refused.
-    pub(crate) fn physical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
+    pub fn physical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
         const MAX_BYTES: usize = 512;
 
         let grid = self.term.grid();
@@ -1547,7 +1546,7 @@ impl TerminalGrid {
     }
 
     #[cfg(test)]
-    pub(crate) fn regex_compiles(&self) -> usize {
+    pub fn regex_compiles(&self) -> usize {
         self.regex_compiles
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -2145,7 +2144,7 @@ impl TerminalGrid {
     /// guessing at the win. `shipped / damaged` is the byte multiplier the current
     /// whole-row format pays.
     #[cfg(test)]
-    pub(crate) fn take_damage_geometry(&mut self) -> DamageGeometry {
+    pub fn take_damage_geometry(&mut self) -> DamageGeometry {
         let num_cols = self.term.grid().columns();
         let num_lines = self.term.grid().screen_lines();
         let display_offset = self.term.grid().display_offset();
@@ -2298,7 +2297,7 @@ impl TerminalGrid {
     }
 
     #[cfg(test)]
-    pub(crate) fn term(&self) -> &Term<TermEventCollector> {
+    pub fn term(&self) -> &Term<TermEventCollector> {
         &self.term
     }
 }
@@ -2428,7 +2427,7 @@ fn starts_list_item(trimmed: &str) -> bool {
 /// One frame's worth of damage geometry — see `take_damage_geometry`.
 #[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct DamageGeometry {
+pub struct DamageGeometry {
     /// Rows the frame would carry.
     pub rows: usize,
     /// Cells alacritty reported as damaged across those rows.
@@ -5715,7 +5714,7 @@ mod tests {
 
     fn gh_run_watch_capture() -> Vec<u8> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/fixtures/alt_screen/gh-run-watch.raw");
+            .join("../../src/fixtures/alt_screen/gh-run-watch.raw");
         std::fs::read(&path).unwrap_or_else(|e| panic!("missing fixture {}: {e}", path.display()))
     }
 

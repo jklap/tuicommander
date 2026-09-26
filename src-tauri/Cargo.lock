@@ -9495,6 +9495,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuic-terminal"
+version = "1.7.7"
+dependencies = [
+ "alacritty_terminal",
+ "dirs",
+ "lazy_static",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "strip-ansi-escapes",
+ "tempfile",
+ "tracing",
+ "tuic-test-support",
+ "unicode-width 0.2.2",
+ "vte 0.15.0",
+]
+
+[[package]]
+name = "tuic-test-support"
+version = "1.7.7"
+dependencies = [
+ "portable-pty",
+]
+
+[[package]]
 name = "tuicommander"
 version = "1.7.7"
 dependencies = [
@@ -9591,6 +9617,8 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tuic-terminal",
+ "tuic-test-support",
  "ulid",
  "unicode-width 0.2.2",
  "url",

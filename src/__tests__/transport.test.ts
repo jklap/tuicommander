@@ -146,7 +146,7 @@ describe("transport", () => {
 	 */
 	describe("per-session Tauri event parity", () => {
 		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
-			const rustSources = ["src-tauri/src/pty.rs", "src-tauri/src/state.rs", "src-tauri/src/terminal_grid.rs"]
+			const rustSources = ["src-tauri/src/pty.rs", "src-tauri/src/state.rs", "src-tauri/crates/tuic-terminal/src/terminal_grid.rs"]
 				.map((relative) => readRepoFile(relative))
 				.join("\n");
 

@@ -18,7 +18,7 @@ pub(crate) mod ai_agent;
 pub mod app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
-pub(crate) mod chrome;
+pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
 pub(crate) mod cli;
@@ -54,10 +54,11 @@ pub(crate) mod github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;
-pub(crate) mod grid_gate;
+pub(crate) use tuic_terminal::grid_gate;
+pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
 pub(crate) mod improvement_scan;
-mod input_line_buffer;
+pub(crate) use tuic_terminal::input_line_buffer;
 pub(crate) mod jsonc_edit;
 pub(crate) mod mcp_http;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
@@ -81,8 +82,8 @@ mod native_drag;
 mod native_keys;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
-mod output_parser;
-pub(crate) mod output_watchers;
+pub(crate) use tuic_terminal::output_parser;
+pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
 pub(crate) mod plugin_credentials;
@@ -120,7 +121,9 @@ pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
-pub(crate) mod terminal_grid;
+pub(crate) use tuic_terminal::terminal_grid;
+#[cfg(feature = "desktop")]
+pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod text_rank;
@@ -2157,7 +2160,7 @@ pub fn run() {
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
             grok_usage::get_grok_usage_api,
-            terminal_grid::set_terminal_theme_colors,
+            terminal_grid_commands::set_terminal_theme_colors,
             screenshot_response,
             mcp_confirm_response,
             app_logger::push_log,
