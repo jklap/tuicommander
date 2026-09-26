@@ -452,6 +452,17 @@ Markdown import stay outside this version by decision, not by omission. The
 delegation structure the Flow view draws is observed from spawns and sends; it
 is not inferred, and nothing groups entries into workstreams.
 
+## Native plans and stories
+
+The story service stores plan and story records outside the repository. It discovers
+existing Markdown plan documents from the project's top-level `plans/` and
+`.claude/plans/` directories on each `list_plan_sources` call. The Plans and Stories
+dialog uses this action through the same story service as MCP, HTTP, IPC, and CLI.
+Selecting a document calls `add_plan_source`, which derives the title from
+front matter or the first Markdown heading and reuses an existing record for
+the same source. Nested archives are not offered. A path or link can still be
+added through the secondary dialog control.
+
 ## Settings navigation
 
 The Settings panel groups its global pages by task. Group labels are static,

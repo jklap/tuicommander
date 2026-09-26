@@ -12,6 +12,10 @@
 
 # To Test
 
+## Plan picker (2026-09-26) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, open Plans and Stories in a repository with `plans/*.md`. Confirm the document choices are visible, the selected plan title matches its heading or front matter, and **Add from path or link** stays collapsed until opened. The running backend cannot serve `list_plan_sources` or `add_plan_source` until restart. Targeted Rust and Vitest tests cover discovery and dialog behavior; the visual layout needs the rebuilt app.
+
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart.
