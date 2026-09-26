@@ -17,6 +17,12 @@ pub struct Plan {
     pub source: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PlanSource {
+    pub title: String,
+    pub source: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanState {
