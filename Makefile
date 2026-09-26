@@ -149,8 +149,13 @@ cov:
 # under .tmp/ — see scripts/mutants.sh for why not the default tree copy.
 RANGE?=HEAD~1
 MUTANTS_ARGS?=
+ifneq ($(filter mutants,$(MAKECMDGOALS)),)
+MUTANTS_TRAILING_ARGS := $(filter-out mutants,$(MAKECMDGOALS))
+.PHONY: $(MUTANTS_TRAILING_ARGS)
+$(MUTANTS_TRAILING_ARGS):
+endif
 mutants:
-	@scripts/mutants.sh $(RANGE) $(MUTANTS_ARGS)
+	@scripts/mutants.sh $(RANGE) $(MUTANTS_ARGS) $(MUTANTS_TRAILING_ARGS)
 
 # CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
 # from `make cov`. Thresholds and exclusions live in src-tauri/.cargo-crap.toml.
