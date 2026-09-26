@@ -148,8 +148,9 @@ cov:
 # a full-tree run is not offered. Runs --in-place in a disposable worktree
 # under .tmp/ — see scripts/mutants.sh for why not the default tree copy.
 RANGE?=HEAD~1
+MUTANTS_ARGS?=
 mutants:
-	@scripts/mutants.sh $(RANGE)
+	@scripts/mutants.sh $(RANGE) $(MUTANTS_ARGS)
 
 # CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
 # from `make cov`. Thresholds and exclusions live in src-tauri/.cargo-crap.toml.
