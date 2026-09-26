@@ -88,13 +88,13 @@ describe("prepareAgentLaunchCommand", () => {
 		expect(await prepareAgentLaunchCommand("gemini", null, "gemini")).toBe("gemini");
 	});
 
-	it("preserves an inline environment assignment without treating it as a screen override", async () => {
+	it("preserves an inline environment assignment while Rust chooses the screen flag", async () => {
 		mockRpc.mockResolvedValueOnce(["--no-alt-screen"]).mockResolvedValueOnce(["--no-alt-screen"]);
-		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN=1 codex", null, "codex")).toBe(
-			"TUIC_ALLOW_ALT_SCREEN=1 codex --no-alt-screen",
+		expect(await prepareAgentLaunchCommand("PROFILE=work codex", null, "codex")).toBe(
+			"PROFILE=work codex --no-alt-screen",
 		);
-		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN='1' codex", null, "codex")).toBe(
-			"TUIC_ALLOW_ALT_SCREEN='1' codex --no-alt-screen",
+		expect(await prepareAgentLaunchCommand("PROFILE='work' codex", null, "codex")).toBe(
+			"PROFILE='work' codex --no-alt-screen",
 		);
 		expect(mockRpc).toHaveBeenCalledWith(
 			"prepare_agent_launch_args",

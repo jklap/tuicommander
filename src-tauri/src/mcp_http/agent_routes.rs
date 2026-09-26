@@ -518,8 +518,30 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[test]
+    fn launch_args_request_rejects_removed_screen_override() {
+        let request = serde_json::json!({
+            "agentType": "codex",
+            "binaryPath": "codex",
+            "args": [],
+            "allowAltScreen": true,
+        });
+        assert!(serde_json::from_value::<PrepareAgentLaunchArgsRequest>(request).is_err());
+    }
+
+    #[test]
+    fn spawn_request_rejects_removed_screen_override() {
+        let request = serde_json::json!({
+            "rows": 24,
+            "cols": 80,
+            "prompt": "work",
+            "allow_alt_screen": true,
+        });
+        assert!(serde_json::from_value::<SpawnAgentRequest>(request).is_err());
+    }
+
     #[tokio::test]
-    async fn http_agent_spawn_uses_per_agent_screen_setting_despite_legacy_env() {
+    async fn http_agent_spawn_uses_per_agent_screen_setting() {
         let script = crate::test_support::fake_ssh_script(
             "http-agent-screen-choice",
             "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\n' \"$*\"; fi",
@@ -533,7 +555,6 @@ mod tests {
             "agent_type": "codex",
             "binary_path": script.to_string_lossy(),
             "args": ["resume"],
-            "env": {"TUIC_ALLOW_ALT_SCREEN": "1"},
         }))
         .unwrap();
         let response = spawn_agent_session(

@@ -1148,7 +1148,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
                 "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, aider, goose, gemini, ...). Case-insensitive. (action=spawn)" },
                 "binary_path": { "type": "string", "description": "Override agent binary path (action=spawn)" },
-                "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults (action=spawn)" },
+                "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults. Native scrollback is controlled by the per-agent prevent_alt_screen setting (action=spawn)." },
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
                 "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
@@ -3800,6 +3800,11 @@ fn handle_agent_with_parent_cwd(
             // Agent spawning is restricted to localhost — matches the HTTP route guard in agent_routes.rs
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "Agent spawning is restricted to localhost connections"});
+            }
+            for removed in ["allow_alt_screen", "allowAltScreen"] {
+                if args.get(removed).is_some() {
+                    return serde_json::json!({"error": format!("Removed agent spawn parameter: {removed}; configure prevent_alt_screen for the agent instead")});
+                }
             }
             let prompt = match args["prompt"].as_str() {
                 Some(p) => p.to_string(),
@@ -9677,6 +9682,27 @@ mod tests {
         assert_eq!(state.tasks.len(), 0, "no task may outlive a refused spawn");
     }
 
+    #[tokio::test]
+    async fn agent_spawn_rejects_removed_screen_override() {
+        let state = test_state();
+        for field in ["allow_alt_screen", "allowAltScreen"] {
+            let mut request = serde_json::json!({
+                "action": "spawn",
+                "prompt": "work",
+                "binary_path": "/nonexistent/definitely-not-an-agent",
+            });
+            request[field] = serde_json::json!(true);
+            let result = handle_agent(&state, "127.0.0.1:1".parse().unwrap(), &request, None);
+            assert!(
+                result["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(field)),
+                "removed {field} must be rejected explicitly: {result}"
+            );
+        }
+        assert_eq!(state.tasks.len(), 0);
+    }
+
     /// A spawn that never reaches the PTY (bad binary) must also leave no task.
     #[test]
     fn a_failed_spawn_creates_no_task() {
@@ -13678,6 +13704,13 @@ mod tests {
                 "agent action description must include '{action}'"
             );
         }
+        assert!(
+            agent["inputSchema"]["properties"]["args"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("prevent_alt_screen"),
+            "spawn schema must name the per-agent screen setting"
+        );
     }
 
     #[test]

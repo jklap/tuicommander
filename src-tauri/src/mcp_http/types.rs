@@ -238,6 +238,7 @@ pub(super) struct PostPrReviewRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SpawnAgentRequest {
     pub rows: Option<u16>,
     pub cols: Option<u16>,
@@ -254,7 +255,7 @@ pub(super) struct SpawnAgentRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PrepareAgentLaunchArgsRequest {
     pub agent_type: String,
     pub binary_path: String,
