@@ -438,7 +438,7 @@ describe("terminalsStore", () => {
 		it("still marks the terminal as a sub-agent when the parent has no tab", () => {
 			testInScope(() => {
 				const child = store.add(makeTerminal({ name: "Worker", sessionId: "pty-c", parentSession: "external-caller" }));
-				expect(store.getSubAgentTag(child)).toBe("sub");
+				expect(store.getSubAgentTag(child)).toBe("external agent");
 			});
 		});
 	});

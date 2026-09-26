@@ -49,6 +49,10 @@ pub(crate) struct SessionInfo {
     /// reload: `term-alias-assigned` fires once, at spawn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// Live agent identity bound to this PTY; differs from session_id for a
+    /// locally launched tab that registered its own TUIC_SESSION.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tuic_session: Option<String>,
     /// Session (or `$TUIC_SESSION`) of the agent that spawned this one. Published
     /// once on `session-created`, so a reload or a late browser client needs it
     /// here. Never a `pending-mcp:` placeholder: no tab can match one.

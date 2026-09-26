@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Subagent attribution** — The Activity Dashboard uses the same robot marker as the sidebar. Its tooltip names a live parent even when the parent's TUIC identity differs from its PTY ID.
+
 - **Compact Activity Dashboard** — The inline overlay matches the detached window's compact width and remains inside narrow main windows.
 
 - **Progress stays accessible** — The toolbar bell always includes Terminal Progress, even after all updates are read. Open it with `Cmd/Ctrl+Shift+P` or from the command palette; the unread badge keeps counting new entries.
