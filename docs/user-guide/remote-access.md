@@ -118,6 +118,9 @@ The app launches in standalone mode (no browser chrome) for a native-like experi
 The question is encrypted to the phone's Web Push subscription. It does not
 pass through TUICommander's content-blind cloud relay. TUICommander sends at
 most one question or completion push per session every 30 seconds.
+Notifications from different sessions remain separate. A newer notification
+for one session can replace its earlier one; tapping either remaining session
+notification opens that session.
 
 ### Mobile Features
 
