@@ -391,6 +391,24 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		expect(result.ok).toBe(false);
 		expect(result.reason).toBe("No active terminal");
 	});
+
+	it("blocks a live terminal with no agent detected yet, even when it would only insert for review", () => {
+		// Distinct from "No active terminal" above: the session exists, but
+		// agent detection hasn't caught up yet (agentType still null/undefined).
+		// This is the exact gap PromptDrawer's own doInject used to skip —
+		// clicking "Send immediately" before detection settles used to write
+		// straight into the PTY instead of being refused here.
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: null,
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal", autoExecute: false }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toBe("No agent detected in terminal");
+		expect(mockedIsBusy).not.toHaveBeenCalled();
+	});
 });
 
 describe("executeInject — routing by inject target", () => {
