@@ -27,7 +27,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
-pub(crate) mod cow;
+pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
@@ -41,10 +41,10 @@ pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
-pub(crate) mod git_cli;
+pub(crate) use tuic_git::git_cli;
 pub(crate) mod git_graph;
-pub(crate) mod git_locks;
-pub(crate) mod git_reads;
+pub(crate) use tuic_git::git_locks;
+pub(crate) use tuic_git::git_reads;
 pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
@@ -2173,7 +2173,7 @@ pub fn run() {
             app_logger::clear_logs,
             notification_sound::play_notification_sound,
             notification_sound::list_audio_output_devices,
-            git_graph::get_commit_graph,
+            git::get_commit_graph,
             tuic_cli::get_cli_status,
             tuic_cli::install_cli,
             tuic_cli::uninstall_cli,

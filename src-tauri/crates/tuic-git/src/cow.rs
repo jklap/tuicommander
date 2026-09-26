@@ -14,14 +14,14 @@ use crate::git_cli::git_cmd;
 const COW_COPY_FLAGS: [&str; 2] = ["-c", "--reflink=always"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CowSupport {
+pub enum CowSupport {
     Supported,
     Unsupported(String),
 }
 
 /// Probe the actual source/destination pair instead of inferring reflink
 /// support from a filesystem name.
-pub(crate) fn probe_cow_support(src: &Path, dest_parent: &Path) -> CowSupport {
+pub fn probe_cow_support(src: &Path, dest_parent: &Path) -> CowSupport {
     let probe_source = src.join(".git").join("HEAD");
     if !probe_source.is_file() {
         return CowSupport::Unsupported(format!(
@@ -103,7 +103,7 @@ fn same_volume(_left: &Path, _right: &Path) -> Option<bool> {
 
 /// Copy a directory tree copy-on-write, trying the platform-specific flags in
 /// order and never falling back to a byte copy.
-pub(crate) fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
+pub fn clone_tree(src: &Path, dest: &Path) -> Result<(), String> {
     clone_tree_with(src, dest, |flag| {
         let mut command = Command::new("cp");
         command.arg(flag).arg("-R").arg(src).arg(dest);
@@ -169,9 +169,9 @@ fn clone_tree_with(
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct WarmingReport {
-    pub(crate) warmed: usize,
-    pub(crate) warnings: Vec<String>,
+pub struct WarmingReport {
+    pub warmed: usize,
+    pub warnings: Vec<String>,
 }
 
 /// Ask git which directories are ignored. A git failure is a warning rather
@@ -234,7 +234,7 @@ fn external_bin_candidates(src: &Path) -> Vec<PathBuf> {
 
 /// Production wrapper. Probe once so a filesystem without clonefile support
 /// produces one useful warning instead of one failure for every ignored tree.
-pub(crate) fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
+pub fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
     let candidates = match warming_candidates(src, dest) {
         Ok(candidates) => candidates,
         Err(report) => return report,
@@ -264,7 +264,7 @@ pub(crate) fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
 /// it can belongs to `warm_worktree`; this seam exists so the tests can drive
 /// `warm_candidates` with a copy that does not depend on the filesystem.
 #[cfg(test)]
-pub(crate) fn warm_worktree_with(
+pub fn warm_worktree_with(
     src: &Path,
     dest: &Path,
     copy: impl Fn(&Path, &Path) -> Result<(), String>,
@@ -392,12 +392,12 @@ const WARM_ARTIFACT_DIRS: [&str; 7] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct WarmArtifact {
-    pub(crate) path: String,
-    pub(crate) size: String,
+pub struct WarmArtifact {
+    pub path: String,
+    pub size: String,
 }
 
-pub(crate) fn warm_artifacts(workspace: &Path) -> Vec<WarmArtifact> {
+pub fn warm_artifacts(workspace: &Path) -> Vec<WarmArtifact> {
     let present: Vec<&str> = WARM_ARTIFACT_DIRS
         .iter()
         .copied()
@@ -577,7 +577,7 @@ mod tests {
         // The flood has to be spelled for the host shell. `sh` is not a Windows
         // program: this test spawned it anyway and only passed on GitHub's
         // runner, whose image carries `C:\Program Files\Git\usr\bin` on `PATH`.
-        let (shell, flag) = crate::test_support::host_shell();
+        let (shell, flag) = tuic_test_support::host_shell();
         let script = if cfg!(windows) {
             // What has to exceed the pipe buffer is a byte count, not a line
             // count, and `cmd`'s `for /L` costs about 14ms an iteration on a

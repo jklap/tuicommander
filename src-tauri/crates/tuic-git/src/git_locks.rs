@@ -32,7 +32,7 @@ use crate::git_cli::{self, LockOwnership};
 
 /// A `*.lock` file found while scanning a repo's gitdir.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LockFileInfo {
+pub struct LockFileInfo {
     pub path: PathBuf,
     pub len: u64,
     pub age_secs: u64,
@@ -60,7 +60,7 @@ const MTIME_STABILITY_WINDOW: Duration = Duration::from_millis(50);
 /// diagnostic scan into an expensive one for no benefit.
 ///
 /// Read-only: never opens, touches, or removes anything it finds.
-pub(crate) fn find_lock_files(git_dir: &Path) -> Vec<LockFileInfo> {
+pub fn find_lock_files(git_dir: &Path) -> Vec<LockFileInfo> {
     let mut out = Vec::new();
     scan_dir_for_locks(git_dir, &mut out);
     out
@@ -112,7 +112,7 @@ fn age_secs_from(meta: &fs::Metadata) -> Option<u64> {
 /// [`MTIME_STABILITY_WINDOW`] apart. This can only withhold a "stale" verdict
 /// `git_cli.rs` would give, never grant one it would refuse — so the two
 /// modules can never disagree about the same lock.
-pub(crate) fn is_lock_stale(lock: &Path, len: u64, age_secs: u64) -> bool {
+pub fn is_lock_stale(lock: &Path, len: u64, age_secs: u64) -> bool {
     is_lock_stale_inner(lock, len, age_secs, git_cli::probe_index_lock_owner, || {
         std::thread::sleep(MTIME_STABILITY_WINDOW)
     })
@@ -171,7 +171,7 @@ fn is_lock_stale_inner(
 }
 
 /// [`find_lock_files`] filtered down to the ones [`is_lock_stale`] confirms.
-pub(crate) fn find_stale_lock_files(git_dir: &Path) -> Vec<LockFileInfo> {
+pub fn find_stale_lock_files(git_dir: &Path) -> Vec<LockFileInfo> {
     find_lock_files(git_dir)
         .into_iter()
         .filter(|lock| is_lock_stale(&lock.path, lock.len, lock.age_secs))
@@ -185,7 +185,7 @@ pub(crate) fn find_stale_lock_files(git_dir: &Path) -> Vec<LockFileInfo> {
 /// Returns `None` when no stale lock is found, so the caller falls back to
 /// its normal error message — this function only ever makes a failure
 /// *more* specific, never invents a cause that isn't there.
-pub(crate) fn describe_stale_lock(repo_path: &Path) -> Option<String> {
+pub fn describe_stale_lock(repo_path: &Path) -> Option<String> {
     let git_dir = crate::git::resolve_git_dir(repo_path)?;
     let stale = find_stale_lock_files(&git_dir);
     let lock = stale.first()?;
