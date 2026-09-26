@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
 import * as platform from "../../platform";
 import { diffTabsStore } from "../../stores/diffTabs";
@@ -2825,6 +2825,17 @@ describe("useGitOperations", () => {
 		});
 
 		it("uses promptRepoPath callback instead of window.prompt in browser mode", async () => {
+			const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+				const url = String(input);
+				if (!url.endsWith("/watchers/hot-repos") && !url.endsWith("/watchers/repo?path=%2Fbrowser-repo")) {
+					throw new Error(`unexpected browser request: ${url}`);
+				}
+				return new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			});
+			onTestFinished(() => fetchMock.mockRestore());
 			const promptRepoPath = vi.fn().mockResolvedValue("/browser-repo");
 			const browserGitOps = useGitOperations({
 				repo: mockRepo,
@@ -2850,6 +2861,10 @@ describe("useGitOperations", () => {
 
 			expect(promptRepoPath).toHaveBeenCalledOnce();
 			expect(repositoriesStore.get("/browser-repo")).toBeDefined();
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://localhost:3000/watchers/repo?path=%2Fbrowser-repo",
+				expect.objectContaining({ method: "POST" }),
+			);
 		});
 
 		it("does nothing when promptRepoPath returns null in browser mode", async () => {
