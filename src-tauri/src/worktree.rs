@@ -1276,6 +1276,39 @@ mod tests {
     }
 
     #[test]
+    fn automatic_archive_leaves_a_locked_worktree_untouched() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "feat-archive-locked", true);
+        git_cmd(repo.path())
+            .args(["worktree", "lock", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let error = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "feat-archive-locked".into(),
+            "archive".into(),
+            false,
+        )
+        .err()
+        .expect("locked checkout must not be archived");
+
+        assert!(error.starts_with(tuic_git::worktree::LOCKED_WORKTREE_PREFIX));
+        assert!(worktree.exists());
+        assert!(
+            git_cmd(repo.path())
+                .args(["worktree", "list", "--porcelain"])
+                .run()
+                .unwrap()
+                .stdout
+                .contains(&worktree.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
     fn resolve_worktree_dir_sibling_strategy() {
         use crate::config::WorktreeStorage;
         let repo = PathBuf::from("/home/user/dev/myrepo");

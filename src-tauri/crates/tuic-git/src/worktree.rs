@@ -2167,6 +2167,8 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
         // Skip entries whose directory no longer exists (double safety after prune)
         if let Some(branch) = branch
             && Path::new(&entry.path).exists()
+            && Path::new(&entry.path).parent().and_then(Path::file_name)
+                != Some(std::ffi::OsStr::new("__archived"))
         {
             result.insert(
                 workspace_id_of_worktree(&branch),
@@ -2654,7 +2656,7 @@ pub fn merge_preflight(
 }
 
 /// Archive a worktree: move its directory to `{worktrees_dir}/__archived/{branch_name}/`
-/// and run `git worktree remove`.
+/// and repair its Git registration so the archived checkout stays usable.
 ///
 /// If `archive_script` is provided (non-empty), it runs in the worktree directory
 /// before archiving. A non-zero exit code aborts the operation.
@@ -2679,6 +2681,29 @@ fn free_archive_dest(archive_dir: &Path, sanitized: &str) -> PathBuf {
     }
 }
 
+fn repair_archived_submodules(
+    base_repo: &Path,
+    worktree: &Path,
+    modules: &[(String, String)],
+) -> Result<(), String> {
+    for (relative, gitdir) in modules {
+        let module = worktree.join(relative);
+        std::fs::write(module.join(".git"), format!("gitdir: {gitdir}\n"))
+            .map_err(|error| format!("Cannot repair submodule {relative} gitfile: {error}"))?;
+        git_cmd(base_repo)
+            .args([
+                "config",
+                "--file",
+                &Path::new(gitdir).join("config").to_string_lossy(),
+                "core.worktree",
+                &module.to_string_lossy(),
+            ])
+            .run()
+            .map_err(|error| format!("Cannot repair submodule {relative} worktree: {error}"))?;
+    }
+    Ok(())
+}
+
 pub fn archive_worktree(
     base_repo: &Path,
     workspace_id: &str,
@@ -2693,6 +2718,14 @@ pub fn archive_worktree(
         lock.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     });
+    let admin = registered_worktree_admin_dir(base_repo, &wt_path)?
+        .ok_or("Cannot archive worktree: its Git registration is missing")?;
+    if admin.join("locked").exists() {
+        return Err(format!("{LOCKED_WORKTREE_PREFIX}worktree is locked"));
+    }
+    if !wt_path.exists() {
+        return Err("Cannot archive worktree: checkout directory is missing".into());
+    }
 
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
@@ -2700,41 +2733,56 @@ pub fn archive_worktree(
     {
         run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
+    let submodules = git_cmd(&wt_path)
+        .args(["submodule", "status", "--recursive"])
+        .run()
+        .map_err(|error| format!("Cannot inspect submodules before archive: {error}"))?;
+    let mut module_gitdirs = Vec::new();
+    for line in submodules.stdout.lines() {
+        if line.starts_with('-') {
+            continue;
+        }
+        let (_, description) = line[1..]
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule status before archive: {line}"))?;
+        let relative = description
+            .rsplit_once(" (")
+            .map_or(description, |(path, _)| path);
+        let module = wt_path.join(relative);
+        module_gitdirs.push((relative.to_string(), rev_at(&module, "--absolute-git-dir")?));
+    }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
     let sanitized = sanitize_name(&workspace.branch);
-    let mut archive_dest = archive_dir.join(&sanitized);
-
-    // Create archive directory
     std::fs::create_dir_all(&archive_dir)
         .map_err(|e| format!("Failed to create archive directory: {e}"))?;
-
-    // Move the directory out FIRST. `git worktree remove --force` DELETES
-    // uncommitted work, so removing before the rename made "archive" exactly as
-    // destructive as "delete" for a dirty worktree — the rename then found
-    // nothing left to move and silently did nothing.
-    if wt_path.exists() {
-        // Archive is the non-destructive alternative to delete — never clobber a
-        // prior archive for the same branch name; land on the next free suffix.
-        archive_dest = free_archive_dest(&archive_dir, &sanitized);
-        std::fs::rename(&wt_path, &archive_dest)
-            .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
+    // Keep the linked checkout and its Git administration intact. Never clobber
+    // an earlier archive of the same branch.
+    let archive_dest = free_archive_dest(&archive_dir, &sanitized);
+    std::fs::rename(&wt_path, &archive_dest)
+        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
+    let repaired = (|| -> Result<(), String> {
+        git_cmd(base_repo)
+            .args(["worktree", "repair", &archive_dest.to_string_lossy()])
+            .run()
+            .map_err(|error| format!("Cannot repair archived worktree: {error}"))?;
+        repair_archived_submodules(base_repo, &archive_dest, &module_gitdirs)
+    })();
+    if let Err(error) = repaired {
+        let rollback = (|| -> Result<(), String> {
+            std::fs::rename(&archive_dest, &wt_path)
+                .map_err(|error| format!("Cannot move checkout back: {error}"))?;
+            git_cmd(base_repo)
+                .args(["worktree", "repair", &wt_path.to_string_lossy()])
+                .run()
+                .map_err(|error| format!("Cannot restore worktree registration: {error}"))?;
+            repair_archived_submodules(base_repo, &wt_path, &module_gitdirs)
+        })();
+        return Err(format!(
+            "Failed to repair archived worktree: {error}; rollback: {rollback:?}"
+        ));
     }
     clear_warm(&wt_path);
-
-    // The directory is out of the repo now; drop git's administrative entry for
-    // it. Unlock first — `prune` skips locked worktrees and would leave a ghost
-    // row in the sidebar.
-    let wt_path_str = wt_path.to_string_lossy().to_string();
-    let _ = git_cmd(base_repo)
-        .args(["worktree", "unlock", &wt_path_str])
-        .run();
-    if let Err(e) = git_cmd(base_repo).args(["worktree", "prune"]).run() {
-        tracing::warn!(
-            source = "worktree",
-            "Archive: failed to prune the worktree entry: {e}"
-        );
-    }
 
     Ok(archive_dest.to_string_lossy().to_string())
 }
@@ -3725,17 +3773,130 @@ mod tests {
             .args(["commit", "-m", "feat: add feature"])
             .run()
             .expect("git commit");
+        let head = rev_at(&wt.path, "HEAD").unwrap();
+        let reflog = git_cmd(&wt.path)
+            .args(["reflog", "show", "--format=%H", "-1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout;
 
         // Archive the worktree
         let result = archive_worktree(repo.path(), "feat-archive-test", None);
         assert!(result.is_ok(), "Archive should succeed: {:?}", result);
 
-        let _archive_path = PathBuf::from(result.unwrap());
+        let archive_path = PathBuf::from(result.unwrap());
         // The worktree should no longer exist at original location
         assert!(!wt.path.exists(), "Original worktree path should be gone");
-        // Archive destination should exist (only if worktree dir wasn't deleted by git)
-        // Note: git worktree remove --force may delete the dir, in which case archive_dest won't exist
-        // but the operation should still succeed
+        assert!(archive_path.exists());
+        assert_eq!(rev_at(&archive_path, "HEAD").unwrap(), head);
+        assert_eq!(
+            git_cmd(&archive_path)
+                .args(["reflog", "show", "--format=%H", "-1", "HEAD"])
+                .run()
+                .unwrap()
+                .stdout,
+            reflog
+        );
+        assert!(
+            !get_worktree_paths_raw(&repo_path)
+                .unwrap()
+                .contains_key("feat-archive-test")
+        );
+        git_cmd(repo.path())
+            .args(["worktree", "prune", "--expire", "now"])
+            .run()
+            .unwrap();
+        assert_eq!(rev_at(&archive_path, "HEAD").unwrap(), head);
+    }
+
+    #[test]
+    fn archive_refuses_a_locked_worktree_without_touching_it() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "archive-locked");
+        git_cmd(&repo)
+            .args(["worktree", "lock", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .expect("worktree registration");
+
+        let error = archive_worktree(&repo, "archive-locked", None).unwrap_err();
+        assert!(error.starts_with(LOCKED_WORKTREE_PREFIX), "{error}");
+        assert!(path.exists());
+        assert!(admin.join("locked").exists());
+        assert!(!path.parent().unwrap().join("__archived").exists());
+    }
+
+    #[test]
+    fn archived_submodule_keeps_its_local_commit_and_ref() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "archive-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-only.txt", "local commit\n");
+        let local_oid = rev_at(&module, "HEAD").unwrap();
+        let module_reflog = git_cmd(&module)
+            .args(["reflog", "show", "--format=%H", "-1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout;
+        git_cmd(&module)
+            .args(["branch", "local-archive-ref", &local_oid])
+            .run()
+            .unwrap();
+
+        let archived = PathBuf::from(archive_worktree(&repo, "archive-module", None).unwrap());
+        let archived_module = archived.join("modules/local");
+        assert_eq!(rev_at(&archived_module, "HEAD").unwrap(), local_oid);
+        assert_eq!(
+            git_cmd(&archived_module)
+                .args(["reflog", "show", "--format=%H", "-1", "HEAD"])
+                .run()
+                .unwrap()
+                .stdout,
+            module_reflog
+        );
+        assert!(
+            git_cmd(&archived_module)
+                .args(["status", "--porcelain"])
+                .run()
+                .is_ok()
+        );
+        assert!(
+            git_cmd(&archived_module)
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .is_ok()
+        );
+        assert!(
+            git_cmd(&archived_module)
+                .args(["for-each-ref", "--points-at", &local_oid])
+                .run()
+                .unwrap()
+                .stdout
+                .lines()
+                .next()
+                .is_some()
+        );
     }
 
     #[test]
@@ -4512,10 +4673,7 @@ branch refs/heads/feat
     #[test]
     fn free_archive_dest_avoids_clobbering_prior_archives() {
         // The anti-clobber guarantee for archive_worktree: archiving the same
-        // branch name again must land on a fresh suffix, never overwrite. Tested
-        // directly on the pure destination-picker because whether the worktree
-        // dir survives `git worktree remove --force` (and thus reaches the rename)
-        // is git-version/OS dependent — see archive_worktree_moves_directory.
+        // branch name again must land on a fresh suffix, never overwrite.
         let tmp = tempfile::tempdir().expect("tempdir");
         let archive_dir = tmp.path().join("__archived");
         fs::create_dir_all(&archive_dir).expect("mkdir archive");
