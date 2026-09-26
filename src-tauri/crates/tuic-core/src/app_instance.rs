@@ -74,7 +74,7 @@ impl AppInstance {
     }
 }
 
-pub(crate) fn is_owned_vault_service(service: &str) -> bool {
+pub fn is_owned_vault_service(service: &str) -> bool {
     service == DEFAULT_VAULT_SERVICE || service.starts_with(NAMED_VAULT_SERVICE_PREFIX)
 }
 

@@ -20,7 +20,7 @@ All values below were captured live from a real PTY session (raw ANSI), not infe
 **Process identity gotcha.** `proc_pidpath()` (macOS) and `/proc/<pid>/comm` (Linux) both return
 the **node** interpreter for a pi session, not `pi`. Foreground-process classification therefore
 falls back to `argv[0]` for known interpreters — see `is_script_interpreter` in `pty.rs` and
-`read_process_argv0` in `process_env.rs`. Without that fallback pi is invisible as an agent.
+`read_process_argv0` in `tuic-core/src/process_env.rs`. Without that fallback pi is invisible as an agent.
 
 ## Bottom zone
 

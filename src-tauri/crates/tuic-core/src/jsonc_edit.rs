@@ -40,7 +40,7 @@ fn parse_options() -> ParseOptions {
 /// Read-only callers (status checks, "is our entry current?") use this instead
 /// of `serde_json::from_str`, which rejects the comments these files legally
 /// contain.
-pub(crate) fn parse(text: &str) -> Result<serde_json::Value, String> {
+pub fn parse(text: &str) -> Result<serde_json::Value, String> {
     let parsed: Option<serde_json::Value> =
         jsonc_parser::parse_to_serde_value(text, &parse_options())
             .map_err(|e| format!("JSONC parse error: {e}"))?;
@@ -103,7 +103,7 @@ fn to_input(value: &serde_json::Value) -> CstInputValue {
 ///
 /// The returned text is re-parsed before it is handed back, so a bug in the
 /// splice surfaces here rather than in the user's config file.
-pub(crate) fn upsert_member(
+pub fn upsert_member(
     text: &str,
     key_path: &[&str],
     key: &str,
@@ -125,7 +125,7 @@ pub(crate) fn upsert_member(
 
 /// Remove `<key_path>/<key>`, leaving the rest of the document byte-identical.
 /// A member that is not there is not an error — the end state is what matters.
-pub(crate) fn remove_member(text: &str, key_path: &[&str], key: &str) -> Result<String, String> {
+pub fn remove_member(text: &str, key_path: &[&str], key: &str) -> Result<String, String> {
     let root = CstRootNode::parse(text, &parse_options())
         .map_err(|e| format!("JSONC parse error: {e}"))?;
     let Some(parent) = navigate(&root, key_path) else {

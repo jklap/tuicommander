@@ -697,7 +697,7 @@ directory on first debug run so a dev instance wouldn't start with an empty
 repo list. That seeding path is gone now that both builds share one
 directory for `repositories.json` and all other config domains covered by
 this document. (`~/.tuicommander-dev/` itself still exists for an unrelated
-purpose — see `credentials.rs`'s debug-only credential store.)
+purpose — see `crates/tuic-core/src/credentials.rs`'s debug-only credential store.)
 
 **Commands:** `load_repositories()`, `save_repositories(config)`
 

@@ -95,7 +95,7 @@ src-tauri/src/
 ├── worktree.rs           # Git worktree management
 ├── output_parser.rs      # Terminal output parsing
 ├── prompt.rs             # Prompt template processing
-├── error_classification.rs # Error classification and backoff
+├── crates/tuic-core/       # CLI, credentials, config path, JSONC, process env, redaction, ranking, error classification
 ├── menu.rs               # Native menu bar
 ├── mcp_http/             # HTTP/WebSocket + MCP server (routes split per area)
 └── dictation/            # Voice dictation (Whisper)
