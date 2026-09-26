@@ -1209,8 +1209,11 @@ OAuth callbacks arrive on a loopback HTTP server bound to `127.0.0.1:0` (OS-assi
 The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`) enable coordination between multiple AI agents connected to TUICommander.
 There is no separate `swarm` action; orchestration composes the `agent` and `session` primitives.
 
-For `agent action=spawn`, `prompt` is always delivered. Caller-supplied `args`
-that contain `{prompt}` remain authoritative and receive direct substitution.
+For `agent action=spawn`, `prompt` is always delivered. The per-agent
+`prevent_alt_screen` setting controls the screen flag on every launch path,
+including MCP spawn; there is no per-spawn screen override. MCP spawn rejects
+the removed `allow_alt_screen` and `allowAltScreen` parameters. Caller-supplied
+`args` that contain `{prompt}` remain authoritative and receive direct substitution.
 Flags-only `args` keep their order; normal CLIs receive the prompt as the final
 positional argument, while prefill-only interactive TUIs receive it through the
 deferred PTY-injection path after their ready prompt appears.

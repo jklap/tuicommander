@@ -1830,7 +1830,7 @@ describe("transport", () => {
 			expect(detectClaude.transform?.({ path: "/usr/local/bin/claude" })).toBe("/usr/local/bin/claude");
 
 			const spawn = mapCommandToHttp("spawn_agent", {
-				pty_config: { rows: 30, cols: 100, cwd: "/repo", env: { TUIC_ALLOW_ALT_SCREEN: "1" } },
+				pty_config: { rows: 30, cols: 100, cwd: "/repo", env: { PROFILE: "work" } },
 				agent_config: { prompt: "fix it", agent_type: "codex", model: "gpt-5" },
 			});
 			expect(spawn.method).toBe("POST");
@@ -1839,7 +1839,7 @@ describe("transport", () => {
 				rows: 30,
 				cols: 100,
 				cwd: "/repo",
-				env: { TUIC_ALLOW_ALT_SCREEN: "1" },
+				env: { PROFILE: "work" },
 				prompt: "fix it",
 				agent_type: "codex",
 				model: "gpt-5",

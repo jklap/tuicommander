@@ -58,8 +58,7 @@ fn pty_identity_defaults_claude_to_native_scrollback() {
     let mut ipc = CommandBuilder::new("claude");
     bind_pty_identity(&state, &mut ipc, "screen-ipc", None);
     let mut http = CommandBuilder::new("claude");
-    let mut env = std::collections::HashMap::new();
-    env.insert("TUIC_ALLOW_ALT_SCREEN".to_string(), "1".to_string());
+    let env = std::collections::HashMap::new();
     apply_agent_screen_env(&mut ipc, &env);
     apply_agent_screen_env(&mut http, &env);
     assert_eq!(

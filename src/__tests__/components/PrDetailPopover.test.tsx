@@ -47,7 +47,7 @@ describe("PrDetailPopover", () => {
 
 	it.each([
 		{ env: {}, expected: "codex --no-alt-screen" },
-		{ env: { TUIC_ALLOW_ALT_SCREEN: "1" }, expected: "codex --no-alt-screen" },
+		{ env: { PROFILE: "work" }, expected: "codex --no-alt-screen" },
 	])("launches the PR review agent with the configured screen mode ($expected)", async ({ env, expected }) => {
 		vi.useRealTimers();
 		mockGetBranchPrData.mockReturnValue({

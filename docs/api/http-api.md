@@ -1617,7 +1617,7 @@ Content-Type: application/json
 { "agentType": "codex", "binaryPath": "codex", "args": ["resume"] }
 ```
 
-Returns the argument array with the agent's supported native-scrollback option inserted before an interactive subcommand. An explicit option, an alternate-screen opt-out, or a non-interactive subcommand leaves the array unchanged. The desktop `prepare_agent_launch_args` command uses the same Rust builder. Remote HTTP callers must authenticate.
+Returns the argument array with the agent's supported native-scrollback option inserted before an interactive subcommand. An explicit option, a disabled per-agent `prevent_alt_screen` setting, or a non-interactive subcommand leaves the array unchanged. The removed `allowAltScreen` request field is rejected, as is `allow_alt_screen` on HTTP agent spawn. The desktop `prepare_agent_launch_args` command uses the same Rust builder. Remote HTTP callers must authenticate.
 
 ### Detect Installed IDEs
 
