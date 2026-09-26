@@ -3865,6 +3865,69 @@ mod tests {
     }
 
     #[test]
+    fn archiving_a_worktree_preserves_a_missing_neighbors_module_only_commit() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let missing = add_worktree(&repo, "missing-archive-neighbor");
+        let archived = add_worktree(&repo, "archived-neighbor");
+        git_cmd(&missing)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = missing.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "neighbor-only.txt", "neighbor commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+        let admin = registered_worktree_admin_dir(&repo, &missing)
+            .unwrap()
+            .expect("missing neighbor registration");
+        assert!(module_gitdir.exists());
+        assert!(
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", &oid])
+                .run()
+                .is_err(),
+            "commit must exist only in the missing neighbor's module"
+        );
+        fs::remove_dir_all(&missing).unwrap();
+
+        let destination = archive_worktree(&repo, "archived-neighbor", None).unwrap();
+        assert!(Path::new(&destination).exists());
+        assert!(!archived.exists());
+        assert!(admin.exists(), "archive pruned the unrelated registration");
+        assert!(
+            module_gitdir.exists(),
+            "archive pruned the module repository"
+        );
+        git_cmd(&repo)
+            .args([
+                "--git-dir",
+                &module_gitdir.to_string_lossy(),
+                "--work-tree",
+                &repo.to_string_lossy(),
+                "cat-file",
+                "-e",
+                &oid,
+            ])
+            .run()
+            .expect("module-only commit remains reachable after archive");
+    }
+
+    #[test]
     fn archived_submodule_keeps_its_local_commit_and_ref() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
