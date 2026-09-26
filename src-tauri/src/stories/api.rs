@@ -1,4 +1,6 @@
-use super::{NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryStore};
+use super::{
+    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStore,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -9,6 +11,10 @@ pub enum StoryAction {
         source: String,
     },
     ListPlans,
+    ListPlanSources,
+    AddPlanSource {
+        source: String,
+    },
     GetPlan {
         plan_id: String,
     },
@@ -53,6 +59,7 @@ pub enum StoryAction {
 pub enum StoryReply {
     Plan(Plan),
     Plans(Vec<Plan>),
+    PlanSources(Vec<PlanSource>),
     PlanState(PlanState),
     PlanView(PlanView),
     Story(Story),
@@ -93,6 +100,24 @@ pub fn story_action(
             })?))
         }
         StoryAction::ListPlans => Ok(StoryReply::Plans(store.list_plans(&project)?)),
+        StoryAction::ListPlanSources => Ok(StoryReply::PlanSources(
+            super::sources::list_plan_sources(std::path::Path::new(&project))?,
+        )),
+        StoryAction::AddPlanSource { source } => {
+            if let Some(plan) = store
+                .list_plans(&project)?
+                .into_iter()
+                .find(|plan| plan.source == source)
+            {
+                return Ok(StoryReply::Plan(plan));
+            }
+            let title = super::sources::title_for_source(std::path::Path::new(&project), &source)?;
+            Ok(StoryReply::Plan(store.create_plan(NewPlan {
+                project: project.clone(),
+                title,
+                source,
+            })?))
+        }
         StoryAction::GetPlan { plan_id } => Ok(StoryReply::Plan(plan_in_project(&plan_id)?)),
         StoryAction::PlanState { plan_id } => {
             plan_in_project(&plan_id)?;
@@ -192,6 +217,89 @@ pub fn story_action_for_session(
 mod tests {
     use super::super::StoryOrigin;
     use super::*;
+
+    #[test]
+    fn plan_sources_follow_repo_files_and_document_titles() {
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(repo.path().join("plans/archive")).expect("plan dirs");
+        std::fs::create_dir_all(repo.path().join(".claude/plans")).expect("claude plans");
+        std::fs::write(
+            repo.path().join("plans/first.md"),
+            "---\ntitle: Front title\n---\n# Other title\n",
+        )
+        .expect("frontmatter plan");
+        std::fs::write(
+            repo.path().join(".claude/plans/second.md"),
+            "# Heading title\n",
+        )
+        .expect("heading plan");
+        std::fs::write(repo.path().join("plans/archive/old.md"), "# Archived\n")
+            .expect("archived plan");
+        let project = repo.path().to_str().expect("project path");
+        let list = || {
+            let action = serde_json::from_value(serde_json::json!({"action":"list_plan_sources"}))
+                .expect("list plan sources action");
+            serde_json::to_value(story_action(project, action, None).expect("plan sources"))
+                .expect("serialize sources")
+        };
+        let first = list();
+        assert_eq!(first["type"], "plan_sources");
+        assert_eq!(first["value"].as_array().expect("sources").len(), 2);
+        assert!(
+            first["value"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .any(|item| item["source"] == "plans/first.md" && item["title"] == "Front title")
+        );
+        assert!(
+            first["value"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .any(|item| item["source"] == ".claude/plans/second.md"
+                    && item["title"] == "Heading title")
+        );
+
+        std::fs::write(repo.path().join("plans/new.md"), "# Created by an agent\n")
+            .expect("new plan");
+        assert!(
+            list()["value"]
+                .as_array()
+                .expect("refreshed sources")
+                .iter()
+                .any(|item| item["source"] == "plans/new.md"
+                    && item["title"] == "Created by an agent")
+        );
+    }
+
+    #[test]
+    fn adding_a_plan_source_derives_its_title_and_reuses_its_record() {
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().expect("project");
+        std::fs::create_dir(repo.path().join("plans")).expect("plans dir");
+        std::fs::write(repo.path().join("plans/feature.md"), "# Document title\n").expect("plan");
+        let project = repo.path().to_str().expect("project path");
+        let action = || {
+            serde_json::from_value(serde_json::json!({
+                "action":"add_plan_source", "source":"plans/feature.md"
+            }))
+            .expect("add plan source action")
+        };
+        let StoryReply::Plan(first) = story_action(project, action(), None).expect("first add")
+        else {
+            panic!("expected plan");
+        };
+        assert_eq!(first.title, "Document title");
+        let StoryReply::Plan(second) = story_action(project, action(), None).expect("second add")
+        else {
+            panic!("expected plan");
+        };
+        assert_eq!(first.id, second.id);
+    }
 
     #[test]
     fn story_actions_reject_unknown_fields() {
