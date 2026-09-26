@@ -1900,7 +1900,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, and `PtyExit` (session completed). A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
 - Deep link: notification click navigates to `/mobile/session/<id>`, opening the specific session detail
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
-- Question pushes are rate limited to one per session per 30 seconds; completion alerts have a separate path (tracked in story 1041-cdc7)
+- Question and completion pushes share one 30-second limit per session
 - A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. Numbered choices keep their key-input path
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
