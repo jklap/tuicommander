@@ -5396,6 +5396,20 @@ fn closing_suggest_does_not_hide_a_later_question() {
     );
 }
 
+#[test]
+fn ordinary_question_with_protocol_punctuation_remains_visible() {
+    let question = "Should I use [safe] mode | continue?";
+    let rows = screen(&[question, "────────────────────────────────", "> "]);
+    assert_eq!(find_last_chat_question(&rows), Some(question.into()));
+    assert_eq!(
+        extract_question_line(&[ChangedRow {
+            row_index: 0,
+            text: question.into(),
+        }]),
+        Some(question.into())
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn hooked_claude_keeps_suggestions_distinct_from_real_questions() {
     let sid = "hooked-claude-suggest-question";
