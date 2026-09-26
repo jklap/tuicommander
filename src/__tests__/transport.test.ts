@@ -146,7 +146,11 @@ describe("transport", () => {
 	 */
 	describe("per-session Tauri event parity", () => {
 		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
-			const rustSources = ["src-tauri/src/pty.rs", "src-tauri/src/state.rs", "src-tauri/crates/tuic-terminal/src/terminal_grid.rs"]
+			const rustSources = [
+				"src-tauri/src/pty.rs",
+				"src-tauri/src/state.rs",
+				"src-tauri/crates/tuic-terminal/src/terminal_grid.rs",
+			]
 				.map((relative) => readRepoFile(relative))
 				.join("\n");
 
@@ -1809,6 +1813,13 @@ describe("transport", () => {
 			expect(readme.path).toBe("/api/plugins/my-plugin/readme");
 			expect(readme.transform?.("/path/to/README.md")).toBe("/path/to/README.md");
 			expect(readme.transform?.(null)).toBeNull();
+		});
+
+		it("maps the remote home lookup to the machine serving the file browser", () => {
+			expect(mapCommandToHttp("get_home_directory", {})).toEqual({
+				method: "GET",
+				path: "/system/home-directory",
+			});
 		});
 
 		it("maps agent detection and spawn aliases to HTTP", () => {
