@@ -10099,6 +10099,67 @@ fn agent_submission_rejects_partial_composer_without_writing() {
 
 #[cfg(unix)]
 #[test]
+fn a_human_reply_can_answer_a_confident_question_without_weakening_agent_injection() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "human-question", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "human-question");
+    state
+        .session_maps
+        .session_states
+        .get_mut("human-question")
+        .unwrap()
+        .question_confident = true;
+
+    assert!(!should_inject_now(&state, "human-question"));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, "human-question", "yes"),
+        AgentSubmissionWrite::Rejected {
+            reason: "awaiting_input",
+            ..
+        }
+    ));
+    assert!(bytes.lock().unwrap().is_empty());
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "human-question", "yes"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    let written = bytes.lock().unwrap();
+    assert_eq!(written.iter().filter(|byte| **byte == b'y').count(), 1);
+    assert_eq!(written.last(), Some(&b'\r'));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_human_reply_cannot_overwrite_a_partial_composer() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "human-partial", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "human-partial");
+    state
+        .session_maps
+        .session_states
+        .get_mut("human-partial")
+        .unwrap()
+        .question_confident = true;
+    let mut buffer = InputLineBuffer::new();
+    buffer.feed("existing draft");
+    state
+        .session_maps
+        .input_buffers
+        .insert("human-partial".to_string(), parking_lot::Mutex::new(buffer));
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "human-partial", "yes"),
+        AgentSubmissionWrite::Rejected {
+            reason: "partial_composer",
+            ..
+        }
+    ));
+    assert!(bytes.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn agent_submission_does_not_overtake_existing_queue() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "submit-queued", SHELL_IDLE);

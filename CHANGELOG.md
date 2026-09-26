@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Compact Activity Dashboard** — The inline overlay matches the detached window's compact width and remains inside narrow main windows.
 
+- **Ask from the phone** — A managed agent's explicit blocked question reaches the mobile PWA by Web Push when the desktop is away, including a focused Mac idle for two minutes. The notification opens that session; a typed answer uses the same atomic submission receipt as the coordinator. Disabled push diagnostics no longer claim a delivery.
+
 - **Progress stays accessible** — The toolbar bell always includes Terminal Progress, even after all updates are read. Open it with `Cmd/Ctrl+Shift+P` or from the command palette; the unread badge keeps counting new entries.
 
 - **File browser opens in tree view** — New installations and preferences without a saved view mode show the directory tree by default. An explicitly saved flat list remains selected.

@@ -7783,6 +7783,10 @@ pub(crate) fn blocked_on_confident_question(state: &AppState, session_id: &str) 
 }
 
 pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
+    submission_ready(state, session_id, false)
+}
+
+fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
     }
@@ -7799,7 +7803,7 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         .map(|s| s.question_confident)
         .unwrap_or(false);
     idle && idle_is_confirmed(state, session_id)
-        && !blocked_on_question
+        && (human_reply || !blocked_on_question)
         && !has_partial_user_input(state, session_id)
 }
 
@@ -7829,7 +7833,15 @@ struct InjectionClaim {
 }
 
 fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
-    if !should_inject_now(state, session_id) {
+    claim_idle_for_submission(state, session_id, false)
+}
+
+fn claim_idle_for_submission(
+    state: &AppState,
+    session_id: &str,
+    human_reply: bool,
+) -> Option<InjectionClaim> {
+    if !submission_ready(state, session_id, human_reply) {
         return None;
     }
     let prior_idle_confirmed = state
@@ -8021,6 +8033,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 fn agent_submission_rejection(
     state: &AppState,
     session_id: &str,
+    human_reply: bool,
 ) -> Option<(&'static str, &'static str)> {
     if !state.session_maps.sessions.contains_key(session_id) {
         return Some(("session_not_found", "unknown"));
@@ -8031,11 +8044,12 @@ fn agent_submission_rejection(
     if has_partial_user_input(state, session_id) {
         return Some(("partial_composer", "partial"));
     }
-    if state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| session.question_confident)
+    if !human_reply
+        && state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.question_confident)
     {
         return Some(("awaiting_input", "empty"));
     }
@@ -8045,7 +8059,7 @@ fn agent_submission_rejection(
     // named the symptom and hid the cause, and the caller retried submit for
     // minutes against a queue that by construction could not move.
     // `agent_not_ready` is the truth, and it is the state that actually changes.
-    if !should_inject_now(state, session_id) {
+    if !submission_ready(state, session_id, human_reply) {
         return Some(("agent_not_ready", "empty"));
     }
     // The agent IS ready, so anything still parked can be typed right now.
@@ -8068,7 +8082,7 @@ fn agent_submission_rejection(
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
-    if !should_inject_now(state, session_id) {
+    if !submission_ready(state, session_id, human_reply) {
         return Some(("agent_not_ready", "empty"));
     }
     None
@@ -8085,16 +8099,37 @@ pub(crate) fn write_agent_submission_to_pty(
     session_id: &str,
     text: &str,
 ) -> AgentSubmissionWrite {
-    if let Some((reason, composer_state)) = agent_submission_rejection(state, session_id) {
+    write_submission_to_pty(state, session_id, text, false)
+}
+
+/// An explicit human answer may claim a confident question's composer; an
+/// automated agent submission continues to wait for that question to clear.
+pub(crate) fn write_human_reply_to_pty(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> AgentSubmissionWrite {
+    write_submission_to_pty(state, session_id, text, true)
+}
+
+fn write_submission_to_pty(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    human_reply: bool,
+) -> AgentSubmissionWrite {
+    if let Some((reason, composer_state)) =
+        agent_submission_rejection(state, session_id, human_reply)
+    {
         return AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
             pending: summarize_pending_injections(state, session_id),
         };
     }
-    let Some(claim) = claim_idle_for_injection(state, session_id) else {
-        let (reason, composer_state) =
-            agent_submission_rejection(state, session_id).unwrap_or(("claim_lost", "unknown"));
+    let Some(claim) = claim_idle_for_submission(state, session_id, human_reply) else {
+        let (reason, composer_state) = agent_submission_rejection(state, session_id, human_reply)
+            .unwrap_or(("claim_lost", "unknown"));
         return AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
