@@ -1,5 +1,6 @@
 mod api;
 mod model;
+mod sources;
 mod store;
 
 pub use api::*;

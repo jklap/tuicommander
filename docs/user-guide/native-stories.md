@@ -2,7 +2,7 @@
 
 Native stories are managed directly in TUICommander. Plans, stories, criteria, dependencies, and revisions are stored in its configuration directory. A plan names one project and a source document; its state is derived from its stories.
 
-Open a project, then select **Plans and Stories** in the toolbar. Create a plan with a title and source document or link. Add stories with acceptance criteria, priority, and optional relative file paths. Select a story to inspect its criteria, dependencies, and status. To work without an agent terminal, choose **Start work**, check criteria as they are met, then **Submit for review**. Approve the story or request changes; blocking and "Won't fix" are explicit manual actions. A dependency can be added while a story is Ready or Backlog. The dialog works in both desktop and browser mode.
+Open a project, then select **Plans and Stories** in the toolbar. Choose **New plan** to see Markdown plans in the project's `plans/` and `.claude/plans/` directories. Select a plan; its title comes from its front-matter `title` or first Markdown heading. Files in nested directories such as `plans/archive/` are excluded. Choose **Refresh** after an agent creates a plan file. **Add from path or link** remains available for another document; a web link needs a typed title because its document is not read locally. Add stories with acceptance criteria, priority, and optional relative file paths. Select a story to inspect its criteria, dependencies, and status. To work without an agent terminal, choose **Start work**, check criteria as they are met, then **Submit for review**. Approve the story or request changes; blocking and "Won't fix" are explicit manual actions. A dependency can be added while a story is Ready or Backlog. The dialog works in both desktop and browser mode.
 
 The close button receives keyboard focus when the dialog opens. If the running backend predates native stories, the dialog asks you to restart TUICommander to load the newer backend.
 
@@ -16,6 +16,8 @@ Use `tuic story '<JSON action>' --project /absolute/project` to call the story s
 ```sh
 tuic story '{"action":"create_plan","title":"Release","source":"plans/release.md"}' --project /absolute/project
 tuic story '{"action":"list_plans"}' --project /absolute/project
+tuic story '{"action":"list_plan_sources"}' --project /absolute/project
+tuic story '{"action":"add_plan_source","source":"plans/release.md"}' --project /absolute/project
 ```
 
 The result is JSON with a `type` and `value`. Supply the returned plan ID when creating a story:
