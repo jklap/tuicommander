@@ -15,7 +15,7 @@ pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
-pub(crate) use tuic_core::app_instance;
+pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 pub(crate) use tuic_terminal::chrome;
