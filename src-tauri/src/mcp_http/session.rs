@@ -46,6 +46,7 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         uptime_secs: uptime,
         session_count,
         protocol_version: crate::remote_runtime::REMOTE_PROTOCOL_VERSION as u32,
+        build: crate::remote_deploy::assets::running_build_identity().ok(),
         survive_secs: state.remote_survive_secs,
         socket_path,
         instance_id: crate::app_instance::instance_identity(),

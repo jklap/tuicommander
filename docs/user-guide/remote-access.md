@@ -257,6 +257,33 @@ best-effort stop, while deleting an installed connection deliberately leaves its
 service alone. The daemon is launched with `--no-agent-configs`, so deploying it
 does not rewrite the host's Claude, Codex, or other agent configuration.
 
+### Update and restart a remote machine
+
+When a connected daemon reports a different binary SHA-256 from the binary the
+desktop would deploy, **Remote out of date** appears beside the connection.
+Select **Update & restart remote** for either Direct or SSH transport. The
+preview reports the remote target and build, selected desktop build and source,
+and the number of live PTY sessions. Confirming ends those sessions. The
+desktop uses the matching release asset first; if that asset does not exist, a
+locally built `tuic-remote` beside the desktop executable is used only when its
+target triple matches the remote. A target mismatch names both targets; a
+missing local binary reports its expected path.
+
+Direct updates stream the binary over the authenticated connection. The daemon
+verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
+count, stages it in its own install directory, then starts the new build. SSH
+updates use the existing SCP deployment path. TUICommander waits for `/health`
+to report the selected build after restart; the connection's status polling
+re-authenticates when the daemon mints a new token. A changed session count or
+binary between preview and confirmation cancels the update. In-process update
+on Windows is unavailable: a running `.exe` cannot be overwritten, and the
+daemon answers 501.
+
+An older daemon without `/health.build` is shown as out of date. SSH can
+bootstrap it because the desktop probes the host target with `uname`; an older
+Direct daemon has no update endpoint or reported target, so it needs one manual
+installation of a compatible daemon before this action can update it.
+
 ### Authentication
 
 `tuic-remote` authenticates **every** TCP request. The headless build has no

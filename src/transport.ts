@@ -1929,6 +1929,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	remote_connection_statuses: {
 		map: () => ({ method: "GET", path: "/config/remote-connections/status" }),
 	},
+	prepare_remote_update: {
+		map: (_args, p) => ({ method: "GET", path: `/config/remote-connections/${p("id")}/update` }),
+	},
+	update_and_restart_remote: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/update`,
+			body: {
+				confirmedSessions: args.confirmedSessions,
+				expectedSha256: args.expectedSha256,
+			},
+		}),
+	},
 	connect_remote_connection: {
 		map: (_args, p) => ({ method: "POST", path: `/config/remote-connections/${p("id")}/connect` }),
 	},

@@ -1993,6 +1993,7 @@ pub struct AppState {
     pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
     /// Idle lifetime advertised by a deployed remote daemon.
     pub(crate) remote_survive_secs: Option<u64>,
+    pub(crate) remote_update: Option<crate::remote_update::RemoteUpdateState>,
     /// Open HTTP event streams. Unlike `event_bus.receiver_count()`, this does
     /// not include permanent backend subscribers such as repo watchers.
     pub(crate) sse_client_count: AtomicUsize,
@@ -3136,6 +3137,7 @@ impl AppState {
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             remote_survive_secs: None,
+            remote_update: None,
             sse_client_count: AtomicUsize::new(0),
             remote_client_generation: AtomicU64::new(0),
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),

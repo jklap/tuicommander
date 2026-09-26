@@ -43,7 +43,7 @@ fn validate_token(token: &str) -> Result<(), String> {
 }
 
 fn systemd_unit() -> &'static str {
-    "[Unit]\nDescription=TUICommander remote daemon\n[Service]\nEnvironmentFile=%h/.config/tuic/remote.env\nExecStart=%h/.cache/tuic/tuic-remote --bind 127.0.0.1 --no-agent-configs\nRestart=on-failure\n[Install]\nWantedBy=default.target\n"
+    "[Unit]\nDescription=TUICommander remote daemon\n[Service]\nEnvironmentFile=%h/.config/tuic/remote.env\nExecStart=%h/.cache/tuic/tuic-remote --bind 127.0.0.1 --no-agent-configs --supervised\nRestart=on-failure\n[Install]\nWantedBy=default.target\n"
 }
 
 fn systemd_env(token: &str, port: u16) -> Result<String, String> {
@@ -64,7 +64,7 @@ fn linux_uninstall_command() -> String {
 fn launchd_plist(token: &str, port: u16) -> Result<String, String> {
     validate_token(token)?;
     Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.tuicommander.remote</string><key>ProgramArguments</key><array><string>/bin/sh</string><string>-lc</string><string>exec \"$HOME/.cache/tuic/tuic-remote\" --bind 127.0.0.1 --no-agent-configs</string></array><key>EnvironmentVariables</key><dict><key>TUIC_PAIRING_TOKEN</key><string>{token}</string><key>TUIC_PORT</key><string>{port}</string></dict><key>KeepAlive</key><true/><key>RunAtLoad</key><true/></dict></plist>\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.tuicommander.remote</string><key>ProgramArguments</key><array><string>/bin/sh</string><string>-lc</string><string>exec \"$HOME/.cache/tuic/tuic-remote\" --bind 127.0.0.1 --no-agent-configs --supervised</string></array><key>EnvironmentVariables</key><dict><key>TUIC_PAIRING_TOKEN</key><string>{token}</string><key>TUIC_PORT</key><string>{port}</string></dict><key>KeepAlive</key><true/><key>RunAtLoad</key><true/></dict></plist>\n"
     ))
 }
 
@@ -201,6 +201,37 @@ pub(crate) async fn uninstall(profile: &TunnelProfile) -> Result<(), String> {
     Ok(())
 }
 
+/// Stop the persistent supervisor before staging the replacement. Otherwise
+/// its automatic restart can race the ephemeral verification launch for port.
+pub(crate) async fn update_installed(
+    profile: &TunnelProfile,
+    port: u16,
+    token: &str,
+) -> Result<(), String> {
+    let uname = run(profile, "platform probe failed", "uname -sm", None).await?;
+    match host_platform(&uname)? {
+        HostPlatform::Linux => {
+            run(
+                profile,
+                "could not stop systemd service",
+                "systemctl --user stop tuic-remote.service",
+                None,
+            )
+            .await?;
+        }
+        HostPlatform::Macos => {
+            run(
+                profile,
+                "could not stop launchd service",
+                "launchctl bootout gui/$(id -u)/dev.tuicommander.remote",
+                None,
+            )
+            .await?;
+        }
+    }
+    install(profile, port, token).await
+}
+
 fn connection_profile(connection: &RemoteConnection) -> Result<(TunnelProfile, u16), String> {
     let RemoteTransport::Ssh {
         ssh_host,
@@ -311,7 +342,7 @@ mod tests {
     fn systemd_files_pin_loopback_and_protect_the_token() {
         assert_eq!(
             systemd_unit(),
-            "[Unit]\nDescription=TUICommander remote daemon\n[Service]\nEnvironmentFile=%h/.config/tuic/remote.env\nExecStart=%h/.cache/tuic/tuic-remote --bind 127.0.0.1 --no-agent-configs\nRestart=on-failure\n[Install]\nWantedBy=default.target\n"
+            "[Unit]\nDescription=TUICommander remote daemon\n[Service]\nEnvironmentFile=%h/.config/tuic/remote.env\nExecStart=%h/.cache/tuic/tuic-remote --bind 127.0.0.1 --no-agent-configs --supervised\nRestart=on-failure\n[Install]\nWantedBy=default.target\n"
         );
         assert_eq!(
             systemd_env("pair-token", 9877).unwrap(),
