@@ -5334,6 +5334,152 @@ fn test_find_last_chat_question_skips_wrapped_suggest_block() {
 }
 
 #[test]
+fn wrapped_suggest_question_is_not_an_agent_question() {
+    let rows = screen(&[
+        "The work is complete.",
+        "suggest: [ Inspect the report | Review the changes |",
+        "  Chi ha lanciato powermetrics?",
+        "────────────────────────────────",
+        "> ",
+    ]);
+    assert_eq!(find_last_chat_question(&rows), None);
+    assert_eq!(
+        extract_question_line(&[
+            ChangedRow {
+                row_index: 1,
+                text: "suggest: [ Inspect the report | Review the changes |".into(),
+            },
+            ChangedRow {
+                row_index: 2,
+                text: "  Chi ha lanciato powermetrics?".into(),
+            },
+        ]),
+        None,
+        "a wrapped suggest item must not arm the silence fallback"
+    );
+}
+
+#[test]
+fn suggest_following_real_question_preserves_question_candidate() {
+    let changed = [
+        ChangedRow {
+            row_index: 0,
+            text: "Should I proceed?".into(),
+        },
+        ChangedRow {
+            row_index: 1,
+            text: "suggest: [ Review it | Inspect the report |".into(),
+        },
+        ChangedRow {
+            row_index: 2,
+            text: "  Chi ha lanciato powermetrics?".into(),
+        },
+    ];
+    assert_eq!(
+        extract_question_line(&changed),
+        Some("Should I proceed?".into())
+    );
+}
+
+#[test]
+fn closing_suggest_does_not_hide_a_later_question() {
+    let rows = screen(&[
+        "suggest: [ Inspect the report | Review the changes |",
+        "  Chi ha lanciato powermetrics? ]",
+        "Should I proceed?",
+        "────────────────────────────────",
+        "> ",
+    ]);
+    assert_eq!(
+        find_last_chat_question(&rows),
+        Some("Should I proceed?".into())
+    );
+}
+
+#[test]
+fn ordinary_question_with_protocol_punctuation_remains_visible() {
+    let question = "Should I use [safe] mode | continue?";
+    let rows = screen(&[question, "────────────────────────────────", "> "]);
+    assert_eq!(find_last_chat_question(&rows), Some(question.into()));
+    assert_eq!(
+        extract_question_line(&[ChangedRow {
+            row_index: 0,
+            text: question.into(),
+        }]),
+        Some(question.into())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hooked_claude_keeps_suggestions_distinct_from_real_questions() {
+    let sid = "hooked-claude-suggest-question";
+    let state = accumulating_state(sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.hook_instrumented = true;
+    }
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-wrapped-suggest-question-synthetic.tcap",
+    ))
+    .expect("valid synthetic PTY capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).unwrap(),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+    assert!(
+        !silence.lock().hook_state_seen,
+        "configured hooks need a runtime marker before heuristic suppression"
+    );
+    let screen = state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .screen_rows();
+    assert_eq!(
+        current_chat_question(&screen),
+        CurrentChatQuestion::PromptAnchored(None)
+    );
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+
+    // A plain question may be pending before hooks start. The next submitted
+    // prompt and observed busy marker must clear its badge.
+    state.emit_pty_event(heuristic_question(sid, "Shall I continue?"));
+    assert!(await_session(&state, sid, |s| s.awaiting_input).await);
+    note_submitted_input(&state, sid);
+    processor.process_chunk("\x1b]7770;state=busy\x07", &silence, sid, &state);
+    assert!(await_session(&state, sid, |s| !s.awaiting_input).await);
+
+    // AskUserQuestion still has an authoritative awaiting signal.
+    processor.process_chunk("\x1b]7770;state=awaiting\x07", &silence, sid, &state);
+    assert!(
+        await_session(&state, sid, |s| s.awaiting_input && s.question_confident).await,
+        "AskUserQuestion must report a confident question"
+    );
+}
+
+#[test]
 fn test_find_last_chat_question_no_question() {
     // Agent statement (not a question) above prompt → None.
     let rows = screen(&[

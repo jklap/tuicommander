@@ -104,7 +104,7 @@ Question events have two sources:
 - **Screen-verified silence detection** handles rendered questions (all instant
   regex patterns were removed due to false positives from Ink agent streaming):
 
-1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), and code syntax (`->`, `=>`, `::`, `)?`)
+1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), code syntax (`->`, `=>`, `::`, `)?`), and wrapped `suggest: [ … ]` protocol items
 2. `SilenceState` stores the candidate and starts a 10s silence timer
 3. When the timer fires, a visible input box restricts detection to the latest chat content above that prompt; only an unanchored screen may use the bounded changed-row fallback
 4. If verified, emits `ParsedEvent::Question { confident: false }`
