@@ -877,7 +877,7 @@ function createTerminalsStore() {
 			return sessionToTerminal.get(sessionId) ?? null;
 		},
 
-		/** Tag for a sub-agent PTY: the spawning agent's tab name, "sub" when that
+		/** Tag for a sub-agent PTY: the spawning agent's tab name, "external agent" when that
 		 *  parent has no tab here (external caller, closed tab), null when the
 		 *  terminal was not spawned by an agent. Read live, so a parent rename follows. */
 		getSubAgentTag(id: string): string | null {
@@ -886,7 +886,7 @@ function createTerminalsStore() {
 			const parentTerm = Object.values(state.terminals).find(
 				(t) => t.sessionId === parent || t.tuicSession === parent,
 			);
-			return parentTerm?.name ?? "sub";
+			return parentTerm?.name ?? "external agent";
 		},
 
 		/** Get the agentType for a PTY session, or null if not found */

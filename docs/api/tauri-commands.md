@@ -51,7 +51,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `can_spawn_session` | -- | `bool` | Check session limit |
 | `get_orchestrator_stats` | -- | `OrchestratorStats` | Active/max/available |
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
-| `list_active_sessions` | -- | `Vec<SessionInfo>` | List all sessions with `display_name_is_custom`, `display_name_from_spawn`, `is_remote`, the optional resolved `parent_session`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` — one builder serves both. Sessions running on a connected remote machine are in the list too, each carrying `connection_id`; a local row has none (#791-055e) |
+| `list_active_sessions` | -- | `Vec<SessionInfo>` | List all sessions with `display_name_is_custom`, `display_name_from_spawn`, `is_remote`, optional live `tuic_session`, the optional resolved `parent_session`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` — one builder serves both. Sessions running on a connected remote machine are in the list too, each carrying `connection_id`; a local row has none (#791-055e) |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |

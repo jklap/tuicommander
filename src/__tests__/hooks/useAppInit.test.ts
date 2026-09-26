@@ -297,8 +297,8 @@ describe("initApp", () => {
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi.fn().mockResolvedValue([
-					{ session_id: "lead", cwd: "/repo", display_name: "lead" },
-					{ session_id: "child", cwd: "/repo", parent_session: "lead" },
+					{ session_id: "pty-lead", tuic_session: "tuic-lead", cwd: "/repo", display_name: "COORDINATOR" },
+					{ session_id: "child", cwd: "/repo", parent_session: "tuic-lead" },
 					{ session_id: "plain", cwd: "/repo" },
 				]),
 				close: vi.fn().mockResolvedValue(undefined),
@@ -308,8 +308,8 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		const child = terminalsStore.getTerminalForSession("child")!;
-		expect(terminalsStore.get(child)?.parentSession).toBe("lead");
-		expect(terminalsStore.getSubAgentTag(child)).toBe("lead");
+		expect(terminalsStore.get(child)?.parentSession).toBe("tuic-lead");
+		expect(terminalsStore.getSubAgentTag(child)).toBe("COORDINATOR");
 		expect(terminalsStore.get(terminalsStore.getTerminalForSession("plain")!)?.parentSession).toBeNull();
 	});
 

@@ -85,6 +85,8 @@ These appear as regular commands in the palette — type "Search" to find them.
 ## Activity Dashboard
 
 Open with `Cmd+Shift+A`. A real-time overview of all your terminal sessions.
+The overlay stays compact in the main window and fits narrow windows; detaching
+it keeps the same list in a separate window.
 
 ### What You See
 
@@ -96,6 +98,9 @@ A compact list where each row shows:
 | **Agent type** | Detected agent (Claude, Aider, etc.) with brand icon |
 | **Status** | Current state with color indicator |
 | **Last activity** | Relative timestamp ("2s ago", "1m ago") — auto-refreshes |
+
+Spawned agent rows include a robot-head marker. Hover it to see the parent
+terminal's name, or "external agent" when its tab is unavailable.
 
 ### Status Colors
 

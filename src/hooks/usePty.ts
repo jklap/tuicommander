@@ -103,6 +103,8 @@ export interface ActiveSessionInfo {
 	 * purpose.
 	 */
 	connection_id?: string | null;
+	/** Live agent identity; may differ from the PTY's session_id. */
+	tuic_session?: string | null;
 }
 
 /** PTY hook for managing terminal sessions */
