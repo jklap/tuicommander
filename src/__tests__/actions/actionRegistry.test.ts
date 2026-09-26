@@ -3,6 +3,8 @@ import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry
 import * as handsFree from "../../actions/handsFreeConversation";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
 import { dictationStore } from "../../stores/dictation";
+import { progressStore } from "../../stores/progress";
+import { repositoriesStore } from "../../stores/repositories";
 import { mockInvoke } from "../mocks/tauri";
 
 /** Turn dictation on the way the app does: by reading the backend config. */
@@ -115,6 +117,20 @@ describe("actionRegistry", () => {
 			expect(ids).toContain("command-palette");
 			expect(ids).toContain("quick-branch-switch");
 			expect(ids).toContain("toggle-focus-mode");
+		});
+
+		it("Progress action advertises its shortcut and opens the active repository", () => {
+			progressStore.resetForTests();
+			repositoriesStore.add({ path: "/repo/progress", displayName: "Progress Repo" });
+			repositoriesStore.setActive("/repo/progress");
+			const action = getActionEntries(createMockHandlers()).find((entry) => entry.id === "progress");
+			expect(action?.keybinding).toBeTruthy();
+			action?.execute();
+			expect(progressStore.dialogVisible()).toBe(true);
+			expect(progressStore.requestedProject()).toBe("/repo/progress");
+			progressStore.resetForTests();
+			repositoriesStore.remove("/repo/progress");
+			repositoriesStore._testCancelPendingSave();
 		});
 
 		it("toggle-focus-mode executes toggleFocusMode handler", () => {

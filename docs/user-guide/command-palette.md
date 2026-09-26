@@ -37,7 +37,8 @@ Hovering over a row highlights it (same as keyboard selection). Clicking a row e
 Run **Open Terminal Progress** to open the active terminal's journal in a dialog.
 Use the selector to inspect another terminal or the whole repository.
 This action is available in desktop and browser mode. The same dialog opens from
-the aggregate Progress entry in the notification bell.
+the always available **Terminal Progress** entry in the notification bell, or
+with `Cmd/Ctrl+Shift+P`. The bell badge still counts unread updates.
 
 ### Powered by the Action Registry
 

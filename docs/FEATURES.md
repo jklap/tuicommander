@@ -2372,4 +2372,5 @@ connect rather than failing later inside a spawn.
 - A last-visit divider frozen while the dialog is open, so it never moves under the line being read
 - Blocked entries in red, `intent` entries muted, one blocked-only filter, per-entry deletion scoped to the project
 - Aggregate notification-bell count plus exactly one live toast, silent by default; Progress entries are not duplicated into MESSAGES
+- The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list

@@ -6,6 +6,7 @@ import { isMacOS, isQuickSwitcherActive } from "../platform";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { keybindingsStore } from "../stores/keybindings";
 import { paneLayoutStore } from "../stores/paneLayout";
+import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
@@ -268,6 +269,9 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return true;
 		case "command-palette":
 			handlers.toggleCommandPalette();
+			return true;
+		case "progress":
+			progressStore.toggle();
 			return true;
 		case "activity-dashboard":
 			handlers.toggleActivityDashboard();

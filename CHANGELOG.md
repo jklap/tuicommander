@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Progress stays accessible** — The toolbar bell always includes Terminal Progress, even after all updates are read. Open it with `Cmd/Ctrl+Shift+P` or from the command palette; the unread badge keeps counting new entries.
+
 - **File browser opens in tree view** — New installations and preferences without a saved view mode show the directory tree by default. An explicitly saved flat list remains selected.
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView.
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView. Local symlinks and parent paths work, UNC links are refused, and internal preview/plugin frames remain available.

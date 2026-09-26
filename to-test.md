@@ -3853,3 +3853,6 @@ or credential is touched.
 ## Vite watcher scope and native reload attribution — needs a `make dev` restart
 
 - [ ] Restart `make dev` when live PTY sessions can be interrupted. In an isolated dev instance, create and delete a checkout with HTML files under repository `.tmp/`; verify document age continues increasing and no full reload occurs. Call `POST /debug/reload_webview` and verify the native log records caller address, trigger, action, and target URL while frontend startup records navigation type and document start. The Vite watch config and Rust backend require a restart to take effect.
+## Desktop Progress entry (2026-09-26)
+
+- [x] With zero unread Progress updates, open the toolbar bell and select Terminal Progress for the active repository. The bell badge remains absent; a new update restores the count. The command palette and `Cmd/Ctrl+Shift+P` open the same dialog. _(verified: targeted Toolbar, keyboard shortcut, and action registry tests; rendered bell screenshot at `~/Gits/.tmp/tuic-progress-entry/progress-bell.png`.)_
