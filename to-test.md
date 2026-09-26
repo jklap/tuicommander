@@ -12,6 +12,10 @@
 
 # To Test
 
+## Mobile notification tags (story 1042-f5ca) — updated service worker
+
+- [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.
+
 ## Rust test temp root (story 980-420e) — Rust, needs `make dev` restart
 
 - [x] Bare `cargo test` test binaries and Nextest setup scripts route Rust scratch directories through the repository test root. _(verified: `src-tauri/crates/tuic-test-support/src/lib.rs` initializes the libtest environment; `src-tauri/.config/nextest.toml` runs platform setup scripts; targeted subprocess test confirms `tempfile` and `std::env::temp_dir` stay under `test_temp_root()`.)_ No live-app behavior changes; the current backend cannot load the Rust test-support code until a restart.
