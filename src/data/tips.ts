@@ -422,6 +422,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Managed Agent Workspace Trust",
+		description:
+			"Agents spawned by another agent can start in a new folder without a trust question. Change this for Claude or direct Codex in Settings > AI > Agents.",
+		shortcut: null,
+	},
+	{
 		feature: "tuic as tmux",
 		description:
 			"Run 'tuic alias' to create a tmux compatibility symlink. Any tool expecting tmux (like Claude Code) will use TUICommander instead.",
