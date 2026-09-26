@@ -180,6 +180,11 @@ HEAD, and reflogs remain registered; the workspace mapper hides archived paths
 from active UI listings. A repair failure rolls the checkout back to its old
 path. The archive path is never unlocked and never pruned.
 
+Orphan pruning accepts only a registered detached linked checkout with no Git
+operation in progress. Immediately before removal it checks detached HEAD
+reachability against all durable refs with `git for-each-ref --contains`; a
+commit reachable only from the worktree HEAD/reflog is kept for recovery.
+
 Non-force removal first requires a clean checkout and submodules, no Git
 operation in progress, and a HEAD matching the captured branch tip. Git needs
 one `--force` to remove a populated submodule even when it is clean; TUICommander
