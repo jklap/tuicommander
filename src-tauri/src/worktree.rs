@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -531,6 +532,8 @@ pub(crate) struct WorkspaceLifecycleStatus {
     pub(crate) dirty_fingerprint: Option<String>,
     pub(crate) submodule_unpushed_commits: Vec<SubmoduleUnpushedCommits>,
     pub(crate) commit_status: WorkspaceCommitStatus,
+    #[serde(skip)]
+    merge_proof: Option<&'static str>,
     pub(crate) removal_safety: WorkspaceRemovalSafety,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
@@ -718,6 +721,142 @@ pub(crate) fn inspect_workspace_lifecycle(
     base_repo: &Path,
     workspace_id: &str,
 ) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_with_pr(base_repo, workspace_id, merged_github_pr_proves_tip)
+}
+
+fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool, String> {
+    let result = git_cmd(repo)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .run_raw()
+        .map_err(|error| format!("could not compare commits: {error}"))?;
+    match result.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        code => Err(format!(
+            "could not compare commits (exit {code:?}): {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        )),
+    }
+}
+
+/// GitHub records the PR head even when squash merging did not preserve its
+/// commit IDs on the default branch. A local tip is safe only if that recorded
+/// head contains it; matching a branch name alone is never enough.
+fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
+    let Some(url) = crate::git::read_remote_url(repo) else {
+        return false;
+    };
+    let Some((host, owner, name)) = crate::github_account::parse_remote_url(&url) else {
+        return false;
+    };
+    let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED]) {
+          nodes { number state headRefName headRefOid }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }"#;
+    let mut command = Command::new(crate::agent::resolve_cli("gh"));
+    command.current_dir(repo).args([
+        "api",
+        "graphql",
+        "--paginate",
+        "--slurp",
+        "--hostname",
+        host.as_str(),
+        "-f",
+        &format!("query={query}"),
+        "-f",
+        &format!("owner={owner}"),
+        "-f",
+        &format!("name={name}"),
+        "-f",
+        &format!("branch={branch}"),
+    ]);
+    crate::cli::apply_no_window(&mut command);
+    let Ok(output) = crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20))
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Ok(pages) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return false;
+    };
+    merged_pr_proof_from_pages(repo, branch, tip, &pages)
+}
+
+fn merged_pr_proof_from_pages(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    pages: &serde_json::Value,
+) -> bool {
+    let Some(pages) = pages.as_array() else {
+        return false;
+    };
+    if pages
+        .iter()
+        .any(|page| page.get("errors").is_some_and(|errors| !errors.is_null()))
+    {
+        return false;
+    }
+    for page in pages {
+        let Some(nodes) = page
+            .pointer("/data/repository/pullRequests/nodes")
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for pr in nodes {
+            if pr["state"].as_str() != Some("MERGED") || pr["headRefName"].as_str() != Some(branch)
+            {
+                continue;
+            }
+            let Some(sha) = pr["headRefOid"].as_str() else {
+                continue;
+            };
+            if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                continue;
+            }
+            let Some(number) = pr["number"].as_u64().filter(|number| *number > 0) else {
+                continue;
+            };
+            let commit = format!("{sha}^{{commit}}");
+            if git_cmd(repo)
+                .args(["cat-file", "-e", &commit])
+                .run_silent()
+                .is_none()
+            {
+                let refspec = format!("refs/pull/{number}/head");
+                if git_cmd(repo)
+                    .timeout(Duration::from_secs(30))
+                    .args(["fetch", "--no-tags", "origin", &refspec])
+                    .run_silent()
+                    .is_none()
+                    || git_cmd(repo)
+                        .args(["cat-file", "-e", &commit])
+                        .run_silent()
+                        .is_none()
+                {
+                    continue;
+                }
+            }
+            if is_ancestor(repo, tip, sha) == Ok(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn inspect_workspace_lifecycle_with_pr(
+    base_repo: &Path,
+    workspace_id: &str,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
         let workspace = resolve_any_workspace(base_repo, workspace_id)?;
         let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
@@ -725,38 +864,32 @@ pub(crate) fn inspect_workspace_lifecycle(
             dirty_fingerprint_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
         let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
-        let ancestry = git_cmd(Path::new(&workspace.path))
-            .args(["merge-base", "--is-ancestor", "HEAD", &default_branch])
-            .run_raw()
-            .map_err(|e| format!("could not compare the worktree with the default branch: {e}"))?;
-        let merged = match ancestry.status.code() {
-            Some(0) => true,
-            Some(1) => false,
-            code => {
-                let stderr = String::from_utf8_lossy(&ancestry.stderr).trim().to_string();
-                return Err(format!(
-                    "could not compare the worktree with the default branch (exit {code:?}): {stderr}"
-                ));
-            }
-        };
+        let workspace_path = Path::new(&workspace.path);
+        let tip = rev_at(workspace_path, "HEAD")?;
+        let default_tip = rev_at(base_repo, &default_branch)?;
+        let merged = is_ancestor(base_repo, &tip, &default_tip)?;
         // `--is-ancestor` answers "no commit here is outside the default
         // branch", which is true of two different histories: a branch whose own
         // commits were merged, and a branch that never had a commit at all.
         // Reporting the second as merged states an event that never happened,
         // so ask whether HEAD *is* the tip and separate them.
-        let workspace_path = Path::new(&workspace.path);
-        let commit_status = if !merged {
-            WorkspaceCommitStatus::Unmerged
-        } else if rev_at(workspace_path, "HEAD")? == rev_at(workspace_path, &default_branch)? {
-            WorkspaceCommitStatus::InSync
+        let (commit_status, merge_proof) = if merged && tip == default_tip {
+            (WorkspaceCommitStatus::InSync, None)
+        } else if merged {
+            (WorkspaceCommitStatus::Merged, Some("ancestry"))
+        } else if is_ancestor(base_repo, &tip, &rev_at(base_repo, "HEAD")?)? {
+            (WorkspaceCommitStatus::Merged, Some("integration_ancestry"))
+        } else if pr_proves_tip(base_repo, &workspace.branch, &tip) {
+            (WorkspaceCommitStatus::Merged, Some("github_pr"))
         } else {
-            WorkspaceCommitStatus::Merged
+            (WorkspaceCommitStatus::Unmerged, None)
         };
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
             dirty_fingerprint: Some(dirty_fingerprint),
             submodule_unpushed_commits,
             commit_status,
+            merge_proof,
             removal_safety: if dirty {
                 WorkspaceRemovalSafety::RequiresForce
             } else {
@@ -771,6 +904,7 @@ pub(crate) fn inspect_workspace_lifecycle(
         dirty_fingerprint: None,
         submodule_unpushed_commits: Vec::new(),
         commit_status: WorkspaceCommitStatus::Unknown,
+        merge_proof: None,
         removal_safety: WorkspaceRemovalSafety::Unknown,
         error: Some(error),
     })
@@ -1588,6 +1722,28 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     override_lock: bool,
     expected_fingerprint: Option<&str>,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    remove_worktree_by_workspace_id_with_confirmation_and_pr(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        expected_fingerprint,
+        merged_github_pr_proves_tip,
+    )
+}
+
+fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
     let mut removal_rule = if force { "force" } else { "kept_branch" };
@@ -1615,7 +1771,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     // lock. Branch deletion still needs its own proof in either mode.
     let branch_ref = format!("refs/heads/{branch_name}");
     let expected_branch_oid = rev_at(&base_repo, &branch_ref)?;
-    let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
+    let lifecycle = inspect_workspace_lifecycle_with_pr(&base_repo, workspace_id, pr_proves_tip);
     if force && let Some(expected) = expected_fingerprint {
         if lifecycle.dirty_fingerprint.as_deref() != Some(expected) {
             return Err(
@@ -1681,7 +1837,9 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
                     }))
                 }
                 WorkspaceCommitStatus::InSync => Ok("in_sync"),
-                WorkspaceCommitStatus::Merged => Ok("ancestry"),
+                WorkspaceCommitStatus::Merged => lifecycle
+                    .merge_proof
+                    .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}")),
             }
         })();
         match branch_proof {
@@ -6944,6 +7102,225 @@ branch refs/heads/feat
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    #[test]
+    fn a_squashed_pr_with_a_merge_commit_needs_github_proof() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let worktree = add_worktree(&repo, "pr-squashed");
+        commit_file(&worktree, "feature.txt", "feature\n");
+        commit_file(&repo, "base.txt", "base changed\n");
+        git_cmd(&worktree)
+            .args(["merge", "main", "--no-edit"])
+            .run()
+            .unwrap();
+        let local_tip = rev_at(&worktree, "HEAD").unwrap();
+        commit_file(&worktree, "pr-extra.txt", "included in PR\n");
+        let pr_head = rev_at(&worktree, "HEAD").unwrap();
+        git_cmd(&worktree)
+            .args(["reset", "--hard", &local_tip])
+            .run()
+            .unwrap();
+        // The squash on the default branch need not preserve the PR's patches.
+        commit_file(&repo, "squashed.txt", "squash result\n");
+        let api = serde_json::json!([{"data": {"repository": {"pullRequests": {"nodes": [{
+            "number": 42,
+            "state": "MERGED",
+            "headRefName": "pr-squashed",
+            "headRefOid": pr_head
+        }]}}}}]);
+
+        let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-squashed", &api);
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof, Some("github_pr"));
+        let outcome = remove_worktree_by_workspace_id_with_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "pr-squashed",
+            true,
+            None,
+            false,
+            false,
+            None,
+            |repo, branch, tip| merged_pr_proof_from_pages(repo, branch, tip, &api),
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "github_pr");
+        assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn a_branch_contained_in_the_checked_out_integration_branch_is_merged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["checkout", "-b", "integration"])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "integrated-feature");
+        commit_file(&worktree, "feature.txt", "feature\n");
+        git_cmd(&repo)
+            .args(["merge", "integrated-feature", "--no-edit"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "later.txt", "integration advanced\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "integrated-feature");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "integrated-feature",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "integration_ancestry");
+    }
+
+    fn inspect_workspace_lifecycle_with_pr_fixture(
+        repo: &Path,
+        workspace_id: &str,
+        api: &serde_json::Value,
+    ) -> WorkspaceLifecycleStatus {
+        inspect_workspace_lifecycle_with_pr(repo, workspace_id, |repo, branch, tip| {
+            merged_pr_proof_from_pages(repo, branch, tip, api)
+        })
+    }
+
+    #[test]
+    fn github_pr_proof_rejects_open_closed_and_stale_heads() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "pr-safety");
+        let base = rev_at(&repo, "HEAD").unwrap();
+        commit_file(&worktree, "feature.txt", "feature\n");
+        let tip = rev_at(&worktree, "HEAD").unwrap();
+        for (name, state, head_branch, head_sha) in [
+            ("open", "OPEN", "pr-safety", tip.as_str()),
+            ("closed", "CLOSED", "pr-safety", tip.as_str()),
+            ("wrong branch", "MERGED", "other-branch", tip.as_str()),
+            ("tip ahead", "MERGED", "pr-safety", base.as_str()),
+        ] {
+            let api = serde_json::json!([{"data": {"repository": {"pullRequests": {"nodes": [{
+                "number": 42,
+                "state": state,
+                "headRefName": head_branch,
+                "headRefOid": head_sha
+            }]}}}}]);
+            let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-safety", &api);
+            assert_eq!(
+                status.commit_status,
+                WorkspaceCommitStatus::Unmerged,
+                "{name}"
+            );
+        }
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn github_pr_proof_rejects_a_partial_graphql_error() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "pr-error");
+        commit_file(&worktree, "feature.txt", "feature\n");
+        let tip = rev_at(&worktree, "HEAD").unwrap();
+        let api = serde_json::json!([{
+            "errors": [{"message": "partial response"}],
+            "data": {"repository": {"pullRequests": {"nodes": [{
+                "number": 42,
+                "state": "MERGED",
+                "headRefName": "pr-error",
+                "headRefOid": tip
+            }]}}}
+        }]);
+
+        assert!(!merged_pr_proof_from_pages(&repo, "pr-error", &tip, &api));
+    }
+
+    #[test]
+    fn github_pr_proof_fetches_the_head_and_checks_the_api_sha() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let remote = temp.path().join("remote.git");
+        git_cmd(temp.path())
+            .args(["init", "--bare", remote.to_str().unwrap()])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["remote", "add", "origin", remote.to_str().unwrap()])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "pr-fetch");
+        commit_file(&worktree, "feature.txt", "feature\n");
+        let tip = rev_at(&worktree, "HEAD").unwrap();
+        git_cmd(&worktree)
+            .args(["push", "origin", "HEAD:refs/heads/pr-source"])
+            .run()
+            .unwrap();
+        let upstream = temp.path().join("upstream");
+        git_cmd(temp.path())
+            .args([
+                "clone",
+                remote.to_str().unwrap(),
+                upstream.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&upstream)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&upstream)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        git_cmd(&upstream)
+            .args(["checkout", "-b", "pr-head", "origin/pr-source"])
+            .run()
+            .unwrap();
+        commit_file(&upstream, "extra.txt", "PR advanced\n");
+        let head = rev_at(&upstream, "HEAD").unwrap();
+        git_cmd(&upstream)
+            .args(["push", "origin", "HEAD:refs/pull/42/head"])
+            .run()
+            .unwrap();
+        assert!(
+            git_cmd(&repo)
+                .args(["cat-file", "-e", &format!("{head}^{{commit}}")])
+                .run_silent()
+                .is_none()
+        );
+        let api = |sha: &str| {
+            serde_json::json!([{"data": {"repository": {"pullRequests": {"nodes": [{
+                "number": 42,
+                "state": "MERGED",
+                "headRefName": "pr-fetch",
+                "headRefOid": sha
+            }]}}}}])
+        };
+
+        assert!(merged_pr_proof_from_pages(
+            &repo,
+            "pr-fetch",
+            &tip,
+            &api(&head)
+        ));
+        commit_file(&upstream, "not-in-pr.txt", "newer\n");
+        let stale_api_head = rev_at(&upstream, "HEAD").unwrap();
+        assert!(!merged_pr_proof_from_pages(
+            &repo,
+            "pr-fetch",
+            &tip,
+            &api(&stale_api_head)
+        ));
     }
 
     #[test]
