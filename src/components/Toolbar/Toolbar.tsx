@@ -537,31 +537,31 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 					</button>
 					<Show when={showNotifPopover()}>
 						<div class={s.popover}>
-							<Show when={progressStore.unreadCount > 0}>
-								<div class={s.sectionHeader}>
-									<span class={s.sectionLabel}>PROGRESS</span>
-								</div>
-								<div
-									class={s.activityItem}
-									onClick={(event) => {
-										event.stopPropagation();
-										setShowNotifPopover(false);
-										progressStore.open(repositoriesStore.state.activeRepoPath);
-									}}
-								>
-									<span class={s.activityItemIcon}>
-										<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-											<path d="M2 13.5h12v1H1.5a.5.5 0 0 1-.5-.5V1h1v12.5zM4 10l2.5-3 2 2L13 3.5l1 1-5.5 7-2-2L5 11z" />
-										</svg>
-									</span>
-									<div class={s.activityItemBody}>
-										<span class={s.activityItemTitle}>Terminal Progress</span>
-										<span class={s.activityItemSubtitle}>
+							<div class={s.sectionHeader}>
+								<span class={s.sectionLabel}>PROGRESS</span>
+							</div>
+							<div
+								class={s.activityItem}
+								onClick={(event) => {
+									event.stopPropagation();
+									setShowNotifPopover(false);
+									progressStore.open(repositoriesStore.state.activeRepoPath);
+								}}
+							>
+								<span class={s.activityItemIcon}>
+									<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+										<path d="M2 13.5h12v1H1.5a.5.5 0 0 1-.5-.5V1h1v12.5zM4 10l2.5-3 2 2L13 3.5l1 1-5.5 7-2-2L5 11z" />
+									</svg>
+								</span>
+								<div class={s.activityItemBody}>
+									<span class={s.activityItemTitle}>Terminal Progress</span>
+									<span class={s.activityItemSubtitle}>
+										<Show when={progressStore.unreadCount > 0} fallback="Open project journal">
 											{progressStore.unreadCount} new update{progressStore.unreadCount === 1 ? "" : "s"}
-										</span>
-									</div>
+										</Show>
+									</span>
 								</div>
-							</Show>
+							</div>
 							{/* App update section */}
 							<Show when={hasUpdate()}>
 								<div class={s.notifHeader}>

@@ -392,6 +392,8 @@ checkbox. Blocked entries are red, host-written `intent` entries are muted, and
 each row can be deleted. There are no pages, no tabs, no workstream projections
 and no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
+The toolbar bell always includes Terminal Progress, regardless of unread count.
+The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
 
 Opening asks the shared journal once, for the selected PTY or project. The old panel
 fanned out across every registered repository and answered with one red
