@@ -1,6 +1,6 @@
 ## Crate split restart
 
-- [ ] Restart `make dev` after the `tuic-terminal` and `tuic-core` crate splits. Rust changes do not hot-reload in the running development instance.
+- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, and `tuic-git` crate splits. Rust changes do not hot-reload in the running development instance.
 
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP

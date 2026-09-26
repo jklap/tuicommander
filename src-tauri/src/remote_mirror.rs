@@ -753,7 +753,11 @@ mod tests {
     /// bus still carries everything.
     #[test]
     fn only_safe_mirrored_events_reach_the_desktop_window() {
-        for event in ["session-state-changed", "session-closed", "progress-recorded"] {
+        for event in [
+            "session-state-changed",
+            "session-closed",
+            "progress-recorded",
+        ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
         for event in [

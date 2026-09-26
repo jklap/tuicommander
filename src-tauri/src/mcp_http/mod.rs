@@ -3994,6 +3994,7 @@ mod tests {
     #[test]
     fn test_validate_repo_path_rejects_relative() {
         assert!(validate_repo_path("relative/path").is_err());
+        assert!(validate_repo_path("C:relative/path").is_err());
     }
 
     #[test]
@@ -4004,6 +4005,8 @@ mod tests {
     #[test]
     fn test_validate_repo_path_accepts_absolute_windows() {
         assert!(validate_repo_path("C:\\Users\\test\\repos").is_ok());
+        assert!(validate_repo_path("C:/Users/test/repos").is_ok());
+        assert!(validate_repo_path("c:/Users/test/repos").is_ok());
         assert!(validate_repo_path("\\\\server\\share").is_ok());
     }
 

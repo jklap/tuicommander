@@ -9516,6 +9516,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuic-git"
+version = "1.7.7"
+dependencies = [
+ "dashmap",
+ "gix",
+ "hex",
+ "moka",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tuic-core",
+ "tuic-test-support",
+ "uuid",
+]
+
+[[package]]
 name = "tuic-terminal"
 version = "1.7.7"
 dependencies = [
@@ -9640,6 +9660,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tuic-core",
+ "tuic-git",
  "tuic-terminal",
  "tuic-test-support",
  "ulid",
