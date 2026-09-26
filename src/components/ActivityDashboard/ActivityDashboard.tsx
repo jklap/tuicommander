@@ -18,6 +18,7 @@ import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";
 import { GlobeIcon } from "../GlobeIcon";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { SubAgentIcon } from "../ui/SubAgentIcon";
 import s from "./ActivityDashboard.module.css";
 
 export const statusClasses = {
@@ -247,11 +248,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 								<div class={s.nameCell}>
 									<span class={s.termName}>{term.name}</span>
 									<Show when={term.subAgentTag}>
-										{(parent) => (
-											<span class={s.subAgentTag} title={`Spawned by ${parent()}`}>
-												↳ {parent()}
-											</span>
-										)}
+										{(parent) => <SubAgentIcon parent={parent()} class={s.subAgentTag} />}
 									</Show>
 									<Show when={term.project}>
 										<span class={s.project} style={term.projectColor ? { color: term.projectColor } : undefined}>
@@ -317,7 +314,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			<div class={s.footer}>
 				<span>{terminals().length} terminal(s)</span>
 				<Show when={!props.embedded}>
-					<span style={{ "margin-left": "auto" }}>Click to switch • Esc to close</span>
+					<span class={s.footerHint}>Click to switch • Esc to close</span>
 				</Show>
 			</div>
 		</>

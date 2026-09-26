@@ -2634,17 +2634,7 @@ fn handle_session(
             // key as a fallback, so a real `$TUIC_SESSION` outranks that entry
             // whichever order the map is walked — otherwise the field would depend
             // on hash order.
-            let mut tuic_by_pty: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            for entry in state.session_maps.live_pty_by_tuic_session.iter() {
-                let (identity, pty) = (entry.key(), entry.value());
-                let bound = tuic_by_pty
-                    .entry(pty.clone())
-                    .or_insert_with(|| identity.clone());
-                if bound == pty && identity != pty {
-                    *bound = identity.clone();
-                }
-            }
+            let tuic_by_pty = super::session::live_tuic_sessions_by_pty(state);
             let sessions: Vec<serde_json::Value> = state
                 .session_maps
                 .sessions

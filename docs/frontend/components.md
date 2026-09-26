@@ -70,7 +70,7 @@ App.tsx (central orchestrator)
 ├── PromptOverlay/            # Agent prompt interception
 ├── PromptDrawer/             # Prompt library management
 ├── CommandPalette/           # Cmd+P / browser-toolbar palette with transport-safe actions
-├── ActivityDashboard/        # Activity center (bell dropdown)
+├── ActivityDashboard/        # Compact inline or detached terminal activity list
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
@@ -481,3 +481,9 @@ system and never turns an absent provider value into zero.
 | Activity Dashboard | — | `activityDashboardStore.toggle()` |
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
+
+Activity Dashboard uses a 500px inline overlay and the same compact row layout
+in its detached window. `SubAgentIcon` supplies the shared 11px robot marker
+for both the dashboard and sidebar; only its tooltip/accessible name contains
+the parent name. The session list supplies each parent's live `tuic_session`
+when its PTY ID differs from that identity.

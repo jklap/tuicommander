@@ -101,6 +101,7 @@ export interface AppInitDeps {
 				display_name?: string | null;
 				pty_description?: string | null;
 				alias?: string | null;
+				tuic_session?: string | null;
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
@@ -843,6 +844,7 @@ export async function initApp(deps: AppInitDeps) {
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
+				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
 				// lifecycle sync shows it after the terminal has measured, and the

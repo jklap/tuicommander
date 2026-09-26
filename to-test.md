@@ -240,11 +240,12 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
+- [ ] [VISUAL] After the restart, the in-window Activity Dashboard stays close to the detached window's width; a long terminal name remains readable beside the robot marker and project badge, and a narrow main window has no horizontal overflow.
 - [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
-- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows `↳ <parent tab name>`, and the parent row shows no tag. Rename the parent tab: the tag follows.
-- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same `↳ <parent>` tag; with a long parent name, the tab title stays readable.
-- [ ] Pop out the Activity Dashboard: the detached window shows the same tag.
-- [ ] After the restart, with a child tagged `↳ <parent>`, run `curl -X POST http://localhost:9876/debug/reload_webview`: the tag is still there. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload.
+- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows.
+- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable.
+- [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip.
+- [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload.
 
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
