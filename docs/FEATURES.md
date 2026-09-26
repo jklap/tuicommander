@@ -904,6 +904,7 @@ re-derived later.
   - Desktop IPC, HTTP, and MCP creation payloads report `warm_artifacts.status` (`pending` until the background copy finishes) and state the linked-worktree isolation semantics; workspace path listing reports the current status. A cancelled create marks warming failed; removal and archive cancel queued copies
   - Removal without force keeps dirty worktrees and submodules, refuses an in-progress Git operation, and keeps a branch that changed after the removal check. Dirty-file force still proves branch safety and never overrides a lock by itself
   - Branch deletion accepts default-branch ancestry, ancestry in the checked-out integration branch, patch equivalence, or a merged GitHub PR whose fetched head contains the local tip
+  - MCP `repo action=branch_delete` removes an integrated local branch without a worktree after the same safety proof; it preserves remote refs and refuses checked-out, current, default, or changed local refs
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
   - Dirty, merged, and unknown badges from the shared progressive refresh
