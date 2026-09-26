@@ -12,7 +12,7 @@ import { settingsStore } from "../stores/settings";
 import { rowAnchoredBlocks, terminalsStore } from "../stores/terminals";
 import { newTerminalShellFamily, scopedLaunchCommand } from "../utils/agentLaunchCommand";
 import { prepareAgentLaunchCommand } from "../utils/agentSession";
-import { writeClipboard } from "../utils/clipboard";
+import { writeClipboardAsync } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import type { useAgentDetection } from "./useAgentDetection";
@@ -189,7 +189,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		},
 		{
 			label: "Copy Block Output",
-			action: async () => {
+			action: () => {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
 				// Skip back past any trailing alt-screen-tainted blocks (e.g. a
@@ -205,24 +205,27 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 					lastBlock.endLine <= term.historyBase
 				)
 					return;
-				// The menu invokes this without awaiting it, so a rejected buffer read
-				// would surface as an unhandled rejection instead of a failed copy.
-				let lines: string[];
-				try {
-					lines = await term.ref.getBufferLines(
-						Math.max(0, lastBlock.executionLine + 1 - term.historyBase),
-						lastBlock.endLine - term.historyBase,
-					);
-				} catch (e) {
-					appLogger.warn("terminal", "Copy Block Output failed to read the buffer", { error: String(e) });
-					return;
-				}
-				const text = lines.join("\n").trimEnd();
-				if (text) {
-					writeClipboard(text).catch((err) =>
-						appLogger.warn("terminal", "Copy Block Output failed to write clipboard", err),
-					);
-				}
+				const ref = term.ref;
+				const start = Math.max(0, lastBlock.executionLine + 1 - term.historyBase);
+				const end = lastBlock.endLine - term.historyBase;
+				// getBufferLines is an HTTP round-trip in browser mode; awaiting it before
+				// writing could outlast the browser's user-activation window over a
+				// slow/remote connection — same bug class as CanvasTerminal.tsx's
+				// copySelection(), fixed the same way: writeClipboardAsync calls into the
+				// Clipboard API synchronously with this promise as the deferred data instead
+				// of awaiting it first. See its doc comment. Wrapped in an async IIFE (rather
+				// than calling getBufferLines directly) so a synchronous throw from it becomes
+				// a rejection here too, not an uncaught exception — the menu invokes this
+				// without awaiting it. Tradeoff (browser mode only): a block with genuinely
+				// empty output writes an empty string instead of leaving the clipboard
+				// untouched, since the Clipboard API call must happen before the text is known.
+				const textPromise = (async () => {
+					const lines = await ref.getBufferLines(start, end);
+					return lines.join("\n").trimEnd();
+				})();
+				writeClipboardAsync(textPromise).catch((err) =>
+					appLogger.warn("terminal", "Copy Block Output failed", { error: String(err) }),
+				);
 			},
 			disabled: (() => {
 				const activeId = terminalsStore.state.activeId;

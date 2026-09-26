@@ -38,10 +38,19 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 		paintRow: vi.fn(),
 	}),
 }));
-vi.mock("../../utils/clipboard", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../utils/clipboard")>()),
-	writeClipboard: vi.fn().mockResolvedValue(undefined),
-}));
+// Copy-on-select writes through writeClipboardAsync (it must start inside the user
+// gesture), which calls the module-local writeClipboard; route it to the mock.
+vi.mock("../../utils/clipboard", async (importOriginal) => {
+	const writeClipboard = vi.fn().mockResolvedValue(undefined);
+	return {
+		...(await importOriginal<typeof import("../../utils/clipboard")>()),
+		writeClipboard,
+		writeClipboardAsync: vi.fn(async (text: Promise<string>) => {
+			const value = await text;
+			if (value) await writeClipboard(value);
+		}),
+	};
+});
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
 import { terminalsStore } from "../../stores/terminals";
