@@ -474,6 +474,16 @@ pub async fn stat_path(path: String) -> PathStat {
     stat_path_impl(path)
 }
 
+/// Return the home directory of the machine serving this request.
+/// The remote repository picker must not infer it from the client's platform.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn get_home_directory() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("Home directory is unavailable")?;
+    home.into_os_string()
+        .into_string()
+        .map_err(|_| "Home directory is not valid UTF-8".to_string())
+}
+
 /// List entries in a directory within a repository.
 ///
 /// Not the microsecond `read_dir` it looks like: `list_directory_impl` runs

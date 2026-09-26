@@ -82,6 +82,8 @@ export interface HttpMapping {
 }
 
 export class HttpRpcError extends Error {
+	public readonly detail: string;
+
 	constructor(
 		public readonly command: string,
 		public readonly status: number,
@@ -89,6 +91,16 @@ export class HttpRpcError extends Error {
 	) {
 		super(`RPC ${command} failed: ${status} ${body}`);
 		this.name = "HttpRpcError";
+		let detail = body;
+		try {
+			const parsed: unknown = JSON.parse(body);
+			if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") {
+				detail = parsed.error;
+			}
+		} catch {
+			// Plain-text HTTP errors already carry their useful message in body.
+		}
+		this.detail = detail;
 	}
 }
 
@@ -1733,6 +1745,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Network ---
 	get_local_ip: { map: () => ({ method: "GET", path: "/system/local-ip" }) },
 	get_local_ips: { map: () => ({ method: "GET", path: "/system/local-ips" }) },
+	get_home_directory: { map: () => ({ method: "GET", path: "/system/home-directory" }) },
 
 	// --- File browser ---
 	list_directory: {

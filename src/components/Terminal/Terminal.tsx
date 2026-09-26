@@ -13,7 +13,7 @@ import { rateLimitStore } from "../../stores/ratelimit";
 import { settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
-import { isTauri, subscribePty, type Unsubscribe } from "../../transport";
+import { HttpRpcError, isTauri, subscribePty, type Unsubscribe } from "../../transport";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -180,6 +180,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 	let sessionId: string | null = null;
 	const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
+	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
 	let pendingCanvasFocus = false;
@@ -884,6 +885,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 					return;
 				}
+				// CanvasTerminal chooses its transport at mount. Register ownership before
+				// mounting it, or a fresh remote PTY is attached to local Tauri IPC.
+				terminalsStore.setSessionId(props.id, sessionId);
 				setCurrentSessionId(sessionId);
 				if (sessionId) {
 					if (!isTauri()) {
@@ -903,6 +907,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		} catch (err) {
 			appLogger.error("terminal", `Failed to create PTY: ${err}`);
+			if (!disposed)
+				setSpawnError(err instanceof HttpRpcError ? err.detail : err instanceof Error ? err.message : String(err));
 		}
 	};
 
@@ -1298,15 +1304,25 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					keyed
 					when={_currentSessionId()}
 					fallback={
-						<Show when={sessionEnded()}>
-							<div class={s.exitedNotice} data-testid="terminal-exited-notice">
-								<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
-								<span class={s.exitedHint}>
-									{t(
-										"terminal.exited.hint",
-										"The process exited and its output was released. Close this tab to remove it.",
-									)}
-								</span>
+						<Show
+							when={spawnError()}
+							fallback={
+								<Show when={sessionEnded()}>
+									<div class={s.exitedNotice} data-testid="terminal-exited-notice">
+										<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
+										<span class={s.exitedHint}>
+											{t(
+												"terminal.exited.hint",
+												"The process exited and its output was released. Close this tab to remove it.",
+											)}
+										</span>
+									</div>
+								</Show>
+							}
+						>
+							<div class={s.exitedNotice} role="alert">
+								<span class={s.exitedTitle}>{t("terminal.spawnFailed", "Terminal could not start")}</span>
+								<span class={s.exitedHint}>{spawnError()}</span>
 							</div>
 						</Show>
 					}

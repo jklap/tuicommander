@@ -49,6 +49,10 @@ runs exactly once: invalid binaries, cwd, and permission failures return
 immediately. Async Tauri and HTTP entry points run allocation and backoff on
 Tokio's blocking pool; synchronous internal callers retain the same bounded
 policy. Each site still owns its justified command/env/dimension assembly.
+The HTTP session spawn checks a supplied `cwd` before PTY allocation: on some
+platforms the PTY library returns a session even when the child later fails to
+enter the directory, leaving a blank terminal. A missing or non-directory cwd
+returns `400` and does not enter the session map.
 
 ### Session Control
 

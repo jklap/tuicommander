@@ -259,6 +259,8 @@ Content-Type: application/json
 
 Returns `{ "session_id": "..." }`.
 
+When `cwd` is missing or names a file, the server returns `400` with `{ "error": "Working directory ..." }` before registering a PTY session.
+
 `alias` lets a client restore the short address a tab had before a restart. The server
 honours it only when it still has the `<prefix>-<number>` shape and no live session
 holds it, and then raises the per-prefix counter past that number so the next
@@ -1535,6 +1537,14 @@ GET /system/local-ip
 ```
 
 Returns the preferred local IP address (single value).
+
+### Home Directory
+
+```
+GET /system/home-directory
+```
+
+Returns the serving machine's home directory as a JSON string. The remote repository picker uses this route through the selected connection.
 
 ## Watcher Endpoints
 

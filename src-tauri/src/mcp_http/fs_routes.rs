@@ -6,6 +6,10 @@ use axum::response::{IntoResponse, Response};
 use super::types::*;
 use super::{err_500, json_result, validate_path_string, validate_repo_path};
 
+pub(super) async fn home_directory_http() -> Response {
+    json_result(crate::fs::get_home_directory())
+}
+
 // `list_directory_http` intentionally omits `State` + `indexer_throttle`: the
 // throttle exists to bound *concurrent* blocking walks (search, content grep,
 // BM25 indexing) against each other, and a directory listing is not one of them.
