@@ -570,6 +570,41 @@ pub fn dirty_fingerprint_at(
     Ok((hex::encode(digest.finalize()), unpushed))
 }
 
+fn initialized_main_submodule(base_repo: &Path, destination: &Path) -> bool {
+    if !destination.join(".git").exists() {
+        return false;
+    }
+    let (Ok(module_root), Ok(superproject_root), Ok(module_gitdir), Ok(base_gitdir)) = (
+        rev_at(destination, "--show-toplevel"),
+        rev_at(destination, "--show-superproject-working-tree"),
+        rev_at(destination, "--absolute-git-dir"),
+        rev_at(base_repo, "--absolute-git-dir"),
+    ) else {
+        return false;
+    };
+    let (
+        Ok(module_root),
+        Ok(destination),
+        Ok(superproject_root),
+        Ok(base_repo),
+        Ok(module_gitdir),
+        Ok(base_gitdir),
+    ) = (
+        Path::new(&module_root).canonicalize(),
+        destination.canonicalize(),
+        Path::new(&superproject_root).canonicalize(),
+        base_repo.canonicalize(),
+        Path::new(&module_gitdir).canonicalize(),
+        Path::new(&base_gitdir).canonicalize(),
+    )
+    else {
+        return false;
+    };
+    // Git can report the expected worktree and superproject even when this
+    // submodule's .git file points back to the superproject object store.
+    module_root == destination && superproject_root == base_repo && module_gitdir != base_gitdir
+}
+
 fn preserve_submodule_refs(
     base_repo: &Path,
     worktree: &Path,
@@ -580,16 +615,11 @@ fn preserve_submodule_refs(
     let source_gitdir = rev_at(&source, "--absolute-git-dir")?;
     // Without an initialized module repository in the main checkout there is
     // nowhere durable to move the objects. Refuse rather than delete their only copy.
-    if !destination.join(".git").exists() {
+    if !initialized_main_submodule(base_repo, &destination) {
         return Err(format!(
             "Cannot remove worktree: main checkout has no repository for submodule {submodule_path}"
         ));
     }
-    rev_at(&destination, "--absolute-git-dir").map_err(|_| {
-        format!(
-            "Cannot remove worktree: main checkout has no repository for submodule {submodule_path}"
-        )
-    })?;
     let refs = git_cmd(&source)
         .args(["for-each-ref", "--format=%(refname) %(objectname)"])
         .run()
@@ -1156,7 +1186,7 @@ fn preserve_missing_worktree_modules(
         if is_repo {
             let relative = names.join("/");
             let destination = base_repo.join(&relative);
-            if !destination.join(".git").exists() {
+            if !initialized_main_submodule(base_repo, &destination) {
                 return Err(format!(
                     "Cannot preserve missing worktree submodule {relative}: main module is not initialized"
                 ));
@@ -5947,6 +5977,68 @@ branch refs/heads/feat
                 .stdout
                 .trim()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn preservation_refuses_a_main_module_gitfile_pointing_at_the_superproject() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "wrong-main-module-gitdir");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "module-only.txt", "module-only commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&repo)
+            .args(["submodule", "deinit", "--force", "modules/local"])
+            .run()
+            .unwrap();
+        let destination = repo.join("modules/local");
+        fs::write(
+            destination.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(
+            rev_at(&destination, "--absolute-git-dir").unwrap(),
+            repo.join(".git").to_string_lossy()
+        );
+
+        let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
+        assert!(error.contains("main checkout has no repository"), "{error}");
+        let worktree = WorktreeInfo {
+            name: "wrong-main-module-gitdir".into(),
+            path: path.clone(),
+            branch: Some("wrong-main-module-gitdir".into()),
+            base_repo: repo.clone(),
+        };
+        let removal_error = remove_worktree_internal(&worktree, true).unwrap_err();
+        assert!(
+            removal_error.contains("main checkout has no repository")
+                || removal_error.contains("uninitialized submodule"),
+            "{removal_error}"
+        );
+        assert!(path.exists(), "the source worktree must remain available");
+        assert!(
+            git_cmd(&repo).args(["cat-file", "-e", &oid]).run().is_err(),
+            "the module-only commit must not be fetched into the superproject"
         );
     }
 
