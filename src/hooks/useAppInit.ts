@@ -280,6 +280,8 @@ function assignSessionToRepoBranch(
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+	appLogger.info("app", `WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`);
 	appLogger.info("app", `initApp called — existing terminals: [${terminalsStore.getIds().join(", ")}]`);
 	appLogger.debug("app", "SolidJS App mounted");
 	const preInitTerminalIds = terminalsStore.getIds();

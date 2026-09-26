@@ -3844,3 +3844,7 @@ or credential is touched.
 
 - [ ] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart.
 - [ ] After the same restart, confirm a forced removal with a dirty submodule, then change its HEAD before the request completes. Removal must stop with a changed-state message; retry after a fresh review. A clean merged submodule commit must remain accessible from the main checkout after removal.
+
+## Vite watcher scope and native reload attribution — needs a `make dev` restart
+
+- [ ] Restart `make dev` when live PTY sessions can be interrupted. In an isolated dev instance, create and delete a checkout with HTML files under repository `.tmp/`; verify document age continues increasing and no full reload occurs. Call `POST /debug/reload_webview` and verify the native log records caller address, trigger, action, and target URL while frontend startup records navigation type and document start. The Vite watch config and Rust backend require a restart to take effect.

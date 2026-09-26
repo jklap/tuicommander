@@ -909,6 +909,8 @@ gets a freshly minted alias instead.
 
 `invoke_js` executes JavaScript in the WebView (localhost-only). Results are logged with `source='eval_js'` and read via `debug(action='logs', source='eval_js', limit=1)`.
 
+`POST /debug/reload_webview` is loopback-only. It logs the caller address before asking the native WebView to navigate to its last healthy URL; the navigation log names the `http_route` trigger, action, URL, and success state. The recovery thread and page-load hook use the same navigation path with their own trigger names.
+
 **`window.__TUIC__` bridge** — runtime introspection API:
 
 | Method | Description |
