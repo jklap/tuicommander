@@ -60,6 +60,9 @@ directories on the same volume. TUICommander never trusts the filesystem *name*
 for this — it makes a real copy-on-write copy of one file and looks at whether it
 worked, trying macOS `clonefile` and then a reflink copy. Where neither works,
 creation still succeeds with one warning and a cold worktree.
+Copied files and directories gain owner write permission in the new worktree,
+even when ignored build evidence is read-only in the source. Symlinks are not
+followed, and the source permissions and contents stay unchanged.
 
 ## Creating Worktrees
 
@@ -165,6 +168,18 @@ Immediately before removal, TUICommander refreshes the backend lifecycle verdict
 for the exact workspace id. Dirty files require an explicit destructive
 confirmation; `Unknown` blocks removal. Commits live in the parent object store,
 and a clean worktree with unmerged commits is marked `Unmerged` in the sidebar.
+The proof also accepts a tip contained in the main checkout's current branch,
+or a merged GitHub PR whose verified head contains the local tip after a squash.
+An open or closed unmerged PR, or a PR head behind the local tip, is insufficient.
+Turning off **Delete branch on remove** keeps the branch without needing merge
+proof, while the clean-checkout and lock checks still apply.
+
+For a local branch that has no worktree, agents can use MCP
+`repo action=branch_delete` with the repository path and branch name. It
+deletes only the local ref after proving its commits are in the checked-out
+integration branch, including equivalent patches from a squash merge. A
+checked-out, current, default, unmerged, or changed branch is kept; no remote
+branch is deleted.
 
 ## Worktree Manager Panel
 

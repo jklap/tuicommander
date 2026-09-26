@@ -4,6 +4,15 @@
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
+Worktree deletion has a separate fail-closed `gh api graphql` proof. When Git
+ancestry does not reach the default or checked-out integration branch, it reads
+merged PRs for the worktree branch and accepts one only when its recorded head
+contains the local tip. Missing heads are fetched from `refs/pull/N/head` and
+checked against the API SHA before ancestry is trusted. An API/auth/fetch
+failure leaves the branch unproved; patch-equivalence remains a local fallback.
+The MCP local-branch deletion action uses the same merged-PR evidence when a
+branch has no worktree.
+
 ## Multi-Account Model (`github_account.rs`)
 
 The integration is **account-centric**: the primary key is a stable `GitHubAccountId`, not the host. This keeps github.com behaving exactly as before behind an "ambient default" account while enabling additional accounts.

@@ -191,12 +191,30 @@ reports no unique patches. A branch with an unmerged merge commit is refused:
 `git cherry` does not compare changes made by merge resolution. The removal
 result names the matching rule.
 
+The checked-out main worktree branch is another integration target: if it
+contains the candidate tip, removal records `integration_ancestry` even when
+the remote default branch is behind. Otherwise, a merged GitHub PR can prove
+a squash merge when its fetched head contains the local tip. Open or closed
+unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
+Keeping the branch skips branch-deletion proof while retaining dirty-work,
+submodule, operation, and lock checks.
+
+MCP `repo action=branch_delete` applies the same merge classification to a
+local branch with no checkout. It refuses the current and default branches,
+checks every worktree record, and accepts ancestry in the checked-out
+integration branch or patch equivalence against that branch when GitHub PR
+proof is unavailable. The ref is removed with its captured OID as the expected
+old value, so an advanced branch remains intact. Remote refs are untouched.
+
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per
 ignored directory. The probe and copy primitive share `COW_COPY_FLAGS` (macOS
 `cp -c`, then GNU `cp --reflink=always`); neither may silently fall back to a
 byte-for-byte recursive copy. Warming is best-effort: failure leaves a complete,
 valid, cold linked worktree.
+After each copy, warming adds owner write permission to cloned files and
+directories. It does not follow symlinks or change the source checkout, so
+sealed ignored evidence remains available and the new worktree stays removable.
 
 ## Tauri Commands
 
