@@ -340,8 +340,12 @@ entry into each supported agent's own MCP config only when a non-empty,
 executable `tuic-bridge` is beside the running executable. Launches from a
 temporary directory, App Translocation, a mounted volume or an AppImage mount
 do not write agent configs. A test binary without that sidecar also leaves the
-configs untouched. A worktree build can add an entry or repair a missing
-executable, but it preserves a working absolute command from another install.
+configs untouched. Launch-time installation and repair belong to the unnamed
+default instance outside a linked Git worktree. Named instances and worktree
+builds leave agent configs unchanged, including integrations disabled in the
+default instance. Set `TUIC_MCP_CONFIG_OWNER=1` on a launch only when that
+instance is deliberately assigned ownership of global agent configs. Explicit
+Install and Remove actions in Settings remain user-requested edits.
 Each target uses the format its tool reads:
 
 | Agent | Config file | Shape |
