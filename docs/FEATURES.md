@@ -261,6 +261,15 @@ Configurable, rule-driven double/quad-click word selection, mirroring iTerm2's S
 - **Export/Import** — a scope dropdown (All rules / Modified only / Custom only) plus Export…/Import…, mirroring Smart Prompts' toolbar; export opens the native Save dialog, import reviews NEW/CONFLICT rules before applying and forces any rule with a command-running or text-sending action to import disabled
 - See [terminal-features.md](frontend/terminal-features.md#smart-selection) for the scoring/dispatch details
 
+### 1.23 Inline Images
+
+Images render inline in the terminal, on a dedicated canvas layer above the text and below the cursor/selection — no setting to enable, works in any program that emits the right escape codes.
+
+- **iTerm2 OSC 1337 (`File=`)** — the protocol iTerm2's own `imgcat`/`imgls`/`divider` scripts use; TUICommander ships clean-room reimplementations of all three (see the CLI guide's "Inline Images" section)
+- **Kitty graphics protocol** — transmit (`a=t`), transmit-and-display (`a=T`), and placement (`a=p`); covers neovim image plugins (`image.nvim`, `snacks.nvim`), `yazi`'s previewer, and `mpv`/`timg` in-terminal video, including negative-`z` (behind-text) placements and Unicode virtual placeholders (`U=1`)
+- Known limits: an image overwritten by ordinary text is detected heuristically (its top-left cell only), and raw pixel formats (`f=24`/`f=32`) require an extra metadata round-trip to decode since there's no container to sniff
+- See [pty.md](backend/pty.md#iterm2-inline-images-osc-1337) and [pty.md](backend/pty.md#kitty-graphics-protocol) for the wire-protocol scope, and [terminal-features.md](frontend/terminal-features.md#inline-images-color-tools-plan-phase-5) for the rendering/compositing details
+
 ---
 
 ## 2. Sidebar

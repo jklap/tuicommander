@@ -406,3 +406,14 @@ A subset of iTerm2's proprietary OSC 1337 escape codes is recognized, for compat
 - **`Copy`** and **`CopyToClipboard`…`EndCopy`** — write to the system clipboard, gated by the same Settings > General > Terminal > "Allow OSC 52 clipboard writes" toggle as OSC 52.
 - **`StealFocus`** (bring the window to the front) and **`RequestAttention`** (bounce the dock icon) — gated by Settings > General > Terminal > "Allow terminal focus/attention requests" (default on). Disable this if a script or log ever spams either.
 - **`OpenURL`** — always shows a confirmation dialog naming the URL before opening it (the same dialog `ui action=confirm` MCP requests use, so any connected client — desktop, browser, or the mobile app — can answer it), and only ever opens `http://`, `https://`, or `mailto:` links.
+
+### Inline Images
+
+The terminal renders images inline, on their own layer above the text but below the cursor and selection — no configuration needed. Two protocols are supported:
+
+- **iTerm2 OSC 1337 (`File=`)** — the same escape codes iTerm2's own `imgcat`/`imgls`/`divider` scripts emit. TUICommander ships clean-room reimplementations of those three as `tuic imgcat`/`tuic imgls`/`tuic divider` (and, inside any TUICommander terminal on Unix, as bare `imgcat`/`imgls`/`divider` with no `tuic` prefix) — see the CLI guide's "Inline Images" section.
+- **Kitty graphics protocol** — used by neovim image plugins (`image.nvim`, `snacks.nvim`), `yazi`'s image preview, `mpv`/`timg` video playback in the terminal, and any other tool that targets Kitty's graphics APC sequences. Transmission (`a=t`), transmit-and-display (`a=T`), and placement (`a=p`) are all supported, including images placed behind text (negative `z`) and Unicode virtual placeholders (`U=1`).
+
+Both protocols work in any program that writes the right escape codes — you don't need to invoke `tuic imgcat` yourself for an image to show up; anything that emits Kitty graphics or iTerm2 `File=` sequences renders the same way.
+
+Known limits: raw pixel formats (Kitty `f=24`/`f=32`, used by `mpv`/`blackcat`) are decoded manually since browsers can't sniff a container-less image; an image overwritten by ordinary text is detected heuristically (checked against its top-left cell) rather than via a dedicated wire signal, so a partial overwrite that leaves that cell untouched can leave a stale image on screen until the next full repaint.
