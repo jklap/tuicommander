@@ -40,7 +40,7 @@ impl Fixture {
     /// want the same recorded ego capabilities and no scenario should have to
     /// carry its own copy.
     pub fn with(scenario: &str) -> Self {
-        let root = TempDir::new().expect("ACP root");
+        let root = TempDir::new_in(tuic_test_support::test_temp_root()).expect("ACP root");
         let fixtures = Path::new("tests/fixtures/acp");
         for (from, to) in [
             (format!("{scenario}.jsonl"), "scenario.jsonl"),

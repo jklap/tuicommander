@@ -9483,6 +9483,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tuic-test-support",
 ]
 
 [[package]]
@@ -9537,6 +9538,7 @@ dependencies = [
 name = "tuic-test-support"
 version = "1.7.7"
 dependencies = [
+ "ctor",
  "portable-pty",
 ]
 
