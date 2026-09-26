@@ -86,9 +86,9 @@
 
 .rowMain {
   display: grid;
-  grid-template-columns: 1fr 80px 120px 80px 28px;
+  grid-template-columns: minmax(0, 1fr) 60px 90px 60px 20px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 /* Terminal name + optional project badge — both in the 1fr column */
@@ -110,12 +110,9 @@
 
 /* Marks a PTY another agent spawned; names the parent so the pair reads at a glance. */
 .subAgentTag {
-  font-size: var(--font-xs);
+  display: inline-flex;
+  align-items: center;
   color: var(--accent);
-  max-width: 140px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   flex-shrink: 0;
 }
 
@@ -125,11 +122,23 @@
   background: var(--bg-tertiary);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  max-width: 120px;
+  max-width: 90px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 0;
+}
+
+@media (max-width: 540px) {
+  .rowMain {
+    grid-template-columns: minmax(0, 1fr) 84px 20px;
+  }
+
+  .project,
+  .agent,
+  .lastActivity {
+    display: none;
+  }
 }
 
 .agent {
@@ -243,4 +252,14 @@
   border-top: 1px solid var(--border);
   font-size: var(--font-sm);
   color: var(--fg-muted);
+}
+
+.footerHint {
+  margin-left: auto;
+}
+
+@media (max-width: 540px) {
+  .footerHint {
+    display: none;
+  }
 }
