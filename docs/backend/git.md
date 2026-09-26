@@ -173,6 +173,13 @@ becomes `failed` instead of remaining `pending`. Removing or archiving a
 worktree waits for an active copy, clears its warm state, and prevents a queued
 copy from recreating the old path.
 
+Archiving refuses a locked or missing checkout before moving it. It renames the
+checkout into `__archived`, runs `git worktree repair`, and repairs initialized
+submodule gitfiles and `core.worktree` paths. The Git administration directory,
+HEAD, and reflogs remain registered; the workspace mapper hides archived paths
+from active UI listings. A repair failure rolls the checkout back to its old
+path. The archive path is never unlocked and never pruned.
+
 Non-force removal first requires a clean checkout and submodules, no Git
 operation in progress, and a HEAD matching the captured branch tip. Git needs
 one `--force` to remove a populated submodule even when it is clean; TUICommander

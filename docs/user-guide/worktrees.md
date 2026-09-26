@@ -112,7 +112,7 @@ Right-click a worktree branch → **Merge & Archive** to:
 
 1. Merge the branch into the main branch
 2. Handle the worktree based on the "After merge" setting:
-   - **Archive**: Moves the worktree directory to `__archived/` — the whole directory, uncommitted changes included (accessible but removed from sidebar)
+   - **Archive**: Moves the worktree directory to `__archived/` — the whole directory, uncommitted changes included. Its Git checkout, HEAD, reflog, and initialized submodules remain usable; it is hidden from the sidebar. A locked worktree is left untouched.
    - **Delete**: Removes the worktree and branch entirely. Anything not committed is gone
    - **Ask**: Merge succeeds, then you choose what to do
 
