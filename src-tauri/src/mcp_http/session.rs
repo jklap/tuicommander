@@ -610,7 +610,7 @@ pub(super) fn register_pty_session(
     state
         .grid
         .watch
-        .insert(session_id.to_string(), crate::grid_gate::new_grid_watch());
+        .insert(session_id.to_string(), crate::grid_watch::new_grid_watch());
 
     // Broadcast to SSE/WebSocket consumers before the reader thread starts.
     state.emit_pty_event(crate::state::AppEvent::SessionCreated {
@@ -1666,7 +1666,7 @@ async fn handle_ws_grid_session(
                     // subscriber, which is a second piece of per-client state on a
                     // path that only skips frames when the client is already too slow
                     // to keep up. Revisit if a missed bell is ever reported.
-                    let frame = if crate::grid_gate::watch_dropped_frames(last_seq, seq) {
+                    let frame = if crate::grid_watch::watch_dropped_frames(last_seq, seq) {
                         tracing::debug!(
                             session_id = %resync_sid,
                             last_seq,
@@ -1728,7 +1728,7 @@ async fn handle_ws_grid_session(
     if let Some(watch_tx) = state.grid.watch.get(&session_id)
         && watch_tx.receiver_count() == 0
     {
-        crate::grid_gate::release_grid_frame(&watch_tx);
+        crate::grid_watch::release_grid_frame(&watch_tx);
     }
 }
 
@@ -3029,7 +3029,7 @@ mod tests {
         let sid = "browser-wheel".to_string();
         let stop = browser_session(&state, &sid, 200);
         // What `handle_ws_grid_session` holds for as long as a browser is attached.
-        let watch = crate::grid_gate::new_grid_watch();
+        let watch = crate::grid_watch::new_grid_watch();
         let _browser = watch.subscribe();
         state.grid.watch.insert(sid.clone(), watch);
 
@@ -3311,7 +3311,7 @@ mod tests {
         let tx = state.grid.watch.get(&session_id).unwrap();
         let mut rx = tx.subscribe();
         let first_seq = rx.borrow_and_update().seq;
-        crate::grid_gate::publish_grid_frame(&tx, vec![1, 2, 3]);
+        crate::grid_watch::publish_grid_frame(&tx, vec![1, 2, 3]);
         rx.changed().await.unwrap();
         let slot = rx.borrow_and_update();
         assert_eq!(slot.frame, vec![1, 2, 3]);

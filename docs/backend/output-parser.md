@@ -1,6 +1,6 @@
 # Output Parser
 
-**Module:** `src-tauri/src/output_parser.rs`
+**Module:** `src-tauri/crates/tuic-terminal/src/output_parser.rs`
 
 Parses terminal output to detect structured events: rate limits, status lines, PR URLs, and progress indicators.
 
@@ -275,7 +275,7 @@ shorter submissions leave the previous qualifying prompt in place.
 
 **Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 
-**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `state.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
+**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `vt_log.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
 
 **Active subtask detection:** The output parser recognizes `⏵⏵` (U+23F5) and `››` (U+203A) mode-line prefixes as active subtask indicators. The `active_sub_tasks` count is tracked in `SessionState` and used to suppress premature completion notifications.
 

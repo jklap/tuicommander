@@ -6,7 +6,7 @@ skill intended for both humans and coding agents.
 
 This directory contains repeatable end-to-end regressions for terminal data
 integrity and agent lifecycle detection. It complements the in-process Rust
-tests in `src-tauri/src/terminal_grid.rs` and `src-tauri/src/pty.rs` by driving a
+tests in `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` and `src-tauri/src/pty.rs` by driving a
 real PTY through TUICommander's HTTP transport.
 
 The Python PTY producers use POSIX raw-mode APIs (`termios`/`tty`); these

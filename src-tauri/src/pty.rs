@@ -11472,7 +11472,7 @@ pub(crate) fn send_grid_frame(
             // The claim and the publish share one critical section: claiming
             // first and publishing after would let two producers claim in the
             // order they serialized and then publish in the other one.
-            if crate::grid_gate::claim_grid_frame(&watch_tx, order, for_watch)
+            if crate::grid_watch::claim_grid_frame(&watch_tx, order, for_watch)
                 == crate::grid_gate::FrameOrder::Stale
             {
                 repaint_after_reorder(state, session_id);

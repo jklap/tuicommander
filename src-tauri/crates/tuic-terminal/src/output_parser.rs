@@ -1,5 +1,18 @@
 use serde::Serialize;
 
+fn expand_tilde(path: &str) -> String {
+    let suffix = if path == "~" {
+        ""
+    } else if path.starts_with("~/") {
+        &path[1..]
+    } else {
+        return path.to_string();
+    };
+    dirs::home_dir()
+        .map(|home| format!("{}{suffix}", home.display()))
+        .unwrap_or_else(|| path.to_string())
+}
+
 /// Structured events parsed from PTY output
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
@@ -343,7 +356,7 @@ impl OutputParser {
     /// by the vt100 crate and invisible in clean rows; they remain on the raw stream.
     pub fn parse_clean_lines(
         &mut self,
-        rows: &[crate::state::ChangedRow],
+        rows: &[crate::vt_log::ChangedRow],
         agent_active: bool,
     ) -> Vec<ParsedEvent> {
         let mut events = Vec::new();
@@ -436,7 +449,7 @@ impl OutputParser {
 
     /// Whether the existing suggest grammar accepts a complete token.
     /// This deliberately does not touch emission deduplication state.
-    pub(crate) fn is_complete_suggest(&self, text: &str, agent_active: bool) -> bool {
+    pub fn is_complete_suggest(&self, text: &str, agent_active: bool) -> bool {
         parse_suggest_with_line(text, agent_active).is_some()
     }
 
@@ -455,7 +468,7 @@ impl OutputParser {
     /// scrolls the viewport, so clearing it here would make stale chips
     /// reappear on the next idle. `begin_suggest_working_turn` reopens that one
     /// on real working evidence instead.
-    pub(crate) fn reset_input_dedup(&mut self) {
+    pub fn reset_input_dedup(&mut self) {
         self.last_api_error_match = None;
         self.session_conflict_fired = false;
     }
@@ -463,7 +476,7 @@ impl OutputParser {
     /// Reopen suggest emission once for a turn that has produced real working
     /// evidence. Keeping this separate from user submission prevents a stale
     /// previous-turn row repaint from recreating completed chips.
-    pub(crate) fn begin_suggest_working_turn(&mut self, turn_epoch: u64) {
+    pub fn begin_suggest_working_turn(&mut self, turn_epoch: u64) {
         if self.suggest_working_turn_epoch != Some(turn_epoch) {
             self.suggest_working_turn_epoch = Some(turn_epoch);
             self.last_suggest_items = None;
@@ -549,6 +562,12 @@ impl OutputParser {
             }
         }
         None
+    }
+}
+
+impl Default for OutputParser {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -823,7 +842,7 @@ fn ae(name: &'static str, pattern: &str, error_kind: &'static str) -> ApiErrorPa
 }
 
 /// Parse OSC 9;4 progress sequences: \x1b]9;4;STATE;VALUE\x07
-pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
+pub fn parse_osc94(text: &str) -> Option<ParsedEvent> {
     // Fast path: check for ESC ] before running regex
     if !text.contains("\x1b]9;4;") {
         return None;
@@ -860,7 +879,7 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
 /// wording is unambiguous and stays confident.
 ///
 /// The `prompt_text` is the body when present, else the title.
-pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
+pub fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
     // Fast path: skip the regex unless the introducer is present.
     if !text.contains("\x1b]777;notify;") {
         return Vec::new();
@@ -897,8 +916,7 @@ pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
 /// buffer contains several, the newest qualifying event retains the historical
 /// single-result behavior; production uses `parse_osc777_notifies` and keeps all,
 /// so this exists for tests only.
-#[cfg(test)]
-pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
+pub fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
     parse_osc777_notifies(text).pop()
 }
 
@@ -1302,7 +1320,7 @@ fn is_ink_dialog_footer_row(row: &str) -> bool {
 /// changed-rows path miss them: the footer is the one row that stays byte-identical
 /// from the first sub-question to the last, so it is useless as a *change* signal
 /// and perfect as a *presence* signal.
-pub(crate) fn ink_dialog_footer(screen_rows: &[String]) -> Option<&str> {
+pub fn ink_dialog_footer(screen_rows: &[String]) -> Option<&str> {
     screen_rows
         .iter()
         .find_map(|row| is_ink_dialog_footer_row(row).then(|| row.trim()))
@@ -1361,7 +1379,7 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
 /// Returns true if a line looks like diff output, code context, or documentation
 /// rather than a genuine interactive prompt. Applied to ALL question regex matches
 /// to prevent false positives from diff hunks containing question-like patterns.
-pub(crate) fn line_is_diff_or_code_context(line: &str) -> bool {
+pub fn line_is_diff_or_code_context(line: &str) -> bool {
     let trimmed = line.trim();
 
     // Line-number prefix from code listings: "462 -...", "75 +-...", "465 //...", "1226    assert!(..."
@@ -1462,7 +1480,7 @@ fn parse_plan_file(clean: &str) -> Option<ParsedEvent> {
         if let Some(caps) = PLAN_RE.captures(line) {
             // Expand leading ~/ to the user's home directory so the
             // frontend always receives an absolute path it can open.
-            let path = crate::cli::expand_tilde(&caps[1]);
+            let path = expand_tilde(&caps[1]);
             return Some(ParsedEvent::PlanFile { path });
         }
     }
@@ -1511,7 +1529,7 @@ const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+
 /// agent's own greeting and the user is meant to read it. Everything from the
 /// keyword rightward goes, as does the bullet and indent of a row that carried
 /// nothing else.
-pub(crate) fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
+pub fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
     lazy_static::lazy_static! {
         static ref PLAIN_PREFIX_RE: regex::Regex = regex::Regex::new(&format!(
             r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?(?:intent|suggest):[\t ]+.*$",
@@ -1524,7 +1542,7 @@ pub(crate) fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str>
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StructuredTokenAnchor {
+pub enum StructuredTokenAnchor {
     Intent,
     Suggest,
 }
@@ -1532,7 +1550,7 @@ pub(crate) enum StructuredTokenAnchor {
 /// Identify a structured token at the start of a logical terminal line.
 /// Keep this shared with the parser grammar so grid filtering accepts exactly
 /// the same optional agent bullets as the authoritative token regexes.
-pub(crate) fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
+pub fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
     lazy_static::lazy_static! {
         static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
             r"^[\t ]*(?:[{b}][\t ]+)?(?:(?:{a})?(intent)|(suggest)):",
@@ -1552,7 +1570,7 @@ pub(crate) fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnch
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
 /// at column 0. Only parsed when an agent is active — prevents false positives from
 /// prose like "The intent: of this code".
-pub(crate) fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
+pub fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
     if !agent_active || !clean.contains("intent:") {
         return None;
     }
@@ -1596,8 +1614,8 @@ lazy_static::lazy_static! {
 }
 
 /// Keep pathological narrow-pane output bounded while allowing long intents.
-pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 64;
-pub(crate) const MAX_INTENT_CANDIDATE_CHARS: usize = 2048;
+pub const MAX_INTENT_CONTINUATION_ROWS: usize = 64;
+pub const MAX_INTENT_CANDIDATE_CHARS: usize = 2048;
 
 /// Rejoin an `intent:` token that the agent hard-wrapped across physical rows.
 ///
@@ -1618,7 +1636,7 @@ fn dewrap_intent_continuation(text: &str) -> std::borrow::Cow<'_, str> {
     dewrap_intent_continuation_with_rows(text, None).0
 }
 
-pub(crate) fn dewrap_intent_continuation_with_rows<'a>(
+pub fn dewrap_intent_continuation_with_rows<'a>(
     text: &'a str,
     geometry: Option<(usize, &[usize])>,
 ) -> (std::borrow::Cow<'a, str>, usize) {
@@ -1647,7 +1665,7 @@ pub(crate) fn dewrap_intent_continuation_with_rows<'a>(
         }
         if let Some((columns, physical_widths)) = geometry {
             let previous = lines[anchor + absorbed].trim_end();
-            let first_word = line.trim().split_whitespace().next().unwrap_or_default();
+            let first_word = line.split_whitespace().next().unwrap_or_default();
             let previous_width = physical_widths
                 .get(absorbed)
                 .copied()
@@ -1679,7 +1697,7 @@ pub(crate) fn dewrap_intent_continuation_with_rows<'a>(
 
 /// True when the row ends in a closed `(title)` — the protocol's only
 /// end-of-token marker, and therefore the signal that nothing wrapped.
-pub(crate) fn intent_row_is_complete(row: &str) -> bool {
+pub fn intent_row_is_complete(row: &str) -> bool {
     INTENT_TITLE_RE.is_match(row.trim_end())
 }
 
@@ -4993,7 +5011,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     #[test]
     fn test_parse_clean_lines_gated_by_agent() {
-        use crate::state::ChangedRow;
+        use crate::vt_log::ChangedRow;
         let mut parser = OutputParser::new();
         let rows = vec![ChangedRow {
             row_index: 0,
@@ -5021,8 +5039,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     // --- parse_clean_lines tests ---
 
-    fn row(i: usize, text: &str) -> crate::state::ChangedRow {
-        crate::state::ChangedRow {
+    fn row(i: usize, text: &str) -> crate::vt_log::ChangedRow {
+        crate::vt_log::ChangedRow {
             row_index: i,
             text: text.to_string(),
         }
@@ -6249,7 +6267,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     // and loosen the parser only as needed.
 
     fn fixtures_dir() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/choice_prompts")
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/fixtures/choice_prompts")
     }
 
     fn load_rows(path: &std::path::Path) -> Vec<String> {
@@ -6546,10 +6565,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// Decode a real PTY capture into the screen text an agent painted.
     fn agent_capture_lines(name: &str) -> Vec<String> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/fixtures/agent_prompts")
+            .join("../../src/fixtures/agent_prompts")
             .join(name);
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {name}: {e}"));
-        let mut vt = crate::state::VtLogBuffer::new(41, 128, 2000);
+        let mut vt = crate::vt_log::VtLogBuffer::new(41, 128, 2000);
         let mut lines = Vec::new();
         for record in crate::pty_capture::decode(&bytes).expect("valid capture") {
             if record.direction != crate::pty_capture::CaptureDirection::Output {

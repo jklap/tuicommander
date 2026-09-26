@@ -16404,14 +16404,14 @@ mod grid_subscriber_tests {
         state
             .grid
             .watch
-            .insert("s1".to_string(), crate::grid_gate::new_grid_watch());
+            .insert("s1".to_string(), crate::grid_watch::new_grid_watch());
         assert!(!grid_has_subscriber(&state, "s1"));
     }
 
     #[test]
     fn a_live_watch_receiver_is_a_subscriber() {
         let state = crate::state::tests_support::make_test_app_state();
-        let tx = crate::grid_gate::new_grid_watch();
+        let tx = crate::grid_watch::new_grid_watch();
         let rx = tx.subscribe();
         state.grid.watch.insert("s1".to_string(), tx);
 
@@ -16427,7 +16427,7 @@ mod grid_subscriber_tests {
     #[test]
     fn one_session_having_a_subscriber_says_nothing_about_another() {
         let state = crate::state::tests_support::make_test_app_state();
-        let tx = crate::grid_gate::new_grid_watch();
+        let tx = crate::grid_watch::new_grid_watch();
         let _rx = tx.subscribe();
         state.grid.watch.insert("watched".to_string(), tx);
 
@@ -16625,7 +16625,8 @@ mod normalize_path_tests {
 #[cfg(test)]
 mod grid_delivery_tests {
     use super::*;
-    use crate::grid_gate::{GridGate, new_grid_watch};
+    use crate::grid_gate::GridGate;
+    use crate::grid_watch::new_grid_watch;
 
     // --- Frame ordering (670-b9a2) ---
     //
@@ -16647,7 +16648,7 @@ mod grid_delivery_tests {
     fn grid_session(
         state: &Arc<AppState>,
         session_id: &str,
-    ) -> tokio::sync::watch::Receiver<crate::grid_gate::GridWatchFrame> {
+    ) -> tokio::sync::watch::Receiver<crate::grid_watch::GridWatchFrame> {
         state.grid.vt_log_buffers.insert(
             session_id.to_string(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),

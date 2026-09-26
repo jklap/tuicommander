@@ -889,11 +889,11 @@ mod tests {
     #[cfg(unix)]
     use std::path::PathBuf;
     #[cfg(unix)]
+    use std::sync::Arc;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicUsize;
     #[cfg(unix)]
     use std::sync::atomic::Ordering;
-    #[cfg(unix)]
-    use std::sync::{Arc, Mutex};
     #[cfg(unix)]
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;

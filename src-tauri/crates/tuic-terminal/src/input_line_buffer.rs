@@ -26,7 +26,7 @@ const MAX_CSI_PARAM_BYTES: usize = 32;
 
 /// A line-editing buffer that tracks cursor position and content.
 #[derive(Debug)]
-pub(crate) struct InputLineBuffer {
+pub struct InputLineBuffer {
     /// The character content of the current line.
     chars: Vec<char>,
     /// Cursor position as a character index (0 = before first char).
@@ -52,7 +52,7 @@ enum EscState {
 
 /// Result of feeding data to the buffer.
 #[derive(Debug)]
-pub(crate) enum InputAction {
+pub enum InputAction {
     /// A complete line was submitted (Enter pressed). Contains the line text.
     Line(String),
     /// Input was interrupted (Ctrl+C). Buffer was cleared.
@@ -60,7 +60,7 @@ pub(crate) enum InputAction {
 }
 
 impl InputLineBuffer {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             chars: Vec::with_capacity(256),
             cursor: 0,
@@ -71,7 +71,7 @@ impl InputLineBuffer {
 
     /// Feed raw PTY write data into the buffer.
     /// Returns a list of actions (typically 0 or 1 Line actions per call).
-    pub(crate) fn feed(&mut self, data: &str) -> Vec<InputAction> {
+    pub fn feed(&mut self, data: &str) -> Vec<InputAction> {
         let mut actions = Vec::new();
         for ch in data.chars() {
             if let Some(action) = self.feed_char(ch) {
@@ -82,7 +82,7 @@ impl InputLineBuffer {
     }
 
     /// Get the current buffer content.
-    pub(crate) fn content(&self) -> String {
+    pub fn content(&self) -> String {
         self.chars.iter().collect()
     }
 
@@ -91,18 +91,18 @@ impl InputLineBuffer {
     /// `write_pty` runs this and [`Self::starts_with`] on every keystroke. Going
     /// through `content()` allocated and collected the whole typed line to answer
     /// one bit, then threw it away.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.chars.is_empty()
     }
 
     /// Whether the line begins with `c`. See [`Self::is_empty`].
-    pub(crate) fn starts_with(&self, c: char) -> bool {
+    pub fn starts_with(&self, c: char) -> bool {
         self.chars.first() == Some(&c)
     }
 
     /// Get current cursor position.
     #[cfg(test)]
-    pub(crate) fn cursor_pos(&self) -> usize {
+    pub fn cursor_pos(&self) -> usize {
         self.cursor
     }
 
@@ -477,6 +477,12 @@ impl InputLineBuffer {
             end += 1;
         }
         self.chars.drain(start..end);
+    }
+}
+
+impl Default for InputLineBuffer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

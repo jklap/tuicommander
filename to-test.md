@@ -1,3 +1,7 @@
+## Terminal crate split restart
+
+- [ ] Restart `make dev` after the terminal crate split. Rust changes do not hot-reload in the running development instance.
+
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP
      comment body (free text, may span multiple lines)
@@ -1108,7 +1112,7 @@ cleared eventually.
 ## Terminal answers OSC 10/11/12 colour queries
 
 **LIVE since the 2026-09-07 07:42 `make dev` — but NOT because it was committed.**
-The answering code is still uncommitted: `git show HEAD:src-tauri/src/terminal_grid.rs`
+The answering code is still uncommitted: `git show HEAD:src-tauri/crates/tuic-terminal/src/terminal_grid.rs`
 has `Event::ColorRequest(..)` in the **ignore list** and no `palette_color_for_index`
 at all. `make dev` builds the *working tree*, so the rebuilt binary contains it.
 
@@ -1140,13 +1144,13 @@ The code below is **working-tree code**, reviewed by inspection (ladder rungs
 1–2). It describes what will run once this is committed and rebuilt — not what
 runs now:
 
-- the reply is built at `terminal_grid.rs:196-202` and pushed as
+- the reply is built at `tuic-terminal/src/terminal_grid.rs:196-202` and pushed as
   `TermEvent::PtyWrite`, drained unconditionally on the chunk path at
   `pty.rs:5106-5119` — so it does NOT depend on a frontend being attached;
-- `palette_color_for_index` (`terminal_grid.rs:94-103`) resolves foreground,
+- `palette_color_for_index` (`tuic-terminal/src/terminal_grid.rs:94-103`) resolves foreground,
   background and cursor off a global `PALETTE` that always has a value, so the
   `None` branch cannot swallow a 10/11/12 query;
-- reply content is asserted by `terminal_grid.rs:2360-2415`.
+- reply content is asserted by `tuic-terminal/src/terminal_grid.rs:2360-2415`.
 
 **A live CLI probe of the reply was attempted and is NOT a usable check — do not
 retry it the obvious ways.** Two traps, both hit on 2026-09-07:
@@ -1627,7 +1631,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
 - [ ] [HUMAN] Copy a long Claude message out of the terminal and paste it into Slack:
   no `▎` gutter and no gutter NBSPs, while lists, blank lines, indentation, `:wave:`
   and the body spacing survive unchanged. The text itself is asserted by nine Rust
-  tests (`cargo nextest -E 'test(copied_selection)'`, `terminal_grid.rs:1687`); the
+  tests (`cargo nextest -E 'test(copied_selection)'`, `tuic-terminal/src/terminal_grid.rs:1687`); the
   paste is not. Tried twice from automation — `agent-browser clipboard read` fails
   with `Resource temporarily unavailable (os error 35)`.
 - [ ] [HUMAN] Drag a file out of the file browser onto Finder, and drop a large folder

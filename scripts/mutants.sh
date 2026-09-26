@@ -95,7 +95,7 @@ ulimit -n 10240
 # the missed.txt dump below only ever printed on a clean run, which is the one
 # case where it has nothing to say.
 STATUS=0
-cargo mutants --in-place --in-diff "$DIFF" "${@:2}" || STATUS=$?
+cargo mutants --workspace --in-place --in-diff "$DIFF" "${@:2}" || STATUS=$?
 echo "--- missed (a surviving mutant is a missing test):"
 cat mutants.out/missed.txt 2>/dev/null || true
 echo "logs: $SRC/src-tauri/mutants.out"
