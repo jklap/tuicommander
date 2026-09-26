@@ -133,6 +133,7 @@ check: test-shell
 	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-dev-builds-sibling.sh && echo "  make-dev-builds-sibling ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm exec vite build && scripts/with-test-tmp.sh $(RTK) node scripts/report-frontend-bundles.mjs --check && echo "  frontend bundle budget ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
 # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
