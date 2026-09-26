@@ -136,8 +136,8 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Project Progress",
 		description:
-			"The Progress dialog draws a line where your last visit ended, so you can see what agents did while you were away without reading it all again.",
-		shortcut: null,
+			"Open Terminal Progress from the toolbar bell to see what agents did while you were away, even when there are no unread updates.",
+		shortcut: "Cmd+Shift+P",
 	},
 	{
 		feature: "Plan Panel",
