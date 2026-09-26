@@ -195,7 +195,7 @@ Each worktree row displays:
 - **Last commit timestamp** — relative time since last activity
 - **Main badge** — marks the main branch (actions disabled)
 
-Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button to clean them up.
+Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button. Prune refuses a Git operation in progress and keeps detached commits that have no durable branch, tag, or other ref. Create a ref for that commit before retrying if you want to keep the commit and remove the checkout.
 
 ### Filtering
 

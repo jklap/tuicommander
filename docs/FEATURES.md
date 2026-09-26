@@ -912,7 +912,7 @@ re-derived later.
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
   - Dirty, merged, and unknown badges from the shared progressive refresh
-  - Orphan worktree detection with warning badge and Prune action
+  - Orphan worktree detection with warning badge and Prune action; pruning refuses in-progress Git operations and detached commits absent from durable refs
   - Repo filter pills and text search for branch names
   - Multi-select with checkboxes and select-all for batch operations
   - Batch delete and batch merge & archive
