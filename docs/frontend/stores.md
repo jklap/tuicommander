@@ -601,9 +601,12 @@ The list is read in both views because it carries the divider and deletion.
 
 A Progress toast opts out of the generic MESSAGES mirror because the bell has its
 own aggregate row, and it is silent — a blocked entry is not automatically a
-demand for attention. `intent`, `delegated` and `message` entries toast nothing:
-they are what an agent set out to do or said to another agent, not a result. Failures stay on the affected project as one line
-instead of being rendered as an empty feed.
+demand for attention. Its source PTY id lets the repo action activate the
+reporting terminal and its workspace; if that terminal has closed, the action
+opens the repository and logs why it could not focus the terminal. `intent`,
+`delegated` and `message` entries toast nothing: they are what an agent set out
+to do or said to another agent, not a result. Failures stay on the affected
+project as one line instead of being rendered as an empty feed.
 
 ### errorLog (`errorLog.ts`)
 Error ring buffer and error panel state.
