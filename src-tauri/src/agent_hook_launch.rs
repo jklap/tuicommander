@@ -252,15 +252,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn screen_probe_is_skipped_when_its_answer_cannot_change_launch_args() {
-        let marker =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh/screen-lazy-probe.invoked");
-        let _ = std::fs::remove_file(&marker);
-        let marker_arg = shell_quote(&marker.to_string_lossy());
         let script = crate::test_support::fake_ssh_script(
             "screen-lazy-probe",
-            &format!("printf x >> {marker_arg}; printf '%s\\n' '--no-alt-screen'"),
+            "printf x >> \"${0%/*}/screen-lazy-probe.invoked\"; printf '%s\\n' '--no-alt-screen'",
             "echo --no-alt-screen",
         );
+        let marker = script.with_file_name("screen-lazy-probe.invoked");
+        let _ = std::fs::remove_file(&marker);
         let binary = script.to_string_lossy();
         for (agent, args) in [
             ("codex", vec!["--no-alt-screen".into()]),

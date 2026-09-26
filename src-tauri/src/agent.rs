@@ -1306,17 +1306,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn concurrent_screen_help_requests_share_one_probe() {
-        let marker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/fake-ssh/screen-help-single-flight.count");
-        let _ = std::fs::remove_file(&marker);
         let script = crate::test_support::fake_ssh_script(
             "screen-help-single-flight",
-            &format!(
-                "printf x >> '{}'; sleep 1; printf '%s\\n' '--no-alt-screen'",
-                marker.display()
-            ),
+            "printf x >> \"${0%/*}/screen-help-single-flight.count\"; sleep 1; printf '%s\\n' '--no-alt-screen'",
             "echo --no-alt-screen",
         );
+        let marker = script.with_file_name("screen-help-single-flight.count");
+        let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy().into_owned();
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let handles: Vec<_> = (0..2)
@@ -1339,18 +1335,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_screen_help_probe_is_retried_after_cooldown() {
-        let marker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/fake-ssh/screen-help-retry.ready");
-        let _ = std::fs::remove_file(&marker);
         let script = crate::test_support::fake_ssh_script(
             "screen-help-retry",
-            &format!(
-                "if [ ! -f '{}' ]; then touch '{}'; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
-                marker.display(),
-                marker.display()
-            ),
+            "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
             "echo --no-alt-screen",
         );
+        let marker = script.with_file_name("screen-help-retry.ready");
+        let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
@@ -1360,18 +1351,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn empty_successful_help_is_inconclusive_and_retried() {
-        let marker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/fake-ssh/screen-help-empty.ready");
-        let _ = std::fs::remove_file(&marker);
         let script = crate::test_support::fake_ssh_script(
             "screen-help-empty",
-            &format!(
-                "if [ ! -f '{}' ]; then touch '{}'; exit 0; fi; printf '%s\\n' '--no-alt-screen'",
-                marker.display(),
-                marker.display()
-            ),
+            "marker=\"${0%/*}/screen-help-empty.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 0; fi; printf '%s\\n' '--no-alt-screen'",
             "echo --no-alt-screen",
         );
+        let marker = script.with_file_name("screen-help-empty.ready");
+        let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
