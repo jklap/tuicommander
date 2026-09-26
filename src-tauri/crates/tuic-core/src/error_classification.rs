@@ -7,7 +7,7 @@
 ///
 /// Returns one of: "rate_limit", "server", "network", "auth", "validation", "unknown".
 #[allow(dead_code)] // Source-of-truth classifier; frontend mirrors these patterns
-pub(crate) fn classify_error(message: &str) -> &'static str {
+pub fn classify_error(message: &str) -> &'static str {
     let lower = message.to_lowercase();
 
     // Rate limit patterns
@@ -72,7 +72,7 @@ pub(crate) fn classify_error(message: &str) -> &'static str {
 ///
 /// This is the source of truth for the backoff algorithm.
 /// The frontend mirrors this in `src/error-handler.ts:calculateBackoffDelay`.
-pub(crate) fn calculate_backoff_delay(
+pub fn calculate_backoff_delay(
     retry_count: u32,
     base_delay_ms: f64,
     max_delay_ms: f64,

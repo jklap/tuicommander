@@ -1,6 +1,6 @@
-## Terminal crate split restart
+## Crate split restart
 
-- [ ] Restart `make dev` after the terminal crate split. Rust changes do not hot-reload in the running development instance.
+- [ ] Restart `make dev` after the `tuic-terminal` and `tuic-core` crate splits. Rust changes do not hot-reload in the running development instance.
 
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP
@@ -597,7 +597,7 @@ that already has one is dropped.
 - [x] `curl -s localhost:9876/health | jq .instance_id` returns a UUID, and it
       changes after a restart.
       _(verified 2026-09-23: :9876 returned `a53f203e-7e81-4d47-a0a8-6c3ec9a4d8ca`;
-      `app_instance.rs:152-155` mints it with `Uuid::new_v4()` in a process-local
+      `crates/tuic-core/src/app_instance.rs:152-155` mints it with `Uuid::new_v4()` in a process-local
       `OnceLock`, never persisted, so each process gets a new one.)_
 
 ## Workspace badge: file count instead of "Dirty", `in_sync` instead of "Merged" (2026-09-20) — **Rust, needs a `make dev` restart**
@@ -2329,7 +2329,7 @@ build`, or `tuic install-cli` after a `cargo build -p tuic-cli`).
 
 ## Stale-temp repository classifier + repair, and `TUIC_APP_INSTANCE` (story `763-d219`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-Both live in `src-tauri/src/config.rs` / `lib.rs` / `app_instance.rs`, so
+Both live in `src-tauri/src/config.rs` / `lib.rs` / `crates/tuic-core/src/app_instance.rs`, so
 neither is loaded by Vite HMR — `make dev` must be restarted (or `make build`
 for release) before any of this is observable.
 

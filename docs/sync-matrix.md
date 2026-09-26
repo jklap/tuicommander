@@ -285,7 +285,7 @@ engine. `pty.rs` reads them, so they kept the `ai_agent/` module path:
 | `src-tauri/src/pty.rs` | ChunkProcessor.record_osc133_outcomes + Inferred fallback in the silence timer |
 | `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
 | `src-tauri/src/lib.rs` | spawn_persist_task at boot |
-| `src-tauri/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
+| `src-tauri/crates/tuic-core/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
 | `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` | Grid reader methods in `tuic-terminal`: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `vt_log.rs` |
 
 ### What #784-0aec removed, and where it comes back
@@ -351,7 +351,7 @@ When modifying remote connection config, storage, or transport routing:
 | `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status`. **`teardown()` is the one way a connection goes down** — poll, mirror task, mirrored rows, tunnel and token, in that order, idempotent and safe on an id nothing knows. Disconnect and delete both call it, over IPC and over HTTP alike; a second stop path is how the tunnel came to outlive the delete that removed its profile |
 | `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | On-connect deployment, cached release assets, and systemd/launchd install/uninstall |
 | `src-tauri/src/remote_lifetime.rs` | Ephemeral daemon idle expiry and `/health.survive_secs` |
-| `src-tauri/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
+| `src-tauri/crates/tuic-core/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
 | `src/stores/remoteConnections.ts` | Frontend remote connections store — a renderer of the backend status, plus the token it holds in memory for the transport |
 | `src/transportRuntime.ts` | `withRemoteToken` — the one place a credential is put on a URL; `resolveOwningConnection` — the one place a call's machine is decided |
 | `src/stores/repositories.ts` / `src/stores/terminals.ts` | the registered path→connection and session→connection lookups |
