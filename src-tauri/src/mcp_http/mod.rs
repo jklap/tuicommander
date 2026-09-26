@@ -767,6 +767,7 @@ const API_PREFIXES: &[&str] = &[
     "progress",
     "prompt",
     "registry",
+    "remote",
     "repo",
     "sessions",
     "stats",
