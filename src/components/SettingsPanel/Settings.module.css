@@ -1004,6 +1004,11 @@
   background: var(--fg-muted);
 }
 
+.mcpStatusDot.error {
+  background: var(--error);
+  box-shadow: 0 0 4px var(--error);
+}
+
 .mcpStatusText {
   font-size: var(--font-sm);
   color: var(--fg-secondary);
