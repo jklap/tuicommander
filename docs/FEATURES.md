@@ -897,6 +897,7 @@ re-derived later.
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
+- Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
 - Remove via sidebar `×` button or context menu (with confirmation)
 - **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; `.tmp` and `.mdkb` directories, tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
