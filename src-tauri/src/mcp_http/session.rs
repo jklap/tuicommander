@@ -59,12 +59,32 @@ pub(super) async fn app_version() -> Json<super::types::VersionResponse> {
     })
 }
 
+/// Resolve live agent identities in one pass for all session-list consumers.
+pub(crate) fn live_tuic_sessions_by_pty(
+    state: &AppState,
+) -> std::collections::HashMap<String, String> {
+    // A session opened without a caller identity is bound under its own PTY
+    // key. A later registered identity must win regardless of map iteration.
+    let mut by_pty = std::collections::HashMap::new();
+    for entry in state.session_maps.live_pty_by_tuic_session.iter() {
+        let (identity, pty) = (entry.key(), entry.value());
+        let bound = by_pty
+            .entry(pty.clone())
+            .or_insert_with(|| identity.clone());
+        if bound == pty && identity != pty {
+            *bound = identity.clone();
+        }
+    }
+    by_pty
+}
+
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
 /// Tauri command return the same rows, so a mirrored remote row (#791-055e) lands
 /// in both lists the same way.
 pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
+    let tuic_by_pty = live_tuic_sessions_by_pty(state);
     state
         .session_maps
         .sessions
@@ -93,6 +113,7 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .term_aliases
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                tuic_session: tuic_by_pty.get(&session_id).cloned(),
                 parent_session: state
                     .session_maps
                     .session_parent
@@ -3414,6 +3435,33 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+    }
+
+    #[tokio::test]
+    async fn session_rows_expose_the_live_tuic_identity_that_children_name() {
+        let state = super::super::tests::test_state();
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity {
+                session_id: Some("coordinator-pty".to_string()),
+                ..Default::default()
+            },
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        state.bind_live_pty("coordinator-tuic", &session_id);
+        let row = super::session_rows_including_remote(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .expect("the parent session is listed");
+        let wire = serde_json::to_value(row).expect("session row serializes over both transports");
+        assert_eq!(wire["tuic_session"], "coordinator-tuic");
     }
 
     /// Every OSC 0/2 and intent title is synced back through `PUT name` as a
