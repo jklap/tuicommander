@@ -31,3 +31,14 @@ cargo nextest run --lib -E 'test(hooked_dialog_capture)'
 The replay checks restoration of the question badge, suppression of duplicate
 notifications, recovery after a later awaiting/busy pair during a dialog redraw,
 and clearing after the dialog disappears and protocol work resumes.
+
+## Mobile question text (2026-09-26)
+
+This real capture also limits what a phone alert can claim. The OSC 7770
+`state=awaiting` marker carries no question text. The replay's recovered
+`question_text` is the Ink dialog footer, not the dialog's question title.
+The mobile push path therefore waits for a nonempty explicit `progress
+type=blocked` report or a parsed choice title. A real AskUserQuestion title
+still needs separate parser evidence and a phone check before it can be
+reported as verified. Do not treat the hook marker alone as a deliverable
+question, or spend the 30-second push limit on its empty text.

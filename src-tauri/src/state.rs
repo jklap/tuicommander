@@ -3166,7 +3166,7 @@ impl AppState {
             ),
             acp: crate::acp::AcpClientManager::new(),
             push_store,
-            desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
             server_start_time: std::time::Instant::now(),
             tunnel_manager,
             remote: Default::default(),
@@ -3748,6 +3748,30 @@ pub(crate) fn broadcast_to_ws_clients(
     }
 }
 
+const MOBILE_PUSH_HID_IDLE_SECS: f64 = 120.0;
+
+fn mobile_push_away(window_focused: bool, hid_idle_secs: Option<f64>) -> bool {
+    !window_focused
+        || hid_idle_secs.is_some_and(|secs| secs.is_finite() && secs >= MOBILE_PUSH_HID_IDLE_SECS)
+}
+
+#[cfg(target_os = "macos")]
+fn hid_idle_seconds() -> Option<f64> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+    }
+    // CoreGraphics defines HIDSystemState as 1 and AnyInputEventType as ~0.
+    // SAFETY: this OS API reads global input idle time and retains no pointers.
+    let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hid_idle_seconds() -> Option<f64> {
+    None
+}
+
 impl AppState {
     /// Invalidate all operation caches (git + GitHub).
     /// Build a session's VT log buffer with the settings that apply to every
@@ -4063,7 +4087,7 @@ impl AppState {
         let push_state = Arc::clone(state);
         let body = body.to_owned();
         tokio::spawn(async move {
-            let stale = crate::push::send_push_batch(
+            let result = crate::push::send_push_batch(
                 subs,
                 &config,
                 &http_client,
@@ -4072,7 +4096,7 @@ impl AppState {
                 &url,
             )
             .await;
-            for endpoint in &stale {
+            for endpoint in &result.stale_endpoints {
                 push_state.push_store.remove(endpoint);
             }
         });
@@ -4182,6 +4206,20 @@ impl AppState {
                         .map(|sl| sl.lock().record_awaiting(rank, source))
                         .unwrap_or(true)
                 });
+                let push_ready = matches!(event_type, "question" | "choice-prompt") && {
+                    let config = state.config.read();
+                    config.services.push.enabled
+                        && !config.services.push.vapid_private_key.is_empty()
+                        && !state.push_store.is_empty()
+                };
+                let window_focused = state
+                    .desktop_window_focused
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let desktop_away = matches!(event_type, "question" | "choice-prompt")
+                    && mobile_push_away(
+                        window_focused,
+                        if window_focused { hid_idle_seconds() } else { None },
+                    );
                 // "status-line" and "question-cleared" only clear a non-confident
                 // awaiting verdict — the old `!question_confident` sticky guard,
                 // read off the same ranked evidence instead of a raw bool.
@@ -4233,7 +4271,9 @@ impl AppState {
                             }
 
                             // Rate limit: skip if last push for this session was < 30s ago
-                            let should_push = !state.push_store.is_empty()
+                            let should_push = push_ready
+                                && desktop_away
+                                && s.question_text.as_deref().is_some_and(|text| !text.trim().is_empty())
                                 && s.last_push_ms
                                     .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
                             if should_push {
@@ -4361,6 +4401,19 @@ impl AppState {
                             as serde::Deserialize>::deserialize(&**parsed)
                         .ok();
                         s.awaiting_input = true;
+                        if let Some(title) = s.choice_prompt.as_ref().map(|choice| choice.title.clone()) {
+                            s.question_text = Some(title.clone());
+                            s.question_confident = true;
+                            if push_ready
+                                && desktop_away
+                                && !title.trim().is_empty()
+                                && s.last_push_ms
+                                    .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000)
+                            {
+                                s.last_push_ms = Some(now_ms);
+                                push_data = Some((session_id.clone(), title));
+                            }
+                        }
                         awaiting_evidence_op = Some(AwaitingEvidenceOp::RecordChoicePrompt);
                         if !was_awaiting {
                             parked_wait = Some((
@@ -4445,11 +4498,7 @@ impl AppState {
                 }
 
                 // Spawn push notification outside the DashMap lock
-                if let Some((sid, prompt)) = push_data
-                    && !state
-                        .desktop_window_focused
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if let Some((sid, prompt)) = push_data {
                     let session_name = state
                         .session_maps.sessions
                         .get(&sid)
@@ -4476,10 +4525,13 @@ impl AppState {
                     entry.last_activity_ms = now_ms;
                 }
                 // Push "session completed" to mobile (unseen)
-                if !state
+                let window_focused = state
                     .desktop_window_focused
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if mobile_push_away(
+                    window_focused,
+                    if window_focused { hid_idle_seconds() } else { None },
+                ) {
                     let session_name = state
                         .session_maps.sessions
                         .get(session_id)
@@ -7726,6 +7778,140 @@ mod tests {
         assert!(
             !s.question_confident,
             "silence-based question should not be confident"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_question_without_a_phone_subscription_does_not_consume_the_away_push_budget() {
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        let question = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Should I deploy now?", "confident": true }),
+        );
+        let at_desk = apply(&state, &question);
+        assert!(
+            at_desk.last_push_ms.is_none(),
+            "a question without a subscribed phone must not spend the 30-second limit"
+        );
+
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let away = apply(&state, &question);
+        assert!(
+            away.last_push_ms.is_some(),
+            "the same question can alert once Boss leaves"
+        );
+
+        let first = away.last_push_ms.unwrap();
+        let recent = first.saturating_sub(1_000);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(recent);
+        let rate_limited = apply(&state, &question);
+        assert_eq!(
+            rate_limited.last_push_ms,
+            Some(recent),
+            "a repeated question within 30 seconds must not alert twice"
+        );
+
+        let old = first.saturating_sub(31_000);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(old);
+        let eligible = apply(&state, &question);
+        assert!(
+            eligible.last_push_ms.unwrap() > old,
+            "an older question alert must not block a new one"
+        );
+    }
+
+    #[test]
+    fn a_focused_but_idle_desktop_can_alert_the_phone() {
+        assert!(super::mobile_push_away(true, Some(120.0)));
+        assert!(!super::mobile_push_away(true, Some(119.9)));
+        assert!(!super::mobile_push_away(true, Some(0.0)));
+        assert!(!super::mobile_push_away(true, Some(f64::NAN)));
+        assert!(!super::mobile_push_away(true, None));
+        assert!(super::mobile_push_away(false, None));
+    }
+
+    #[tokio::test]
+    async fn ask_user_question_waits_for_its_title_before_spending_the_push_limit() {
+        let state = fresh_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        let hook = apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "", "confident": true }),
+            ),
+        );
+        assert!(hook.awaiting_input);
+        assert!(
+            hook.last_push_ms.is_none(),
+            "an empty hook signal must leave room for the real question"
+        );
+
+        let titled = apply(
+            &state,
+            &make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Should I deploy now?",
+                    "options": [
+                        { "key": "1", "label": "Yes", "highlighted": true, "destructive": false },
+                        { "key": "2", "label": "No", "highlighted": false, "destructive": true }
+                    ]
+                }),
+            ),
+        );
+        assert_eq!(
+            titled.question_text.as_deref(),
+            Some("Should I deploy now?")
+        );
+        assert!(
+            titled.last_push_ms.is_some(),
+            "the titled question must be eligible for one push"
         );
     }
 

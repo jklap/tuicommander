@@ -240,6 +240,13 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps one complete managed reply to the atomic session route", () => {
+			expect(mapCommandToHttp("submit_agent_reply", { sessionId: "s1", input: "answer" })).toEqual({
+				method: "POST",
+				path: "/sessions/s1/submit",
+				body: { input: "answer" },
+			});
+		});
 		it("maps every Design Mode command with matching IPC request fields", () => {
 			expect(mapCommandToHttp("start_design_mode", { sessionId: "agent-1" })).toEqual({
 				method: "POST",
