@@ -87,9 +87,10 @@ async fn deploy_ephemeral_inner(
         .map_err(DeployError::Uname)?;
     let uname = uname.stdout.trim();
     let target = assets::require_target(uname).map_err(DeployError::Asset)?;
-    let asset = assets::ensure_local(env!("CARGO_PKG_VERSION"), target)
+    let asset = assets::resolve_update_asset(target)
         .await
         .map_err(DeployError::Asset)?;
+    let asset = asset.binary;
 
     let hash_command = format!(
         "mkdir -p ~/.cache/tuic && if [ -f {REMOTE_BINARY} ]; then (sha256sum {REMOTE_BINARY} 2>/dev/null || shasum -a 256 {REMOTE_BINARY} 2>/dev/null || true); fi"

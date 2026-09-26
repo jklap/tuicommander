@@ -1300,13 +1300,15 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// The one route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// The one buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
 /// voice file, which travels whole as base64 in JSON so the payload is the same
 /// over IPC and HTTP. The cap is what the largest accepted voice
 /// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
 /// it; the handler refuses anything longer before decoding it. A layer on the
 /// route overrides the router-wide `DefaultBodyLimit`, and only for this path —
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
+/// The remote binary upload reads the raw Body as a stream, so its separate
+/// 512 MiB limit is enforced while copying chunks rather than by this layer.
 #[cfg(feature = "desktop")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
@@ -1627,6 +1629,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/remote-connections/status",
             get(config_routes::get_remote_connection_statuses),
+        )
+        .route(
+            "/config/remote-connections/{id}/update",
+            get(config_routes::get_remote_update_preview).post(config_routes::post_remote_update),
         )
         .route(
             "/config/remote-connections/{id}/connect",
@@ -2027,6 +2033,7 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
     let routes = Router::new()
         // Routes common to the desktop/loopback router live in shared_routes().
         .merge(shared_routes())
+        .route("/remote/update", post(crate::remote_update::upload))
         // SECURITY: remote clients get the standard (10 MB) cap, NOT the large
         // editor cap. The 250 MB editor read is a desktop-local feature; serving
         // it over a (possibly metered/slow) remote link risks OOM/latency since
@@ -2625,6 +2632,257 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
+        assert_eq!(json["build"]["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["build"]["target"], env!("TUIC_TARGET_TRIPLE"));
+        assert_eq!(json["build"]["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[tokio::test]
+    async fn remote_update_rejects_a_missing_session_token() {
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        let mut request = Request::post("/remote/update")
+            .body(Body::from("not a binary"))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn remote_update_requires_the_pty_token_even_with_valid_basic_auth() {
+        use base64::Engine;
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        {
+            let mut config = state.config.write();
+            config.services.auth.lan_auth_bypass = false;
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("known-password", 4).unwrap();
+        }
+        let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
+        let mut request = Request::post("/remote/update")
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Basic {credentials}"),
+            )
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let response = build_remote_router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn remote_update_rejects_invalid_metadata_before_writing() {
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (target, sha256, sessions, content_length, expected) in [
+            (
+                "wrong-target",
+                "a".repeat(64),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "not-a-digest".to_string(),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(64),
+                "1",
+                "1",
+                StatusCode::CONFLICT,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(64),
+                "0",
+                "536870913",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let mut request = Request::post("/remote/update?token=update-secret")
+                .header("x-tuic-target", target)
+                .header("x-tuic-sha256", sha256)
+                .header("x-tuic-confirmed-sessions", sessions)
+                .header("content-length", content_length)
+                .body(Body::from("x"))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_update_preserves_the_old_executable_on_bad_digest_then_promotes() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"old executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = build_remote_router(Arc::new(state));
+        let bytes = b"replacement executable";
+        // Independent fixture digest, computed outside the implementation.
+        let good_hash = "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16";
+        for (hash, expected, contents) in [
+            (
+                "0".repeat(64),
+                StatusCode::BAD_REQUEST,
+                b"old executable".as_slice(),
+            ),
+            (
+                good_hash.to_string(),
+                StatusCode::ACCEPTED,
+                bytes.as_slice(),
+            ),
+        ] {
+            let mut request = Request::post("/remote/update?token=update-secret")
+                .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+                .header("x-tuic-sha256", hash)
+                .header("x-tuic-confirmed-sessions", "0")
+                .body(Body::from(bytes.to_vec()))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(std::fs::read(&executable).unwrap(), contents);
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+        let mut duplicate = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header("x-tuic-sha256", good_hash)
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from(bytes.to_vec()))
+            .unwrap();
+        duplicate
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        assert_eq!(
+            app.oneshot(duplicate).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[tokio::test]
+    async fn two_local_remote_routers_isolate_update_and_restart_signal() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first-tuic-remote");
+        let second = directory.path().join("second-tuic-remote");
+        std::fs::write(&first, b"first old binary").unwrap();
+        std::fs::write(&second, b"second old binary").unwrap();
+        let mut first_state = crate::state::tests_support::make_test_app_state();
+        let mut second_state = crate::state::tests_support::make_test_app_state();
+        let restarted = Arc::new(tokio::sync::Notify::new());
+        let untouched = Arc::new(tokio::sync::Notify::new());
+        for (state, executable, signal, token) in [
+            (&mut first_state, &first, &restarted, "first-secret"),
+            (&mut second_state, &second, &untouched, "second-secret"),
+        ] {
+            *state.session_token.write() = token.to_string();
+            state.config.write().services.auth.lan_auth_bypass = false;
+            state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+                executable: executable.to_path_buf(),
+                restart: signal.clone(),
+                in_progress: tokio::sync::Mutex::new(()),
+                installed: std::sync::atomic::AtomicBool::new(false),
+            });
+        }
+        let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_url = format!("http://{}", first_listener.local_addr().unwrap());
+        let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_url = format!("http://{}", second_listener.local_addr().unwrap());
+        let first_server = tokio::spawn(async move {
+            axum::serve(
+                first_listener,
+                build_remote_router(Arc::new(first_state))
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+        let second_server = tokio::spawn(async move {
+            axum::serve(
+                second_listener,
+                build_remote_router(Arc::new(second_state))
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{first_url}/remote/update?token=first-secret"))
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body("replacement executable")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        tokio::time::timeout(std::time::Duration::from_secs(3), restarted.notified())
+            .await
+            .expect("first daemon signalled restart");
+        assert_eq!(std::fs::read(&first).unwrap(), b"replacement executable");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second old binary");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), untouched.notified())
+                .await
+                .is_err()
+        );
+        let second_health: serde_json::Value = client
+            .get(format!("{second_url}/health"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(second_health["ok"], true);
+        first_server.abort();
+        second_server.abort();
     }
 
     #[tokio::test]

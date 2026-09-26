@@ -111,6 +111,7 @@ pub(crate) mod remote_deploy;
 pub(crate) mod remote_lifetime;
 pub(crate) mod remote_mirror;
 pub(crate) mod remote_runtime;
+pub(crate) mod remote_update;
 pub(crate) mod repo_watcher;
 mod shell_integration;
 #[cfg(feature = "desktop")]
@@ -1793,6 +1794,8 @@ pub fn run() {
             remote_runtime::connect_remote_connection,
             remote_runtime::disconnect_remote_connection,
             remote_runtime::remote_connection_statuses,
+            remote_update::prepare_remote_update,
+            remote_update::update_and_restart_remote,
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
@@ -2559,7 +2562,17 @@ pub struct RemoteOptions {
     pub survive_secs: Option<u64>,
     /// Whether startup writes MCP configuration for local agents.
     pub agent_configs: bool,
+    /// Exit with failure after an update so the installed service restarts us.
+    pub supervised: bool,
+    /// Allow the old process a short grace period to release its TCP port.
+    pub wait_for_restart: bool,
     pairing_token: Option<String>,
+}
+
+/// Read-only metadata for selecting a locally built daemon binary.
+pub fn remote_build_info_json() -> Result<String, String> {
+    let build = remote_deploy::assets::running_build_identity()?;
+    serde_json::to_string(build).map_err(|error| error.to_string())
 }
 
 impl Default for RemoteOptions {
@@ -2569,6 +2582,8 @@ impl Default for RemoteOptions {
             bind: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             survive_secs: None,
             agent_configs: true,
+            supervised: false,
+            wait_for_restart: false,
             pairing_token: None,
         }
     }
@@ -2601,6 +2616,10 @@ impl RemotePidFile {
 #[cfg(any(not(feature = "desktop"), test))]
 impl Drop for RemotePidFile {
     fn drop(&mut self) {
+        if std::fs::read_to_string(&self.0).ok().as_deref() != Some(&std::process::id().to_string())
+        {
+            return;
+        }
         if let Err(error) = std::fs::remove_file(&self.0)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -2629,6 +2648,7 @@ async fn remote_shutdown_signal() -> std::io::Result<()> {
 
 #[cfg(not(feature = "desktop"))]
 pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
+    crate::remote_deploy::assets::running_build_identity().map_err(anyhow::Error::msg)?;
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("Failed to install rustls CryptoProvider"))?;
@@ -2679,6 +2699,13 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
+    let restart = Arc::new(tokio::sync::Notify::new());
+    app_state.remote_update = Some(remote_update::RemoteUpdateState {
+        executable: std::env::current_exe()?,
+        restart: restart.clone(),
+        in_progress: tokio::sync::Mutex::new(()),
+        installed: std::sync::atomic::AtomicBool::new(false),
+    });
     *app_state.github.token.get_mut() = github_token;
     *app_state.github.token_source.get_mut() = github_token_source;
 
@@ -2774,8 +2801,24 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     );
 
     let bind_addr = options.bind_addr();
-    let listener = std::net::TcpListener::bind(bind_addr)
-        .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?;
+    let listener = if options.wait_for_restart {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match std::net::TcpListener::bind(bind_addr) {
+                Ok(listener) => break listener,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AddrInUse
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(error) => anyhow::bail!("Fatal: failed to bind TCP on {bind_addr}: {error}"),
+            }
+        }
+    } else {
+        std::net::TcpListener::bind(bind_addr)
+            .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?
+    };
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
@@ -2787,6 +2830,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     );
     tokio::pin!(lifetime);
 
+    let mut updated = false;
     tokio::select! {
         result = axum::serve(listener, svc) => {
             if let Err(e) = result {
@@ -2800,11 +2844,34 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         () = &mut lifetime => {
             tracing::info!(source = "remote", "Remote daemon survive time expired");
         }
+        () = restart.notified() => {
+            updated = true;
+            tracing::info!(source = "remote", "Restarting after remote binary update");
+        }
     }
 
     // Flush the last buffered log lines to disk before the process exits
     // (story #672-c1a3) — the lines a shutdown bug needs most.
     app_logger::flush_logs_on_exit();
+    if updated {
+        if options.supervised {
+            anyhow::bail!("Remote update installed; exiting for supervisor restart");
+        }
+        let mut child = std::process::Command::new(std::env::current_exe()?);
+        child.args(
+            std::env::args()
+                .skip(1)
+                .filter(|arg| arg != "--wait-for-restart"),
+        );
+        child.arg("--wait-for-restart");
+        child.env(
+            "TUIC_PAIRING_TOKEN",
+            &app_config.services.auth.session_token,
+        );
+        child
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Updated remote failed to restart: {e}"))?;
+    }
     Ok(())
 }
 
@@ -3060,6 +3127,16 @@ mod tests {
             );
         }
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn remote_restart_old_pid_guard_preserves_successor_pid() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tuic-remote.pid");
+        let old = RemotePidFile::create(dir.path()).expect("old pid file");
+        std::fs::write(&path, "424242").expect("successor pid");
+        drop(old);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "424242");
     }
 
     #[test]

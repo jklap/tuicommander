@@ -49,6 +49,13 @@ IPC but not over HTTP.
 
 ## Audit (2026-08-18)
 
+### Remote update (2026-09-26)
+
+`prepare_remote_update` and `update_and_restart_remote` are async commands.
+Their HTTP routes call the same `remote_update` service. Binary reads and writes
+use Tokio files and bounded streaming; network probes, asset retrieval, upload
+and restart verification await without blocking the IPC main thread.
+
 ### Native stories (2026-09-25)
 
 `story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
