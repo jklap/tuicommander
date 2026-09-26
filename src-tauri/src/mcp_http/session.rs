@@ -2667,6 +2667,29 @@ mod tests {
         }
     }
 
+    /// `a_browser_scroll_moves_the_grid_with_no_desktop_subscriber` and
+    /// `an_http_scroll_moves_the_grid_with_nothing_attached` below already
+    /// cover this route's happy path thoroughly (through the real frame
+    /// ticker, via `await_display_offset`). The one case neither covers: a
+    /// session with no `pending_scroll`/`frame_dirty` entry at all — nothing
+    /// has ever subscribed to it — must no-op, not panic, matching
+    /// `pty/commands.rs`'s desktop `#[tauri::command]` mirror's identical
+    /// `if let Some(...)` shape (untested there too, but that file has no
+    /// test module at all yet — out of scope to bootstrap here).
+    #[tokio::test]
+    async fn terminal_scroll_to_offset_is_a_noop_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+
+        terminal_scroll_to_offset(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(TerminalScrollToOffsetRequest { offset: 5 }),
+        )
+        .await;
+
+        assert!(!state.grid.pending_scroll.contains_key("does-not-exist"));
+    }
+
     #[tokio::test]
     async fn set_session_accent_color_404s_for_an_unknown_session() {
         let state = super::super::tests::test_state();

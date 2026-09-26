@@ -235,6 +235,106 @@ async fn a_session_owns_its_pending_scroll_entry_from_the_start() {
     );
 }
 
+/// `take_pending_scroll` is the frame ticker's ONLY consumer of `pending_scroll`
+/// — its swap-to-`-1` is what makes "latest wins" true (see its own doc
+/// comment) and is exactly the contract the alt-screen-transition fix above
+/// relies on staying intact. Had zero direct test coverage before this —
+/// closing that gap alongside the alt-screen fix rather than leaving this
+/// closely-related piece of the same mechanism untested.
+#[test]
+fn take_pending_scroll_consumes_the_target_exactly_once() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "take-pending-scroll";
+    state
+        .grid
+        .pending_scroll
+        .insert(sid.to_string(), Arc::new(AtomicI64::new(-1)));
+
+    assert_eq!(
+        take_pending_scroll(&state, sid),
+        None,
+        "the -1 sentinel means nothing is pending"
+    );
+
+    state
+        .grid
+        .pending_scroll
+        .get(sid)
+        .unwrap()
+        .store(17, Ordering::Relaxed);
+    assert_eq!(take_pending_scroll(&state, sid), Some(17));
+    assert_eq!(
+        take_pending_scroll(&state, sid),
+        None,
+        "a target is applied at most once — the swap must reset the slot to -1"
+    );
+}
+
+#[test]
+fn take_pending_scroll_returns_none_for_an_unknown_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert_eq!(take_pending_scroll(&state, "does-not-exist"), None);
+}
+
+/// Regression test for the alt-screen `pending_scroll` race fixed in
+/// `c4f3875a6`: a wheel/scrollbar target computed against the OLD grid must
+/// be discarded, not replayed against the NEW one, when `swap_alt()` runs in
+/// between (entering/exiting an app's alternate screen — e.g. launching or
+/// quitting Claude Code). `clear_pending_scroll_on_alt_screen_transition`'s
+/// own unit tests (`pending_scroll_alt_screen_tests`, below `take_pending_scroll`)
+/// cover that extracted helper in isolation; THIS drives the real
+/// `ChunkProcessor::process_chunk` end-to-end, so a wiring bug at its call
+/// site (wrong variable passed, `last_grid_alt_screen` never threaded) would
+/// be caught too — the exact "caller coverage" gap a pure unit test on the
+/// helper alone would miss.
+#[test]
+fn process_chunk_clears_stale_pending_scroll_across_a_real_alt_screen_swap() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "alt-screen-scroll-race";
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    state
+        .grid
+        .pending_scroll
+        .insert(sid.to_string(), Arc::new(AtomicI64::new(-1)));
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    let mut processor = ChunkProcessor::new(None, None);
+    let pending = || state.grid.pending_scroll.get(sid).unwrap();
+
+    // A gesture computed against the primary screen, still in flight when
+    // Claude Code launches (entering the alternate screen).
+    pending().store(42, Ordering::Relaxed);
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    assert_eq!(
+        pending().load(Ordering::Relaxed),
+        -1,
+        "a stale scroll target from before an alt-screen swap must be discarded, \
+         not replayed against the new grid"
+    );
+
+    // Same on the way back out (quitting Claude Code, exiting the alternate
+    // screen) — the transition direction must not matter.
+    pending().store(7, Ordering::Relaxed);
+    processor.process_chunk("\x1b[?1049l", &silence, sid, &state);
+    assert_eq!(
+        pending().load(Ordering::Relaxed),
+        -1,
+        "a stale scroll target from before an alt-screen exit must be discarded too"
+    );
+
+    // Negative control: an ordinary chunk with no alt-screen transition must
+    // leave a legitimately still-pending target alone.
+    pending().store(55, Ordering::Relaxed);
+    processor.process_chunk("just some output\r\n", &silence, sid, &state);
+    assert_eq!(
+        pending().load(Ordering::Relaxed),
+        55,
+        "a chunk with no alt-screen transition must not touch pending_scroll"
+    );
+}
+
 #[test]
 fn grid_send_min_interval_policy() {
     // Short burst, no typing → no floor: full-speed for low latency.
