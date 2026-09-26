@@ -4,6 +4,7 @@ members = [
     "crates/tuic-terminal",
     "crates/tuic-test-support",
     "crates/tuic-core",
+    "crates/tuic-git",
     "crates/tuic-bridge",
     "crates/tuic-cli",
     "patches/alacritty_terminal",
@@ -156,6 +157,7 @@ tauri-build = { version = "2", features = [], optional = true }
 [dependencies]
 tuic-terminal = { path = "crates/tuic-terminal" }
 tuic-core = { path = "crates/tuic-core" }
+tuic-git = { path = "crates/tuic-git" }
 agent-client-protocol = { version = "=2.0.0", features = [
     "unstable_elicitation",
     "unstable_end_turn_token_usage",
@@ -426,6 +428,7 @@ wayland-scanner = { path = "patches/wayland-scanner" }
 [dev-dependencies]
 tuic-test-support = { path = "crates/tuic-test-support" }
 tuic-core = { path = "crates/tuic-core", features = ["test-support"] }
+tuic-git = { path = "crates/tuic-git", features = ["test-support"] }
 # `full` does not include `test-util`, and `start_paused` needs it. It used to
 # arrive transitively through a dependency of the embedded AI engine; deleting
 # that engine (#784-0aec) made the suite stop compiling, so it is declared here

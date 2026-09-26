@@ -1,12 +1,14 @@
 # Git Operations
 
-**Modules:** `src-tauri/src/git.rs`, `src-tauri/src/git_cli.rs`, `src-tauri/src/git_reads.rs`
+**Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
+
+The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches merged GitHub PR evidence through `gh` and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
 
 ## Async Execution & Caching
 
-All Tauri git commands are `async` and run git subprocesses inside `tokio::task::spawn_blocking`. This prevents blocking Tokio worker threads during I/O-heavy operations like `git diff`, `git log`, or `git fetch`.
+The root Git adapters run blocking domain operations inside `tokio::task::spawn_blocking`; the domain crate does not own a runtime. All Tauri git commands are `async` and run git subprocesses inside `tokio::task::spawn_blocking`. This prevents blocking Tokio worker threads during I/O-heavy operations like `git diff`, `git log`, or `git fetch`.
 
 Git data is cached with a 60s TTL in `GitCacheState` (`state.rs`), one `moka::sync::Cache<String, Arc<T>>` per result type keyed by repo path. `moka`'s `get_with`/`try_get_with` **coalesce concurrent identical loads to a single computation** — replacing the previous hand-rolled `DashMap<String,(T,Instant)>` whose check-then-compute-then-set pattern had a TOCTOU race that let a `repo-changed` burst fan out N duplicate computes. `sync::Cache` is used (not `future::Cache`) because every loader is blocking git work run on the blocking pool; the sync `*_cached` helpers keep working without async (`git.rs::cached_get`/`cached_try` wrap the pattern). `github_repo_cooldown` stays a plain `DashMap` — it is a cooldown set, not a TTL value cache.
 
@@ -18,7 +20,7 @@ Internal callers that need synchronous access use `_impl` suffixes (e.g. `get_di
 
 ## GitReads Port (gix migration)
 
-Read operations go through a reversible `GitReads` port (`src-tauri/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
+Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
 
 **An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix 0.84 cannot match git's exact output, the op stays on the CLI.
 

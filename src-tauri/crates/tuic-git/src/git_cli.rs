@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::cli::{enriched_path, resolve_cli};
+use tuic_core::cli::{enriched_path, resolve_cli};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -18,7 +18,7 @@ use crate::cli::{enriched_path, resolve_cli};
 
 /// Error from a git subprocess call.
 #[derive(Debug)]
-pub(crate) enum GitError {
+pub enum GitError {
     /// The git process could not be spawned (missing binary, permission error).
     SpawnFailed(std::io::Error),
     /// Git exited with a non-zero status code.
@@ -65,7 +65,7 @@ impl From<GitError> for String {
 
 /// Successful output from a git subprocess.
 #[derive(Debug)]
-pub(crate) struct GitOutput {
+pub struct GitOutput {
     pub stdout: String,
 }
 
@@ -81,7 +81,7 @@ pub(crate) struct GitOutput {
 ///     .args(&["log", "--oneline", "-5"])
 ///     .run()?;
 /// ```
-pub(crate) struct GitCmd {
+pub struct GitCmd {
     cmd: Command,
     cwd: PathBuf,
     /// Deadline for the whole invocation. `None` (the default) waits forever,
@@ -198,7 +198,7 @@ impl GitCmd {
 ///
 /// Not git-specific: the owner probe below runs `lsof` through it, and
 /// `worktree.rs` runs the user's setup scripts through it.
-pub(crate) fn output_with_deadline(
+pub fn output_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, GitError> {
@@ -273,12 +273,12 @@ pub(crate) fn output_with_deadline(
 /// an existing clone, never a clone, so the transfer is a branch delta — killing
 /// one that would have succeeded is a worse outcome than waiting for it.
 #[cfg(not(test))]
-pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(180);
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Tests exercise the shipped wiring through a deadline they can afford to wait
 /// for. Only the number differs from the value above.
 #[cfg(test)]
-pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -324,19 +324,19 @@ const NONEMPTY_LOCK_STALE_SECS: u64 = 30;
 /// One hour is deliberately far above [`NONEMPTY_LOCK_STALE_SECS`]: this rule
 /// runs *without* evidence, so it must be the one that almost never fires.
 ///
-/// `pub(crate)`: also the escape-hatch threshold [`crate::git_locks`] reuses
+/// `pub`: also the escape-hatch threshold [`crate::git_locks`] reuses
 /// so its read-only detector agrees with this module's adjudication instead
 /// of inventing a second, independent one (#694-4fcc, #724-9909).
-pub(crate) const UNADJUDICATED_LOCK_STALE_SECS: u64 = 3600;
+pub const UNADJUDICATED_LOCK_STALE_SECS: u64 = 3600;
 
 /// Pure staleness rule for an `index.lock` of the given byte size and age.
 /// Split out from [`remove_stale_index_lock`] so the thresholds are unit-testable
 /// without touching the filesystem clock.
 ///
-/// `pub(crate)`: [`crate::git_locks`] calls this directly rather than
+/// `pub`: [`crate::git_locks`] calls this directly rather than
 /// re-deriving its own age/size threshold — see the note on
 /// [`UNADJUDICATED_LOCK_STALE_SECS`].
-pub(crate) fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
+pub fn is_index_lock_stale(len: u64, age_secs: u64) -> bool {
     let threshold = if len == 0 {
         EMPTY_LOCK_STALE_SECS
     } else {
@@ -359,7 +359,7 @@ const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// could not find out" — so an `lsof` that merely ran slowly was read downstream
 /// as permission to delete a lock a live `git add` was holding.
 ///
-/// `pub(crate)`: [`crate::git_locks`] matches on this directly so its
+/// `pub`: [`crate::git_locks`] matches on this directly so its
 /// detector's verdict is derived from the same probe result this module
 /// acts on, not a second call that could — even in principle — race to a
 /// different answer.
@@ -371,7 +371,7 @@ const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// platform for no gain.
 #[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LockOwnership {
+pub enum LockOwnership {
     /// The probe ran and named the live processes holding the lock open.
     HeldBy(Vec<u32>),
     /// The probe ran and found no holder. The only outcome that is evidence.
@@ -387,7 +387,7 @@ pub(crate) enum LockOwnership {
 /// probe to time out, only `Unavailable` is ever constructed there.
 #[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum UnknownOwner {
+pub enum UnknownOwner {
     /// The probe could not be run at all — no `lsof` on `PATH`, exec refused, or
     /// a platform with no probe. Nothing can be determined here, ever, so
     /// retrying costs a fork and buys nothing.
@@ -465,10 +465,10 @@ fn classify_owner_probe(probe: Result<std::process::Output, GitError>) -> LockOw
 /// `lsof` fork happens at most once per reclaim attempt and never on the hot
 /// path of an ordinary git call.
 ///
-/// `pub(crate)`: shared with [`crate::git_locks`] — see
+/// `pub`: shared with [`crate::git_locks`] — see
 /// [`UNADJUDICATED_LOCK_STALE_SECS`].
 #[cfg(unix)]
-pub(crate) fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
+pub fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
     // -t: PIDs only, one per line. -w: no warnings on unreadable mounts.
     //
     // Deadlined: this runs inside `git_cmd`, so an `lsof` stuck on a wedged
@@ -487,7 +487,7 @@ pub(crate) fn probe_index_lock_owner(lock: &Path) -> LockOwnership {
 /// No portable owner probe outside unix. Windows refuses to unlink a file another
 /// process holds open, so the OS itself provides the protection `lsof` gives us here.
 #[cfg(not(unix))]
-pub(crate) fn probe_index_lock_owner(_lock: &Path) -> LockOwnership {
+pub fn probe_index_lock_owner(_lock: &Path) -> LockOwnership {
     LockOwnership::Unknown(UnknownOwner::Unavailable(
         "no owner probe on this platform".to_string(),
     ))
@@ -597,19 +597,19 @@ fn reclaim_stale_index_lock(cwd: &Path, probe: impl FnOnce(&Path) -> LockOwnersh
 /// Keyed by cwd rather than process-wide: the suite runs tests in parallel, so a
 /// single counter would measure every other test's git calls. Each test owns its
 /// own temp repo, so the key isolates it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static GIT_CMD_FORKS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
     std::sync::LazyLock::new(dashmap::DashMap::new);
 
 /// How many git subprocesses were built for `cwd`. See [`GIT_CMD_FORKS`].
-#[cfg(test)]
-pub(crate) fn git_cmd_forks(cwd: &Path) -> usize {
+#[cfg(any(test, feature = "test-support"))]
+pub fn git_cmd_forks(cwd: &Path) -> usize {
     GIT_CMD_FORKS.get(cwd).map(|n| *n).unwrap_or(0)
 }
 
 /// Create a git command builder rooted at the given directory.
-pub(crate) fn git_cmd(cwd: &Path) -> GitCmd {
-    #[cfg(test)]
+pub fn git_cmd(cwd: &Path) -> GitCmd {
+    #[cfg(any(test, feature = "test-support"))]
     {
         *GIT_CMD_FORKS.entry(cwd.to_path_buf()).or_insert(0) += 1;
     }
@@ -619,7 +619,7 @@ pub(crate) fn git_cmd(cwd: &Path) -> GitCmd {
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("PATH", enriched_path());
     cmd.arg("--no-optional-locks");
-    crate::cli::apply_no_window(&mut cmd);
+    tuic_core::cli::apply_no_window(&mut cmd);
     GitCmd {
         cmd,
         cwd: cwd.to_path_buf(),
@@ -655,7 +655,7 @@ fn finish_failed_operation_after_abort_result(
 /// Returns a message that claims `(aborted)` only when the abort command
 /// succeeds. If abort fails, the message tells the user the repository may still
 /// be conflicted and includes the manual recovery command.
-pub(crate) fn finish_failed_git_operation_after_abort(
+pub fn finish_failed_git_operation_after_abort(
     repo_path: &Path,
     operation: &str,
     failure_summary: &str,
@@ -690,7 +690,7 @@ fn is_unmerged_code(code: &str) -> bool {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn parse_conflicted_files_porcelain(status: &str) -> Vec<String> {
+pub fn parse_conflicted_files_porcelain(status: &str) -> Vec<String> {
     status
         .lines()
         .filter_map(|line| {
@@ -702,7 +702,7 @@ pub(crate) fn parse_conflicted_files_porcelain(status: &str) -> Vec<String> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn build_conflict_assist_prompt(pr_number: i64, base: &str, files: &[String]) -> String {
+pub fn build_conflict_assist_prompt(pr_number: i64, base: &str, files: &[String]) -> String {
     let mut prompt = format!(
         "Resolve the merge conflicts for PR #{pr_number} after rebasing onto {base}. Do not push and do not merge. Edit only the conflicted files, run relevant checks, and stop for human review.\n\nConflicted files:"
     );
@@ -755,7 +755,7 @@ mod tests {
     /// real sleeper running — nextest saw exactly that and reported both tests
     /// as leaky while they passed.
     fn sleeping_command(cwd: &Path) -> Command {
-        let (program, args) = crate::test_support::sleep_argv();
+        let (program, args) = tuic_test_support::sleep_argv();
         let mut cmd = Command::new(program);
         cmd.args(args);
         cmd.current_dir(cwd);
