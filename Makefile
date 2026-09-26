@@ -103,6 +103,7 @@ check:
 	@$(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
 	@$(RTK) pnpm architecture:cycles && $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
 	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
+	@$(RTK) pnpm exec vite build && $(RTK) node scripts/report-frontend-bundles.mjs --check && echo "  frontend bundle budget ✓"
 	@cd src-tauri && $(RTK) cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && $(RTK) cargo clippy --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo nextest run --workspace && $(RTK) cargo test --doc -q && echo "  rust tests ✓"

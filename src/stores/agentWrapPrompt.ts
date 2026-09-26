@@ -1,7 +1,6 @@
 import { createSignal } from "solid-js";
 import type { AgentType } from "../agents";
 import { rpc, subscribeEvents, type Unsubscribe } from "../transport";
-import { agentConfigsStore } from "./agentConfigs";
 import { appLogger } from "./appLogger";
 
 /**
@@ -71,6 +70,11 @@ function drop(agentType: string) {
  * that's already settled. An explicit answer also updates the local
  * `agentConfigsStore` mirror immediately, so Settings → Agents reflects it
  * without waiting on a full config reload.
+ *
+ * `agentConfigsStore` is imported lazily here — it's a large store with no
+ * other reason to be in this module's eager import graph (mounted by both
+ * shells, so a static import would ship the whole store into every client's
+ * initial bundle just for this rare write-path).
  */
 export async function answerAgentWrapPrompt(
 	requestId: string,
@@ -79,6 +83,7 @@ export async function answerAgentWrapPrompt(
 ): Promise<void> {
 	drop(agentType);
 	if (decision !== null) {
+		const { agentConfigsStore } = await import("./agentConfigs");
 		agentConfigsStore.syncWrapUserFunction(agentType as AgentType, decision);
 	}
 	try {

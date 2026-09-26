@@ -48,22 +48,28 @@ describe("AgentWrapPromptHost", () => {
 		const { findByText } = render(() => <AgentWrapPromptHost />);
 		emitPrompt("claude", "r1");
 		(await findByText("Wrap my function")).click();
-		expect(mockRpc).toHaveBeenCalledWith("agent_wrap_prompt_response", {
-			requestId: "r1",
-			agentType: "claude",
-			decision: true,
-		});
+		// A non-null decision resolves agentConfigsStore via a lazy `import()`
+		// before calling rpc — no longer synchronous within the click handler.
+		await vi.waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("agent_wrap_prompt_response", {
+				requestId: "r1",
+				agentType: "claude",
+				decision: true,
+			}),
+		);
 	});
 
 	it("sends decision:false when the human chooses to leave it alone", async () => {
 		const { findByText } = render(() => <AgentWrapPromptHost />);
 		emitPrompt("claude", "r1");
 		(await findByText("Leave it alone")).click();
-		expect(mockRpc).toHaveBeenCalledWith("agent_wrap_prompt_response", {
-			requestId: "r1",
-			agentType: "claude",
-			decision: false,
-		});
+		await vi.waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("agent_wrap_prompt_response", {
+				requestId: "r1",
+				agentType: "claude",
+				decision: false,
+			}),
+		);
 	});
 
 	it("sends decision:null (not the same as an explicit No) on dismiss", async () => {
