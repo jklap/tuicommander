@@ -58,6 +58,43 @@ pub(crate) fn is_lost(url: &str) -> bool {
     url.starts_with("about:")
 }
 
+#[cfg(any(feature = "desktop", test))]
+fn navigate_home_with(
+    target: Option<url::Url>,
+    trigger: &'static str,
+    reload: impl FnOnce() -> Result<(), String>,
+    navigate: impl FnOnce(url::Url) -> Result<(), String>,
+) -> serde_json::Value {
+    let action = if target.is_some() {
+        "navigate"
+    } else {
+        "reload"
+    };
+    let url = target.as_ref().map_or("<none>", url::Url::as_str);
+    let result = match target.clone() {
+        Some(target) => navigate(target),
+        None => reload(),
+    };
+    tracing::info!(
+        source = "webview",
+        trigger,
+        action,
+        url,
+        ok = result.is_ok(),
+        "Native WebView navigation"
+    );
+    match (action, result) {
+        ("navigate", Ok(())) => serde_json::json!({"ok": true, "action": action, "url": url}),
+        ("reload", Ok(())) => serde_json::json!({
+            "ok": true,
+            "action": action,
+            "warning": "no boot URL recorded yet — reload does not recover a blank document",
+        }),
+        (action, Err(e)) => serde_json::json!({"error": format!("{action} failed: {e}")}),
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(feature = "desktop")]
 mod desktop {
     use super::{POLL_INTERVAL, STARTUP_DELAY, is_lost};
@@ -74,33 +111,17 @@ mod desktop {
     /// Shared by the automatic poller, the `on_page_load` crash hook and
     /// `POST /debug/reload_webview`, because all three want the same thing and
     /// only one of them can be tested by hand.
-    pub(crate) fn navigate_home(state: &Arc<AppState>) -> serde_json::Value {
+    pub(crate) fn navigate_home(state: &Arc<AppState>, trigger: &'static str) -> serde_json::Value {
         let Some(window) = main_window(state) else {
             return serde_json::json!({"error": "main window not found"});
         };
         let target = state.webview_boot_url.read().clone();
-        let Some(target) = target else {
-            // No healthy URL was ever recorded, so there is nothing to aim at.
-            // `reload` is the only move left and it is precisely the one that
-            // does not work against a blank srcdoc — say so rather than report
-            // a success the caller cannot verify.
-            return match window.reload() {
-                Ok(()) => serde_json::json!({
-                    "ok": true,
-                    "action": "reload",
-                    "warning": "no boot URL recorded yet — reload does not recover a blank document",
-                }),
-                Err(e) => serde_json::json!({"error": format!("reload failed: {e}")}),
-            };
-        };
-        match window.navigate(target.clone()) {
-            Ok(()) => serde_json::json!({
-                "ok": true,
-                "action": "navigate",
-                "url": target.as_str(),
-            }),
-            Err(e) => serde_json::json!({"error": format!("navigate failed: {e}")}),
-        }
+        super::navigate_home_with(
+            target,
+            trigger,
+            || window.reload().map_err(|e| e.to_string()),
+            |url| window.navigate(url).map_err(|e| e.to_string()),
+        )
     }
 
     /// One poll. Returns the lost document's URL, or `None` while the frame
@@ -172,8 +193,8 @@ mod desktop {
                         polls_until_retry -= 1;
                         continue;
                     }
-                    let outcome = navigate_home(&state);
-                    tracing::info!(
+                    let outcome = navigate_home(&state, "recovery_thread");
+                    tracing::debug!(
                         source = "webview",
                         outcome = %outcome,
                         "WebView recovery attempted"
@@ -190,13 +211,84 @@ mod desktop {
 pub(crate) use desktop::{navigate_home, spawn};
 
 #[cfg(not(feature = "desktop"))]
-pub(crate) fn navigate_home(_state: &std::sync::Arc<crate::state::AppState>) -> serde_json::Value {
+pub(crate) fn navigate_home(
+    _state: &std::sync::Arc<crate::state::AppState>,
+    _trigger: &'static str,
+) -> serde_json::Value {
     serde_json::json!({"error": "webview recovery requires the desktop feature"})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct LogSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn native_navigation_logs_action_target_and_trigger_for_both_branches() {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(LogSink(output.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let reload = navigate_home_with(
+                None,
+                "http_route",
+                || Ok(()),
+                |_| panic!("unexpected navigate"),
+            );
+            assert_eq!(reload["action"], "reload");
+            let target = url::Url::parse("http://127.0.0.1:1421/").unwrap();
+            let navigate = navigate_home_with(
+                Some(target),
+                "recovery_thread",
+                || panic!("unexpected reload"),
+                |_| Ok(()),
+            );
+            assert_eq!(navigate["url"], "http://127.0.0.1:1421/");
+            let failed = navigate_home_with(
+                None,
+                "page_load_hook",
+                || Err("window closed".into()),
+                |_| panic!("unexpected navigate"),
+            );
+            assert_eq!(failed["error"], "reload failed: window closed");
+        });
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("trigger=\"http_route\" action=\"reload\" url=\"<none>\""),
+            "{log}"
+        );
+        assert!(
+            log.contains(
+                "trigger=\"recovery_thread\" action=\"navigate\" url=\"http://127.0.0.1:1421/\""
+            ),
+            "{log}"
+        );
+        assert!(
+            log.contains("trigger=\"page_load_hook\" action=\"reload\" url=\"<none>\" ok=false"),
+            "{log}"
+        );
+    }
 
     #[test]
     fn the_observed_blank_documents_are_lost() {

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { execSync } from "node:child_process";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import solid from "vite-plugin-solid";
@@ -10,6 +10,20 @@ import { Features } from "lightningcss";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+
+// Only frontend inputs can affect Vite's output. A repository-local tooling
+// checkout may contain any filename, including index.html, so excluding a
+// fixed list of scratch directories would leave future tools able to reload
+// the live WebView.
+const ignoreNonFrontendFile = (path: string): boolean => {
+  const file = relative(process.cwd(), path).split(sep).join("/");
+  if (file === "") return false; // Keep the root itself watchable.
+  if (file === ".." || file.startsWith("../") || isAbsolute(file)) return true;
+  if (file === "src" || file.startsWith("src/")) return false;
+  if (file === "public" || file.startsWith("public/")) return false;
+  if (!file.includes("/") && file.endsWith(".html")) return false;
+  return !["vite.config.ts", "tsconfig.json", "package.json", "pnpm-lock.yaml"].includes(file);
+};
 // Read app version from tauri.conf.json
 const tauriConf = JSON.parse(readFileSync("./src-tauri/tauri.conf.json", "utf-8"));
 
@@ -154,14 +168,10 @@ export default defineConfig(async ({ command }) => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`, `.claude`, and `.mdkb`.
-      //    Vite already ignores `.git`/`node_modules` by default; these are the
-      //    agent/tooling dirs it would otherwise watch. Worktrees under
-      //    `.claude/worktrees/` are full checkouts incl. `src/` (double-watch +
-      //    spurious reload on create/remove), and `.mdkb/` is written constantly
-      //    by mdkb (memory writes, code index) — both would churn the dev server
-      //    or trigger spurious full reloads mid-session.
-      ignored: ["**/src-tauri/**", "**/.claude/**", "**/.mdkb/**"],
+      // 3. watch only frontend inputs. Mutation tooling clones a full checkout
+      //    into `.tmp/`; its index.html files caused live WebView reloads.
+      //    This also excludes other tooling, docs, builds and worktree trees.
+      ignored: ignoreNonFrontendFile,
     },
   },
 }));
