@@ -158,8 +158,16 @@ pub(crate) fn generate_vapid_keys() -> Result<(String, String), String> {
     Ok((private_b64, public_b64))
 }
 
-/// Send a push notification to a list of subscriptions.
-/// Returns endpoints that should be removed (410 Gone = revoked).
+/// Push-service acceptance, failures, and subscriptions revoked by the service.
+#[derive(Default)]
+pub(crate) struct PushBatchResult {
+    pub sent: usize,
+    pub failed: usize,
+    pub stale_endpoints: Vec<String>,
+}
+
+/// Send a push notification to a list of subscriptions. `sent` counts accepted
+/// push-service requests, not notifications displayed by a phone.
 pub(crate) async fn send_push_batch(
     subs: Vec<PushSubscription>,
     config: &crate::config::AppConfig,
@@ -167,16 +175,16 @@ pub(crate) async fn send_push_batch(
     title: &str,
     body: &str,
     url: &str,
-) -> Vec<String> {
+) -> PushBatchResult {
     use p256::ecdsa::SigningKey;
 
-    let mut stale_endpoints: Vec<String> = Vec::new();
+    let mut result = PushBatchResult::default();
 
     if !config.services.push.enabled
         || config.services.push.vapid_private_key.is_empty()
         || subs.is_empty()
     {
-        return stale_endpoints;
+        return result;
     }
 
     let payload = serde_json::json!({ "title": title, "body": body, "url": url });
@@ -186,7 +194,8 @@ pub(crate) async fn send_push_batch(
         Ok(b) => b,
         Err(e) => {
             tracing::error!(source = "push", "Invalid VAPID private key encoding: {e}");
-            return stale_endpoints;
+            result.failed = subs.len();
+            return result;
         }
     };
     let vapid_kp = match p256::SecretKey::from_slice(&kp_bytes)
@@ -196,7 +205,8 @@ pub(crate) async fn send_push_batch(
         Ok(kp) => kp,
         Err(e) => {
             tracing::error!(source = "push", "Failed to load VAPID key pair: {e}");
-            return stale_endpoints;
+            result.failed = subs.len();
+            return result;
         }
     };
 
@@ -230,11 +240,11 @@ pub(crate) async fn send_push_batch(
                             source = "push",
                             "Subscription revoked (410 Gone), removing"
                         );
-                        Some(endpoint)
+                        (false, Some(endpoint))
                     }
                     Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 201 => {
                         tracing::debug!(source = "push", "Push sent successfully");
-                        None
+                        (true, None)
                     }
                     Ok(resp) => {
                         let status = resp.status().as_u16();
@@ -246,29 +256,35 @@ pub(crate) async fn send_push_batch(
                                 source = "push",
                                 "Subscription stale (status={status}), removing: {body_text}"
                             );
-                            return Some(endpoint);
+                            return (false, Some(endpoint));
                         }
                         tracing::warn!(
                             source = "push",
                             "Push delivery failed: status={status} body={body_text}"
                         );
-                        None
+                        (false, None)
                     }
                     Err(e) => {
                         tracing::warn!(source = "push", "Push request error: {e}");
-                        None
+                        (false, None)
                     }
                 }
             }
         })
         .collect();
 
-    let results = futures_util::future::join_all(futures).await;
-    for result in results.into_iter().flatten() {
-        stale_endpoints.push(result);
+    result.failed = subs.len() - futures.len();
+    for (accepted, stale_endpoint) in futures_util::future::join_all(futures).await {
+        if accepted {
+            result.sent += 1;
+        } else if let Some(endpoint) = stale_endpoint {
+            result.stale_endpoints.push(endpoint);
+        } else {
+            result.failed += 1;
+        }
     }
 
-    stale_endpoints
+    result
 }
 
 /// Build an RFC 8292 VAPID `Authorization` header value.
@@ -491,6 +507,54 @@ mod tests {
         let sk = p256::SecretKey::from_slice(&priv_bytes).unwrap();
         let loaded_pub = sk.public_key().to_encoded_point(false);
         assert_eq!(loaded_pub.as_bytes(), pub_bytes.as_slice());
+    }
+
+    #[tokio::test]
+    async fn gone_push_service_marks_subscription_stale() {
+        use axum::http::StatusCode;
+        use axum::routing::post;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route("/push", post(|| async { StatusCode::GONE })),
+            )
+            .await
+            .unwrap();
+        });
+        let client_key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        let sub = PushSubscription {
+            endpoint: endpoint.clone(),
+            keys: PushSubscriptionKeys {
+                p256dh: Base64UrlUnpadded::encode_string(
+                    client_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                ),
+                auth: Base64UrlUnpadded::encode_string(&[7u8; 16]),
+            },
+            created_at: chrono::Utc::now(),
+        };
+        let (private, public) = generate_vapid_keys().unwrap();
+        let mut config = crate::config::AppConfig::default();
+        config.services.push.enabled = true;
+        config.services.push.vapid_private_key = private;
+        config.services.push.vapid_public_key = public;
+        let result = send_push_batch(
+            vec![sub],
+            &config,
+            &reqwest::Client::new(),
+            "Test",
+            "Is the phone reachable?",
+            "/mobile",
+        )
+        .await;
+        assert_eq!(result.stale_endpoints, vec![endpoint]);
+        assert_eq!(result.sent, 0);
+        server.abort();
     }
 
     #[test]

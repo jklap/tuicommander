@@ -93,6 +93,32 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
+### Receive and answer an agent's question away from the desk
+
+1. On the Mac, enable **Remote Access** and **Tailscale HTTPS** in TUICommander
+   Settings. Connect both the Mac and phone to the same tailnet. Use the HTTPS
+   Tailscale URL shown in Settings; a plain LAN `http://` URL cannot register a
+   phone service worker for push. Do not expose the port to the public internet.
+2. Open `<Tailscale HTTPS URL>/mobile` on the phone and sign in. On iPhone, add
+   it to the Home Screen, then launch that installed PWA. In mobile **Settings**,
+   turn **Push notifications** on and grant notification permission. If it says
+   **Enabled** for an old subscription, turn it off and back on to re-subscribe.
+3. On the Mac, run an authenticated `POST /api/push/test` against that HTTPS
+   server. `sent` counts accepted push-service requests, not notification
+   display. A 404 means no subscription; `stale_removed` after HTTP 410 means
+   the phone must re-subscribe. A 503 means push is disabled or the VAPID key is
+   unavailable. Confirm the notification actually appears on the phone.
+4. Have a managed agent report `progress type=blocked` with its question.
+   After the desktop is unfocused, or the Mac has had no HID input for two
+   minutes, the phone notification contains the question and opens that
+   session. Type one answer and tap Send. The PWA waits for the same submission
+   receipt as `session action=submit`; if the session closed or is busy, it
+   keeps the draft for review instead of blindly retrying.
+
+The question is encrypted to the phone's Web Push subscription. It does not
+pass through TUICommander's content-blind cloud relay. TUICommander sends at
+most one question push per session every 30 seconds.
+
 ### Mobile Features
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)

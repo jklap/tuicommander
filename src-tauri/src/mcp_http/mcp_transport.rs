@@ -1876,7 +1876,7 @@ async fn handle_mcp_tool_call_with_context(
                     "error": "This session action is restricted to localhost connections"
                 })
             } else if action == "submit" {
-                handle_session_submit(state, args).await
+                handle_session_submit(state, args, false).await
             } else if matches!(
                 action,
                 "create" | "input" | "kill" | "close" | "pause" | "resume"
@@ -2153,7 +2153,11 @@ fn submission_output_offset(state: &AppState, session_id: &str) -> Option<u64> {
         .map(|buffer| buffer.lock().total_written)
 }
 
-fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> BeginSubmission {
+fn begin_session_submit(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    human_reply: bool,
+) -> BeginSubmission {
     let session_id = match require_session_id(state, args, "submit") {
         Ok(id) => id,
         Err(error) => return BeginSubmission::Response(error),
@@ -2195,7 +2199,12 @@ fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> Begi
         }));
     }
 
-    match crate::pty::write_agent_submission_to_pty(state, &session_id, text) {
+    let write = if human_reply {
+        crate::pty::write_human_reply_to_pty(state, &session_id, text)
+    } else {
+        crate::pty::write_agent_submission_to_pty(state, &session_id, text)
+    };
+    match write {
         crate::pty::AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
@@ -2269,9 +2278,10 @@ fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> Begi
     }
 }
 
-async fn handle_session_submit(
+pub(super) async fn handle_session_submit(
     state: &Arc<AppState>,
     args: &serde_json::Value,
+    human_reply: bool,
 ) -> serde_json::Value {
     let pty_description = match parse_pty_description(args) {
         Ok(description) => description,
@@ -2280,7 +2290,7 @@ async fn handle_session_submit(
     let blocking_state = Arc::clone(state);
     let blocking_args = args.clone();
     let begin = match tokio::task::spawn_blocking(move || {
-        begin_session_submit(&blocking_state, &blocking_args)
+        begin_session_submit(&blocking_state, &blocking_args, human_reply)
     })
     .await
     {
@@ -5669,7 +5679,26 @@ pub(crate) fn report_progress(
         agent_type,
         pty_id,
     )?;
-    Ok(emit_progress_entry(state, submitted))
+    let blocked_question = (submitted.kind == crate::progress::ProgressKind::Blocked)
+        .then(|| (submitted.pty_id.clone(), submitted.text.clone()));
+    let receipt = emit_progress_entry(state, submitted);
+    if let Some((Some(session_id), text)) = blocked_question
+        && state.session_maps.sessions.contains_key(&session_id)
+    {
+        // Reuse the authoritative session-state lane. It owns awaiting state,
+        // parent routing, mobile deep links, and the per-session push limit.
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id,
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": text,
+                "confident": true,
+                "source": "progress-blocked",
+            })
+            .into(),
+        });
+    }
+    Ok(receipt)
 }
 
 /// Announce a committed entry on both transports and hand back its receipt.
@@ -8843,6 +8872,64 @@ mod tests {
                 .content(),
             ""
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mobile_http_reply_reaches_only_the_asking_confident_session_once() {
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let asking = install_atomic_submit_test_session(&state, "asking-phone");
+        let other = install_atomic_submit_test_session(&state, "other-agent");
+        state
+            .session_maps
+            .session_states
+            .get_mut("asking-phone")
+            .unwrap()
+            .question_confident = true;
+        let mut request = axum::http::Request::post("/sessions/asking-phone/submit")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"input":"Approve once"}"#))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(loopback_addr()));
+        let app = super::super::build_router(Arc::clone(&state), false, true);
+        let call = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if asking.lock().unwrap().last() == Some(&b'\r') {
+                    break;
+                }
+                assert!(
+                    !call.is_finished(),
+                    "HTTP reply returned before writing the answer"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("HTTP reply did not finish its PTY write");
+        state
+            .session_maps
+            .output_buffers
+            .get("asking-phone")
+            .unwrap()
+            .lock()
+            .write(b"child moved");
+
+        let response = call.await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(receipt["submitted"], true);
+        assert_eq!(receipt["acknowledged"], true);
+        assert_eq!(asking.lock().unwrap().as_slice(), b"\x15Approve once\r");
+        assert!(other.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]
@@ -13570,6 +13657,70 @@ mod tests {
             ),
             "the second entry emits in its own right"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_progress_emits_the_question_for_its_managed_session() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        insert_managed_test_session(&state, "asking-pty", &project.path().to_string_lossy());
+        let mut events = state.event_bus.subscribe();
+
+        report_progress(
+            &state,
+            Some(&project.path().to_string_lossy()),
+            crate::progress::ProgressReportInput {
+                kind: crate::progress::ProgressKind::Blocked,
+                text: "Should I deploy now?".to_string(),
+                step: None,
+            },
+            Some("worker".to_string()),
+            Some("codex"),
+            Some("asking-pty"),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            events.try_recv(),
+            Ok(crate::state::AppEvent::ProgressRecorded { .. })
+        ));
+        match events.try_recv() {
+            Ok(crate::state::AppEvent::PtyParsed { session_id, parsed }) => {
+                assert_eq!(session_id, "asking-pty");
+                assert_eq!(parsed["type"], "question");
+                assert_eq!(parsed["prompt_text"], "Should I deploy now?");
+                assert_eq!(parsed["confident"], true);
+            }
+            other => panic!("expected explicit question after committed report, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn empty_blocked_progress_is_rejected_without_a_question_event() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        insert_managed_test_session(&state, "asking-pty", &project.path().to_string_lossy());
+        let mut events = state.event_bus.subscribe();
+        let result = report_progress(
+            &state,
+            Some(&project.path().to_string_lossy()),
+            crate::progress::ProgressReportInput {
+                kind: crate::progress::ProgressKind::Blocked,
+                text: "   ".to_string(),
+                step: None,
+            },
+            None,
+            Some("codex"),
+            Some("asking-pty"),
+        );
+        assert_eq!(result.unwrap_err(), "text must not be empty");
+        assert!(events.try_recv().is_err());
     }
 
     #[tokio::test]

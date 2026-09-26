@@ -1886,15 +1886,16 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.8.1 Push Notifications
 - Web Push from TUICommander directly to mobile PWA clients (no relay dependency)
-- VAPID ES256 key generation on first enable, persisted in config
+- VAPID ES256 key generation on first enable; the private key is held in the OS credential vault and the public key in config
 - Service worker (`sw.js`) handles push events and notification clicks
 - `PushManager.subscribe()` flow with user gesture (click handler) for iOS/Firefox
 - Push subscriptions stored in `push_subscriptions.json`, survive restarts
 - API endpoints: `POST/DELETE /api/push/subscribe`, `GET /api/push/vapid-key`, `POST /api/push/test`
-- Triggers: agent `awaiting_input` (question, orange dot) and `PtyExit` (session completed, purple/unseen dot)
+- Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, and `PtyExit` (session completed). A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
 - Deep link: notification click navigates to `/mobile/session/<id>`, opening the specific session detail
-- Delivery gate: push is sent whenever the desktop window is **not** focused (minimized, hidden, or on another workspace). This prevents duplicate alerts while the user is at the desktop and still wakes the PWA service worker when the phone is locked
-- Rate limited: max 1 push per session per 30 seconds
+- Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
+- Question pushes are rate limited to one per session per 30 seconds; completion alerts have a separate path (tracked in story 1041-cdc7)
+- A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. Numbered choices keep their key-input path
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS
