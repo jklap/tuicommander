@@ -71,7 +71,7 @@ fn extra_bin_dirs() -> &'static [String] {
 ///
 /// Results are cached per binary name for the lifetime of the app —
 /// CLI tool locations don't change at runtime.
-pub(crate) fn resolve_cli(name: &str) -> String {
+pub fn resolve_cli(name: &str) -> String {
     static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, String>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
 
@@ -108,7 +108,7 @@ fn resolve_cli_uncached(name: &str) -> String {
 ///
 /// No-op on other platforms. Use for background `.output()` and piped
 /// `.spawn()` calls — never for interactive processes that need a visible window.
-pub(crate) fn apply_no_window(_cmd: &mut std::process::Command) {
+pub fn apply_no_window(_cmd: &mut std::process::Command) {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -120,7 +120,7 @@ pub(crate) fn apply_no_window(_cmd: &mut std::process::Command) {
 /// Expand a leading `~` or `~/` to `$HOME`. `std::process::Command` and
 /// `std::fs` APIs do not invoke a shell, so tilde is treated as a literal
 /// character and the OS returns ENOENT.
-pub(crate) fn expand_tilde(path: &str) -> String {
+pub fn expand_tilde(path: &str) -> String {
     // `dirs::home_dir` rather than `$HOME`: Windows does not set that variable,
     // so every `~` reached the OS literally there — in repo paths, working
     // directories and agent commands alike. On unix it reads `$HOME` first, so
@@ -138,7 +138,7 @@ pub(crate) fn expand_tilde(path: &str) -> String {
 /// Used to enrich subprocess environments so git hooks and other child
 /// processes can find tools (pnpm, node, etc.) that desktop-launched apps
 /// don't have on PATH.
-pub(crate) fn enriched_path() -> String {
+pub fn enriched_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let extra = extra_bin_dirs();
     if extra.is_empty() {
@@ -153,7 +153,7 @@ pub(crate) fn enriched_path() -> String {
 }
 
 /// Check if a CLI tool exists on PATH or in well-known directories.
-pub(crate) fn has_cli(name: &str) -> bool {
+pub fn has_cli(name: &str) -> bool {
     which_cli(name).is_some()
 }
 
@@ -163,7 +163,7 @@ pub(crate) fn has_cli(name: &str) -> bool {
 /// user added like `~/bin`), then falls back to probing well-known dirs that
 /// desktop-launched apps miss. The path is returned *as found* — a symlink on
 /// PATH is reported as the symlink, not its target (issue #98).
-pub(crate) fn which_cli(name: &str) -> Option<String> {
+pub fn which_cli(name: &str) -> Option<String> {
     let checker = if cfg!(target_os = "windows") {
         "where"
     } else {
