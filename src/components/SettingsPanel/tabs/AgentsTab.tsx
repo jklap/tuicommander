@@ -843,6 +843,30 @@ const AgentRow: Component<{
 						</div>
 					</ExpertSetting>
 
+					<Show when={props.agentType === "claude" || props.agentType === "codex"}>
+						<ExpertSetting
+							configKey="agent_settings.skip_trust_dialog"
+							value={configStore.state.agents[props.agentType]?.skip_trust_dialog ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getSkipTrustDialog(props.agentType)}
+										onChange={() =>
+											configStore.setSkipTrustDialog(props.agentType, !configStore.getSkipTrustDialog(props.agentType))
+										}
+									/>
+									<span>Accept workspace trust for managed spawns</span>
+								</label>
+								<p class={s.hint}>
+									Start agents in a new folder without stopping at their workspace trust question. Applies only to
+									agent-to-agent spawns.
+								</p>
+							</div>
+						</ExpertSetting>
+					</Show>
+
 					<Show when={supportsLaunchSignals()}>
 						<ExpertSetting
 							configKey="agent_settings.native_status_signals"

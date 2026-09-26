@@ -801,6 +801,8 @@ Each agent entry may contain `native_status_signals: boolean`. For Claude and Co
 
 Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
 
+Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent value means `true`. The setting applies only to MCP `agent spawn`: a direct Codex executable receives a launch-only project trust override for the canonical working directory, while Claude's first exact startup picker is answered through the managed PTY. A false value leaves the CLI's normal trust question in place. TUICommander does not modify either CLI's saved trust file.
+
 **Type:** `AgentsConfig`
 
 Per-agent run configurations (custom commands, arguments, environment variables).
@@ -817,6 +819,7 @@ struct AgentRunConfig {
 struct AgentSettings {
     run_configs: Vec<AgentRunConfig>,
     prevent_alt_screen: Option<bool>, // absent = true
+    skip_trust_dialog: Option<bool>, // absent = true; MCP spawns only
 }
 
 struct AgentsConfig {

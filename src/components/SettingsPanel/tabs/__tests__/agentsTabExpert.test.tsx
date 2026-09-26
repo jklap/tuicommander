@@ -59,6 +59,7 @@ const DEFAULTS = {
 		headless_template: null,
 		native_status_signals: null,
 		prevent_alt_screen: null,
+		skip_trust_dialog: null,
 		hook_instrumentation: null,
 		intent_tab_title: null,
 		progress_tracking: null,
@@ -72,6 +73,7 @@ const DEFAULTS = {
 const OVERRIDES: Array<[string, "claude" | "gemini", Record<string, unknown>]> = [
 	["Native status signals", "claude", { native_status_signals: false }],
 	["Prevent alternate screen", "gemini", { prevent_alt_screen: false }],
+	["Accept workspace trust for managed spawns", "claude", { skip_trust_dialog: false }],
 	["Install hooks globally", "gemini", { hook_instrumentation: true }],
 	["Track agent intent", "claude", { intent_tab_title: false }],
 	["Collect progress", "claude", { progress_tracking: false }],
@@ -198,10 +200,34 @@ describe("AgentsTab expert controls", () => {
 		uiStore.setSettingsExpertMode(true);
 		const { container } = renderExpanded("gemini");
 		await waitFor(() => expect(has(container, "Prevent alternate screen")).toBe(true));
-		const label = [...container.querySelectorAll("label")].find((el) => el.textContent?.includes("Prevent alternate screen"));
+		const label = [...container.querySelectorAll("label")].find((el) =>
+			el.textContent?.includes("Prevent alternate screen"),
+		);
 		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
 		expect(checkbox.checked).toBe(true);
 		fireEvent.click(checkbox);
 		expect(agentConfigsStore.getPreventAltScreen("gemini")).toBe(false);
+	});
+
+	it("keeps managed trust acceptance on by default and saves an explicit opt-out", async () => {
+		await setup();
+		uiStore.setSettingsExpertMode(true);
+		const { container } = renderExpanded("claude");
+		const label = [...container.querySelectorAll("label")].find((el) =>
+			el.textContent?.includes("Accept workspace trust for managed spawns"),
+		);
+		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		expect(checkbox.checked).toBe(true);
+		fireEvent.click(checkbox);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ claude: expect.objectContaining({ skip_trust_dialog: false }) }),
+					}),
+				}),
+			),
+		);
 	});
 });

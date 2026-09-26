@@ -377,6 +377,8 @@ export interface AgentSettingsConfig {
 	native_status_signals?: boolean;
 	/** Prevent alternate screen when a verified agent control exists. Undefined means enabled. */
 	prevent_alt_screen?: boolean;
+	/** Accept the startup trust picker for managed MCP spawns. Undefined means enabled. */
+	skip_trust_dialog?: boolean;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
