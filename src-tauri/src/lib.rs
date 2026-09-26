@@ -1590,7 +1590,8 @@ pub fn run() {
                             // server's address, so this hook could not recover
                             // a `make dev` window at all.
                             let state: tauri::State<'_, Arc<AppState>> = handle.state();
-                            let _ = webview_recovery::navigate_home(state.inner());
+                            let _ =
+                                webview_recovery::navigate_home(state.inner(), "page_load_hook");
                         });
                     }
                 })

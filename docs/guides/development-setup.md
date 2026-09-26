@@ -24,6 +24,7 @@ pnpm tauri dev
 ```
 
 Starts the Vite dev server and Tauri app. Frontend files use Vite HMR; Rust changes require restarting the development process.
+Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
 
 ### Browser Mode
 
