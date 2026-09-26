@@ -21,7 +21,7 @@ use crate::git_graph::RawCommit;
 /// `status` is "clean" | "dirty" | "conflict". Untracked entries count toward
 /// `changed` (matches the git panel's prior behavior).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StatusCounts {
+pub struct StatusCounts {
     pub status: String,
     pub staged: u32,
     pub changed: u32,
@@ -32,7 +32,7 @@ pub(crate) struct StatusCounts {
 /// Implementors must produce results indistinguishable from the git CLI — the
 /// shootout parity tests assert structural equality of both adapters' output on
 /// fixture repos before any op is flipped to gix.
-pub(crate) trait GitReads: Send + Sync {
+pub trait GitReads: Send + Sync {
     fn branches_detail(&self, repo: &Path) -> Result<Vec<BranchDetail>, String>;
     fn commit_log(
         &self,
@@ -52,7 +52,7 @@ pub(crate) trait GitReads: Send + Sync {
 }
 
 /// CLI adapter — delegates every op to the existing `git_cmd`-based functions.
-pub(crate) struct CliGitReads;
+pub struct CliGitReads;
 
 impl GitReads for CliGitReads {
     fn branches_detail(&self, repo: &Path) -> Result<Vec<BranchDetail>, String> {
@@ -97,9 +97,9 @@ impl GitReads for CliGitReads {
 }
 
 /// Rewrite a host path string the way git prints one. See
-/// [`crate::fs::portable_spelling`] for why the two adapters must agree on it.
+/// [`tuic_core::path_spelling::portable_spelling`] for why the two adapters must agree on it.
 fn git_spelling(path: &str) -> String {
-    crate::fs::portable_spelling(path)
+    tuic_core::path_spelling::portable_spelling(path)
 }
 
 /// In-process gix adapter. Implements the same port as the CLI adapter; ops are
@@ -108,12 +108,12 @@ fn git_spelling(path: &str) -> String {
 /// Repository handles are cached: opening a `gix::Repository` reads config,
 /// refs and the object DB layout, so we keep a `ThreadSafeRepository` per path
 /// and cheaply derive a thread-local `Repository` per call.
-pub(crate) struct GixGitReads {
+pub struct GixGitReads {
     handles: moka::sync::Cache<PathBuf, gix::ThreadSafeRepository>,
 }
 
 impl GixGitReads {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             handles: moka::sync::Cache::builder().max_capacity(64).build(),
         }
@@ -121,7 +121,7 @@ impl GixGitReads {
 
     /// Open (or reuse a cached) repository handle for `repo` and return a
     /// thread-local `Repository` for use on the current thread.
-    pub(crate) fn repo(&self, repo: &Path) -> Result<gix::Repository, String> {
+    pub fn repo(&self, repo: &Path) -> Result<gix::Repository, String> {
         let tsr = self
             .handles
             .try_get_with(repo.to_path_buf(), || {
@@ -879,7 +879,7 @@ impl GitReads for GixGitReads {
 
 /// Which backend serves a given read op.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Backend {
+pub enum Backend {
     // Every op currently defaults to `Gix` (each gix adapter falls back to the
     // CLI internally for its unsupported edge cases). `Cli` is retained as the
     // per-op rollback lever: set any field in `PerOpBackend::default` back to
@@ -939,7 +939,7 @@ impl Default for PerOpBackend {
 }
 
 /// Routes each read op to its configured backend (CLI or gix).
-pub(crate) struct GitReadsRouter {
+pub struct GitReadsRouter {
     cli: CliGitReads,
     gix: GixGitReads,
     backend: PerOpBackend,
@@ -954,14 +954,14 @@ impl GitReadsRouter {
         }
     }
 
-    pub(crate) fn branches_detail(&self, repo: &Path) -> Result<Vec<BranchDetail>, String> {
+    pub fn branches_detail(&self, repo: &Path) -> Result<Vec<BranchDetail>, String> {
         match self.backend.branches_detail {
             Backend::Cli => self.cli.branches_detail(repo),
             Backend::Gix => self.gix.branches_detail(repo),
         }
     }
 
-    pub(crate) fn commit_log(
+    pub fn commit_log(
         &self,
         repo: &Path,
         count: Option<u32>,
@@ -973,26 +973,21 @@ impl GitReadsRouter {
         }
     }
 
-    pub(crate) fn graph_commits(&self, repo: &Path, count: u32) -> Result<Vec<RawCommit>, String> {
+    pub fn graph_commits(&self, repo: &Path, count: u32) -> Result<Vec<RawCommit>, String> {
         match self.backend.graph_commits {
             Backend::Cli => self.cli.graph_commits(repo, count),
             Backend::Gix => self.gix.graph_commits(repo, count),
         }
     }
 
-    pub(crate) fn ahead_behind(
-        &self,
-        repo: &Path,
-        left: &str,
-        right: &str,
-    ) -> Result<(u32, u32), String> {
+    pub fn ahead_behind(&self, repo: &Path, left: &str, right: &str) -> Result<(u32, u32), String> {
         match self.backend.ahead_behind {
             Backend::Cli => self.cli.ahead_behind(repo, left, right),
             Backend::Gix => self.gix.ahead_behind(repo, left, right),
         }
     }
 
-    pub(crate) fn worktree_paths(
+    pub fn worktree_paths(
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
@@ -1004,21 +999,21 @@ impl GitReadsRouter {
         Ok(paths)
     }
 
-    pub(crate) fn status_counts(&self, repo: &Path) -> StatusCounts {
+    pub fn status_counts(&self, repo: &Path) -> StatusCounts {
         match self.backend.status_counts {
             Backend::Cli => self.cli.status_counts(repo),
             Backend::Gix => self.gix.status_counts(repo),
         }
     }
 
-    pub(crate) fn diff_stats(&self, repo: &Path, scope: Option<&str>) -> DiffStats {
+    pub fn diff_stats(&self, repo: &Path, scope: Option<&str>) -> DiffStats {
         match self.backend.diff_stats {
             Backend::Cli => self.cli.diff_stats(repo, scope),
             Backend::Gix => self.gix.diff_stats(repo, scope),
         }
     }
 
-    pub(crate) fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
+    pub fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
         match self.backend.blame {
             Backend::Cli => self.cli.blame(repo, file),
             Backend::Gix => self.gix.blame(repo, file),
@@ -1029,18 +1024,18 @@ impl GitReadsRouter {
 static ROUTER: OnceLock<GitReadsRouter> = OnceLock::new();
 
 /// Global read-ops router. All git read call sites go through this.
-pub(crate) fn git_reads() -> &'static GitReadsRouter {
+pub fn git_reads() -> &'static GitReadsRouter {
     ROUTER.get_or_init(GitReadsRouter::new)
 }
 
 #[cfg(test)]
-pub(crate) mod test_fixtures {
+pub mod test_fixtures {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use tempfile::TempDir;
 
     /// Run a git command in `dir`, panicking with stderr on failure.
-    pub(crate) fn run_git(dir: &Path, args: &[&str]) -> String {
+    pub fn run_git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .current_dir(dir)
             .args(args)
@@ -1062,7 +1057,7 @@ pub(crate) mod test_fixtures {
 
     /// Like `run_git`, but pins author+committer date to `ts` (RFC3339) so
     /// commits get distinct, deterministic timestamps for topo-order tests.
-    pub(crate) fn run_git_at(dir: &Path, ts: &str, args: &[&str]) -> String {
+    pub fn run_git_at(dir: &Path, ts: &str, args: &[&str]) -> String {
         let out = Command::new("git")
             .current_dir(dir)
             .args(args)
@@ -1087,7 +1082,7 @@ pub(crate) mod test_fixtures {
     /// Layout: `main` with 3 commits; a `feature` branch 1 commit ahead; a
     /// simulated `refs/remotes/origin/main`; plus a staged, an unstaged, and an
     /// untracked change in the working tree. Enough to exercise every read op.
-    pub(crate) fn fixture_repo() -> (TempDir, PathBuf) {
+    pub fn fixture_repo() -> (TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().to_path_buf();
         let git = |args: &[&str]| run_git(&path, args);
@@ -1332,8 +1327,6 @@ mod tests {
     #[test]
     fn shootout_worktrees() {
         let (_guard, repo) = fixture_repo();
-        let config = tempfile::tempdir().unwrap();
-        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let wt_dir = tempfile::tempdir().unwrap();
         let wt = wt_dir.path().join("linked");
         run_git(
@@ -1732,8 +1725,6 @@ mod tests {
     #[test]
     fn cli_parity_with_legacy() {
         let (_guard, repo) = fixture_repo();
-        let config = tempfile::tempdir().unwrap();
-        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let cli = CliGitReads;
 
         // branches_detail

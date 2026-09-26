@@ -1317,14 +1317,7 @@ pub(crate) fn strip_kitty_sequences(input: &str) -> (Cow<'_, str>, Vec<KittyActi
     (Cow::Owned(output), actions)
 }
 
-/// Represents a git worktree
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorktreeInfo {
-    pub name: String,
-    pub path: PathBuf,
-    pub branch: Option<String>,
-    pub base_repo: PathBuf,
-}
+pub use tuic_git::worktree::WorktreeInfo;
 
 /// Represents a PTY session with optional worktree
 pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;

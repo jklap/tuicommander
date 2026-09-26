@@ -87,15 +87,13 @@ src-tauri/src/
 ├── lib.rs                # App setup, plugin init, command registration
 ├── main.rs               # Entry point
 ├── pty.rs                # PTY session lifecycle
-├── git.rs                # Git operations
+├── git.rs                # Git cache and Tauri command adapters
 ├── github.rs             # GitHub API integration
 ├── config.rs             # Configuration management
 ├── state.rs              # Global state (sessions, buffers, metrics)
 ├── agent.rs              # Agent binary detection and spawning
-├── worktree.rs           # Git worktree management
-├── output_parser.rs      # Terminal output parsing
+├── worktree.rs           # Worktree config, events, and Tauri command adapters
 ├── prompt.rs             # Prompt template processing
-├── crates/tuic-core/       # CLI, credentials, config path, JSONC, process env, redaction, ranking, error classification
 ├── menu.rs               # Native menu bar
 ├── mcp_http/             # HTTP/WebSocket + MCP server (routes split per area)
 └── dictation/            # Voice dictation (Whisper)
@@ -106,6 +104,8 @@ src-tauri/src/
     ├── transcribe.rs     # Whisper transcription
     └── corrections.rs    # Post-processing corrections
 ```
+
+`src-tauri/crates/` is a sibling of `src-tauri/src/`. `tuic-core` owns shared configuration and path utilities; `tuic-terminal` owns terminal parsing and buffers; `tuic-git` owns blocking Git reads, subprocesses, branch and worktree operations, and artifact warming; the root Git adapters own Tokio scheduling and Tauri commands.
 
 ## Application Startup Flow
 
