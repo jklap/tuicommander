@@ -116,7 +116,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		return {
 			agentType,
 			command: `${reviewCfg.command}${args ? " " + args : ""}`,
-			allowAltScreen: reviewCfg.env?.TUIC_ALLOW_ALT_SCREEN === "1",
 		};
 	});
 
@@ -413,7 +412,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 															launch.command,
 															null,
 															launch.agentType,
-															launch.allowAltScreen,
 															props.repoPath,
 														);
 														props.onReview(props.repoPath, props.branch, command);

@@ -105,9 +105,10 @@ pub(crate) fn bind_pty_identity(
 ) {
     let identity = tuic_session.unwrap_or(session_id);
     cmd.env("TUIC_SESSION", identity);
-    // Every Claude process started inside this PTY inherits native scrollback,
-    // including manual launches and restored tabs on every host shell.
-    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+    // Manually typed Claude inherits the same per-agent preference as TUIC spawns.
+    if crate::agent_hook_launch::prevents_alt_screen("claude") {
+        cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+    }
     cmd.env(
         "TUIC_CONFIG_DIR",
         crate::config::config_dir().to_string_lossy().as_ref(),
@@ -122,19 +123,13 @@ pub(crate) fn apply_agent_screen_env(
     cmd: &mut CommandBuilder,
     env: &std::collections::HashMap<String, String>,
 ) {
+    if !crate::agent_hook_launch::prevents_alt_screen("claude") {
+        return;
+    }
     let mode = env
         .get("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
         .map(String::as_str)
-        .unwrap_or_else(|| {
-            if env
-                .get("TUIC_ALLOW_ALT_SCREEN")
-                .is_some_and(|value| value == "1")
-            {
-                "0"
-            } else {
-                "1"
-            }
-        });
+        .unwrap_or("1");
     cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", mode);
 }
 

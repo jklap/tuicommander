@@ -37,6 +37,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Agent Scrollback",
+		description:
+			"Agent commands in new terminals keep native scrollback when supported. Change Prevent alternate screen per agent in Settings.",
+		shortcut: null,
+	},
+	{
 		feature: "Activity Dashboard",
 		description: "See all agent sessions, CPU usage, and errors in one panel.",
 		shortcut: `${mod}+K`,

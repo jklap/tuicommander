@@ -164,22 +164,17 @@ export async function prepareAgentLaunchCommand(
 	command: string,
 	agentSessionId: string | null | undefined,
 	agentType: AgentType,
-	allowAltScreen = false,
 	cwd?: string | null,
 ): Promise<string> {
 	const base = buildAgentLaunchCommand(command, agentSessionId, agentType);
 	const parts = splitEnvPrefix(base);
 	const [binary, ...args] = parts.argv;
 	if (!binary) return base;
-	const inlineOptOut = parts.env.some(
-		(assignment) => assignment.startsWith("TUIC_ALLOW_ALT_SCREEN=") && unquoteShellValue(assignment.slice(22)) === "1",
-	);
 	try {
 		const prepared = await rpc<string[]>("prepare_agent_launch_args", {
 			agentType,
 			binaryPath: binary,
 			args,
-			allowAltScreen: allowAltScreen || inlineOptOut,
 			repoPath: cwd,
 		});
 		if (!Array.isArray(prepared) || !prepared.every((arg) => typeof arg === "string")) return base;
@@ -253,7 +248,6 @@ export async function verifyAndBuildResumeCommand(
 					applyDefaultRunConfig(agentType, cmd, launchCommand, cwd),
 					null,
 					agentType,
-					resolveLaunchEnv(agentType, launchCommand, cwd).TUIC_ALLOW_ALT_SCREEN === "1",
 					cwd,
 				);
 			}
@@ -270,7 +264,6 @@ export async function verifyAndBuildResumeCommand(
 				resumed,
 				null,
 				agentType,
-				resolveLaunchEnv(agentType, launchCommand, cwd).TUIC_ALLOW_ALT_SCREEN === "1",
 				cwd,
 			)
 		: null;

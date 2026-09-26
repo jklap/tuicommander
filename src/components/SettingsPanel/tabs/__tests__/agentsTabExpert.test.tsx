@@ -58,6 +58,7 @@ const DEFAULTS = {
 		auto_retry_on_error: false,
 		headless_template: null,
 		native_status_signals: null,
+		prevent_alt_screen: null,
 		hook_instrumentation: null,
 		intent_tab_title: null,
 		progress_tracking: null,
@@ -70,6 +71,7 @@ const DEFAULTS = {
 /** Per-agent override rows: label, the agent whose row carries it, a stored override. */
 const OVERRIDES: Array<[string, "claude" | "gemini", Record<string, unknown>]> = [
 	["Native status signals", "claude", { native_status_signals: false }],
+	["Prevent alternate screen", "gemini", { prevent_alt_screen: false }],
 	["Install hooks globally", "gemini", { hook_instrumentation: true }],
 	["Track agent intent", "claude", { intent_tab_title: false }],
 	["Collect progress", "claude", { progress_tracking: false }],
@@ -189,5 +191,17 @@ describe("AgentsTab expert controls", () => {
 			expect(has(container, "Auto-retry on server errors")).toBe(true);
 			expect(has(container, "Headless Command Template")).toBe(true);
 		});
+	});
+
+	it("shows native scrollback prevention for an agent without a CLI flag", async () => {
+		await setup();
+		uiStore.setSettingsExpertMode(true);
+		const { container } = renderExpanded("gemini");
+		await waitFor(() => expect(has(container, "Prevent alternate screen")).toBe(true));
+		const label = [...container.querySelectorAll("label")].find((el) => el.textContent?.includes("Prevent alternate screen"));
+		const checkbox = label?.querySelector("input[type=checkbox]") as HTMLInputElement;
+		expect(checkbox.checked).toBe(true);
+		fireEvent.click(checkbox);
+		expect(agentConfigsStore.getPreventAltScreen("gemini")).toBe(false);
 	});
 });

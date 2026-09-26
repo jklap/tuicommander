@@ -1375,6 +1375,9 @@ pub(crate) struct AgentSettings {
     /// Launch-scoped native status signals. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_status_signals: Option<bool>,
+    /// Prefer native terminal scrollback for supported agent CLIs. Missing means enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prevent_alt_screen: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -5056,6 +5059,7 @@ mod tests {
                 suggest_followups: None,
                 hook_instrumentation: None,
                 native_status_signals: None,
+                prevent_alt_screen: None,
                 progress_tracking: Some(false),
             },
         );
@@ -7871,6 +7875,17 @@ mod tests {
     #[test]
     fn agent_settings_field_defaults_match_default_impl() {
         assert_no_field_default_drift(&AgentSettings::default());
+    }
+
+    #[test]
+    fn agent_settings_round_trip_native_scrollback_opt_out() {
+        let settings: AgentSettings =
+            serde_json::from_value(serde_json::json!({"prevent_alt_screen": false})).unwrap();
+        let saved = serde_json::to_value(settings).unwrap();
+        assert_eq!(saved["prevent_alt_screen"], false);
+        assert!(
+            serde_json::to_value(AgentSettings::default()).unwrap()["prevent_alt_screen"].is_null()
+        );
     }
 
     #[test]

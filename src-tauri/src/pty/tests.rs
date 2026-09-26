@@ -68,7 +68,31 @@ fn pty_identity_defaults_claude_to_native_scrollback() {
     );
     assert_eq!(
         ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
-        Some(std::ffi::OsStr::new("0"))
+        Some(std::ffi::OsStr::new("1"))
+    );
+}
+
+#[test]
+fn claude_screen_setting_off_preserves_explicit_environment() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+    let mut config = crate::config::AgentsConfig::default();
+    config.agents.insert(
+        "claude".into(),
+        crate::config::AgentSettings {
+            prevent_alt_screen: Some(false),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(config).unwrap();
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "custom");
+    bind_pty_identity(&state, &mut cmd, "screen-setting-off", None);
+    apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("custom"))
     );
 }
 

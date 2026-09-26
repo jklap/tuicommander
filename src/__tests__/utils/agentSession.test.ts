@@ -77,7 +77,6 @@ describe("prepareAgentLaunchCommand", () => {
 			agentType: "codex",
 			binaryPath: "codex",
 			args: ["resume"],
-			allowAltScreen: false,
 			repoPath: undefined,
 		});
 	});
@@ -89,17 +88,22 @@ describe("prepareAgentLaunchCommand", () => {
 		expect(await prepareAgentLaunchCommand("gemini", null, "gemini")).toBe("gemini");
 	});
 
-	it("passes an explicit opt-out without adding a flag", async () => {
-		mockRpc.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+	it("preserves an inline environment assignment without treating it as a screen override", async () => {
+		mockRpc.mockResolvedValueOnce(["--no-alt-screen"]).mockResolvedValueOnce(["--no-alt-screen"]);
 		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN=1 codex", null, "codex")).toBe(
-			"TUIC_ALLOW_ALT_SCREEN=1 codex",
+			"TUIC_ALLOW_ALT_SCREEN=1 codex --no-alt-screen",
 		);
 		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN='1' codex", null, "codex")).toBe(
-			"TUIC_ALLOW_ALT_SCREEN='1' codex",
+			"TUIC_ALLOW_ALT_SCREEN='1' codex --no-alt-screen",
 		);
 		expect(mockRpc).toHaveBeenCalledWith(
 			"prepare_agent_launch_args",
-			expect.objectContaining({ allowAltScreen: true }),
+			{
+				agentType: "codex",
+				binaryPath: "codex",
+				args: [],
+				repoPath: undefined,
+			},
 		);
 	});
 });
@@ -128,17 +132,6 @@ describe("buildResumeCommand", () => {
 	it("returns id-based resume for codex with UUID", () => {
 		expect(buildResumeCommand("codex", "abc-123")).toBe("codex resume abc-123");
 	});
-	it("respects a run config's alternate-screen opt-out on resume", () => {
-		const config = {
-			command: "codex",
-			args: [],
-			env: { TUIC_ALLOW_ALT_SCREEN: "1" },
-			is_default: true,
-		};
-		mockAgentConfigsStore.getDefaultConfig.mockReturnValueOnce(config).mockReturnValueOnce(config);
-		expect(buildResumeCommand("codex", "abc-123", null, null)).toBe("codex resume abc-123");
-	});
-
 	it("falls back to static resume for codex without UUID", () => {
 		expect(buildResumeCommand("codex", null)).toBe("codex resume --last");
 	});
@@ -249,7 +242,6 @@ describe("verifyAndBuildResumeCommand", () => {
 			agentType: "codex",
 			binaryPath: "codex",
 			args: ["resume", "codex-session"],
-			allowAltScreen: false,
 			repoPath: "/repo",
 		});
 		expect(result).toBe("codex --no-alt-screen resume codex-session");
