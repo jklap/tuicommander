@@ -860,6 +860,37 @@ pub fn resolve_any_workspace(
         })
 }
 
+/// Removal alone may resolve a registered checkout whose directory disappeared.
+/// The normal workspace listing deliberately hides these stale entries.
+fn resolve_missing_registered_workspace(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceWorktree, String> {
+    let listed = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("git worktree list failed: {error}"))?;
+    for entry in parse_worktree_entries(&listed.stdout) {
+        let Some(branch) = entry.branch else { continue };
+        let path = PathBuf::from(&entry.path);
+        if workspace_id_of_worktree(&branch) == workspace_id
+            && !path.exists()
+            && registered_worktree_admin_dir(base_repo, &path)?.is_some()
+        {
+            return Ok(WorkspaceWorktree {
+                branch,
+                path: entry.path,
+                kind: WorkspaceKind::Worktree,
+                warm_artifacts: None,
+            });
+        }
+    }
+    Err(format!(
+        "No workspace found for id '{workspace_id}' in '{}'",
+        base_repo.display()
+    ))
+}
+
 /// A workspace, however it was built.
 ///
 /// One type for both mechanisms on purpose: the caller asked for a workspace,
@@ -1282,6 +1313,11 @@ fn remove_worktree_internal_with_lock(
                     "{LOCKED_WORKTREE_PREFIX}missing worktree is locked"
                 ));
             }
+            if !force {
+                return Err(
+                    "Cannot remove missing worktree registration without force confirmation".into(),
+                );
+            }
             preserve_missing_worktree_modules(&worktree.base_repo, &worktree.path, &admin)?;
             let force_args: &[&str] = if override_lock {
                 &["worktree", "remove", "--force", "--force"]
@@ -1635,17 +1671,20 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
         "remove_worktree_by_workspace_id: start"
     );
 
-    let workspace = resolve_any_workspace(&base_repo, workspace_id).inspect_err(|_| {
-        tracing::error!(
-            source = "worktree",
-            workspace_id = %workspace_id,
-            "remove_worktree_by_workspace_id: no workspace found for id"
-        );
-    })?;
+    let workspace = resolve_any_workspace(&base_repo, workspace_id)
+        .or_else(|_| resolve_missing_registered_workspace(&base_repo, workspace_id))
+        .inspect_err(|_| {
+            tracing::error!(
+                source = "worktree",
+                workspace_id = %workspace_id,
+                "remove_worktree_by_workspace_id: no workspace found for id"
+            );
+        })?;
     // The branch to delete comes off the resolved record instead of duplicating
     // the workspace-id representation at the call site.
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
+    let missing_checkout = !worktree_path.exists();
 
     // Force permits discarding dirty files, but never detached commits or a
     // lock. Branch deletion still needs its own proof in either mode.
@@ -1671,7 +1710,7 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
             "Cannot remove {branch_name}: a Git operation is in progress"
         ));
     }
-    if rev_at(&worktree_path, "HEAD")? != expected_branch_oid {
+    if !missing_checkout && rev_at(&worktree_path, "HEAD")? != expected_branch_oid {
         return Err(format!(
             "Cannot remove {branch_name}: worktree HEAD differs from its branch tip"
         ));
@@ -5695,7 +5734,18 @@ branch refs/heads/feat
             branch: Some("missing-module".into()),
             base_repo: repo.clone(),
         };
-        remove_worktree_internal(&worktree, false).unwrap();
+        let admin = registered_worktree_admin_dir(&repo, &worktree.path)
+            .unwrap()
+            .expect("missing checkout remains registered");
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("force"), "{error}");
+        assert!(admin.exists(), "refusal must retain the registration");
+        assert!(
+            Path::new(&module_gitdir).exists(),
+            "refusal must retain module objects"
+        );
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!admin.exists());
         assert!(!Path::new(&module_gitdir).exists());
         assert!(
             git_cmd(&repo.join("modules/local"))
@@ -5717,6 +5767,79 @@ branch refs/heads/feat
             !refs.stdout.trim().is_empty(),
             "local commit needs a durable ref"
         );
+    }
+
+    #[test]
+    fn missing_registered_checkout_requires_force_through_workspace_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "missing-force");
+        fs::remove_dir_all(&path).unwrap();
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .expect("missing checkout remains registered");
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "missing-force",
+            false,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            admin.exists(),
+            "non-force removal must retain the registration: {error}"
+        );
+
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "missing-force",
+            false,
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !admin.exists(),
+            "confirmed removal must prune the registration"
+        );
+    }
+
+    #[test]
+    fn missing_locked_checkout_requires_a_separate_lock_override() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "missing-locked");
+        git_cmd(&repo)
+            .args(["worktree", "lock", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        fs::remove_dir_all(&path).unwrap();
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .expect("locked checkout remains registered");
+
+        let error = remove_worktree_by_workspace_id_with_lock(
+            &repo.to_string_lossy(),
+            "missing-locked",
+            false,
+            None,
+            true,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.starts_with(LOCKED_WORKTREE_PREFIX), "{error}");
+        assert!(admin.exists(), "lock refusal must retain the registration");
+
+        remove_worktree_by_workspace_id_with_lock(
+            &repo.to_string_lossy(),
+            "missing-locked",
+            false,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(!admin.exists(), "lock override must prune the registration");
     }
 
     #[test]
