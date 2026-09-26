@@ -62,12 +62,12 @@ fn circuit_record_failure() {
 /// The default instance vault tuple. Named instances derive their own in
 /// `app_instance`; these constants only remain to address the default vault in
 /// tests.
-#[cfg(test)]
-pub(crate) const KEYRING_SERVICE: &str = "tuicommander";
+#[cfg(any(test, feature = "test-support"))]
+pub const KEYRING_SERVICE: &str = "tuicommander";
 #[cfg(test)]
 const KEYRING_USER: &str = "vault";
 
-pub(crate) const LEGACY_ENTRIES: &[(&str, &str)] = &[
+pub const LEGACY_ENTRIES: &[(&str, &str)] = &[
     ("tuicommander-ai-chat", "api-key"),
     ("tuicommander-llm-api", "api-key"),
     ("tuicommander-github", "oauth-token"),
@@ -82,14 +82,14 @@ pub(crate) const LEGACY_ENTRIES: &[(&str, &str)] = &[
 /// single source of truth `legacy_entry()` reads from below, so
 /// `plugin_credentials::plugin_read_credential_inner`'s deny check can derive
 /// from it instead of hardcoding the string a second time.
-pub(crate) const MCP_UPSTREAM_LEGACY_SERVICE: &str = "tuicommander-mcp";
+pub const MCP_UPSTREAM_LEGACY_SERVICE: &str = "tuicommander-mcp";
 
 // ---------------------------------------------------------------------------
 // Credential keys
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub(crate) enum Credential<'a> {
+pub enum Credential<'a> {
     AiChatApiKey,
     LlmApiKey,
     GithubOauthToken,
@@ -206,7 +206,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
     // otherwise the fault never reaches the mock and the assertion becomes
     // order-dependent. Dropping it under the same guard leaves no window for a
     // concurrent test to repopulate before the forced failure is observed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if MOCK_FAIL_READS.load(std::sync::atomic::Ordering::SeqCst) {
         guard.take();
     }
@@ -218,7 +218,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
     #[cfg(all(debug_assertions, not(test)))]
     dev_store::init();
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ensure_mock_keyring();
 
     let instance = crate::app_instance::current_app_instance();
@@ -276,7 +276,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
 // Public API
 // ---------------------------------------------------------------------------
 
-pub(crate) fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
+pub fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
     let key = cred.vault_key();
     let mut guard = lock();
     load(&mut guard)?;
@@ -303,7 +303,7 @@ pub(crate) fn get(cred: Credential<'_>) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-pub(crate) fn set(cred: Credential<'_>, value: &str) -> Result<(), String> {
+pub fn set(cred: Credential<'_>, value: &str) -> Result<(), String> {
     let key = cred.vault_key();
     let trimmed = value.trim().to_string();
     let mut guard = lock();
@@ -315,7 +315,7 @@ pub(crate) fn set(cred: Credential<'_>, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn delete(cred: Credential<'_>) -> Result<(), String> {
+pub fn delete(cred: Credential<'_>) -> Result<(), String> {
     let key = cred.vault_key();
     let mut guard = lock();
     load(&mut guard)?;
@@ -328,8 +328,7 @@ pub(crate) fn delete(cred: Credential<'_>) -> Result<(), String> {
 
 /// Fail a named instance before it binds if its vault namespace is unreadable.
 /// The default instance has nothing to prove here: `load()` already sweeps it.
-#[cfg(not(feature = "desktop"))]
-pub(crate) fn probe_named_vault_read() -> Result<(), String> {
+pub fn probe_named_vault_read() -> Result<(), String> {
     let instance = crate::app_instance::current_app_instance();
     if instance.is_default() {
         return Ok(());
@@ -338,7 +337,7 @@ pub(crate) fn probe_named_vault_read() -> Result<(), String> {
     #[cfg(all(debug_assertions, not(test)))]
     dev_store::init();
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ensure_mock_keyring();
 
     read_keyring_entry(instance.vault_service(), instance.vault_user()).map(|_| ())
@@ -475,20 +474,20 @@ mod dev_store {
 /// (simulating a locked keychain on write) while reads still succeed. Used to
 /// prove the legacy sweep never deletes a legacy entry before the merged vault
 /// is durably persisted (#116-1cb4).
-#[cfg(test)]
-pub(crate) static MOCK_FAIL_WRITES: std::sync::atomic::AtomicBool =
+#[cfg(any(test, feature = "test-support"))]
+pub static MOCK_FAIL_WRITES: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Test-only fault injection for READS: the mock rejects `get_password` with a real
 /// error rather than `NoEntry`. That distinction is the whole point — a vault that
 /// cannot be consulted must never be mistaken for a vault holding nothing, or the
 /// config layer deletes a perfectly good secret (#488-5576).
-#[cfg(test)]
-pub(crate) static MOCK_FAIL_READS: std::sync::atomic::AtomicBool =
+#[cfg(any(test, feature = "test-support"))]
+pub static MOCK_FAIL_READS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(test)]
-pub(crate) fn reset_test_faults() {
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_test_faults() {
     use std::sync::atomic::Ordering;
     MOCK_FAIL_READS.store(false, Ordering::SeqCst);
     MOCK_FAIL_WRITES.store(false, Ordering::SeqCst);
@@ -497,7 +496,7 @@ pub(crate) fn reset_test_faults() {
     cb.last_failure = None;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn ensure_mock_keyring() {
     use keyring::{
         Error,

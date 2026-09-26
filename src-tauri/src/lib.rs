@@ -15,13 +15,13 @@ pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
-pub mod app_instance;
+pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
-pub(crate) mod cli;
+pub(crate) use tuic_core::cli;
 pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
@@ -29,14 +29,14 @@ pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
 pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
-pub(crate) mod credentials;
+pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
 pub(crate) mod ego_cli;
-pub(crate) mod error_classification;
+pub(crate) use tuic_core::error_classification;
 pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
@@ -58,8 +58,8 @@ pub(crate) use tuic_terminal::grid_gate;
 pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
 pub(crate) mod improvement_scan;
+pub(crate) use tuic_core::jsonc_edit;
 pub(crate) use tuic_terminal::input_line_buffer;
-pub(crate) mod jsonc_edit;
 pub(crate) mod mcp_http;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
@@ -95,13 +95,13 @@ pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
 mod press_and_hold;
-pub(crate) mod process_env;
+pub(crate) use tuic_core::process_env;
 pub(crate) mod progress;
 pub(crate) mod prompt;
 pub(crate) mod pty;
 pub(crate) mod pty_capture;
 pub(crate) mod push;
-pub(crate) mod redaction;
+pub(crate) use tuic_core::redaction;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -126,7 +126,7 @@ pub(crate) use tuic_terminal::terminal_grid;
 pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod text_rank;
+pub(crate) use tuic_core::text_rank;
 pub(crate) mod themes;
 pub(crate) mod tool_search;
 #[cfg(feature = "desktop")]

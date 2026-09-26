@@ -9495,6 +9495,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuic-core"
+version = "1.7.7"
+dependencies = [
+ "bm25",
+ "dirs",
+ "jsonc-parser",
+ "keyring",
+ "lazy_static",
+ "libc",
+ "parking_lot",
+ "rand 0.10.2",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tuic-test-support",
+ "uuid",
+]
+
+[[package]]
 name = "tuic-terminal"
 version = "1.7.7"
 dependencies = [
@@ -9617,6 +9637,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tuic-core",
  "tuic-terminal",
  "tuic-test-support",
  "ulid",

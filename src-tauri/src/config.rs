@@ -3,94 +3,16 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Test-only override for the config directory.
 #[cfg(test)]
-static CONFIG_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+pub(crate) use tuic_core::config_dir::{
+    set_override as set_config_dir_override, without_override as without_config_dir_override,
+};
 
-/// Global serialization lock for tests that call `set_config_dir_override`.
-/// Held for the lifetime of the returned guard so tests in different modules
-/// do not race on the shared `CONFIG_DIR_OVERRIDE` global.
-#[cfg(test)]
-static CONFIG_DIR_EXCLUSIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Override the config directory for testing. Returns a guard that holds the
-/// global `CONFIG_DIR_EXCLUSIVE` lock and restores the original value on drop.
-/// All callers across all test modules are automatically serialized.
-#[cfg(test)]
-pub(crate) fn set_config_dir_override(dir: PathBuf) -> impl Drop {
-    let lock = CONFIG_DIR_EXCLUSIVE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *lock_config_dir_override() = Some(dir);
-    ConfigDirGuard { _lock: lock }
-}
-
-/// `CONFIG_DIR_OVERRIDE.lock()`, tolerating poison. The mutex guards nothing
-/// but an `Option<PathBuf>` swap — there is no half-written invariant a panic
-/// mid-write could leave behind — so recovering is strictly safer than a
-/// second `.unwrap()` panicking on top of the first.
-///
-/// That second panic is not hypothetical: `config_dir_in_a_test_refuses_the_real_user_directory`
-/// deliberately panics while `CONFIG_DIR_OVERRIDE.lock().unwrap()`'s temporary
-/// guard is still alive (chained into `.clone().expect(...)`), which poisons
-/// the mutex as the guard drops during unwind. `ConfigDirGuard::drop` then ran
-/// on the way out and called `.lock().unwrap()` on that now-poisoned mutex —
-/// a panic inside a `Drop` impl that is *itself* running because of an
-/// earlier panic, which Rust treats as unrecoverable and aborts the whole
-/// process (SIGABRT) rather than unwinding. One `#[should_panic]` test that
-/// exercises the panic path this way was enough to take down the entire test
-/// binary and every test still in flight in it — not a handful of
-/// assertions, the process itself.
-#[cfg(test)]
-fn lock_config_dir_override() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
-    CONFIG_DIR_OVERRIDE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-/// Take the same exclusive lock `set_config_dir_override` takes, but leave the
-/// override unset — the only way to observe the no-override branch of
-/// `config_dir` without racing a test that did set one.
-#[cfg(test)]
-pub(crate) fn without_config_dir_override() -> impl Drop {
-    let lock = CONFIG_DIR_EXCLUSIVE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *lock_config_dir_override() = None;
-    ConfigDirGuard { _lock: lock }
-}
-
-#[cfg(test)]
-struct ConfigDirGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-impl Drop for ConfigDirGuard {
-    fn drop(&mut self) {
-        *lock_config_dir_override() = None;
-    }
-}
-
-/// Get the config directory using platform-appropriate location.
-///
-/// - macOS: `~/Library/Application Support/com.tuic.commander/`
-/// - Linux: `~/.config/com.tuic.commander/` (or `$XDG_CONFIG_HOME`)
-/// - Windows: `%APPDATA%/com.tuic.commander/`
-///
-/// Matches Tauri's `$APPCONFIG` path (derived from the bundle identifier).
-/// Falls back to `~/.tuicommander/` if platform dir is unavailable.
-/// On first call, migrates from legacy locations if the new dir doesn't exist:
-///   1. `{platform_config}/tuicommander/` (previous custom name)
-///   2. `{platform_config}/tui-commander/` (older name)
-///   3. `~/.tuicommander/` (legacy dotdir)
+/// Resolve the config directory for production or the isolated test support feature.
 pub(crate) fn config_dir() -> PathBuf {
     #[cfg(test)]
     {
-        if let Some(dir) = lock_config_dir_override().clone() {
-            return dir;
-        }
-        test_fallback_config_dir().clone()
+        tuic_core::config_dir::config_dir()
     }
     #[cfg(not(test))]
     {
@@ -98,86 +20,14 @@ pub(crate) fn config_dir() -> PathBuf {
     }
 }
 
-/// A test build never gets to name the user's real config directory, with or
-/// without an explicit [`set_config_dir_override`]. It used to: the override
-/// was optional and a test that forgot it read and wrote Boss's live
-/// `config.json`/`repositories.json` in silence — which is how fifteen
-/// `tempfile` roots became permanent repository rows (#763-d219).
-///
-/// This is deliberately a silent, process-wide fallback rather than a panic.
-/// A panic was tried first and reproducibly deadlocked or aborted the full
-/// `cargo nextest run --lib` suite: any test whose call chain reaches
-/// `config_dir()` without having set its own override — dozens across
-/// `state.rs`/`worktree.rs`, most not touching `repositories.json` at all and
-/// having no reason to care where it lives — either failed outright, or (for
-/// the handful that ALSO call an `isolated_config()`-style helper on the same
-/// thread first) self-deadlocked on `CONFIG_DIR_EXCLUSIVE`, which is not
-/// reentrant. A test author who genuinely needs an isolated, known directory
-/// still gets one via `set_config_dir_override`, unaffected by this fallback;
-/// this path exists only for the call chains that never asked and never
-/// checked. `fallback_config_dir_is_never_the_real_directory` proves the two
-/// can never coincide.
-///
-/// One directory per PROCESS, not per test or per thread: `cargo nextest`
-/// already runs one test per process, and `cargo test`'s in-process threads
-/// sharing this path is a test-vs-test file collision at worst — the same
-/// class of risk `make_test_app_state`'s own per-call `data_dir` comment
-/// already accepts for its SQLite file, and strictly safer than any test
-/// reaching real user data. A thread-local fallback was considered and
-/// rejected: code under test that offloads work to `spawn_blocking` (e.g.
-/// `finalize_merged_worktree`, `merge_and_archive_worktree`) runs on a
-/// different OS thread than the test itself, and a thread-local override set
-/// on the test's own thread would not be visible there — reintroducing the
-/// exact "forgot to set it" gap on a thread the test can't reach to fix.
-#[cfg(test)]
-fn test_fallback_config_dir() -> &'static PathBuf {
-    static FALLBACK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    static GUARD: std::sync::OnceLock<std::sync::Mutex<Option<tempfile::TempDir>>> =
-        std::sync::OnceLock::new();
-
-    // The fallback is process-wide so spawn_blocking workers see the same path.
-    // Statics are not dropped on exit; atexit releases the TempDir after tests
-    // and their worker threads have finished, including when a test unwinds.
-    extern "C" fn cleanup() {
-        if let Some(guard) = GUARD.get() {
-            let _ = guard
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .take();
-        }
-    }
-
-    unsafe extern "C" {
-        fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
-    }
-
-    FALLBACK.get_or_init(|| {
-        let dir = tempfile::Builder::new()
-            .prefix("tuic-test-fallback-")
-            .tempdir_in(crate::test_support::test_temp_root())
-            .expect("create test config fallback");
-        let path = dir.path().to_path_buf();
-        GUARD
-            .set(std::sync::Mutex::new(Some(dir)))
-            .expect("initialize test config fallback guard once");
-        assert_eq!(
-            unsafe { atexit(cleanup) },
-            0,
-            "register test config cleanup"
-        );
-        path
-    })
-}
-
-/// The real, platform-derived config directory. Unreachable in a test build —
-/// `config_dir` panics before it gets here — but kept compiled so the migration
-/// it performs cannot rot behind a `cfg`.
+/// The real, platform-derived config directory and its legacy migration.
+/// Test builds use tuic-core's safe test-support resolver instead.
 #[cfg_attr(test, allow(dead_code))]
 fn resolve_real_config_dir() -> PathBuf {
     let platform_dir = dirs::config_dir();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let instance = crate::app_instance::current_app_instance();
-    let new_dir = instance.config_dir_from(platform_dir.as_deref(), &home);
+    let new_dir = tuic_core::config_dir::production_path(platform_dir.as_deref(), &home, &instance);
 
     // Migrate if our config file is missing (the dir may already exist from Tauri's window-state plugin)
     if instance.is_default() && !new_dir.join(APP_CONFIG_FILE).exists() {
