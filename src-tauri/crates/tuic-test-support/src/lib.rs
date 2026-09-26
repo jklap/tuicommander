@@ -1,5 +1,17 @@
 //! Platform-neutral helpers shared by Rust tests.
 
+// Cargo's libtest runner has no per-binary setup hook. This crate is linked
+// only into test binaries, so install their temp root before the harness starts.
+#[ctor::ctor]
+fn install_test_temp_root() {
+    let root = test_temp_root();
+    for key in ["TMPDIR", "TMP", "TEMP"] {
+        // SAFETY: a process constructor runs before main and before libtest
+        // creates its worker threads. No test can read the environment yet.
+        unsafe { std::env::set_var(key, &root) };
+    }
+}
+
 /// Scratch space for Rust tests, overridable by the test runner.
 pub fn test_temp_root() -> std::path::PathBuf {
     let root = std::env::var_os("TUIC_TEST_TMP_ROOT")
