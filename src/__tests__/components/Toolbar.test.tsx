@@ -48,6 +48,7 @@ import { activityStore } from "../../stores/activityStore";
 import { commandPaletteStore } from "../../stores/commandPalette";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { prNotificationsStore } from "../../stores/prNotifications";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { uiStore } from "../../stores/ui";
 
@@ -73,6 +74,7 @@ describe("Toolbar", () => {
 		uiStore.setSidebarVisible(true);
 		prNotificationsStore.clearAll();
 		activityStore.clearAll();
+		progressStore.resetForTests();
 		editorTabsStore.clearAll();
 	});
 
@@ -340,6 +342,42 @@ describe("Toolbar", () => {
 	// Bell (Activity Center) — PR notifications
 	// -------------------------------------------------------------------------
 	describe("PR notification bell", () => {
+		it("keeps Progress available with no unread entries and opens the active repository", () => {
+			repositoriesStore.add({ path: "/repo/progress", displayName: "Progress Repo" });
+			repositoriesStore.setActive("/repo/progress");
+			const { container } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")).toBeNull();
+			fireEvent.click(container.querySelector(".bell")!);
+			const item = Array.from(container.querySelectorAll(".activityItem")).find((node) =>
+				node.textContent?.includes("Terminal Progress"),
+			);
+			expect(item).toBeDefined();
+			expect(item?.textContent).toContain("Open project journal");
+			fireEvent.click(item!);
+			expect(progressStore.dialogVisible()).toBe(true);
+			expect(progressStore.requestedProject()).toBe("/repo/progress");
+		});
+
+		it("keeps the unread badge and count when Progress is available", () => {
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: {
+					entry: { id: 1, project: "/repo", createdAtMs: 1, type: "intent", text: "Starting" },
+				},
+			});
+			const { container } = render(() => <Toolbar />);
+			expect(container.querySelector(".notifCount")?.textContent).toBe("1");
+			fireEvent.click(container.querySelector(".bell")!);
+			expect(container.querySelector(".activityItemSubtitle")?.textContent).toBe("1 new update");
+			progressStore.presentLive({
+				repo_path: "/repo",
+				payload: {
+					entry: { id: 2, project: "/repo", createdAtMs: 2, type: "intent", text: "Continuing" },
+				},
+			});
+			expect(container.querySelector(".notifCount")?.textContent).toBe("2");
+			expect(container.querySelector(".activityItemSubtitle")?.textContent).toBe("2 new updates");
+		});
 		it("bell is always visible even with no notifications", () => {
 			const { container } = render(() => <Toolbar />);
 			expect(container.querySelector(".bell")).not.toBeNull();
@@ -460,7 +498,9 @@ describe("Toolbar", () => {
 			addTestActivityItem({ title: "My Plan" });
 			const { container } = render(() => <Toolbar />);
 			fireEvent.click(container.querySelector(".bell")!);
-			const header = container.querySelector(".sectionLabel");
+			const header = Array.from(container.querySelectorAll(".sectionLabel")).find(
+				(node) => node.textContent === "ACTIVE PLAN",
+			);
 			expect(header?.textContent).toBe("ACTIVE PLAN");
 		});
 
@@ -468,7 +508,9 @@ describe("Toolbar", () => {
 			addTestActivityItem({ title: "My Plan" });
 			const { container } = render(() => <Toolbar />);
 			fireEvent.click(container.querySelector(".bell")!);
-			const title = container.querySelector(".activityItemTitle");
+			const title = Array.from(container.querySelectorAll(".activityItemTitle")).find(
+				(node) => node.textContent === "My Plan",
+			);
 			expect(title?.textContent).toBe("My Plan");
 		});
 
@@ -476,7 +518,10 @@ describe("Toolbar", () => {
 			addTestActivityItem({ title: "My Plan", subtitle: "/repo/plans/foo.md" });
 			const { container } = render(() => <Toolbar />);
 			fireEvent.click(container.querySelector(".bell")!);
-			const subtitle = container.querySelector(".activityItemSubtitle");
+			const item = Array.from(container.querySelectorAll(".activityItem")).find((node) =>
+				node.textContent?.includes("My Plan"),
+			);
+			const subtitle = item?.querySelector(".activityItemSubtitle");
 			expect(subtitle?.textContent).toContain("/repo/plans/foo.md");
 		});
 

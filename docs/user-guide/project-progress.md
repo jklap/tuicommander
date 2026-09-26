@@ -69,8 +69,10 @@ the same label.
 
 ## Reading it
 
-Open the Progress dialog from the command palette (`progress`) or from the
-toolbar bell, which shows how many entries arrived since you last opened it.
+Open the Progress dialog from the command palette (`progress`), with
+`Cmd/Ctrl+Shift+P`, or from **Terminal Progress** in the toolbar bell. The bell
+entry remains available when there are no unread updates; its badge counts
+entries that arrived since you last opened the dialog.
 An outcome toast's **Go to repo** action also opens the reporting terminal
 in its workspace when that terminal is still open. If it has closed, the
 action opens the repository instead.
