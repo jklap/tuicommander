@@ -309,7 +309,7 @@ fn warm_candidates(
             ));
             continue;
         }
-        match copy(&from, &to) {
+        match copy(&from, &to).and_then(|()| restore_owner_write(&to)) {
             Ok(()) => report.warmed += 1,
             Err(reason) => report.warnings.push(format!(
                 "could not warm '{}' in the new worktree, which starts cold there: {reason}",
@@ -318,6 +318,30 @@ fn warm_candidates(
         }
     }
     report
+}
+
+/// A clonefile preserves mode bits. Sealed build evidence is useful in the
+/// new checkout, but its copied directories must remain removable by Git.
+fn restore_owner_write(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            restore_owner_write(&entry.path())?;
+        }
+    }
+    let mut permissions = metadata.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(permissions.mode() | 0o200);
+    }
+    #[cfg(not(unix))]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())
 }
 
 fn ignored_directories(src: &Path) -> Result<Vec<PathBuf>, String> {
@@ -660,6 +684,78 @@ mod tests {
             std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
             "warm"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn warming_unseals_only_the_cloned_evidence_tree() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::write(repo.join(".gitignore"), "build/\ntarget/\n.env\n").unwrap();
+        let source_dir = repo.join("target/macos-system-profiler-exact20/run");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source_file = source_dir.join("evidence.txt");
+        std::fs::write(&source_file, "sealed evidence\n").unwrap();
+        std::fs::set_permissions(&source_file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::set_permissions(&source_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, |from, to| {
+            plain_copy(from, to)?;
+            if from.file_name().is_some_and(|name| name == "target") {
+                let cloned_dir = to.join("macos-system-profiler-exact20/run");
+                std::fs::set_permissions(
+                    cloned_dir.join("evidence.txt"),
+                    std::fs::Permissions::from_mode(0o444),
+                )
+                .map_err(|e| e.to_string())?;
+                std::fs::set_permissions(&cloned_dir, std::fs::Permissions::from_mode(0o555))
+                    .map_err(|e| e.to_string())?;
+                symlink(&source_dir, to.join("outside-link")).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        });
+
+        let cloned_dir = worktree.join("target/macos-system-profiler-exact20/run");
+        let cloned_file = cloned_dir.join("evidence.txt");
+        let writable = [cloned_dir.as_path(), cloned_file.as_path()]
+            .into_iter()
+            .all(|path| {
+                std::fs::symlink_metadata(path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o200
+                    != 0
+            });
+        let source_sealed = std::fs::symlink_metadata(&source_dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+            == 0o555
+            && std::fs::symlink_metadata(&source_file)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+                == 0o444;
+        let bytes_match =
+            std::fs::read(&source_file).unwrap() == std::fs::read(&cloned_file).unwrap();
+        let removed = git_cmd(&repo)
+            .args(["worktree", "remove", "--force", worktree.to_str().unwrap()])
+            .run();
+        if cloned_dir.exists() {
+            std::fs::set_permissions(&cloned_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::set_permissions(&source_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&source_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(report.warnings.is_empty(), "{report:?}");
+        assert!(writable, "cloned evidence must be owner-writable");
+        assert!(source_sealed, "source evidence must stay sealed");
+        assert!(bytes_match, "warming must preserve evidence bytes");
+        assert!(removed.is_ok(), "{removed:?}");
     }
 
     #[test]
