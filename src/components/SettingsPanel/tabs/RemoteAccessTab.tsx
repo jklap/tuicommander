@@ -660,9 +660,10 @@ export const RemoteAccessTab: Component = () => {
 						<>
 							<h3>Tailscale HTTPS</h3>
 							<div class={s.group}>
-								<div class={s.row}>
-									<span class={s.label}>{t("services.label.tailscaleStatus", "Status")}</span>
-									<span class={s.value}>
+								<label>{t("services.label.tailscaleStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={cx(s.mcpStatusDot, ts.state === "Running" && ts.https_enabled && s.running)} />
+									<span class={s.mcpStatusText}>
 										{statusText}
 										<button
 											class={s.inlineBtn}
@@ -710,9 +711,10 @@ export const RemoteAccessTab: Component = () => {
 						<>
 							<h3>{t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}</h3>
 							<div class={s.group}>
-								<div class={s.row}>
-									<span class={s.label}>{t("services.label.selfSignedStatus", "Status")}</span>
-									<span class={s.value}>
+								<label>{t("services.label.selfSignedStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
+									<span class={s.mcpStatusText}>
 										{statusText}
 										<button
 											class={s.inlineBtn}
@@ -739,9 +741,9 @@ export const RemoteAccessTab: Component = () => {
 								</div>
 								<Show when={ss.fingerprint_sha256}>
 									{(fingerprint) => (
-										<div class={s.row}>
-											<span class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</span>
-											<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
+										<div class={s.group}>
+											<label>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
+											<span class={s.mcpStatusText} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
 												{fingerprint()
 													.match(/.{1,2}/g)
 													?.join(":")}

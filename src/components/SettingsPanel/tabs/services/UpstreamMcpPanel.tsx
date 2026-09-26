@@ -5,6 +5,7 @@ import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTrans
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { randomId } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import s from "../../Settings.module.css";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
 
@@ -601,23 +602,26 @@ export const UpstreamMcpPanel: Component = () => {
 										{/* Status dot + label */}
 										<Show when={st()}>
 											{(entry) => (
-												<>
-													<span
-														style={{
-															display: "inline-block",
-															width: "7px",
-															height: "7px",
-															"border-radius": "50%",
-															background: statusColor(entry().status),
-														}}
-														title={statusLabel(entry().status)}
+												<Show
+													when={server.enabled && entry().status !== "disabled"}
+													fallback={
+														<span
+															style={{
+																display: "inline-block",
+																width: "7px",
+																height: "7px",
+																"border-radius": "50%",
+																background: statusColor(entry().status),
+															}}
+															title={statusLabel(entry().status)}
+														/>
+													}
+												>
+													<ConnectionStatusBadge
+														color={statusColor(entry().status)}
+														label={statusLabel(entry().status)}
 													/>
-													<Show when={server.enabled && entry().status !== "disabled"}>
-														<span style={{ "font-size": "11px", color: statusColor(entry().status) }}>
-															{statusLabel(entry().status)}
-														</span>
-													</Show>
-												</>
+												</Show>
 											)}
 										</Show>
 										<Show when={!server.enabled}>

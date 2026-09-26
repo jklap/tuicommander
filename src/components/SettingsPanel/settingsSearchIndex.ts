@@ -618,6 +618,19 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Allow LAN access without authentication",
 		labelKey: "services.toggle.lanAuthBypass",
 	},
+	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
+	{
+		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Status",
+		labelKey: "services.label.selfSignedStatus",
+	},
+	{
+		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Fingerprint",
+		labelKey: "services.label.selfSignedFingerprint",
+	},
 	{
 		tab: "remote-access",
 		section: "Cloud Relay",

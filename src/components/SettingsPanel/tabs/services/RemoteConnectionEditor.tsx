@@ -320,11 +320,11 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 	const AuthFields: Component = () => (
 		<>
 			<div class={s.group}>
-				<label class={s.label}>Auth username (optional)</label>
+				<label>Auth username (optional)</label>
 				<input value={authUsername()} onInput={(e) => setAuthUsername(e.currentTarget.value)} />
 			</div>
 			<div class={s.group}>
-				<label class={s.label}>Auth password (optional)</label>
+				<label>Auth password (optional)</label>
 				<input
 					type="password"
 					value={password()}
@@ -359,12 +359,12 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 		>
 			<div style={{ display: "grid", gap: "8px" }}>
 				<div class={s.group}>
-					<label class={s.label}>Name</label>
+					<label>Name</label>
 					<input value={name()} onInput={(e) => setName(e.currentTarget.value)} />
 				</div>
 
 				<div class={s.group}>
-					<label class={s.label}>Kind</label>
+					<label>Kind</label>
 					<select value={kind()} disabled={isEdit} onChange={(e) => setKind(e.currentTarget.value as ConnectionKind)}>
 						<option value="SshTunnel">SSH Tunnel</option>
 						<option value="RemoteSsh">Remote Server — SSH</option>
@@ -385,7 +385,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				<Show when={kind() === "RemoteSsh"}>
 					<SshConnectionFields value={ssh()} onChange={patchSsh} />
 					<div class={s.group}>
-						<label class={s.label}>Remote daemon port</label>
+						<label>Remote daemon port</label>
 						<input
 							type="number"
 							value={remoteDaemonPort()}
@@ -395,7 +395,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						/>
 					</div>
 					<div class={s.group}>
-						<label class={s.label}>Instance ID (optional)</label>
+						<label>Instance ID (optional)</label>
 						<input
 							placeholder="e.g. dev-box"
 							value={sshInstanceId()}
@@ -429,7 +429,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 
 				<Show when={kind() === "RemoteDirect"}>
 					<div class={s.group}>
-						<label class={s.label}>URL</label>
+						<label>URL</label>
 						<input
 							placeholder="http://192.168.1.100:9877"
 							value={directUrl()}
@@ -452,7 +452,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 
 				<Show when={kind() === "RemoteLocal"}>
 					<div class={s.group}>
-						<label class={s.label}>Target</label>
+						<label>Target</label>
 						<div style={{ display: "flex", gap: "16px", "align-items": "center" }}>
 							<label style={{ display: "flex", gap: "4px", "align-items": "center" }}>
 								<input
@@ -476,7 +476,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</div>
 					<Show when={localMode() === "instance"}>
 						<div class={s.group}>
-							<label class={s.label}>Instance ID</label>
+							<label>Instance ID</label>
 							<input
 								placeholder="e.g. dev-box"
 								value={localInstanceId()}
@@ -486,7 +486,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</Show>
 					<Show when={localMode() === "port"}>
 						<div class={s.group}>
-							<label class={s.label}>Port</label>
+							<label>Port</label>
 							<input
 								type="number"
 								value={localPort()}
