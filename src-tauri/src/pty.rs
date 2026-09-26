@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
@@ -1575,6 +1576,14 @@ struct ChunkProcessor {
     /// Tracks whether the terminal is in alternate screen buffer mode.
     /// Set on ESC[?1049h, cleared on ESC[?1049l.
     pub(crate) in_alt_buffer: bool,
+    /// Mirrors `vt.is_alternate_screen()` (the real parsed `Term::mode()`
+    /// state, backed by `swap_alt()`) — NOT the same signal as
+    /// `in_alt_buffer` above, which scans raw bytes for `1049h`/`1049l` and
+    /// can theoretically desync (a split escape sequence, a `1047`/`47`
+    /// variant). Used only to edge-detect a real alt-screen swap so
+    /// `pending_scroll` can be cleared on the transition — see that field's
+    /// doc comment and the call site in `process_chunk`.
+    last_grid_alt_screen: bool,
     /// Structured terminal mode with nesting depth and app detection.
     terminal_mode: crate::ai_agent::tui_detect::TerminalMode,
     /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
@@ -1732,6 +1741,7 @@ impl ChunkProcessor {
             emitted_planfiles: std::collections::HashSet::new(),
             gaveup_planfiles: std::collections::HashSet::new(),
             in_alt_buffer: false,
+            last_grid_alt_screen: false,
             terminal_mode: crate::ai_agent::tui_detect::TerminalMode::Shell,
             last_vt_log_total: 0,
             alt_screen_warned: false,
@@ -2130,6 +2140,24 @@ impl ChunkProcessor {
                     kitty_pending_jobs,
                 )
             };
+
+            // A wheel/scrollbar gesture computes its target against whichever
+            // grid is active when the gesture fires, but `pending_scroll` is
+            // consumed asynchronously by the frame ticker on its next tick —
+            // if `swap_alt()` (entering/exiting an app's alternate screen,
+            // e.g. launching or quitting Claude Code) lands in between, that
+            // stale target gets clamped against and applied to the NEW grid,
+            // landing the view short of true bottom by whatever the clamp
+            // allows. Clear it on every real alt-screen transition so a
+            // leftover gesture from the old grid is discarded instead of
+            // replayed. Lock-free by design (see `pending_scroll`'s doc
+            // comment) — deliberately done outside the `vt_log` lock above.
+            clear_pending_scroll_on_alt_screen_transition(
+                &state.grid.pending_scroll,
+                session_id,
+                alt_screen,
+                &mut self.last_grid_alt_screen,
+            );
 
             // CPR/DSR/DA1 replies (`device_status`/`identify_terminal` in the
             // alacritty fork's Handler impl) are latency-sensitive: a pager
@@ -5314,6 +5342,83 @@ fn desktop_grid_visible(state: &AppState, session_id: &str) -> bool {
         .channels
         .get(session_id)
         .is_some_and(|ch| ch.visible.load(Ordering::Relaxed))
+}
+
+/// Discard a pending coalesced scroll target on a real alt-screen transition.
+///
+/// `current_alt_screen` is `vt.is_alternate_screen()` for the chunk just
+/// processed; `last_alt_screen` is the caller's own tracking of the previous
+/// chunk's value (updated in place). A target left in `pending_scroll` was
+/// computed against whichever grid was active when the gesture fired — if
+/// `swap_alt()` (`patches/alacritty_terminal`) swaps to a different grid with
+/// its own independent `display_offset`/history before the frame ticker
+/// consumes it, applying that stale target lands the view short of the new
+/// grid's true bottom. See `pending_scroll`'s doc comment in `state.rs`.
+fn clear_pending_scroll_on_alt_screen_transition(
+    pending_scroll: &DashMap<String, Arc<AtomicI64>>,
+    session_id: &str,
+    current_alt_screen: bool,
+    last_alt_screen: &mut bool,
+) {
+    if current_alt_screen != *last_alt_screen {
+        if let Some(slot) = pending_scroll.get(session_id) {
+            slot.store(-1, Ordering::Relaxed);
+        }
+        *last_alt_screen = current_alt_screen;
+    }
+}
+
+#[cfg(test)]
+mod pending_scroll_alt_screen_tests {
+    use super::{AtomicI64, Ordering, clear_pending_scroll_on_alt_screen_transition};
+    use dashmap::DashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn clears_on_transition_into_alt_screen() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(42)));
+        let mut last = false;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", true, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), -1);
+        assert!(last);
+    }
+
+    #[test]
+    fn clears_on_transition_out_of_alt_screen() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(7)));
+        let mut last = true;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", false, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), -1);
+        assert!(!last);
+    }
+
+    #[test]
+    fn leaves_pending_target_alone_when_state_is_unchanged() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(99)));
+        let mut last = true;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", true, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), 99);
+        assert!(last);
+    }
+
+    #[test]
+    fn missing_session_never_panics() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        let mut last = false;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "does-not-exist", true, &mut last);
+
+        assert!(last);
+    }
 }
 
 /// Is anyone waiting for this session's grid frames?
