@@ -671,7 +671,7 @@ say what was measured, not what the list costs today.
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
-| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list | Enabled |
+| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -1070,6 +1070,18 @@ When `delete_branch=true` and safe branch
 deletion fails after a linked worktree is removed, the action still succeeds
 with `branch_delete_warning` populated so clients can report that the worktree
 was removed but the branch was kept.
+
+### MCP Tool: `repo` — Local Branch Delete
+
+`repo action=branch_delete` takes `path` and `branch` and returns
+`{ "ok": true, "proof": "..." }` on success. It deletes only the local branch
+ref; it does not remove a worktree or touch a remote ref. The branch must be
+absent from every checkout and must not be the current integration or default
+branch. The same ancestry and merged-PR checks as worktree removal apply; if
+those fail, patch equivalence against the current integration branch can prove
+a squash-merged branch safe. Merge commits without ancestry or PR proof are
+refused because patch comparison cannot cover their resolution. The final
+delete compares the ref against the proved tip and refuses a moved ref.
 
 ## Upstream MCP Proxy
 

@@ -374,14 +374,20 @@ new worktree.
 
 After `git worktree add`, TUICommander warms Git-ignored directories such as
 `node_modules`, `target`, and `.venv` with copy-on-write filesystem copies.
-Ignored files are never copied, and tracked files remain Git's responsibility.
+Only selected ignored build directories are copied; tracked files remain Git's responsibility.
 The capability probe and copy primitive share the same clonefile/reflink flags;
 unsupported filesystems produce one cold-worktree warning rather than one per
 directory. Warming is best-effort and never invalidates an otherwise complete
-worktree.
+worktree. After cloning, owner write permission is restored on the copies in
+the new worktree, without following symlinks or changing the source checkout.
 
 Lifecycle state is one backend verdict keyed by workspace id: working-tree
 dirtiness, whether `HEAD` is merged into the default branch, and removal safety.
+Merged GitHub PR state can also prove a squash-merged branch safe when its local
+tip is contained in the PR head; ancestry in the checked-out integration branch
+is sufficient even when the remote default branch has not advanced. The MCP
+`repo branch_delete` action applies the same proof to a local branch with no
+worktree, and refuses current, default, checked-out, or unmerged branches.
 Any inspection failure is `Unknown` and cannot authorize removal. Destructive
 UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
 confirmation cannot authorize changed state.
