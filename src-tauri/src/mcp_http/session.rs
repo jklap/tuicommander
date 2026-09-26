@@ -651,6 +651,26 @@ pub(super) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    // portable-pty can report a successful spawn even when the child fails to
+    // enter its requested directory. Reject that request before registering a
+    // session that would otherwise render as an empty terminal.
+    if let Some(ref dir) = cwd {
+        let expanded = crate::cli::expand_tilde(dir);
+        let metadata = std::fs::metadata(&expanded).map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Working directory {expanded:?} is unavailable: {error}")})),
+            )
+        })?;
+        if !metadata.is_dir() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": format!("Working directory {expanded:?} is not a directory")}),
+                ),
+            ));
+        }
+    }
     // Honor a client-provided id when it is non-empty and not already taken
     // (browser duplicate-tab fix); otherwise mint a fresh one.
     let session_id = match requested.session_id {
@@ -2184,6 +2204,73 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: a remote PTY spawn error is swallowed before the HTTP response.
+    #[tokio::test]
+    async fn remote_create_session_reports_missing_cwd_over_http() {
+        let state = super::super::tests::test_state();
+        let missing = state
+            .data_dir
+            .join(format!("missing-cwd-{}", Uuid::new_v4()));
+        let app = super::super::build_router(state.clone(), false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind isolated test server");
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/sessions"))
+            .json(&serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "shell": tuic_test_support::host_shell().0,
+                "cwd": missing.to_string_lossy(),
+            }))
+            .send()
+            .await
+            .expect("test server answers");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("Working directory"))
+        );
+        assert!(
+            state.session_maps.sessions.is_empty(),
+            "a rejected cwd must not register a PTY"
+        );
+
+        let regular_file = state.data_dir.join(format!("file-cwd-{}", Uuid::new_v4()));
+        std::fs::write(&regular_file, b"file").unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/sessions"))
+            .json(&serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "shell": tuic_test_support::host_shell().0,
+                "cwd": regular_file.to_string_lossy(),
+            }))
+            .send()
+            .await
+            .expect("test server answers");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("not a directory"))
+        );
+        assert!(state.session_maps.sessions.is_empty());
+        server.abort();
+    }
 
     /// One WebSocket handshake, start to finish, against a real socket.
     ///

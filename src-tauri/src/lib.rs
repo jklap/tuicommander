@@ -2109,6 +2109,7 @@ pub fn run() {
             fs::resolve_terminal_paths,
             fs::resolve_markdown_link,
             fs::list_directory,
+            fs::get_home_directory,
             fs::stat_path,
             fs::search_files,
             fs::warm_content_index,

@@ -2289,7 +2289,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 24.5 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge
+- Remote repository browsing starts at the remote host's reported home directory and exposes directory permission errors without blocking manual path entry
 - Terminals on remote repos route WebSocket I/O through the connection's base URL
+- A terminal launch failure is shown in its pane, and a failed grid stream shows an error toast; the remote session owner is registered before the stream attaches
 - **One choke point decides the machine.** `resolveOwningConnection` (`transportRuntime.ts`) reads the call's own arguments — a session id first, then a repository path — and answers which connection owns it. Both entry points ask it: `rpc()` for the HTTP transport and `invoke()` for the desktop IPC path, which would otherwise short-circuit straight to the local backend. A call site cannot forget to route, because it never routes
 - Path→connection resolution reuses `resolveRepoPathFor` (deepest registered repo or linked worktree wins); session→connection goes through the terminal's `repoPath`, falling back to its `cwd` while ownership reconciliation has not run yet
 - A command with no HTTP route (`INTENTIONALLY_UNMAPPED`) stays local and warns once — routing it would replace a working call with a throw
