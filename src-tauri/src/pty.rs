@@ -13221,7 +13221,7 @@ fn clear_pending_scroll_on_alt_screen_transition(
 
 #[cfg(test)]
 mod pending_scroll_alt_screen_tests {
-    use super::{clear_pending_scroll_on_alt_screen_transition, AtomicI64, Ordering};
+    use super::{AtomicI64, Ordering, clear_pending_scroll_on_alt_screen_transition};
     use dashmap::DashMap;
     use std::sync::Arc;
 
