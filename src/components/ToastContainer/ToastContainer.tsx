@@ -60,10 +60,18 @@ function toastRepoAction(toast: Toast): RepoAction | null {
 					appLogger.warn("app", "Go to repo: the repository is no longer registered", { repoPath });
 					return false;
 				}
+				if (toast.sessionId) {
+					const terminalId = terminalsStore.findBySessionId(toast.sessionId);
+					if (terminalId) {
+						navigateToTerminal(terminalId);
+						return true;
+					}
+					appLogger.warn("app", "Go to repo: the originating terminal is no longer open", {
+						repoPath,
+						sessionId: toast.sessionId,
+					});
+				}
 				repositoriesStore.setActive(repoPath);
-				if (!toast.sessionId) return true;
-				const terminalId = terminalsStore.findBySessionId(toast.sessionId);
-				if (terminalId) navigateToTerminal(terminalId);
 				return true;
 			},
 		};
