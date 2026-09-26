@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 portable-pty = "0.9"
+ctor = "0.8"
 
 [lints]
 workspace = true
