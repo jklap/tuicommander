@@ -712,6 +712,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Stale candidate clearing: candidates that fail screen verification are purged so the same question can re-fire in a future agent cycle
 - Echo suppression: user-typed input echoed by PTY is ignored for 500ms to prevent false question detection
 - `extract_question_line()` scans all changed rows (not just the last) for question text, applied in both normal and headless reader threads
+- Wrapped `suggest: [ … ]` items remain follow-up actions even when an item contains `?`; they cannot set the question state.
 - Question state auto-clears when a `status-line` event fires (agent is actively working, so it's no longer awaiting input)
 
 ### 6.5 Usage Limit Detection

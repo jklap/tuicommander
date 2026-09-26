@@ -12,6 +12,10 @@
 
 # To Test
 
+## Claude question state after wrapped suggestions (story 1023-dcc9) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, run a Claude turn that ends in a wrapped `suggest: [ … ]` item containing `?`. Confirm the idle tab does not show a question badge. A real AskUserQuestion must still show one. The existing live backend cannot load this Rust change without a restart.
+
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart.
