@@ -16,6 +16,10 @@
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, inspect a clean squash-merged worktree whose local tip is contained in its merged GitHub PR head. Confirm the lifecycle badge says Merged and removal with branch deletion succeeds. Check that a branch contained in the main checkout's current integration branch also removes when the remote default branch is behind. A read-only ignored build tree should arrive writable only in the new worktree and should not block removal. The current live backend cannot load this Rust change without a restart.
 
+## MCP local branch deletion (story 1033-1796) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use MCP `repo action=branch_delete` on an integrated local branch with no worktree. Confirm only the local ref disappears; a checked-out or unmerged branch must be refused. The current live backend cannot load this Rust action without a restart.
+
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart.

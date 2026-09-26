@@ -1096,7 +1096,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, progress_list";
+const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1171,10 +1171,10 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- ci_logs: Fetch bounded, terminal-safe failed CI logs for a branch. Requires path and branch.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and workspace_id.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- ci_logs: Fetch bounded, terminal-safe failed CI logs for a branch. Requires path and branch.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and workspace_id.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, progress_list" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove)" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete)" },
                 "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
@@ -1182,7 +1182,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
-                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
+                "branch": { "type": "string", "description": "Local branch name (required for action=branch_delete; optional for worktree_create)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
                 "input": { "type": "object", "description": "Typed action payload for progress_list. Unknown fields are rejected." }
@@ -3623,6 +3623,29 @@ async fn handle_worktree(
                 Err(e) => serde_json::json!({
                     "error": format!("worktree removal task failed to complete: {e}")
                 }),
+            }
+        }
+        "branch_delete" => {
+            let path = match require_path(args, "branch_delete") {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let Some(branch) = args["branch"].as_str().map(str::to_owned) else {
+                return serde_json::json!({"error":"Action 'branch_delete' requires 'branch' parameter"});
+            };
+            match tokio::task::spawn_blocking(move || {
+                crate::worktree::delete_integrated_local_branch(&path, &branch)
+            })
+            .await
+            {
+                Ok(Ok(proof)) => serde_json::json!({"ok":true,"proof":proof}),
+                Ok(Err(error)) => serde_json::json!({"error":error}),
+                Err(error) => {
+                    serde_json::json!({"error":format!("branch deletion task failed: {error}")})
+                }
             }
         }
         other => serde_json::json!({"error": format!(
@@ -6774,9 +6797,8 @@ async fn handle_repo(
         "prs" | "status" | "ci_logs" | "issues" | "close_issue" | "reopen_issue" => {
             handle_github(state, args).await
         }
-        "worktree_list" | "worktree_lifecycle" | "worktree_create" | "worktree_remove" => {
-            handle_worktree(state, args, is_claude_code).await
-        }
+        "worktree_list" | "worktree_lifecycle" | "worktree_create" | "worktree_remove"
+        | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
         "progress_list" => {
             let path = match require_path(args, action) {
                 Ok(path) => path,
@@ -8039,6 +8061,153 @@ mod tests {
             "patch_equivalence",
         );
         assert_eq!(warned["branch_delete_warning"], "branch retained");
+    }
+
+    fn branch_delete_fixture() -> (tempfile::TempDir, std::path::PathBuf, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["init"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "base"]);
+        git(&["branch", "-M", "main"]);
+        let base = crate::git_cli::git_cmd(&repo)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        git(&["checkout", "-b", "integration"]);
+        (temp, repo, base)
+    }
+
+    fn branch_delete_commit(repo: &std::path::Path, file: &str, content: &str) {
+        std::fs::write(repo.join(file), content).unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", file])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-m", file])
+            .run()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn mcp_branch_delete_accepts_integrated_refs_despite_stale_upstream_or_squash() {
+        let (_temp, repo, base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "stale-upstream"]);
+        branch_delete_commit(&repo, "merged.txt", "merged on integration\n");
+        git(&["checkout", "integration"]);
+        git(&["merge", "--no-ff", "stale-upstream", "--no-edit"]);
+        git(&["update-ref", "refs/remotes/origin/stale-upstream", &base]);
+        git(&["config", "branch.stale-upstream.remote", "origin"]);
+        git(&[
+            "config",
+            "branch.stale-upstream.merge",
+            "refs/heads/stale-upstream",
+        ]);
+        let upstream_tip = crate::git_cli::git_cmd(&repo)
+            .args(["rev-parse", "refs/remotes/origin/stale-upstream"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert_eq!(upstream_tip.trim(), base, "upstream must be stale");
+
+        git(&["checkout", "-b", "squashed"]);
+        branch_delete_commit(&repo, "squash.txt", "same final patch\n");
+        git(&["checkout", "integration"]);
+        branch_delete_commit(&repo, "squash.txt", "same final patch\n");
+
+        let state = test_state();
+        let path = repo.to_string_lossy();
+        let ancestor = handle_repo(
+            &state,
+            &serde_json::json!({"action":"branch_delete","path":path,"branch":"stale-upstream"}),
+            false,
+        )
+        .await;
+        let squash = handle_repo(
+            &state,
+            &serde_json::json!({"action":"branch_delete","path":path,"branch":"squashed"}),
+            false,
+        )
+        .await;
+
+        assert_eq!(ancestor["ok"], true, "{ancestor}");
+        assert_eq!(ancestor["proof"], "integration_ancestry", "{ancestor}");
+        assert_eq!(squash["ok"], true, "{squash}");
+        assert_eq!(squash["proof"], "patch_equivalence", "{squash}");
+        for branch in ["stale-upstream", "squashed"] {
+            assert!(
+                crate::git_cli::git_cmd(&repo)
+                    .args(["show-ref", "--verify", &format!("refs/heads/{branch}")])
+                    .run_silent()
+                    .is_none(),
+                "local {branch} must be gone"
+            );
+        }
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/remotes/origin/stale-upstream"])
+                .run()
+                .is_ok(),
+            "the remote-tracking ref must remain untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_branch_delete_refuses_unique_checked_out_current_and_missing_branches() {
+        let (temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "unique"]);
+        branch_delete_commit(&repo, "unique.txt", "not integrated\n");
+        git(&["checkout", "integration"]);
+        git(&["branch", "checked-out"]);
+        let linked = temp.path().join("linked");
+        git(&["worktree", "add", linked.to_str().unwrap(), "checked-out"]);
+
+        let state = test_state();
+        let path = repo.to_string_lossy();
+        let cases = [
+            ("unique", "unmerged"),
+            ("checked-out", "checked out"),
+            ("integration", "current"),
+            ("main", "default"),
+            ("missing", "does not exist"),
+            ("../HEAD", "invalid"),
+        ];
+        let mut failures = Vec::new();
+        for (branch, reason) in cases {
+            let response = handle_repo(
+                &state,
+                &serde_json::json!({"action":"branch_delete","path":path,"branch":branch}),
+                false,
+            )
+            .await;
+            if !response["error"]
+                .as_str()
+                .is_some_and(|error| error.to_lowercase().contains(reason))
+            {
+                failures.push(format!("{branch}: expected {reason:?}, got {response}"));
+            }
+            assert!(
+                crate::git_cli::git_cmd(&repo)
+                    .args(["show-ref", "--verify", &format!("refs/heads/{branch}")])
+                    .run_silent()
+                    .is_some()
+                    || matches!(branch, "missing" | "../HEAD"),
+                "ref {branch} must be retained"
+            );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("; "));
+        assert!(linked.exists(), "a checked-out worktree must remain");
     }
 
     #[tokio::test]

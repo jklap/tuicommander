@@ -10,6 +10,8 @@ merged PRs for the worktree branch and accepts one only when its recorded head
 contains the local tip. Missing heads are fetched from `refs/pull/N/head` and
 checked against the API SHA before ancestry is trusted. An API/auth/fetch
 failure leaves the branch unproved; patch-equivalence remains a local fallback.
+The MCP local-branch deletion action uses the same merged-PR evidence when a
+branch has no worktree.
 
 ## Multi-Account Model (`github_account.rs`)
 

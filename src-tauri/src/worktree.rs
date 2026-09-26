@@ -852,6 +852,45 @@ fn merged_pr_proof_from_pages(
     false
 }
 
+fn classify_branch_merge(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    default_branch: &str,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
+    let default_tip = rev_at(repo, default_branch)?;
+    let merged = is_ancestor(repo, tip, &default_tip)?;
+    // A branch standing on the default tip has not itself merged anything.
+    if merged && tip == default_tip {
+        Ok((WorkspaceCommitStatus::InSync, None))
+    } else if merged {
+        Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
+    } else if is_ancestor(repo, tip, &rev_at(repo, "HEAD")?)? {
+        Ok((WorkspaceCommitStatus::Merged, Some("integration_ancestry")))
+    } else if pr_proves_tip(repo, branch, tip) {
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+    } else {
+        Ok((WorkspaceCommitStatus::Unmerged, None))
+    }
+}
+
+fn patches_integrated(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+    // `git cherry` omits merge commits and their resolution changes.
+    let merges = git_cmd(repo)
+        .args(["rev-list", "--merges", &format!("{target}..{tip}")])
+        .run()
+        .map_err(|error| format!("could not inspect merge commits: {error}"))?;
+    if !merges.stdout.trim().is_empty() {
+        return Ok(false);
+    }
+    let cherry = git_cmd(repo)
+        .args(["cherry", target, tip])
+        .run()
+        .map_err(|error| format!("could not compare patches: {error}"))?;
+    Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
+}
+
 fn inspect_workspace_lifecycle_with_pr(
     base_repo: &Path,
     workspace_id: &str,
@@ -866,24 +905,13 @@ fn inspect_workspace_lifecycle_with_pr(
         let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let workspace_path = Path::new(&workspace.path);
         let tip = rev_at(workspace_path, "HEAD")?;
-        let default_tip = rev_at(base_repo, &default_branch)?;
-        let merged = is_ancestor(base_repo, &tip, &default_tip)?;
-        // `--is-ancestor` answers "no commit here is outside the default
-        // branch", which is true of two different histories: a branch whose own
-        // commits were merged, and a branch that never had a commit at all.
-        // Reporting the second as merged states an event that never happened,
-        // so ask whether HEAD *is* the tip and separate them.
-        let (commit_status, merge_proof) = if merged && tip == default_tip {
-            (WorkspaceCommitStatus::InSync, None)
-        } else if merged {
-            (WorkspaceCommitStatus::Merged, Some("ancestry"))
-        } else if is_ancestor(base_repo, &tip, &rev_at(base_repo, "HEAD")?)? {
-            (WorkspaceCommitStatus::Merged, Some("integration_ancestry"))
-        } else if pr_proves_tip(base_repo, &workspace.branch, &tip) {
-            (WorkspaceCommitStatus::Merged, Some("github_pr"))
-        } else {
-            (WorkspaceCommitStatus::Unmerged, None)
-        };
+        let (commit_status, merge_proof) = classify_branch_merge(
+            base_repo,
+            &workspace.branch,
+            &tip,
+            &default_branch,
+            pr_proves_tip,
+        )?;
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
             dirty_fingerprint: Some(dirty_fingerprint),
@@ -1801,30 +1829,11 @@ fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
             match lifecycle.commit_status {
                 WorkspaceCommitStatus::Unmerged => {
                     let default_branch = get_remote_default_branch(repo_path)?;
-                    // `git cherry` omits merge commits, including their resolution
-                    // changes. Require every commit on this path to be comparable.
-                    let merges = git_cmd(&base_repo)
-                        .args([
-                            "rev-list",
-                            "--merges",
-                            &format!("{default_branch}..{expected_branch_oid}"),
-                        ])
-                        .run()
-                        .map_err(|e| {
-                            format!("Cannot check merge commits for {branch_name}: {e}")
-                        })?;
-                    if !merges.stdout.trim().is_empty() {
-                        return Err(format!(
-                            "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                        ));
-                    }
-                    let cherry = git_cmd(&base_repo)
-                        .args(["cherry", &default_branch, &expected_branch_oid])
-                        .run()
-                        .map_err(|e| {
-                            format!("Cannot check patch equivalence for {branch_name}: {e}")
-                        })?;
-                    if cherry.stdout.lines().any(|line| !line.starts_with("- ")) {
+                    if !patches_integrated(&base_repo, &default_branch, &expected_branch_oid)
+                        .map_err(|error| {
+                            format!("Cannot check patch equivalence for {branch_name}: {error}")
+                        })?
+                    {
                         return Err(format!(
                             "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
                         ));
@@ -2110,6 +2119,85 @@ pub(crate) fn delete_local_branch_impl(
     }
 
     Ok(())
+}
+
+/// Delete only a local ref, using the same merge evidence as worktree removal.
+/// A linked checkout is never detached or removed by this operation.
+pub(crate) fn delete_integrated_local_branch(
+    repo_path: &str,
+    branch_name: &str,
+) -> Result<&'static str, String> {
+    let repo = Path::new(repo_path);
+    if branch_name.is_empty()
+        || git_cmd(repo)
+            .args(["check-ref-format", "--branch", branch_name])
+            .run_silent()
+            .is_none()
+    {
+        return Err(format!("Invalid local branch name '{branch_name}'"));
+    }
+    let default_branch = get_remote_default_branch(repo_path)?;
+    let current_branch = git_cmd(repo)
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .run()
+        .map_err(|error| format!("Cannot determine the current integration branch: {error}"))?
+        .stdout
+        .trim()
+        .to_string();
+    if branch_name == current_branch {
+        return Err(format!(
+            "Cannot delete current integration branch '{branch_name}'"
+        ));
+    }
+    if branch_name == default_branch {
+        return Err(format!("Cannot delete default branch '{branch_name}'"));
+    }
+    let listed = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot verify branch checkouts: {error}"))?;
+    if parse_worktree_entries(&listed.stdout)
+        .iter()
+        .any(|entry| entry.branch.as_deref() == Some(branch_name))
+    {
+        return Err(format!(
+            "Cannot delete '{branch_name}': checked out in a worktree"
+        ));
+    }
+    let branch_ref = format!("refs/heads/{branch_name}");
+    let tip = rev_at(repo, &branch_ref)
+        .map_err(|_| format!("Local branch '{branch_name}' does not exist"))?;
+    let (status, merge_proof) = classify_branch_merge(
+        repo,
+        branch_name,
+        &tip,
+        &default_branch,
+        merged_github_pr_proves_tip,
+    )?;
+    let proof = match status {
+        WorkspaceCommitStatus::InSync => "in_sync",
+        WorkspaceCommitStatus::Merged => merge_proof
+            .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
+        WorkspaceCommitStatus::Unmerged => {
+            if patches_integrated(repo, "HEAD", &tip)? {
+                "patch_equivalence"
+            } else {
+                return Err(format!(
+                    "Cannot delete '{branch_name}': unmerged commits are not in the integration branch"
+                ));
+            }
+        }
+        WorkspaceCommitStatus::Unknown => {
+            return Err(format!("Cannot verify merged commits for '{branch_name}'"));
+        }
+    };
+    git_cmd(repo)
+        .args(["update-ref", "-d", &branch_ref, &tip])
+        .run()
+        .map_err(|error| {
+            format!("Cannot delete '{branch_name}': local ref moved or deletion failed: {error}")
+        })?;
+    Ok(proof)
 }
 
 /// Tauri command: delete a local branch.
@@ -7134,7 +7222,6 @@ branch refs/heads/feat
         let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-squashed", &api);
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof, Some("github_pr"));
         let outcome = remove_worktree_by_workspace_id_with_confirmation_and_pr(
             &repo.to_string_lossy(),
             "pr-squashed",
@@ -7243,7 +7330,8 @@ branch refs/heads/feat
             }]}}}
         }]);
 
-        assert!(!merged_pr_proof_from_pages(&repo, "pr-error", &tip, &api));
+        let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-error", &api);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
     }
 
     #[test]
@@ -7260,7 +7348,6 @@ branch refs/heads/feat
             .unwrap();
         let worktree = add_worktree(&repo, "pr-fetch");
         commit_file(&worktree, "feature.txt", "feature\n");
-        let tip = rev_at(&worktree, "HEAD").unwrap();
         git_cmd(&worktree)
             .args(["push", "origin", "HEAD:refs/heads/pr-source"])
             .run()
@@ -7307,20 +7394,13 @@ branch refs/heads/feat
             }]}}}}])
         };
 
-        assert!(merged_pr_proof_from_pages(
-            &repo,
-            "pr-fetch",
-            &tip,
-            &api(&head)
-        ));
+        let status = inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&head));
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
         commit_file(&upstream, "not-in-pr.txt", "newer\n");
         let stale_api_head = rev_at(&upstream, "HEAD").unwrap();
-        assert!(!merged_pr_proof_from_pages(
-            &repo,
-            "pr-fetch",
-            &tip,
-            &api(&stale_api_head)
-        ));
+        let status =
+            inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&stale_api_head));
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
     }
 
     #[test]

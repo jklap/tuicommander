@@ -174,6 +174,13 @@ An open or closed unmerged PR, or a PR head behind the local tip, is insufficien
 Turning off **Delete branch on remove** keeps the branch without needing merge
 proof, while the clean-checkout and lock checks still apply.
 
+For a local branch that has no worktree, agents can use MCP
+`repo action=branch_delete` with the repository path and branch name. It
+deletes only the local ref after proving its commits are in the checked-out
+integration branch, including equivalent patches from a squash merge. A
+checked-out, current, default, unmerged, or changed branch is kept; no remote
+branch is deleted.
+
 ## Worktree Manager Panel
 
 Open the Worktree Manager with `Cmd+Shift+W` (or via the Command Palette → "Worktree Manager"). It shows a unified view of all worktrees across your repositories.
