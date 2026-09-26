@@ -773,6 +773,46 @@ pub(super) async fn get_remote_connection_statuses(
     super::json_result(Ok::<_, String>(state.remote.snapshot()))
 }
 
+pub(super) async fn get_remote_update_preview(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(crate::remote_update::prepare(&state, &id).await)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RemoteUpdateRequest {
+    confirmed_sessions: usize,
+    expected_sha256: String,
+}
+
+pub(super) async fn post_remote_update(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<RemoteUpdateRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::remote_update::update_and_restart(
+            &state,
+            &id,
+            request.confirmed_sessions,
+            &request.expected_sha256,
+        )
+        .await,
+    )
+}
+
 /// Bring a remote connection up. The upstream failures — unreachable daemon,
 /// rejected password, tunnel that never came up — answer 502, as every call that
 /// leaves this machine does.

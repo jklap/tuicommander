@@ -2,6 +2,7 @@
 struct ParsedArgs {
     instance: Option<String>,
     set_password: bool,
+    build_info: bool,
     remote: tuicommander_lib::RemoteOptions,
 }
 
@@ -13,9 +14,12 @@ where
 {
     let mut instance = None;
     let mut set_password = false;
+    let mut build_info = false;
     let mut bind_seen = false;
     let mut survive_seen = false;
     let mut no_agent_configs_seen = false;
+    let mut supervised_seen = false;
+    let mut wait_for_restart_seen = false;
     let mut remote = tuicommander_lib::RemoteOptions::default();
     let mut args = args.into_iter().map(Into::into);
     while let Some(arg) = args.next() {
@@ -35,6 +39,12 @@ where
                     anyhow::bail!("--set-password may only be specified once");
                 }
                 set_password = true;
+            }
+            "--build-info" => {
+                if build_info {
+                    anyhow::bail!("--build-info may only be specified once");
+                }
+                build_info = true;
             }
             "--bind" => {
                 if bind_seen {
@@ -70,6 +80,20 @@ where
                 no_agent_configs_seen = true;
                 remote.agent_configs = false;
             }
+            "--supervised" => {
+                if supervised_seen {
+                    anyhow::bail!("--supervised may only be specified once");
+                }
+                supervised_seen = true;
+                remote.supervised = true;
+            }
+            "--wait-for-restart" => {
+                if wait_for_restart_seen {
+                    anyhow::bail!("--wait-for-restart may only be specified once");
+                }
+                wait_for_restart_seen = true;
+                remote.wait_for_restart = true;
+            }
             _ => anyhow::bail!("Unknown argument: {arg}"),
         }
     }
@@ -77,6 +101,7 @@ where
     Ok(ParsedArgs {
         instance,
         set_password,
+        build_info,
         remote,
     })
 }
@@ -93,6 +118,14 @@ fn take_pairing_token() -> Option<String> {
 #[cfg(not(feature = "desktop"))]
 fn main() -> anyhow::Result<()> {
     let mut parsed = parse_args(std::env::args().skip(1))?;
+
+    if parsed.build_info {
+        println!(
+            "{}",
+            tuicommander_lib::remote_build_info_json().map_err(anyhow::Error::msg)?
+        );
+        return Ok(());
+    }
 
     tuicommander_lib::app_instance::select_app_instance(parsed.instance.as_deref())
         .map_err(anyhow::Error::msg)?;
@@ -146,6 +179,27 @@ mod tests {
         assert_eq!(parsed.remote.bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(parsed.remote.survive_secs, Some(1800));
         assert!(!parsed.remote.agent_configs);
+    }
+
+    #[test]
+    fn remote_restart_flags_are_accepted_together() {
+        let parsed = parse_args(["--supervised", "--wait-for-restart"]);
+        assert!(
+            parsed.is_ok(),
+            "restart flags must survive a daemon relaunch"
+        );
+    }
+
+    #[test]
+    fn build_info_flag_is_read_only_and_rejects_duplicates() {
+        let parsed = parse_args(["--build-info"]).expect("build identity query");
+        assert!(parsed.build_info);
+        assert!(parse_args(["--build-info", "--build-info"]).is_err());
+        let identity: serde_json::Value =
+            serde_json::from_str(&tuicommander_lib::remote_build_info_json().unwrap()).unwrap();
+        assert_eq!(identity["target"], env!("TUIC_TARGET_TRIPLE"));
+        assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(identity["sha256"].as_str().unwrap().len(), 64);
     }
 
     #[test]

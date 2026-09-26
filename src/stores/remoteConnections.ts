@@ -50,6 +50,7 @@ export interface ConnectionState {
 	status: ConnectionStatus;
 	baseUrl?: string;
 	protocolVersion?: number;
+	outOfDate?: boolean;
 	error?: string;
 	deployStep?: string;
 }
@@ -61,6 +62,7 @@ interface RemoteConnectionStatusPayload {
 	base_url?: string;
 	token?: string;
 	protocol_version?: number;
+	out_of_date?: boolean;
 	error?: string;
 	step?: string;
 }
@@ -68,6 +70,20 @@ interface RemoteConnectionStatusPayload {
 interface RemoteConnectionsState {
 	connections: Record<string, ConnectionState>;
 	hydrated: boolean;
+}
+
+export interface RemoteBuildIdentity {
+	version: string;
+	target: string;
+	sha256: string;
+}
+
+export interface RemoteUpdatePreview {
+	remote_build: RemoteBuildIdentity | null;
+	desktop_build: RemoteBuildIdentity;
+	source: "release" | "local";
+	session_count: number;
+	out_of_date: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +160,7 @@ function createRemoteConnectionsStore() {
 			status: payload.status,
 			baseUrl: payload.base_url,
 			protocolVersion: payload.protocol_version,
+			outOfDate: payload.out_of_date,
 			error: payload.error,
 			deployStep: payload.step,
 		});
@@ -221,6 +238,14 @@ function createRemoteConnectionsStore() {
 			if (!state.connections[id]) return;
 			remoteTokens.delete(id);
 			await invoke("disconnect_remote_connection", { id });
+		},
+
+		async prepareUpdate(id: string): Promise<RemoteUpdatePreview> {
+			return await invoke<RemoteUpdatePreview>("prepare_remote_update", { id });
+		},
+
+		async updateAndRestart(id: string, confirmedSessions: number, expectedSha256: string): Promise<void> {
+			await invoke("update_and_restart_remote", { id, confirmedSessions, expectedSha256 });
 		},
 
 		async install(id: string): Promise<void> {

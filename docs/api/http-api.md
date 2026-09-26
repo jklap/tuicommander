@@ -1260,6 +1260,8 @@ GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
 POST   /config/remote-connections/{id}/install
 DELETE /config/remote-connections/{id}/install
+GET    /config/remote-connections/{id}/update
+POST   /config/remote-connections/{id}/update
 ```
 
 The configured remote machines and their vault password. The password is write
@@ -1273,6 +1275,17 @@ binary, installs and starts a systemd user unit or launchd agent, and persists
 `deploy = "installed"`. `DELETE .../install` stops and removes the service
 files and persists `deploy = "on_connect"`. Pairing tokens stay in the credential
 vault; neither response nor the connection document contains them.
+
+`GET .../update` previews the selected daemon binary: `remote_build`,
+`desktop_build` (version, target triple, SHA-256), `source` (`release` or
+`local`), `session_count`, and `out_of_date`. The release asset is preferred;
+when it is absent, a locally built sibling `tuic-remote` is accepted only for
+the same target triple. `POST .../update` takes
+`{ "confirmedSessions": N, "expectedSha256": "..." }`. A changed count or
+binary after confirmation is rejected. Direct connections upload over the
+authenticated daemon route; SSH connections use the existing SCP deployment.
+The call returns after `/health` reports the new SHA-256, or an error if the
+restart cannot be verified. Live remote PTY sessions are lost.
 
 `DELETE /config/remote-connections/{id}` tears the live connection down before it
 rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
@@ -1290,7 +1303,7 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, error?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error?, step? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
@@ -1478,13 +1491,22 @@ not expose a Gemini account-usage route.
 GET /health
 ```
 
-Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "socket_path"?: "...", "instance_id": "<uuid>", "survive_secs"?: N }`.
+Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "build": { "version": "...", "target": "...", "sha256": "..." }, "socket_path"?: "...", "instance_id": "<uuid>", "survive_secs"?: N }`.
 
 The one route served without a credential. `instance_id` identifies the running
 **process** (minted at startup, not derived from the instance id or the config
 directory): a remote connection compares it against its own before mirroring and
 refuses a base URL that resolves back to itself. A daemon that omits the field is
 older than the check and still connects.
+
+The daemon hashes its running executable once at startup, so `build.sha256`
+identifies the process that answered even after an update stages a new file.
+`POST /remote/update` exists only on the daemon router. It needs the same
+session token as PTY access and the `x-tuic-target`, `x-tuic-sha256`, and
+`x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
+daemon executable's own directory, verifies the hash and current session
+count, and atomically promotes the file before restarting. Windows currently
+returns 501 because a running executable cannot be replaced there.
 
 `survive_secs` is present when `tuic-remote` was launched with an idle lifetime.
 Desktop-managed SSH deployment sets the vault pairing token as this daemon's

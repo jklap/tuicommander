@@ -85,6 +85,7 @@
 /config/remote-connections/x/install
 /config/remote-connections/x/password
 /config/remote-connections/x/token
+/config/remote-connections/x/update
 /config/repo-defaults
 /config/repo-local-config
 /config/repo-settings
