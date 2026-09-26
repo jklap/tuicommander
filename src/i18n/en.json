@@ -917,6 +917,7 @@
 	"taskQueue.title": "Task Queue",
 	"terminal.exited.hint": "The process exited and its output was released. Close this tab to remove it.",
 	"terminal.exited.title": "Session ended",
+	"terminal.spawnFailed": "Terminal could not start",
 	"stories.abandoned": "abandoned",
 	"stories.addDependency": "Add dependency",
 	"stories.allCancelled": "All cancelled",
