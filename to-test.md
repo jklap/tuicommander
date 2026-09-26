@@ -8,6 +8,26 @@
 
 # To Test
 
+## Hidden iframe unload (story 979-3d7f) — live instance required
+
+- [ ] In a disposable test instance, open a URL tab pointing to a page that runs a 1 s busy loop every 5 s. Hide it by switching tabs, repositories, and pane groups, including a pinned tab and a split pane covered by an orphan tab. Verify `document.querySelectorAll('iframe[src="<test-url>"]').length === 0` while hidden and that showing the tab loads the same URL again. While hidden, run a read-only 30 s main-thread probe with 100 ms `setTimeout` ticks; require 0 gaps over 150 ms. Do not use Boss's live instance. _(Deferred: this requires the changed frontend in a running test instance; targeted Vitest proves DOM removal and remount.)_
+
+  Run this in the test instance's frontend console while the tab is hidden (a gap is measured delay beyond the intended 100 ms):
+
+  ```js
+  const gaps = [];
+  let last = performance.now();
+  const end = last + 30000;
+  const tick = () => {
+    const now = performance.now();
+    if (now - last > 250) gaps.push(Math.round(now - last - 100));
+    last = now;
+    if (now < end) setTimeout(tick, 100);
+    else console.log({ gapsOver150ms: gaps.length, gaps });
+  };
+  setTimeout(tick, 100);
+  ```
+
 ## Linked-worktree warming excludes MDKB (2026-09-26) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a disposable worktree from a repository that ignores and contains `.mdkb/`. Confirm the new worktree has no `.mdkb` while an ignored build directory still arrives warm. The live backend cannot load this Rust change without a restart.

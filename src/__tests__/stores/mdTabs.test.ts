@@ -346,6 +346,22 @@ describe("mdTabsStore", () => {
 	});
 
 	describe("openUiTab()", () => {
+		it("replaces URL content with HTML and HTML content with a URL", () => {
+			testInScope(() => {
+				const id = store.openUiTab("dashboard", "Dashboard", "", true, "https://example.test/one");
+				store.openUiTab("dashboard", "Notice", "<p>Paused</p>", true, undefined, false);
+				const htmlTab = store.get(id);
+				expect(htmlTab?.type).toBe("plugin-panel");
+				if (htmlTab?.type !== "plugin-panel") return;
+				expect(htmlTab.url).toBeUndefined();
+				expect(htmlTab.html).toBe("<p>Paused</p>");
+				store.openUiTab("dashboard", "Dashboard", "<p>stale</p>", true, "https://example.test/two", false);
+				const urlTab = store.get(id);
+				if (urlTab?.type !== "plugin-panel") return;
+				expect(urlTab.url).toBe("https://example.test/two");
+				expect(urlTab.html).toBe("");
+			});
+		});
 		it("creates a new plugin-panel tab with the given id", () => {
 			testInScope(() => {
 				const tabId = store.openUiTab("wiz-coverage", "Coverage Report", "<h1>Report</h1>", true);

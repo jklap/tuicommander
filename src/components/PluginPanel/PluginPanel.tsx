@@ -23,11 +23,9 @@ export interface PluginPanelProps {
 	tab: PluginPanelTab;
 	onClose?: () => void;
 	/**
-	 * Whether this panel is the one on screen. Every plugin panel ever opened
-	 * stays mounted behind `display:none` — unmounting would throw away the
-	 * iframe's scroll, focus and JS state, which is the whole reason a panel is
-	 * worth keeping — so the host gates what it pushes at the hidden ones
-	 * instead. Absent (detached windows, previews) means always visible.
+	 * Whether this panel is on screen. Hidden panels unload their iframes so
+	 * their page scripts cannot block the terminal's shared WebContent thread.
+	 * Absent (detached windows, previews) means always visible.
 	 */
 	visible?: () => boolean;
 }
@@ -523,19 +521,20 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 				openReloadMenu(e.clientX, e.clientY);
 			}}
 		>
-			{props.tab.url && !props.tab.url.startsWith("file://") ? (
-				<iframe
-					ref={iframeRef}
-					src={props.tab.url}
-					sandbox="allow-scripts allow-same-origin"
-					onLoad={() => {
-						guardSameOriginNav();
-						sendSdkInit();
-					}}
-					style={iframeStyle}
-				/>
-			) : (
-				/* DO NOT remove allow-same-origin — WKWebView inherits the parent
+			<Show when={props.visible?.() ?? true}>
+				{props.tab.url && !props.tab.url.startsWith("file://") ? (
+					<iframe
+						ref={iframeRef}
+						src={props.tab.url}
+						sandbox="allow-scripts allow-same-origin"
+						onLoad={() => {
+							guardSameOriginNav();
+							sendSdkInit();
+						}}
+						style={iframeStyle}
+					/>
+				) : (
+					/* DO NOT remove allow-same-origin — WKWebView inherits the parent
            CSP into srcdoc iframes and CSP3 silently blocks ALL inline scripts
            when source-list entries coexist with 'unsafe-inline'. Without
            allow-same-origin every plugin's JS is dead (no D&D, no filters,
@@ -544,16 +543,17 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
            Keyed <Show> on reloadKey() forces Solid to unmount/remount the
            iframe element on reload — avoids the srcdoc write races that
            can leave it blank. */
-				<Show when={reloadKey()} keyed>
-					<iframe
-						ref={iframeRef}
-						sandbox="allow-scripts allow-same-origin"
-						srcdoc={srcdoc()}
-						style={iframeStyle}
-						onLoad={installKeyForwarder}
-					/>
-				</Show>
-			)}
+					<Show when={reloadKey()} keyed>
+						<iframe
+							ref={iframeRef}
+							sandbox="allow-scripts allow-same-origin"
+							srcdoc={srcdoc()}
+							style={iframeStyle}
+							onLoad={installKeyForwarder}
+						/>
+					</Show>
+				)}
+			</Show>
 			<ContextMenu
 				visible={menu.visible()}
 				x={menu.position().x}
