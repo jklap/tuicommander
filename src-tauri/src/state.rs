@@ -2059,6 +2059,12 @@ pub(crate) struct GridState {
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.
+    ///
+    /// Cleared (not just consumed) on every real alt-screen transition —
+    /// `ChunkProcessor::process_chunk` in `pty.rs`, comparing `vt.is_alternate_screen()`
+    /// against `last_grid_alt_screen`. A target computed against the OLD grid
+    /// (`swap_alt()` gives primary/alternate independent `display_offset`s) must
+    /// never be replayed against the NEW one — see that call site's comment.
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
 }
 
