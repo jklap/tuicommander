@@ -329,8 +329,8 @@ dialog update without moving the journal to the local machine.
 
 Once a remote connection is configured:
 
-- **Add remote repo** — When adding a repository, select a connection. The repo appears in the sidebar with a remote badge
-- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. I/O works identically to local terminals
+- **Add remote repo** — Select a connection and browse from that machine's home directory. If a directory cannot be read, the picker explains the error and still allows entering a path or moving to its parent. The repo appears in the sidebar with a remote badge
+- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection shows a persistent error toast
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.

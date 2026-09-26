@@ -1214,6 +1214,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // System info
         .route("/system/local-ips", get(git_routes::get_local_ips_http))
         .route("/system/local-ip", get(git_routes::get_local_ip_http))
+        .route(
+            "/system/home-directory",
+            get(fs_routes::home_directory_http),
+        )
         // Server-Sent Events
         .route("/events", get(sse_routes::sse_events))
         .route("/events/types", post(sse_routes::sse_update_types))
@@ -2900,6 +2904,7 @@ mod tests {
             "/grok/usage",
             "/terminal/theme-colors",
             "/system/local-ip",
+            "/system/home-directory",
             "/acp/connections",
             "/acp/connections/x",
             "/acp/connections/x/reconnect",
@@ -2987,6 +2992,27 @@ mod tests {
                 "desktop-only/router-specific path leaked into shared_routes(): {p}"
             );
         }
+    }
+
+    /// Catches: the shared route exists but answers with a client-side or fixed root path.
+    #[tokio::test]
+    async fn home_directory_route_reports_serving_hosts_home() {
+        let app = build_router(test_state(), false, true);
+        let response = app
+            .oneshot(
+                Request::get("/system/home-directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let reported: String = serde_json::from_slice(&bytes).unwrap();
+        let host_home = dirs::home_dir().expect("test host has a home directory");
+        assert_eq!(reported, host_home.to_string_lossy());
     }
 
     /// Half two of the COMMAND_TABLE → router gate (story 643).

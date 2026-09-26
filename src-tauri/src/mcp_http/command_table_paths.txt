@@ -303,6 +303,7 @@
 /stories/action
 /stories/capabilities
 /system/check-update
+/system/home-directory
 /system/local-ip
 /system/local-ips
 /system/notification-sound

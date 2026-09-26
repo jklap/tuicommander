@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.
 - **File browser opens in tree view** — New installations and preferences without a saved view mode show the directory tree by default. An explicitly saved flat list remains selected.
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView.
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView. Local symlinks and parent paths work, UNC links are refused, and internal preview/plugin frames remain available.
