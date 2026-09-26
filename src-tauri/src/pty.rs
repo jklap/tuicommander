@@ -943,11 +943,22 @@ use alacritty_terminal::vte;
 /// Applies content filters to reject lines that are clearly not questions (code comments,
 /// diff context, markdown headers, code syntax).
 pub(crate) fn extract_question_line(changed_rows: &[ChangedRow]) -> Option<String> {
+    if !changed_rows.iter().any(|row| row.text.ends_with('?')) {
+        return None;
+    }
+    let protocol_rows =
+        collect_protocol_token_indices(changed_rows.iter().map(|r| r.text.as_str()));
     changed_rows
         .iter()
+        .enumerate()
         .rev()
-        .find(|r| !r.text.is_empty() && r.text.ends_with('?') && is_plausible_question(&r.text))
-        .map(|r| r.text.clone())
+        .find(|(index, row)| {
+            !protocol_rows.contains(index)
+                && !row.text.is_empty()
+                && row.text.ends_with('?')
+                && is_plausible_question(&row.text)
+        })
+        .map(|(_, row)| row.text.clone())
 }
 
 /// Returns false for lines that are clearly not questions: code comments, diff context,
@@ -1025,24 +1036,32 @@ use crate::chrome::{is_prompt_line, is_separator_line};
 /// frontend, not agent chat content — they must be skipped by question detection.
 fn is_protocol_token_line(text: &str) -> bool {
     let t = text.trim_start();
-    (t.starts_with("suggest:") || t.starts_with("intent:")) && t.contains('|')
+    (t.starts_with("suggest:") && (t.contains('[') || t.contains('|')))
+        || (t.starts_with("intent:") && t.contains('|'))
 }
 
 /// Returns the set of row indices occupied by a protocol token (including
 /// terminal-wrapped continuation rows). A continuation row is a row that
-/// immediately follows a `suggest:` or `intent:` row and contains `|` but
-/// does NOT start a new token prefix. Used to exclude the entire suggest/intent
-/// block from "last chat line" detection — without this, the continuation row
+/// immediately follows a bracketed `suggest:` row (up to `]`), or follows a
+/// legacy unbracketed token row and contains `|`. Used to exclude the entire
+/// suggest/intent block from "last chat line" detection — without this, the continuation row
 /// gets mistaken for real chat content and steals the question slot.
-fn collect_protocol_token_indices(screen_rows: &[String]) -> std::collections::HashSet<usize> {
+fn collect_protocol_token_indices<'a>(
+    screen_rows: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashSet<usize> {
+    let screen_rows: Vec<&str> = screen_rows.into_iter().collect();
     let mut indices = std::collections::HashSet::new();
     for (i, row) in screen_rows.iter().enumerate() {
         if is_protocol_token_line(row) {
             indices.insert(i);
+            let bracketed_suggest = row.trim_start().starts_with("suggest:") && row.contains('[');
+            if bracketed_suggest && row.contains(']') {
+                continue;
+            }
             // Walk forward to find continuation rows (wrapped by terminal width)
             for (j, row) in screen_rows.iter().enumerate().skip(i + 1) {
                 let trimmed = row.trim();
-                if trimmed.is_empty() {
+                if trimmed.is_empty() || is_separator_line(trimmed) || is_prompt_line(row) {
                     break;
                 }
                 // Stop at rows that start a new protocol token or chat content
@@ -1055,13 +1074,15 @@ fn collect_protocol_token_indices(screen_rows: &[String]) -> std::collections::H
                 {
                     break;
                 }
-                // A continuation row must contain the `|` separator — without
-                // it, the row is regular text (like an answer) that happens
-                // to follow the suggest line.
-                if !trimmed.contains('|') {
+                // An unbracketed continuation needs `|`; a bracketed suggest
+                // remains protocol content until its closing `]`.
+                if !bracketed_suggest && !trimmed.contains('|') {
                     break;
                 }
                 indices.insert(j);
+                if bracketed_suggest && trimmed.contains(']') {
+                    break;
+                }
             }
         }
     }
@@ -1087,7 +1108,7 @@ pub(crate) fn find_last_chat_question(screen_rows: &[String]) -> Option<String> 
         .find(|(_, row)| is_prompt_line(row))?
         .0;
 
-    let protocol_indices = collect_protocol_token_indices(screen_rows);
+    let protocol_indices = collect_protocol_token_indices(screen_rows.iter().map(String::as_str));
 
     for i in (0..prompt_idx).rev() {
         if protocol_indices.contains(&i) {

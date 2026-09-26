@@ -265,6 +265,7 @@ Generic desktop notifications such as “needs your attention” do not by
 themselves mark the tab as awaiting input; TUICommander requires explicit
 permission, approval, or waiting-for-input wording, an agent hook, or a verified
 question on screen.
+Questions inside a wrapped suggested follow-up action do not mark the tab as awaiting input.
 
 ### Queueing Follow-up Commands
 
