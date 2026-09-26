@@ -383,9 +383,7 @@ describe("paintLinkUnderline (smart-selection right-click highlight)", () => {
 		const clearRectCallsBeforeClose = vi.mocked(ctx.clearRect).mock.calls.length;
 		fireEvent.keyDown(document, { key: "Escape" });
 		await waitFor(() => expect(within(mounted.container).queryByText("Copy")).toBeNull());
-		await waitFor(() =>
-			expect(vi.mocked(ctx.clearRect).mock.calls.length).toBeGreaterThan(clearRectCallsBeforeClose),
-		);
+		await waitFor(() => expect(vi.mocked(ctx.clearRect).mock.calls.length).toBeGreaterThan(clearRectCallsBeforeClose));
 
 		// The mock records every draw call cumulatively across every repaint, so
 		// "no longer drawn" must be checked against calls made AFTER the repaint
@@ -393,9 +391,9 @@ describe("paintLinkUnderline (smart-selection right-click highlight)", () => {
 		// while it was open.
 		const lastClearRectOrder = Math.max(...vi.mocked(ctx.clearRect).mock.invocationCallOrder);
 		const moveToOrders = vi.mocked(ctx.moveTo).mock.invocationCallOrder;
-		const moveToCallsAfterClose = vi.mocked(ctx.moveTo).mock.calls.filter(
-			(_, i) => moveToOrders[i] > lastClearRectOrder,
-		);
+		const moveToCallsAfterClose = vi
+			.mocked(ctx.moveTo)
+			.mock.calls.filter((_, i) => moveToOrders[i] > lastClearRectOrder);
 		expect(moveToCallsAfterClose.some(([x, y]) => x === EXPECTED_X0 && y === EXPECTED_Y)).toBe(false);
 
 		await mounted.dispose();
