@@ -124,6 +124,7 @@
 - [ ] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical.
 ## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
 
+- [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository.
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep.
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly.
 
