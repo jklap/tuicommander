@@ -398,6 +398,52 @@ async fn post_progress_report(
     ))
 }
 
+#[derive(serde::Deserialize)]
+struct SubmitAgentReplyRequest {
+    input: String,
+}
+
+/// Browser counterpart of the managed session `submit` action. Both transports
+/// use the same validation, atomic PTY write and bounded receipt path.
+async fn submit_agent_reply(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    AxumPath(session_id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SubmitAgentReplyRequest>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if body.input.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "submitted": false,
+                "reason": "empty_input",
+                "error": "Reply text must not be empty"
+            })),
+        )
+            .into_response();
+    }
+    let result = mcp_transport::handle_session_submit(
+        &state,
+        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        true,
+    )
+    .await;
+    let status = if result["reason"] == "session_not_found" {
+        StatusCode::NOT_FOUND
+    } else if result.get("error").is_some() {
+        StatusCode::BAD_REQUEST
+    } else if result["submitted"] == false {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::OK
+    };
+    (status, Json(result)).into_response()
+}
+
 /// Returns the rejection response, or `None` when the caller may proceed.
 ///
 /// `Option` rather than `Result`: an axum `Response` is a large value, so a
@@ -621,6 +667,26 @@ async fn push_test(
         return (StatusCode::NOT_FOUND, "No push subscriptions registered").into_response();
     }
     let config = state.config.read().clone();
+    if !config.services.push.enabled {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "sent": 0,
+                "error": "Push notifications are disabled"
+            })),
+        )
+            .into_response();
+    }
+    if config.services.push.vapid_private_key.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "sent": 0,
+                "error": "VAPID private key is unavailable"
+            })),
+        )
+            .into_response();
+    }
     let title = body
         .as_ref()
         .and_then(|b| b.get("title"))
@@ -631,20 +697,18 @@ async fn push_test(
         .and_then(|b| b.get("body"))
         .and_then(|v| v.as_str())
         .unwrap_or("Test push notification");
-    let stale = crate::push::send_push_batch(
-        subs.clone(),
-        &config,
-        &state.http_client,
-        title,
-        msg,
-        "/mobile",
-    )
-    .await;
-    for endpoint in &stale {
+    let result =
+        crate::push::send_push_batch(subs, &config, &state.http_client, title, msg, "/mobile")
+            .await;
+    for endpoint in &result.stale_endpoints {
         state.push_store.remove(endpoint);
     }
-    let sent = subs.len() - stale.len();
-    Json(serde_json::json!({ "sent": sent, "stale_removed": stale.len() })).into_response()
+    Json(serde_json::json!({
+        "sent": result.sent,
+        "failed": result.failed,
+        "stale_removed": result.stale_endpoints.len()
+    }))
+    .into_response()
 }
 
 /// Middleware that injects a synthetic `ConnectInfo<SocketAddr>` for IPC
@@ -816,6 +880,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::list_sessions).post(session::create_session),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
+        .route("/sessions/{id}/submit", post(submit_agent_reply))
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
         // runs once per part. Concatenating into `/write` is NOT equivalent —
         // `apply_input_bookkeeping` reads the whole payload as one keystroke.
@@ -2608,6 +2673,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn push_test_does_not_claim_delivery_when_push_is_disabled() {
+        let state = test_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state.config.write().services.push.enabled = false;
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post("/api/push/test", &serde_json::json!({})))
+            .await
+            .expect("push test response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("push test body");
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sent"], 0);
+        assert_eq!(body["error"], "Push notifications are disabled");
+    }
+
+    #[tokio::test]
+    async fn push_test_does_not_count_an_invalid_subscription_as_sent() {
+        let state = test_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "invalid".to_string(),
+                auth: "invalid".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post("/api/push/test", &serde_json::json!({})))
+            .await
+            .expect("push test response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("push test body");
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sent"], 0);
+        assert_eq!(body["failed"], 1);
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_to_a_closed_session_returns_a_structured_rejection() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "yes" }),
+            ))
+            .await
+            .expect("reply response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("reply body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON rejection");
+        assert_eq!(body["submitted"], false);
+        assert_eq!(body["reason"], "session_not_found");
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_rejects_an_unauthenticated_remote_caller() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post_from(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "yes" }),
+                remote,
+            ))
+            .await
+            .expect("remote reply response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_rejects_empty_input_without_a_submission() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "" }),
+            ))
+            .await
+            .expect("empty reply response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("empty reply body");
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["submitted"], false);
+    }
+
+    #[tokio::test]
     async fn test_health() {
         let state = test_state();
         let app = build_router(state, false, true);
@@ -2864,6 +3036,7 @@ mod tests {
             "/api/auth/session-token",
             "/sessions",
             "/sessions/x/write",
+            "/sessions/x/submit",
             "/sessions/x/output",
             "/sessions/x/terminal/scroll",
             "/sessions/x/terminal/lines",

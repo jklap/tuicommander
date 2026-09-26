@@ -281,6 +281,7 @@
 /sessions/x/resume
 /sessions/x/shell-family
 /sessions/x/shell-state
+/sessions/x/submit
 /sessions/x/terminal/cursor-line
 /sessions/x/terminal/hyperlink
 /sessions/x/terminal/hyperlink-span

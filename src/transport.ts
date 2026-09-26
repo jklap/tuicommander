@@ -85,7 +85,7 @@ export class HttpRpcError extends Error {
 	constructor(
 		public readonly command: string,
 		public readonly status: number,
-		body: string,
+		public readonly body: string,
 	) {
 		super(`RPC ${command} failed: ${status} ${body}`);
 		this.name = "HttpRpcError";
@@ -438,6 +438,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/sessions/${args.sessionId ?? args.id}/write`,
 			body: { data: args.data },
+		}),
+	},
+	submit_agent_reply: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${encodeURIComponent(String(args.sessionId))}/submit`,
+			body: { input: args.input },
 		}),
 	},
 	// Not `write_pty` with the parts joined: the backend runs its per-input

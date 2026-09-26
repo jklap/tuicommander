@@ -235,6 +235,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			/>
 			<CommandInput
 				sessionId={props.session.session_id}
+				managedSession={!!sessionState()?.agent_type}
+				awaitingInput={sessionState()?.awaiting_input}
+				sessionExists={props.sessionExists}
 				prefillValue={inputPrefill()}
 				ptyInputLine={ptyInputLine()}
 				agentType={sessionState()?.agent_type ?? null}

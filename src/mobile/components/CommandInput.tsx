@@ -1,7 +1,7 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
-import { rpc } from "../../transport";
+import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey } from "../../utils/sendCommand";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
@@ -22,12 +22,18 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
+	/** Managed agent waiting for a free-text answer. */
+	managedSession?: boolean;
+	awaitingInput?: boolean;
+	sessionExists?: boolean;
 	/** Registers the triggerSlash function so parent can invoke it. */
 	onRegisterTrigger?: (fn: () => void) => void;
 }
 
 export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
+	const [submitting, setSubmitting] = createSignal(false);
+	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt;
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// What we last sent to PTY — used to compute deltas and to gate which
 	// PTY echoes we accept (only strict extensions — see sync effect below).
@@ -59,6 +65,7 @@ export function CommandInput(props: CommandInputProps) {
 	// Everything else (prompt redraws, lagging echoes over slow links,
 	// history-nav replacements) is ignored so the textarea can't be clobbered.
 	createEffect(() => {
+		if (atomicReply()) return;
 		const text = props.ptyInputLine ?? "";
 		if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
 		if (!isSupersetEcho(text, syncedText)) return;
@@ -87,6 +94,7 @@ export function CommandInput(props: CommandInputProps) {
 	 *  backspaces only the divergent tail instead of nuking and retyping the
 	 *  whole line, which previously caused a keystroke storm and visible mess. */
 	function syncDelta(newText: string) {
+		if (atomicReply() || props.sessionExists === false) return;
 		const delta = computeInputDelta(syncedText, newText);
 		if (delta) writePty(delta);
 		syncedText = newText;
@@ -137,7 +145,44 @@ export function CommandInput(props: CommandInputProps) {
 
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
-		if (!text) return;
+		if (!text || props.sessionExists === false || submitting()) return;
+
+		if (atomicReply()) {
+			setSubmitting(true);
+			try {
+				const receipt = await rpc<{
+					status: string;
+					submitted: boolean;
+					acknowledged: boolean;
+					reason?: string;
+				}>("submit_agent_reply", { sessionId: props.sessionId, input: text });
+				if (!receipt.submitted) {
+					toastsStore.add("Reply not sent", receipt.reason ?? "The session is not ready for a reply", "error", true);
+					return;
+				}
+				if (!receipt.acknowledged) {
+					toastsStore.add("Reply sent", "The agent did not acknowledge it yet. Check the session before retrying.", "warn", true);
+				}
+				setValue("");
+				if (textareaEl) textareaEl.value = "";
+			} catch (err) {
+				let msg = err instanceof Error ? err.message : String(err);
+				if (err instanceof HttpRpcError) {
+					try {
+						const result: unknown = JSON.parse(err.body);
+						const reason = typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
+						if (reason === "session_not_found") msg = "This session has ended";
+						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
+						else if (reason === "partial_composer") msg = "The agent already has a draft. Check the session before retrying.";
+						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
+					} catch { /* Keep the server error for a malformed response. */ }
+				}
+				toastsStore.add("Reply not sent", msg, "error", true);
+			} finally {
+				setSubmitting(false);
+			}
+			return;
+		}
 
 		lastSendAt = Date.now();
 		syncedText = "";
@@ -157,6 +202,17 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
+		if (props.sessionExists === false) {
+			e.preventDefault();
+			return;
+		}
+		if (atomicReply() && e.key === "Tab") return;
+		if (atomicReply() && e.key === "Escape") {
+			e.preventDefault();
+			setValue("");
+			if (textareaEl) textareaEl.value = "";
+			return;
+		}
 		if (e.key === "Tab") {
 			e.preventDefault();
 			writePty("\t");

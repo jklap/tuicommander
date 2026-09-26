@@ -57,6 +57,7 @@ export interface SessionInfo {
 	worktree_path: string | null;
 	worktree_branch: string | null;
 	display_name?: string | null;
+	parent_session?: string | null;
 	state?: SessionState;
 }
 

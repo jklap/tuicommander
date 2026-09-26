@@ -296,6 +296,22 @@ Content-Type: application/json
 { "data": "ls -la\n" }
 ```
 
+### Submit One Managed-Agent Reply
+
+```
+POST /sessions/:id/submit
+Content-Type: application/json
+
+{ "input": "Please wait for my approval" }
+```
+
+Authenticated browser/PWA counterpart of `session action=submit`. It checks the
+managed agent's idle state and empty composer, writes the whole reply and Enter
+atomically, and returns the same submission receipt. A closed session returns
+HTTP 404 with `submitted: false` and `reason: "session_not_found"`; another
+rejection returns HTTP 409 and its precise `reason`. A successful write can
+still have `acknowledged: false`: the client must not retry blindly.
+
 ### Write Several Inputs at Once
 
 ```
@@ -2245,7 +2261,12 @@ Content-Type: application/json
 
 Register a push subscription. Idempotent (same endpoint updates keys).
 
-Push delivery is gated by desktop window focus: notifications for `question` and session completion events are sent whenever the desktop window is **not** focused (including when the app is minimized or the user is on another workspace). This avoids duplicate alerts while the user is actively at the desktop, and still wakes the PWA service worker when the phone is locked.
+Question and completion pushes are sent when the desktop window is unfocused or,
+on macOS, HID input has been idle for at least 120 seconds. The idle threshold
+also covers a focused window left in front when Boss walks away. Other platforms
+use focus when HID idle time is unavailable. A committed `progress type=blocked`
+report supplies the question text to the same session event and 30-second push
+limit as a parsed question. Empty blocked text is rejected by Progress validation.
 
 ### Unsubscribe
 
@@ -2257,6 +2278,21 @@ Content-Type: application/json
 ```
 
 Remove a push subscription by endpoint.
+
+### Test Push Delivery
+
+```
+POST /api/push/test
+Content-Type: application/json
+
+{}
+```
+
+Returns `{ "sent": 1, "failed": 0, "stale_removed": 0 }`, where `sent` counts
+push-service acceptance, not display on the phone. HTTP 404 means no saved
+subscription. HTTP 503 with `sent: 0` means push is disabled or the private
+VAPID key is unavailable. A 410 Gone response removes the stale subscription
+and increments `stale_removed`; Boss must re-subscribe from the phone PWA.
 
 ## ACP (ego)
 
