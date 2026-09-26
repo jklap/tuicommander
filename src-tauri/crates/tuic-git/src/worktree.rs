@@ -1343,6 +1343,39 @@ fn remove_worktree_internal_with_lock(
     if admin.is_none() && worktree.path.join(".git").exists() {
         return Err("Cannot remove worktree: its Git registration is missing".into());
     }
+    if has_operation_in_progress(&wt_path_str) {
+        return Err("Cannot remove worktree: a Git operation is in progress".into());
+    }
+    let head_ref = git_cmd(&worktree.path)
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .run_raw()
+        .map_err(|error| format!("Cannot inspect worktree HEAD: {error}"))?;
+    match head_ref.status.code() {
+        Some(0) => {}
+        Some(1) => {
+            let head = rev_at(&worktree.path, "HEAD")?;
+            let containing = git_cmd(&worktree.base_repo)
+                .args([
+                    "for-each-ref",
+                    &format!("--contains={head}"),
+                    "--count=1",
+                    "--format=%(refname)",
+                ])
+                .run()
+                .map_err(|error| format!("Cannot check detached HEAD reachability: {error}"))?;
+            if containing.stdout.trim().is_empty() {
+                return Err(
+                    "Cannot remove worktree: detached HEAD commit has no durable ref".into(),
+                );
+            }
+        }
+        code => {
+            return Err(format!(
+                "Cannot inspect worktree HEAD (git exit {code:?}): {}",
+                String::from_utf8_lossy(&head_ref.stderr).trim()
+            ));
+        }
+    }
 
     let before = if admin.is_some() {
         Some(dirty_fingerprint_at(&worktree.path)?.0)
@@ -2253,8 +2286,8 @@ pub async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, S
         .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
-/// Validate that `worktree_path` is a known worktree of the given repo by checking it against
-/// `git worktree list --porcelain` output. Prevents arbitrary directory deletion.
+/// Validate that `worktree_path` is a detached orphan of the given repo, not a
+/// main or branch checkout or one with a Git operation in progress.
 pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     let path = PathBuf::from(worktree_path);
     if !path.is_absolute() {
@@ -2266,17 +2299,20 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    let known_paths: Vec<&str> = out
-        .stdout
-        .lines()
-        .filter_map(|line| line.strip_prefix("worktree "))
-        .collect();
-
-    if !known_paths.contains(&worktree_path) {
-        return Err(format!(
-            "Refused: '{}' is not a known worktree of '{}'",
-            worktree_path, repo_path
-        ));
+    let entry = parse_worktree_entries(&out.stdout)
+        .into_iter()
+        .find(|entry| entry.path == worktree_path)
+        .ok_or_else(|| {
+            format!(
+                "Refused: '{}' is not a known worktree of '{}'",
+                worktree_path, repo_path
+            )
+        })?;
+    if has_operation_in_progress(worktree_path) {
+        return Err("Cannot remove orphan worktree: a Git operation is in progress".into());
+    }
+    if !entry.detached || entry.branch.is_some() {
+        return Err("Cannot remove orphan worktree: checkout is not detached".into());
     }
 
     Ok(())
@@ -6635,6 +6671,80 @@ branch refs/heads/feat
         assert!(error.contains("No workspace found"), "{error}");
         assert!(worktree.exists());
         assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
+    }
+
+    #[test]
+    fn orphan_removal_refuses_a_detached_commit_without_a_durable_ref() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-only-head");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        commit_file(&path, "detached.txt", "only at detached HEAD\n");
+        let oid = rev_at(&path, "HEAD").unwrap();
+        let worktree = WorktreeInfo {
+            name: "orphan-only-head".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+
+        validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap();
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("detached"), "{error}");
+        assert!(path.exists());
+        assert_eq!(rev_at(&path, "HEAD").unwrap(), oid);
+    }
+
+    #[test]
+    fn orphan_removal_accepts_a_detached_head_reachable_from_a_ref() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-reachable");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let detached_oid = rev_at(&path, "HEAD").unwrap();
+        commit_file(&repo, "later.txt", "main moved ahead\n");
+        assert_ne!(rev_at(&repo, "HEAD").unwrap(), detached_oid);
+        let worktree = WorktreeInfo {
+            name: "orphan-reachable".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+
+        validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap();
+        remove_worktree_internal(&worktree, false).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn orphan_removal_refuses_an_in_progress_operation() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-mid-operation");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let admin = worktree_admin_dir(&path.to_string_lossy()).unwrap();
+        fs::write(admin.join("MERGE_HEAD"), rev_at(&repo, "HEAD").unwrap()).unwrap();
+
+        let error =
+            validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
+        assert!(error.contains("operation"), "{error}");
+        let worktree = WorktreeInfo {
+            name: "orphan-mid-operation".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("operation"), "{error}");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn orphan_removal_refuses_an_attached_worktree_path() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "not-an-orphan");
+
+        let error =
+            validate_worktree_path(&repo.to_string_lossy(), &path.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+        assert!(path.exists());
     }
 
     #[tokio::test]
