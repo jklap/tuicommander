@@ -4509,7 +4509,26 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
-                if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
+                let push_ready = {
+                    let config = state.config.read();
+                    config.services.push.enabled
+                        && !config.services.push.vapid_private_key.is_empty()
+                        && !state.push_store.is_empty()
+                };
+                let window_focused = state
+                    .desktop_window_focused
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let desktop_away = mobile_push_away(
+                    window_focused,
+                    if window_focused { hid_idle_seconds() } else { None },
+                );
+                let mut should_push = false;
+                {
+                    let mut entry = state
+                        .session_maps
+                        .session_states
+                        .entry(session_id.clone())
+                        .or_default();
                     entry.awaiting_input = false;
                     entry.question_text = None;
                     entry.question_confident = false;
@@ -4519,15 +4538,18 @@ impl AppState {
                     entry.active_sub_tasks = 0;
                     entry.choice_prompt = None;
                     entry.last_activity_ms = now_ms;
+                    // Completion and questions share the same per-session window.
+                    if push_ready
+                        && desktop_away
+                        && entry
+                            .last_push_ms
+                            .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000)
+                    {
+                        entry.last_push_ms = Some(now_ms);
+                        should_push = true;
+                    }
                 }
-                // Push "session completed" to mobile (unseen)
-                let window_focused = state
-                    .desktop_window_focused
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                if mobile_push_away(
-                    window_focused,
-                    if window_focused { hid_idle_seconds() } else { None },
-                ) {
+                if should_push {
                     let session_name = state
                         .session_maps.sessions
                         .get(session_id)
@@ -7841,6 +7863,145 @@ mod tests {
             eligible.last_push_ms.unwrap() > old,
             "an older question alert must not block a new one"
         );
+    }
+
+    #[tokio::test]
+    async fn completion_push_shares_per_session_window_with_question() {
+        use base64ct::Encoding;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let (sent, mut accepted) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/push",
+                    axum::routing::post(move || {
+                        let sent = sent.clone();
+                        async move {
+                            sent.send(()).unwrap();
+                            axum::http::StatusCode::CREATED
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let exit = AppEvent::PtyExit {
+            session_id: "s1".to_string(),
+        };
+        let without_phone = apply(&state, &exit);
+        assert!(
+            without_phone.last_push_ms.is_none(),
+            "completion without a subscriber must leave the push budget available"
+        );
+        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint,
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: base64ct::Base64UrlUnpadded::encode_string(
+                    client_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                ),
+                auth: base64ct::Base64UrlUnpadded::encode_string(&[7u8; 16]),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let question = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Done?", "confident": true }),
+        );
+        let asked = apply(&state, &question);
+        let first = asked.last_push_ms.expect("question spent the push budget");
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("question push never reached the local service")
+            .expect("local service closed");
+
+        apply(&state, &exit);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+                .await
+                .is_err(),
+            "completion bypassed the question's 30-second push limit"
+        );
+
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(first.saturating_sub(31_000));
+        apply(&state, &exit);
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("completion stayed blocked after the window")
+            .expect("local service closed");
+        let completed_at = state
+            .session_maps
+            .session_states
+            .get("s1")
+            .unwrap()
+            .last_push_ms;
+        apply(&state, &exit);
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .last_push_ms,
+            completed_at,
+            "a repeated completion must not reserve a second push"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+                .await
+                .is_err(),
+            "a repeated completion reached the push service"
+        );
+
+        state
+            .session_maps
+            .session_states
+            .insert("s2".to_string(), SessionState::default());
+        AppState::apply_event_to_session_state(
+            &state,
+            &AppEvent::PtyExit {
+                session_id: "s2".to_string(),
+            },
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("another session inherited the first session's limit")
+            .expect("local service closed");
+        AppState::apply_event_to_session_state(
+            &state,
+            &AppEvent::PtyExit {
+                session_id: "s3".to_string(),
+            },
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+            .await
+            .expect("completion without an existing state row lost its push")
+            .expect("local service closed");
+        server.abort();
     }
 
     #[test]
