@@ -26,6 +26,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
 
 interface FakeTerminal {
 	agentType: string | null;
+	sessionId?: string | null;
 }
 const [terminals, setTerminals] = createStore<{
 	activeId: string | null;
@@ -115,10 +116,47 @@ describe("agent usage ticker — no vendor default", () => {
 		await settle();
 		expect(invoke).not.toHaveBeenCalled();
 
-		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "claude" } } });
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "claude", sessionId: "claude-one" } } });
 		await settle();
 
-		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_claude_usage_api");
+		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_claude_usage_api", { sessionId: "claude-one" });
+	});
+
+	it("repolls when focus moves between Claude sessions and opens the matching dashboard", async () => {
+		setTerminals({
+			activeId: "t1",
+			terminals: {
+				t1: { agentType: "claude", sessionId: "private-session" },
+				t2: { agentType: "claude", sessionId: "default-session" },
+			},
+		});
+		initAgentUsage();
+		await settle();
+		expect(invoke).toHaveBeenCalledWith("get_claude_usage_api", { sessionId: "private-session" });
+
+		setTerminals("activeId", "t2");
+		await settle();
+		expect(invoke).toHaveBeenLastCalledWith("get_claude_usage_api", { sessionId: "default-session" });
+		expect(addMessage).toHaveBeenLastCalledWith(expect.objectContaining({ label: "Claude" }));
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		addMessage.mock.lastCall?.[0].onClick();
+		expect(mdTabsStore.addClaudeUsage).toHaveBeenCalledWith("default-session");
+	});
+
+	it("shows unknown when the focused Claude profile cannot be read", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "claude", sessionId: "missing-profile" } } });
+		invoke.mockRejectedValueOnce(new Error("Cannot read Claude session profile"));
+		initAgentUsage();
+		await settle();
+		expect(addMessage).toHaveBeenCalledWith(expect.objectContaining({ label: "Claude", text: "unknown" }));
+	});
+
+	it("does not open default-account usage for a Claude tab without a backend session", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "claude", sessionId: null } } });
+		initAgentUsage();
+		await settle();
+		expect(invoke).not.toHaveBeenCalled();
+		expect(addMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "unknown", onClick: undefined }));
 	});
 
 	it("keeps the detected agent when the active tab moves to a shell", async () => {

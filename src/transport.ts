@@ -688,7 +688,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_process_stats: { map: () => ({ method: "GET", path: "/process/stats" }) },
 
 	// --- Claude Usage dashboard ---
-	get_claude_usage_api: { map: () => ({ method: "GET", path: "/claude/usage" }) },
+	get_claude_usage_api: {
+		map: (args, p) => ({
+			method: "GET",
+			path: args.sessionId == null ? "/claude/usage" : `/claude/usage?sessionId=${p("sessionId")}`,
+		}),
+	},
 	get_claude_project_list: { map: () => ({ method: "GET", path: "/claude/projects" }) },
 	get_codex_usage_api: { map: () => ({ method: "GET", path: "/codex/usage" }) },
 	get_codex_usage_stats: { map: () => ({ method: "GET", path: "/codex/stats" }) },

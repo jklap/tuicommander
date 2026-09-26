@@ -1418,7 +1418,7 @@ Sandboxed filesystem operations for the file manager panel. `/fs/read-external` 
 ## Agent Usage Endpoints
 
 ```
-GET /claude/usage                              -> UsageApiResponse (rate-limit usage, 5-min cached)
+GET /claude/usage?sessionId=<id>               -> UsageApiResponse (session profile rate limits, 5-min cache per profile; omitted id selects default)
 GET /claude/projects                           -> ProjectEntry[]
 GET /claude/timeline?scope=all&days=7          -> TimelinePoint[] (hourly token aggregation)
 GET /claude/session-stats?scope=current        -> SessionStats

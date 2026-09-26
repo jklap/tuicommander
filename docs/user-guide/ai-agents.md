@@ -107,6 +107,8 @@ For Claude Code, TUICommander detects weekly and session usage limit messages fr
   - Red (pulsing): >= 90%
 - Clicking the badge opens the Claude Usage Dashboard.
 
+The API quota follows the focused Claude session's `CLAUDE_CONFIG_DIR`. Switching between Claude sessions using different accounts updates the badge. If the session's profile or its credentials cannot be read, the badge shows unknown rather than the default account's quota.
+
 This helps you pace your usage across the week.
 
 ## Claude Usage Dashboard
@@ -123,6 +125,7 @@ When enabled, TUICommander polls the Claude API every 5 minutes and shows:
 - **Per-project breakdown** — All projects ranked by token usage. Click a project to filter the dashboard to that project.
 
 The dashboard opens as a tab in the Activity Center. You can also reach it by clicking the Claude usage badge in the status bar.
+When opened from the badge, its rate-limit data uses that session's credential profile. The transcript-based charts and project statistics currently scan the default Claude projects directory.
 
 ## Agent Teams
 

@@ -343,6 +343,15 @@ describe("mdTabsStore", () => {
 				expect(uiStore.state.markdownPanelVisible).toBe(false);
 			});
 		});
+
+		it("updates the singleton Claude dashboard when opened from another session", () => {
+			testInScope(() => {
+				const id = store.addClaudeUsage("private-session");
+				expect(store.get(id)).toMatchObject({ type: "claude-usage", sessionId: "private-session" });
+				expect(store.addClaudeUsage("default-session")).toBe(id);
+				expect(store.get(id)).toMatchObject({ type: "claude-usage", sessionId: "default-session" });
+			});
+		});
 	});
 
 	describe("openUiTab()", () => {

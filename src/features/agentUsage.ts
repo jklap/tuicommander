@@ -49,7 +49,7 @@ interface AgentUsageSpec {
 	/** Substring of the backend's "no credentials" error, for a clearer ticker. */
 	missingTokenHint: string;
 	/** Opens the agent's usage dashboard tab when the ticker is clicked. */
-	openDashboard: () => void;
+	openDashboard: (sessionId?: string) => void;
 }
 
 const SPECS: Record<UsageAgent, AgentUsageSpec> = {
@@ -59,7 +59,7 @@ const SPECS: Record<UsageAgent, AgentUsageSpec> = {
 		buildText: (api: UsageApiResponse) => buildTickerText(api),
 		priority: (api: UsageApiResponse) => getTickerPriority(api),
 		missingTokenHint: "No Claude OAuth token",
-		openDashboard: () => mdTabsStore.addClaudeUsage(),
+		openDashboard: (sessionId) => mdTabsStore.addClaudeUsage(sessionId),
 	} as AgentUsageSpec,
 	codex: {
 		label: "Codex",
@@ -108,17 +108,20 @@ let initialized = false;
  * Sticky once set: a shell tab does not clear it.
  */
 let shownAgent: UsageAgent | null = null;
+let shownSessionId: string | null = null;
 
 /** Guards against a slow poll for the previous agent overwriting the new one. */
 let pollSeq = 0;
 
-function activeUsageAgent(): UsageAgent | null {
+function activeUsageSession(): { agent: UsageAgent; sessionId: string | null } | null {
 	const id = terminalsStore.state.activeId;
 	if (!id) return null;
-	return toUsageAgent(terminalsStore.state.terminals[id]?.agentType);
+	const terminal = terminalsStore.state.terminals[id];
+	const agent = toUsageAgent(terminal?.agentType);
+	return agent ? { agent, sessionId: terminal?.sessionId ?? null } : null;
 }
 
-async function poll(agent: UsageAgent): Promise<void> {
+async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> {
 	const spec = SPECS[agent];
 	const seq = ++pollSeq;
 
@@ -133,16 +136,24 @@ async function poll(agent: UsageAgent): Promise<void> {
 			icon: CHART_SVG,
 			priority,
 			ttlMs: API_POLL_MS + 30_000,
-			onClick: spec.openDashboard,
+			onClick: agent === "claude" && !sessionId ? undefined : () => spec.openDashboard(sessionId ?? undefined),
 		});
 	};
 
 	try {
-		const api = await invoke<never>(spec.command);
+		if (agent === "claude" && !sessionId) {
+			write("unknown", 5);
+			return;
+		}
+		const api = agent === "claude"
+			? await invoke<never>(spec.command, { sessionId })
+			: await invoke<never>(spec.command);
 		write(spec.buildText(api), spec.priority(api));
 	} catch (err) {
 		const errStr = String(err);
-		const text = describeUsageError(errStr, spec.missingTokenHint);
+		const text = agent === "claude" && /No Claude OAuth token|Cannot (?:resolve|read) Claude session profile|Failed to parse credentials/.test(errStr)
+			? "unknown"
+			: describeUsageError(errStr, spec.missingTokenHint);
 		if (text !== "no token") {
 			appLogger.warn("network", `${spec.label} usage poll: ${text}`, errStr);
 		}
@@ -155,20 +166,23 @@ export function initAgentUsage(): void {
 	if (initialized) return;
 	initialized = true;
 
-	shownAgent = activeUsageAgent();
-	if (shownAgent) poll(shownAgent);
+	const active = activeUsageSession();
+	shownAgent = active?.agent ?? null;
+	shownSessionId = active?.sessionId ?? null;
+	if (shownAgent) poll(shownAgent, shownSessionId);
 	pollTimer = setInterval(() => {
-		if (shownAgent) poll(shownAgent);
+		if (shownAgent) poll(shownAgent, shownSessionId);
 	}, API_POLL_MS);
 
 	// Repoll immediately when the active tab moves to a different usage agent.
 	// Tracked outside a component, so it needs its own reactive root.
 	disposeEffect = createRoot((dispose) => {
 		createEffect(() => {
-			const next = activeUsageAgent();
-			if (!next || next === shownAgent) return;
-			shownAgent = next;
-			poll(next);
+			const next = activeUsageSession();
+			if (!next || (next.agent === shownAgent && next.sessionId === shownSessionId)) return;
+			shownAgent = next.agent;
+			shownSessionId = next.sessionId;
+			poll(next.agent, next.sessionId);
 		});
 		return dispose;
 	});
@@ -179,6 +193,7 @@ export function destroyAgentUsage(): void {
 	if (!initialized) return;
 	initialized = false;
 	shownAgent = null;
+	shownSessionId = null;
 
 	if (pollTimer) {
 		clearInterval(pollTimer);
