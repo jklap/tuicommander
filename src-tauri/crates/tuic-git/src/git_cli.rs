@@ -272,12 +272,12 @@ pub fn output_with_deadline(
 /// incremental fetch on a slow link. Every fetch below is a single refspec into
 /// an existing clone, never a clone, so the transfer is a branch delta — killing
 /// one that would have succeeded is a worse outcome than waiting for it.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Tests exercise the shipped wiring through a deadline they can afford to wait
-/// for. Only the number differs from the value above.
-#[cfg(test)]
+/// Test binaries also compile this crate as a dependency, where `cfg(test)`
+/// is absent. The root crate enables `test-support` for that build.
+#[cfg(any(test, feature = "test-support"))]
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------

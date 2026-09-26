@@ -5,6 +5,9 @@
 #[ctor::ctor]
 fn install_test_temp_root() {
     let root = test_temp_root();
+    // Freeze the checkout selected at process start: tests may change cwd.
+    // SAFETY: this constructor runs before libtest creates worker threads.
+    unsafe { std::env::set_var("TUIC_TEST_TMP_ROOT", &root) };
     for key in ["TMPDIR", "TMP", "TEMP"] {
         // SAFETY: a process constructor runs before main and before libtest
         // creates its worker threads. No test can read the environment yet.
@@ -17,7 +20,20 @@ pub fn test_temp_root() -> std::path::PathBuf {
     let root = std::env::var_os("TUIC_TEST_TMP_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.tmp/tuic-tests")
+            // A cached test-support crate may have been compiled in another
+            // worktree. Find the checkout running this test, not its build path.
+            let checkout = std::env::current_dir().ok().and_then(|cwd| {
+                cwd.ancestors()
+                    .find(|dir| {
+                        dir.join(".git").exists() && dir.join("src-tauri/Cargo.toml").is_file()
+                    })
+                    .map(std::path::Path::to_path_buf)
+            });
+            checkout
+                .unwrap_or_else(|| {
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+                })
+                .join(".tmp/tuic-tests")
         });
     std::fs::create_dir_all(&root).expect("create repository test temp root");
     root
