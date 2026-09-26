@@ -134,6 +134,7 @@ Note: File browser and Markdown panels are mutually exclusive — opening one cl
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+P` | Command palette |
+| `Cmd+Shift+P` | Open Terminal Progress |
 | `Cmd+Shift+A` | Activity dashboard |
 
 ## Git
@@ -269,6 +270,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `quick-branch-switch` | `Cmd+B` | Quick branch switch |
 | `find-in-terminal` | `Cmd+F` | Find in terminal |
 | `command-palette` | `Cmd+P` | Command palette |
+| `progress` | `Cmd+Shift+P` | Open Terminal Progress |
 | `activity-dashboard` | `Cmd+Shift+A` | Activity dashboard |
 | `toggle-error-log` | `Cmd+Shift+E` | Toggle error log |
 | `toggle-mcp-popup` | `Cmd+Shift+I` | MCP servers popup (per-repo) |
