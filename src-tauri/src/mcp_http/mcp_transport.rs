@@ -8190,6 +8190,16 @@ mod tests {
         branch_delete_commit(&repo, "squash.txt", "same final patch\n");
         git(&["checkout", "integration"]);
         branch_delete_commit(&repo, "squash.txt", "same final patch\n");
+        // Distinct messages guarantee different SHAs even when Git records both
+        // commits in the same second with identical parents and trees.
+        git(&["commit", "--amend", "-m", "integration copy of squash patch"]);
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["merge-base", "--is-ancestor", "squashed", "integration"])
+                .run_silent()
+                .is_none(),
+            "the fixture must require patch proof rather than ancestry"
+        );
 
         let state = test_state();
         let path = repo.to_string_lossy();
