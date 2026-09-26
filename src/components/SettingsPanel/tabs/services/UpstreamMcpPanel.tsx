@@ -14,6 +14,7 @@ import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { randomUuid } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { ContextualHelp } from "../../ContextualHelp";
@@ -872,23 +873,26 @@ export const UpstreamMcpPanel: Component = () => {
 											{/* Status dot + label */}
 											<Show when={st()}>
 												{(entry) => (
-													<>
-														<span
-															style={{
-																display: "inline-block",
-																width: "7px",
-																height: "7px",
-																"border-radius": "50%",
-																background: statusColor(entry().status),
-															}}
-															title={statusLabel(entry().status)}
+													<Show
+														when={server.enabled && entry().status !== "disabled"}
+														fallback={
+															<span
+																style={{
+																	display: "inline-block",
+																	width: "7px",
+																	height: "7px",
+																	"border-radius": "50%",
+																	background: statusColor(entry().status),
+																}}
+																title={statusLabel(entry().status)}
+															/>
+														}
+													>
+														<ConnectionStatusBadge
+															color={statusColor(entry().status)}
+															label={statusLabel(entry().status)}
 														/>
-														<Show when={server.enabled && entry().status !== "disabled"}>
-															<span style={{ "font-size": "11px", color: statusColor(entry().status) }}>
-																{statusLabel(entry().status)}
-															</span>
-														</Show>
-													</>
+													</Show>
 												)}
 											</Show>
 											<Show when={!server.enabled}>

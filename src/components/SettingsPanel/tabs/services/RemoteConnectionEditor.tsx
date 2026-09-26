@@ -354,7 +354,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				/>
 			</label>
 			<div class={s.group}>
-				<label class={s.label}>Auth username (optional)</label>
+				<label>Auth username (optional)</label>
 				<Input
 					data-setting-id="connections.connections.{id}.auth_username"
 					value={authUsername()}
@@ -362,7 +362,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				/>
 			</div>
 			<div class={s.group}>
-				<label class={s.label}>Auth password (optional)</label>
+				<label>Auth password (optional)</label>
 				<Input
 					data-setting-id="connections.{id}.credential"
 					type="password"
@@ -405,7 +405,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 		>
 			<div style={{ display: "grid", gap: "8px" }}>
 				<div class={s.group}>
-					<label class={s.label}>Name</label>
+					<label>Name</label>
 					<Input
 						data-setting-id={
 							kind() === "SshTunnel" ? "tunnels.profiles.{id}.name" : "connections.connections.{id}.name"
@@ -416,7 +416,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</div>
 
 				<div class={s.group}>
-					<label class={s.label}>Kind</label>
+					<label>Kind</label>
 					<Select
 						data-non-setting="Choose which owner (tunnel profile or remote connection) and transport the draft is saved as"
 						value={kind()}
@@ -452,7 +452,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						hostKeyChecking="enforced-accept-new"
 					/>
 					<div class={s.group}>
-						<label class={s.label}>Remote daemon port</label>
+						<label>Remote daemon port</label>
 						<Input
 							data-setting-id="connections.connections.{id}.transport.remote_daemon_port"
 							type="number"
@@ -465,7 +465,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						/>
 					</div>
 					<div class={s.group}>
-						<label class={s.label}>Deployment</label>
+						<label>Deployment</label>
 						<Select
 							data-setting-id="connections.connections.{id}.deploy"
 							value={deploy()}
@@ -483,7 +483,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						</Select>
 					</div>
 					<div class={s.group}>
-						<label class={s.label}>Keep ephemeral daemon alive (minutes)</label>
+						<label>Keep ephemeral daemon alive (minutes)</label>
 						<Input
 							data-setting-id="connections.connections.{id}.survive_secs"
 							type="number"
@@ -493,7 +493,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						/>
 					</div>
 					<div class={s.group}>
-						<label class={s.label}>Instance ID (optional)</label>
+						<label>Instance ID (optional)</label>
 						<Input
 							data-setting-id="connections.connections.{id}.transport.instance_id"
 							placeholder="e.g. dev-box"
@@ -538,7 +538,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 
 				<Show when={kind() === "RemoteDirect"}>
 					<div class={s.group}>
-						<label class={s.label}>URL</label>
+						<label>URL</label>
 						<Input
 							data-setting-id="connections.connections.{id}.transport.url"
 							placeholder="http://192.168.1.100:9877"
@@ -568,7 +568,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 
 				<Show when={kind() === "RemoteLocal"}>
 					<div class={s.group}>
-						<label class={s.label}>Target</label>
+						<label>Target</label>
 						<div style={{ display: "flex", gap: "16px", "align-items": "center" }}>
 							<label style={{ display: "flex", gap: "4px", "align-items": "center" }}>
 								<input
@@ -594,7 +594,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</div>
 					<Show when={localMode() === "instance"}>
 						<div class={s.group}>
-							<label class={s.label}>Instance ID</label>
+							<label>Instance ID</label>
 							<Input
 								data-setting-id="connections.connections.{id}.transport.instance_id"
 								placeholder="e.g. dev-box"
@@ -605,7 +605,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</Show>
 					<Show when={localMode() === "port"}>
 						<div class={s.group}>
-							<label class={s.label}>Port</label>
+							<label>Port</label>
 							<Input
 								data-setting-id="connections.connections.{id}.transport.port"
 								type="number"
