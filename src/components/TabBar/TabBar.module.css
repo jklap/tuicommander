@@ -689,12 +689,22 @@
    an opaque, non-accent base color is required here so the moving accent
    band has something to contrast against on the active tab. A transparent
    base (letting that underline show through) makes the band blend into an
-   identically-colored backdrop and renders motionless. */
+   identically-colored backdrop and renders motionless.
+   The gradient tile is 200% wide and holds two identical copies of the
+   band, one container-width apart (`background-size: 200% 100%`); note
+   that a 100%-wide tile would NOT work here — when a background image's
+   size equals its container's, percentage `background-position` is always
+   a no-op (offset = (container − image) × percent = 0). Animating position
+   from 100% down to 0% slides the pair leftward one container-width per
+   cycle: the band travels left-to-right and, at the wrap point, the
+   trailing copy shrinks off the right edge while the leading copy
+   simultaneously grows in from the left — same total visible band length
+   throughout, never vanishing and popping back. */
 .progress[data-kind="indeterminate"] {
   background-color: var(--bg-tertiary);
-  background-image: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
+  background-image: linear-gradient(90deg, transparent 0%, var(--accent) 10%, transparent 20%, transparent 50%, var(--accent) 60%, transparent 70%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
   animation: progressIndeterminateSweep 1.2s linear infinite;
 }
 
@@ -702,8 +712,8 @@
    SessionDetailScreen.module.css's indeterminate sweeps — keep all three in
    sync if this ever changes. */
 @keyframes progressIndeterminateSweep {
-  0% { background-position: -50% 0; }
-  100% { background-position: 150% 0; }
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
 }
 
 .progressLabel {

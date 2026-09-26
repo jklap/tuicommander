@@ -147,19 +147,23 @@
 }
 
 /* Indeterminate: no scaleX transform is applied (see SessionCard.tsx), so
-   the fill stays full width; a sweeping band is the only activity signal. */
+   the fill stays full width; a sweeping band is the only activity signal.
+   Two copies of the band in a 200%-wide tile, animated left-to-right, so it
+   wraps seamlessly at the edges instead of shrinking away and popping back
+   — see TabBar.module.css's fuller comment on the same pattern (including
+   why the tile can't just be 100% wide). */
 .progressFill[data-kind="indeterminate"] {
-  background: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
+  background: linear-gradient(90deg, transparent 0%, var(--accent) 10%, transparent 20%, transparent 50%, var(--accent) 60%, transparent 70%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
   animation: progressIndeterminateSweep 1.2s linear infinite;
 }
 
 /* Same band width/speed as TabBar.module.css and SessionDetailScreen.module.css's
    indeterminate sweeps — keep all three in sync if this ever changes. */
 @keyframes progressIndeterminateSweep {
-  0% { background-position: -50% 0; }
-  100% { background-position: 150% 0; }
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
 }
 
 .usageLabel {
