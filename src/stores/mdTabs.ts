@@ -1,3 +1,4 @@
+import { batch } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
 import { branchKeyFor, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
@@ -369,10 +370,16 @@ function createMdTabsStore() {
 				(tab) => tab.type === "plugin-panel" && (tab as PluginPanelTab).pluginId === pluginId,
 			) as PluginPanelTab | undefined;
 			if (existing) {
-				base._setState("tabs", existing.id, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
-				base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
-				if (url !== undefined)
+				batch(() => {
+					base._setState(
+						"tabs",
+						existing.id,
+						"html" as keyof MdTabData,
+						(url ? "" : html) as MdTabData[keyof MdTabData],
+					);
+					base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
 					base._setState("tabs", existing.id, "url" as keyof MdTabData, url as MdTabData[keyof MdTabData]);
+				});
 				if (focus) base.setActive(existing.id);
 				return existing.id;
 			}
@@ -381,7 +388,15 @@ function createMdTabsStore() {
 			// MCP `ui` tabs are design/preview surfaces: keep their own styling and
 			// omit PLUGIN_BASE_CSS (#080). SDK plugin dashboards use addPluginPanel,
 			// which leaves selfStyled unset so the base sheet is injected.
-			const tab: PluginPanelTab = { type: "plugin-panel", id, title, pluginId, html, pinned, selfStyled: true };
+			const tab: PluginPanelTab = {
+				type: "plugin-panel",
+				id,
+				title,
+				pluginId,
+				html: url ? "" : html,
+				pinned,
+				selfStyled: true,
+			};
 			const resolvedRepo = resolveRepoForCwd(originRepoPath) ?? undefined;
 			if (resolvedRepo) tab.repoPath = resolvedRepo;
 			if (url) tab.url = url;

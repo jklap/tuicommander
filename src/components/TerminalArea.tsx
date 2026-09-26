@@ -122,6 +122,7 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 						<div style={{ visibility: hasActiveOrphan() ? "hidden" : "visible", display: "contents" }}>
 							<PaneNodeView
 								node={root()}
+								visible={() => !hasActiveOrphan()}
 								onCloseTab={props.onCloseTab}
 								onOpenFilePath={props.onOpenFilePath}
 								onTerminalFocus={props.onTerminalFocus}

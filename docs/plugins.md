@@ -707,6 +707,8 @@ Alias for `clearTicker`.
 
 Open an HTML panel in a sandboxed iframe tab. Returns a handle for updating content or closing the panel. If a panel with the same id is already open, it will be activated and updated. **Requires `"ui:panel"` capability.**
 
+When the panel is hidden, its iframe is unloaded; showing it loads the page again. Keep state that must survive tab switches outside the iframe. This also applies to URL tabs.
+
 ```typescript
 const panel = host.openPanel({
   id: "my-dashboard",

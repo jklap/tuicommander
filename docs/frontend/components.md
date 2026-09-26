@@ -105,6 +105,10 @@ behavioral boundaries rather than generic service wrappers.
 
 ## Core Components
 
+### PluginPanel (`PluginPanel/`)
+
+URL tabs and inline plugin panels mount their sandboxed iframe only while their tab is visible. Hiding a tab, switching repositories or pane tabs, or covering split panes with an orphan tab removes the iframe from the DOM. Showing it again loads the page anew, so iframe scroll, focus and JavaScript state do not persist. This prevents hidden page timers from blocking terminal input on the shared WebContent main thread. Native `tuic://edit` and `tuic://open` tabs use their own components and are unaffected.
+
 ### Terminal (`Terminal/`)
 
 Native terminal renderer with full PTY integration.

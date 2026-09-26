@@ -230,20 +230,38 @@ describe("PluginPanel", () => {
 	});
 
 	describe("hidden panels (613-00e8 F102)", () => {
+		it.each([
+			["URL", { url: "about:blank", html: "" }],
+			["pinned URL", { url: "about:blank", html: "", pinned: true }],
+			["inline plugin", { html: "<p>Dashboard</p>" }],
+		])("unloads a hidden %s iframe and reloads it when shown", (_mode, overrides) => {
+			const [visible, setVisible] = createSignal(true);
+			const { container } = render(() => <PluginPanel tab={makeTab(overrides)} visible={visible} />);
+			const first = container.querySelector("iframe") as HTMLIFrameElement;
+			const src = first.getAttribute("src");
+			const srcdoc = first.getAttribute("srcdoc");
+			setVisible(false);
+			expect(container.querySelector("iframe")).toBeNull();
+			setVisible(true);
+			const second = container.querySelector("iframe") as HTMLIFrameElement;
+			expect(second).not.toBe(first);
+			expect(second.getAttribute("src")).toBe(src);
+			expect(second.getAttribute("srcdoc")).toBe(srcdoc);
+		});
 		/**
 		 * Mount a panel and start spying on what reaches its iframe. The stub goes
 		 * in after mount on purpose — the mount-time handshake is not what this
 		 * block is about.
 		 */
+		let contentWindowSpy: ReturnType<typeof vi.spyOn> | undefined;
 		function spyOnPanelTraffic(visible: () => boolean) {
 			const tab = makeTab();
-			const { container } = render(() => <PluginPanel tab={tab} visible={visible} />);
-			const iframe = container.querySelector("iframe") as HTMLIFrameElement;
 			const postMessage = vi.fn();
-			Object.defineProperty(iframe, "contentWindow", {
-				configurable: true,
-				get: () => ({ postMessage }),
-			});
+			contentWindowSpy = vi
+				.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get")
+				.mockReturnValue({ postMessage } as unknown as Window);
+			render(() => <PluginPanel tab={tab} visible={visible} />);
+			postMessage.mockClear();
 			return postMessage;
 		}
 
@@ -251,6 +269,8 @@ describe("PluginPanel", () => {
 			postMessage.mock.calls.filter((call) => call[0]?.type === "tuic:repo-changed");
 
 		afterEach(() => {
+			contentWindowSpy?.mockRestore();
+			contentWindowSpy = undefined;
 			repositoriesStore.setActive(null);
 			repositoriesStore._testCancelPendingSave();
 		});

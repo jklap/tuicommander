@@ -492,6 +492,8 @@ Active prompt overlay state and agent stats buffer.
 ### diffTabsStore (`diffTabs.ts`) / mdTabsStore (`mdTabs.ts`)
 Open diff and markdown tab management (identical API patterns).
 
+`mdTabsStore.openUiTab` treats URL and HTML content as alternatives. Updating an existing URL tab with HTML clears its URL; updating an HTML tab with a URL clears its HTML. Visibility is decided by the tab renderers, which unload hidden plugin and URL iframes.
+
 ### updaterStore (`updater.ts`)
 App update check, download, and install. Supports stable (Tauri built-in), beta, and nightly channels.
 
