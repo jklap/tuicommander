@@ -13,6 +13,7 @@ import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Term
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
+import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
@@ -75,9 +76,19 @@ describe("initApp", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		vi.useRealTimers();
 		repositoriesStore._testCancelPendingSave();
 		paneLayoutStore._testCancelPendingSave();
+	});
+
+	it("logs the navigation type and document start at each initialization", async () => {
+		const navigation = { type: "reload" } as PerformanceNavigationTiming;
+		vi.spyOn(performance, "getEntriesByType").mockReturnValue([navigation]);
+		const log = vi.spyOn(appLogger, "info");
+		await initApp(createMockDeps());
+		expect(log).toHaveBeenCalledWith("app", expect.stringContaining("navigation=reload"));
+		expect(log).toHaveBeenCalledWith("app", expect.stringContaining(`documentStart=${performance.timeOrigin}`));
 	});
 
 	it("hydrates stores and detects platform", async () => {

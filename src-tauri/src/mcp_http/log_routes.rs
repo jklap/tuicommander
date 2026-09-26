@@ -283,6 +283,7 @@ pub(crate) async fn reload_webview_http(
     if let Err(resp) = super::guards::localhost_only(&addr) {
         return resp.into_response();
     }
+    tracing::info!(source = "webview", caller = %addr, "HTTP WebView reload requested");
     Json(reload_main_webview(&state)).into_response()
 }
 
@@ -293,7 +294,7 @@ pub(crate) async fn reload_webview_http(
 /// on `about:srcdoc`, and reloading a blank document reloads the blank document.
 /// The same recovery serves the automatic poller — see `webview_recovery`.
 pub(crate) fn reload_main_webview(state: &Arc<AppState>) -> serde_json::Value {
-    crate::webview_recovery::navigate_home(state)
+    crate::webview_recovery::navigate_home(state, "http_route")
 }
 
 #[cfg(not(feature = "desktop"))]
