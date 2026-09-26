@@ -8,6 +8,7 @@ pub(super) struct HealthResponse {
     pub uptime_secs: u64,
     pub session_count: usize,
     pub protocol_version: u32,
+    pub build: Option<&'static crate::remote_deploy::assets::BuildIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub survive_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

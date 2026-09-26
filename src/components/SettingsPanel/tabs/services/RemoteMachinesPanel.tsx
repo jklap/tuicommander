@@ -239,6 +239,25 @@ export const RemoteMachinesPanel: Component = () => {
 		}
 	}
 
+	async function updateRemote(connState: ConnectionState) {
+		const id = connState.connection.id;
+		setServiceBusyId(id);
+		setError("");
+		try {
+			const { session_count, desktop_build, remote_build, source } = await remoteConnectionsStore.prepareUpdate(id);
+			const details =
+				`Remote: ${remote_build?.version ?? "unknown"} (${remote_build?.target ?? "unknown target"})\n` +
+				`Selected: ${desktop_build.version} (${desktop_build.target}, ${source})\n` +
+				`${session_count} live sessions will be lost. Update and restart remote?`;
+			if (!window.confirm(details)) return;
+			await remoteConnectionsStore.updateAndRestart(id, session_count, desktop_build.sha256);
+		} catch (reason) {
+			setError(String(reason));
+		} finally {
+			setServiceBusyId(null);
+		}
+	}
+
 	async function removeConnection(id: string, name: string) {
 		let confirmed: boolean;
 		try {
@@ -530,6 +549,9 @@ export const RemoteMachinesPanel: Component = () => {
 												{remoteStatusLabel(connState.status, connState.deployStep)}
 											</span>
 										</Show>
+										<Show when={connState.outOfDate}>
+											<span style={{ "font-size": "11px", color: "var(--attention)" }}>Remote out of date</span>
+										</Show>
 									</div>
 									<div
 										class={s.hint}
@@ -551,6 +573,15 @@ export const RemoteMachinesPanel: Component = () => {
 									</Show>
 								</div>
 								{/* Connect / Disconnect */}
+								<Show when={connState.status === "connected"}>
+									<button
+										class={s.textBtn}
+										disabled={serviceBusyId() === conn().id}
+										onClick={() => updateRemote(connState)}
+									>
+										{serviceBusyId() === conn().id ? "Updating..." : "Update & restart remote"}
+									</button>
+								</Show>
 								<button
 									class={s.textBtn}
 									onClick={() => {

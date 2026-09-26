@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Remote Machine Updates",
+		description:
+			"Remote Machines shows when a connected daemon is out of date. Update & restart confirms the live sessions that will close.",
+		shortcut: null,
+	},
+	{
 		feature: "Editor Line Wrapping",
 		description: "Press Alt+Z in the editor to wrap long lines. Text and code files remember separate choices.",
 		shortcut: "Alt+Z",

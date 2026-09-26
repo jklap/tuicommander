@@ -1102,6 +1102,42 @@ const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 const VOICE_ACTIONS: &str = "speak, stop, status";
+const REMOTE_ACTIONS: &str = "preview, update";
+
+async fn handle_remote_update(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    let action = match require_action(args, "remote", REMOTE_ACTIONS) {
+        Ok(action) => action,
+        Err(error) => return error,
+    };
+    let Some(id) = args["connection_id"].as_str().filter(|id| !id.is_empty()) else {
+        return serde_json::json!({"error": "remote action requires connection_id"});
+    };
+    let result = match action {
+        "preview" => crate::remote_update::prepare(state, id).await,
+        "update" => {
+            let Some(count) = args["confirmed_sessions"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+            else {
+                return serde_json::json!({"error": "remote update requires confirmed_sessions"});
+            };
+            let Some(digest) = args["expected_sha256"].as_str() else {
+                return serde_json::json!({"error": "remote update requires expected_sha256"});
+            };
+            crate::remote_update::update_and_restart(state, id, count, digest).await
+        }
+        _ => {
+            return serde_json::json!({"error": format!("Unknown remote action {action}. Available: {REMOTE_ACTIONS}")});
+        }
+    };
+    match result {
+        Ok(preview) => to_json_or_error(preview),
+        Err(error) => serde_json::json!({"error": error}),
+    }
+}
 
 /// Full MCP tool definitions — the one native tool family.
 ///
@@ -1168,6 +1204,16 @@ fn native_tool_definitions() -> serde_json::Value {
                 "action": { "type": "string", "description": "One of: get, cancel" },
                 "task_id": { "type": "string", "description": "Task handle returned by agent action=spawn (required)" }
             }, "required": ["action", "task_id"] }
+        },
+        {
+            "name": "remote",
+            "description": "Update a connected remote daemon. preview reports both builds, source, target and live PTY count. update requires the count and selected SHA-256 from a preview after the user has confirmed session loss; it waits until the new build answers /health.",
+            "inputSchema": { "type": "object", "properties": {
+                "action": { "type": "string", "enum": ["preview", "update"] },
+                "connection_id": { "type": "string", "description": "Configured remote connection ID" },
+                "confirmed_sessions": { "type": "integer", "minimum": 0, "description": "Live session count confirmed by the user (update only)" },
+                "expected_sha256": { "type": "string", "description": "Selected build digest from preview (update only)" }
+            }, "required": ["action", "connection_id"] }
         },
         {
             "name": "repo",
@@ -1930,6 +1976,7 @@ async fn handle_mcp_tool_call_with_context(
             run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
+        "remote" => handle_remote_update(state, args).await,
         "story" => {
             let state = state.clone();
             let args = args.clone();
@@ -13253,6 +13300,7 @@ mod tests {
                 "session",
                 "agent",
                 "task",
+                "remote",
                 "repo",
                 "story",
                 "progress",
@@ -13264,6 +13312,31 @@ mod tests {
             ],
             "native_tool_definitions must return exactly the one family, in order"
         );
+    }
+
+    #[tokio::test]
+    async fn remote_mcp_update_requires_confirmation_fields() {
+        let state = test_state();
+        let response = handle_remote_update(
+            &state,
+            &serde_json::json!({
+                "action": "update", "connection_id": "machine-1"
+            }),
+        )
+        .await;
+        assert_eq!(
+            response["error"],
+            "remote update requires confirmed_sessions"
+        );
+
+        let response = handle_remote_update(
+            &state,
+            &serde_json::json!({
+                "action": "update", "connection_id": "machine-1", "confirmed_sessions": 3
+            }),
+        )
+        .await;
+        assert_eq!(response["error"], "remote update requires expected_sha256");
     }
 
     #[test]

@@ -154,7 +154,7 @@ the workflow.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Health check, including running build version, target and SHA-256 |
 | `GET` | `/stats` | Orchestrator stats (active/max/available) |
 | `GET` | `/metrics` | Session metrics (spawned, failed, bytes) |
 | `GET` | `/process/stats` | CPU% and RSS memory for TUIC and all child process trees |
@@ -660,7 +660,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Ten native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -670,6 +670,7 @@ say what was measured, not what the list costs today.
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
+| `remote` | preview, update | Enabled |
 | `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
@@ -861,7 +862,7 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 ### One tool family, and why the second one went
 
 TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
-`repo`, `progress`, `ui`, `plugin_dev_guide`, `config`, `debug`. Few tools,
+`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `config`, `debug`. Few tools,
 many actions.
 
 It used to expose a second — 13 flat `ai_terminal_*` tools behind the

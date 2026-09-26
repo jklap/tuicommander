@@ -512,9 +512,9 @@ and an invalid ID or unavailable named release vault terminates before network
 bind. Runtime switching is unsupported.
 
 Production black-box consumers pin and verify the digest of the exact
-`tuic-remote` artifact they launch. That consumer-side artifact identity is the
-capability proof for this contract; the daemon exposes no additional capability
-or version endpoint.
+`tuic-remote` artifact they launch. The daemon also reports its running build's
+version, target triple and SHA-256 in `/health`; the desktop uses that identity
+to detect an outdated remote and to verify an update after restart.
 
 Ordinary `config.json` and `mcp-upstreams.json` mutations use delta-under-lock
 semantics: after taking the cross-process file lock, the backend reloads the
