@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastContainer } from "../../components/ToastContainer/ToastContainer";
+import { appLogger } from "../../stores/appLogger";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
@@ -14,6 +16,7 @@ import { toastsStore } from "../../stores/toasts";
 describe("ToastContainer", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		progressStore.resetForTests();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		vi.restoreAllMocks();
@@ -106,6 +109,62 @@ describe("ToastContainer", () => {
 		expect(toastsStore.toasts).toHaveLength(0);
 	});
 
+	it("opens the reporting terminal in its worktree from a progress toast", () => {
+		repositoriesStore.add({ path: "/progress-current", displayName: "Current" });
+		repositoriesStore.setWorkspace("/progress-current", "main", { worktreePath: "/progress-current" });
+		repositoriesStore.add({ path: "/progress-repo", displayName: "Progress" });
+		repositoriesStore.setWorkspace("/progress-repo", "main", { worktreePath: "/progress-repo" });
+		repositoriesStore.setWorkspace("/progress-repo", "feature", { worktreePath: "/progress-worktree" });
+		const current = addTerminal("pty-current");
+		const origin = addTerminal("pty-reporting");
+		repositoriesStore.addTerminalToWorkspace("/progress-current", "main", current);
+		repositoriesStore.addTerminalToWorkspace("/progress-repo", "feature", origin);
+		repositoriesStore.setActive("/progress-current");
+		terminalsStore.setActive(current);
+
+		progressStore.presentLive({
+			repo_path: "/progress-repo",
+			payload: {
+				entry: {
+					id: 1, project: "/progress-repo", ptyId: "pty-reporting", createdAtMs: 1,
+					type: "done", text: "Build complete", step: "Build",
+				},
+			},
+		});
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-repo");
+		expect(repositoriesStore.get("/progress-repo")?.activeWorkspaceId).toBe("feature");
+		expect(terminalsStore.state.activeId).toBe(origin);
+	});
+
+	it("lands in the repository and logs when a progress terminal has closed", () => {
+		repositoriesStore.add({ path: "/progress-before", displayName: "Before" });
+		repositoriesStore.add({ path: "/progress-gone", displayName: "Gone" });
+		repositoriesStore.setActive("/progress-before");
+		const current = addTerminal("pty-still-open");
+		terminalsStore.setActive(current);
+		const closed = addTerminal("pty-closed");
+		terminalsStore.remove(closed);
+		const warn = vi.spyOn(appLogger, "warn");
+		progressStore.presentLive({
+			repo_path: "/progress-gone",
+			payload: {
+				entry: {
+					id: 2, project: "/progress-gone", ptyId: "pty-closed", createdAtMs: 2,
+					type: "blocked", text: "Review needed", step: "Review",
+				},
+			},
+		});
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-gone");
+		expect(terminalsStore.state.activeId).toBe(current);
+		expect(warn).toHaveBeenCalledWith("app", expect.stringContaining("terminal"), expect.objectContaining({ sessionId: "pty-closed" }));
+	});
+
 	it("places the repo action before the primary toast action", () => {
 		repositoriesStore.add({ path: "/toast-current-order", displayName: "Current" });
 		repositoriesStore.add({ path: "/toast-origin-order", displayName: "Origin" });
@@ -132,6 +191,20 @@ describe("ToastContainer", () => {
 		fireEvent.click(buttons[1]);
 		expect(openProgress).toHaveBeenCalledOnce();
 		expect(repositoriesStore.state.activeRepoPath).toBe("/toast-current-order");
+	});
+
+	it("switches a plain UI toast's repository without claiming a missing terminal", () => {
+		repositoriesStore.add({ path: "/plain-before", displayName: "Before" });
+		repositoriesStore.add({ path: "/plain-origin", displayName: "Origin" });
+		repositoriesStore.setActive("/plain-before");
+		const warn = vi.spyOn(appLogger, "warn");
+		toastsStore.add("Plain notice", "No PTY binding", "info", false, undefined, undefined, "/plain-origin");
+
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/plain-origin");
+		expect(warn).not.toHaveBeenCalled();
 	});
 
 	it("does not offer a repo action for the active repository", () => {

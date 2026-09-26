@@ -71,6 +71,9 @@ the same label.
 
 Open the Progress dialog from the command palette (`progress`) or from the
 toolbar bell, which shows how many entries arrived since you last opened it.
+An outcome toast's **Go to repo** action also opens the reporting terminal
+in its workspace when that terminal is still open. If it has closed, the
+action opens the repository instead.
 
 The dialog opens on the active PTY, newest first. The selector switches to
 another PTY in the project or **All repo**, which combines their histories.

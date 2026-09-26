@@ -283,7 +283,7 @@ export function createProgressStore() {
 			{ label: "Open Progress", onClick: () => open(payload.repo_path, entry.ptyId ?? null) },
 			undefined,
 			payload.repo_path,
-			undefined,
+			entry.ptyId,
 			false,
 		);
 	}
