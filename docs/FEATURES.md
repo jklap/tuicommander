@@ -723,6 +723,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Native SolidJS component (not a plugin panel — renders as a first-class tab)
 - The active Claude, Codex, or Grok badge opens its matching dashboard; `Cmd+Shift+A` opens Claude Usage
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
+  - Follows the focused Claude terminal's `CLAUDE_CONFIG_DIR` credential profile; an unresolved profile shows unknown rather than another account's quota
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
   - Reset countdown per bucket

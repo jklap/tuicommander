@@ -27,6 +27,13 @@ pub fn read_process_env_var(pid: u32, name: &str) -> Option<String> {
     })
 }
 
+/// Read the process environment while preserving read failures as errors.
+/// A missing `CLAUDE_CONFIG_DIR` means the default profile only when the
+/// environment itself was readable.
+pub fn read_process_environment(pid: u32) -> Result<Vec<String>, std::io::Error> {
+    read_environ_raw(pid)
+}
+
 /// Read `argv[0]` of a process by PID.
 ///
 /// Needed to identify a CLI that runs inside a script interpreter: the executable

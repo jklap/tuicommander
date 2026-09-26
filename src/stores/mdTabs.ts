@@ -64,6 +64,7 @@ export interface PluginPanelTab extends BaseTab {
 export interface ClaudeUsageTab extends BaseTab {
 	type: "claude-usage";
 	title: string;
+	sessionId?: string;
 }
 
 /** Native Codex Usage Dashboard tab */
@@ -430,18 +431,19 @@ function createMdTabsStore() {
 		},
 
 		/** Add the Claude Usage Dashboard tab (singleton — reuses existing if open) */
-		addClaudeUsage(): string {
+		addClaudeUsage(sessionId?: string): string {
 			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "claude-usage") as
 				| ClaudeUsageTab
 				| undefined;
 			if (existing) {
+				base._setState("tabs", existing.id, "sessionId" as keyof MdTabData, sessionId as MdTabData[keyof MdTabData]);
 				base.setActive(existing.id);
 
 				return existing.id;
 			}
 
 			const id = base._nextId("md");
-			const tabId = base._addTab({ type: "claude-usage", id, title: "Claude Usage", pinned: true } as ClaudeUsageTab);
+			const tabId = base._addTab({ type: "claude-usage", id, title: "Claude Usage", pinned: true, sessionId } as ClaudeUsageTab);
 
 			return tabId;
 		},

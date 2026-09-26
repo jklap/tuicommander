@@ -424,7 +424,7 @@ Reusable in-app confirmation dialog that replaces native Tauri `ask()` dialogs (
 
 ### ClaudeUsageDashboard (`ClaudeUsageDashboard/`)
 
-Native SolidJS component (not a plugin) showing Claude API usage data. Displayed as a tab in the markdown/editor area. Features rate bucket gauges, per-model token breakdown, daily usage chart, and project stats. Opened by clicking the Claude Usage ticker in the status bar.
+Native SolidJS component (not a plugin) showing Claude API usage data. Displayed as a tab in the markdown/editor area. Features rate bucket gauges, per-model token breakdown, daily usage chart, and project stats. Clicking the Claude Usage ticker opens it for that terminal session's credential profile. The rate-limit API follows `CLAUDE_CONFIG_DIR`; transcript statistics still use the default Claude projects directory.
 
 ### CodexUsageDashboard (`CodexUsageDashboard/`)
 

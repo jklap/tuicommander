@@ -900,6 +900,8 @@ Persistent cache for incremental JSONL parsing of Claude session transcripts. St
 
 This is an internal cache file, not user-editable. It is automatically pruned when projects or session files are deleted.
 
+The separate Anthropic rate-limit API cache is in memory only. Its responses and rate-limit backoff are keyed by the Claude session's credential profile directory, so switching `CLAUDE_CONFIG_DIR` cannot reuse another account's quota.
+
 ## Repo-Local Config (`.tuic.json`)
 
 **Module:** `src-tauri/src/config.rs`

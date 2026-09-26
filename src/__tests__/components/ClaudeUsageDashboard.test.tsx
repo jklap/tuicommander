@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -29,6 +30,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { ClaudeUsageDashboard } from "../../components/ClaudeUsageDashboard";
+import { MdTabContent } from "../../components/shared/MdTabContent";
+import type { ClaudeUsageTab } from "../../stores/mdTabs";
 
 const mockUsageApiResponse = {
 	five_hour: null,
@@ -71,6 +74,64 @@ describe("ClaudeUsageDashboard", () => {
 			if (cmd === "get_claude_usage_timeline") return mockTimeline;
 			return undefined;
 		});
+	});
+
+	it("requests API usage for the session that opened the dashboard", async () => {
+		render(() => <ClaudeUsageDashboard sessionId="private-session" />);
+		await vi.waitFor(() => {
+			expect(invoke).toHaveBeenCalledWith("get_claude_usage_api", { sessionId: "private-session" });
+		});
+	});
+
+	it("passes the Claude tab's session through the shared panel renderer", async () => {
+		const tab = { type: "claude-usage", sessionId: "private-session" } as ClaudeUsageTab;
+		render(() => <MdTabContent tab={tab} onClose={() => {}} />);
+		await vi.waitFor(() => {
+			expect(invoke).toHaveBeenCalledWith("get_claude_usage_api", { sessionId: "private-session" });
+		});
+	});
+
+	it("clears the previous account quota when the next profile has no credentials", async () => {
+		vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+			if (cmd === "get_claude_usage_api") {
+				if ((args as { sessionId?: string } | undefined)?.sessionId === "missing") throw new Error("No Claude OAuth token found");
+				return { ...mockUsageApiResponse, five_hour: { utilization: 21, resets_at: null } };
+			}
+			if (cmd === "get_claude_session_stats") return mockSessionStats;
+			if (cmd === "get_claude_project_list") return mockProjectList;
+			if (cmd === "get_claude_usage_timeline") return mockTimeline;
+			return undefined;
+		});
+		const [sessionId, setSessionId] = createSignal("first");
+		const view = render(() => <ClaudeUsageDashboard sessionId={sessionId} />);
+		await vi.waitFor(() => expect(view.getByText("21%")).toBeTruthy());
+		setSessionId("missing");
+		await vi.waitFor(() => expect(view.getByText("Rate limit data unavailable")).toBeTruthy());
+		expect(view.queryByText("21%")).toBeNull();
+	});
+
+	it("ignores a late response from the previous profile", async () => {
+		let resolveFirst: ((value: unknown) => void) | undefined;
+		vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+			if (cmd === "get_claude_usage_api") {
+				const sessionId = (args as { sessionId?: string } | undefined)?.sessionId;
+				if (sessionId === "first") return new Promise((resolve) => { resolveFirst = resolve; });
+				return { ...mockUsageApiResponse, five_hour: { utilization: 42, resets_at: null } };
+			}
+			if (cmd === "get_claude_session_stats") return mockSessionStats;
+			if (cmd === "get_claude_project_list") return mockProjectList;
+			if (cmd === "get_claude_usage_timeline") return mockTimeline;
+			return undefined;
+		});
+		const [sessionId, setSessionId] = createSignal("first");
+		const view = render(() => <ClaudeUsageDashboard sessionId={sessionId} />);
+		await vi.waitFor(() => expect(resolveFirst).toBeDefined());
+		setSessionId("second");
+		await vi.waitFor(() => expect(view.getByText("42%")).toBeTruthy());
+		resolveFirst?.({ ...mockUsageApiResponse, five_hour: { utilization: 21, resets_at: null } });
+		await Promise.resolve();
+		expect(view.queryByText("21%")).toBeNull();
+		expect(view.getByText("42%")).toBeTruthy();
 	});
 
 	describe("scope change — single fetch cycle", () => {

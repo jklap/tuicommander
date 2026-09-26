@@ -1114,6 +1114,12 @@ describe("transport", () => {
 			expect(result.path).toBe("/claude/usage");
 		});
 
+		it("routes a Claude session usage request to its owning backend", () => {
+			const result = mapCommandToHttp("get_claude_usage_api", { sessionId: "private/session" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/claude/usage?sessionId=private%2Fsession");
+		});
+
 		it("maps get_claude_project_list to GET /claude/projects", () => {
 			const result = mapCommandToHttp("get_claude_project_list", {});
 			expect(result.method).toBe("GET");
