@@ -12900,6 +12900,13 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
 /// intent must absorb every growing prefix before Progress sees it.
 #[test]
 fn captured_codex_streaming_intent_emits_one_complete_marker() {
+    #[cfg(not(feature = "desktop"))]
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test Tokio runtime");
+    #[cfg(not(feature = "desktop"))]
+    let _runtime_guard = runtime.enter();
     let config = tempfile::tempdir().expect("config directory");
     let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
     let project = tempfile::tempdir().expect("registered project");
@@ -13547,6 +13554,15 @@ fn run_progress_intent_case_grid(
     history_capacity: usize,
     alt_screen: bool,
 ) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    #[cfg(not(feature = "desktop"))]
+    let runtime = tokio::runtime::Handle::try_current().is_err().then(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test Tokio runtime")
+    });
+    #[cfg(not(feature = "desktop"))]
+    let _runtime_guard = runtime.as_ref().map(|runtime| runtime.enter());
     let config = tempfile::tempdir().expect("config directory");
     let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
     let project = tempfile::tempdir().expect("registered project");
