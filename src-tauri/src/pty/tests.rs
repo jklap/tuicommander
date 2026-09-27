@@ -8067,6 +8067,80 @@ fn pty_parent_env_sanitizer_removes_no_color_and_allows_override() {
     );
 }
 
+#[test]
+fn pty_spawn_env_does_not_inherit_tuic_build_target() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "pty::tests::pty_spawn_env_child_checks_inherited_target",
+        ])
+        .env("TUIC_TEST_PTY_BUILD_ENV", "1")
+        .env("CARGO_TARGET_DIR", "/tuic-dev-build-target")
+        .env("CARGO_MANIFEST_DIR", "/tuic/src-tauri")
+        .env("CARGO_MANIFEST_PATH", "/tuic/src-tauri/Cargo.toml")
+        .env("CARGO_PKG_NAME", "tuicommander")
+        .env("OUT_DIR", "/tuic-dev-build-target/debug/build/out")
+        .env("RUSTDOC", "/tuic-dev-rustdoc")
+        .env("CARGO_HOME", "/user/cargo")
+        .env("TUIC_TEST_USER_ENV", "keep-me")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "isolated spawn-env check failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "spawn-env child was not selected: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn pty_spawn_env_child_checks_inherited_target() {
+    if std::env::var_os("TUIC_TEST_PTY_BUILD_ENV").is_none() {
+        return;
+    }
+    assert_eq!(
+        std::env::var("CARGO_TARGET_DIR").unwrap(),
+        "/tuic-dev-build-target"
+    );
+    let mut agent = CommandBuilder::new("agent");
+    assert_eq!(
+        agent.get_env("CARGO_TARGET_DIR"),
+        Some(std::ffi::OsStr::new("/tuic-dev-build-target"))
+    );
+    sanitize_pty_parent_env(&mut agent);
+    let shell = build_shell_command("/bin/sh");
+    for cmd in [&agent, &shell] {
+        for key in [
+            "CARGO_TARGET_DIR",
+            "CARGO_MANIFEST_DIR",
+            "CARGO_MANIFEST_PATH",
+            "CARGO_PKG_NAME",
+            "OUT_DIR",
+            "RUSTDOC",
+        ] {
+            assert_eq!(cmd.get_env(key), None, "{key} leaked into a PTY");
+        }
+        assert_eq!(
+            cmd.get_env("CARGO_HOME"),
+            Some(std::ffi::OsStr::new("/user/cargo"))
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_TEST_USER_ENV"),
+            Some(std::ffi::OsStr::new("keep-me"))
+        );
+    }
+    agent.env("CARGO_TARGET_DIR", "/intentional-agent-target");
+    assert_eq!(
+        agent.get_env("CARGO_TARGET_DIR"),
+        Some(std::ffi::OsStr::new("/intentional-agent-target"))
+    );
+}
+
 // --- windows_to_wsl_path tests ---
 
 #[test]
