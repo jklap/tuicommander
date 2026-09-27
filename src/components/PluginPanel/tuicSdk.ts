@@ -20,6 +20,9 @@ export const TUIC_SDK_SCRIPT = `<script id="tuic-sdk">
     open:function(path,opts){
       parent.postMessage({type:"tuic:open",path:path,pinned:!!(opts&&opts.pinned)},"*");
     },
+    openUrl:function(url){
+      parent.postMessage({type:"tuic:open-url",url:url},"*");
+    },
     edit:function(path,opts){
       parent.postMessage({type:"tuic:edit",path:path,line:(opts&&opts.line)||0},"*");
     },
@@ -75,10 +78,11 @@ export const TUIC_SDK_SCRIPT = `<script id="tuic-sdk">
     var href=a.getAttribute("href");
     if(!href)return;
     if(href.indexOf("tuic://")!==0){
-      // Block all non-tuic navigation — relative links in srcdoc resolve
-      // to the app origin and would load TUIC inside its own iframe.
+      // Only explicit external URLs can leave this iframe. Relative links in
+      // srcdoc resolve to the app origin and must not reload TUIC in the frame.
       if(href.charAt(0)==="#")return;
       e.preventDefault();
+      if(/^(https?:|mailto:)/i.test(href))tuic.openUrl(href);
       return;
     }
     e.preventDefault();

@@ -28,6 +28,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 	})),
 }));
 
+vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: vi.fn() }));
+
 // Track whether addEventListener("message") was called inside an onMount callback.
 // We wrap solid-js onMount to set a flag during its execution.
 let insideOnMount = false;
@@ -53,6 +55,7 @@ import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { applyAppTheme } from "../../themes";
+import { handleOpenUrl } from "../../utils/openUrl";
 
 function makeTab(overrides: Partial<PluginPanelTab> = {}): PluginPanelTab {
 	return {
@@ -112,6 +115,31 @@ describe("PluginPanel", () => {
 
 		const messageCalls = addEventListenerSpy.mock.calls.filter(([event]: [string]) => event === "message");
 		expect(messageCalls).toHaveLength(1);
+	});
+
+	it("opens an external URL only when the owning plugin iframe sends the message", () => {
+		const { container } = render(() => <PluginPanel tab={makeTab()} />);
+		const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+		const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+		const foreign = new MessageEvent("message", { data: { type: "tuic:open-url", url: "https://example.org/help" } });
+		(handler as EventListener)(foreign);
+		expect(handleOpenUrl).not.toHaveBeenCalled();
+		const own = new MessageEvent("message", { data: { type: "tuic:open-url", url: "https://example.org/help" } });
+		Object.defineProperty(own, "source", { get: () => iframe.contentWindow });
+		(handler as EventListener)(own);
+		expect(handleOpenUrl).toHaveBeenCalledWith("https://example.org/help");
+	});
+
+	it("does not let a URL-mode dashboard request browser opens through the message bridge", () => {
+		const { container } = render(() => <PluginPanel tab={makeTab({ url: "about:blank", html: "" })} />);
+		const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+		const [, handler] = addEventListenerSpy.mock.calls.find(([event]: [string]) => event === "message")!;
+		const request = new MessageEvent("message", {
+			data: { type: "tuic:open-url", url: "https://example.org/help" },
+		});
+		Object.defineProperty(request, "source", { get: () => iframe.contentWindow });
+		(handler as EventListener)(request);
+		expect(handleOpenUrl).not.toHaveBeenCalled();
 	});
 
 	it("removes message listener on unmount", () => {
