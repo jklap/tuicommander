@@ -19,6 +19,7 @@ import type {
 	AcpConnectionId,
 	AcpConnectionSettlement,
 	AcpConnectionSnapshot,
+	AcpContentBlock,
 	AcpElicitationAction,
 	AcpHostRequestId,
 	AcpPendingInteraction,
@@ -247,18 +248,27 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			});
 		},
 
-		/** Send one turn. A person types text; ego reads content blocks. */
-		async prompt(connectionId: AcpConnectionId, sessionId: AcpSessionId, text: string): Promise<string> {
+		/** Send one turn as ACP content blocks, shared by desktop and remote chat. */
+		async prompt(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			text: string,
+			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
+		): Promise<string> {
+			if (images.length && !acpStore.connection(connectionId)?.capabilities?.promptImage) {
+				throw new Error("This agent does not support images.");
+			}
+			const prompt: AcpContentBlock[] = [...(text.trim() ? [{ type: "text" as const, text }] : []), ...images];
 			// Shown before the agent answers. Ego echoes a user message only when
 			// it replays history, so nothing else would put it on screen — and a
 			// prompt the backend refuses would leave a turn that never happened
 			// sitting in the conversation, reading as one the agent ignored.
-			const entryId = acpTranscript.noteUserMessage(sessionId, text);
+			const entryId = acpTranscript.noteUserMessage(sessionId, text.trim() ? text : "Image");
 			try {
 				return await invoke<string>("acp_session_prompt", {
 					connectionId,
 					sessionId,
-					prompt: [{ type: "text", text }],
+					prompt,
 				});
 			} catch (error) {
 				acpTranscript.dropEntry(sessionId, entryId);
