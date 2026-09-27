@@ -35,6 +35,10 @@ beside it lists previous conversations by title, newest first. Selecting one
 loads its history. The last selected conversation is restored after restarting
 TUICommander.
 
+When ego updates the session title, the panel header and conversation picker
+show the new title. During a turn, the footer shows context-window use as a
+percentage and shows the cumulative cost when ego reports one.
+
 ego reaches terminals and repositories the way any external agent does: by
 calling TUICommander's own MCP server. The entry for it is built by
 TUICommander, not by whoever opened the session, so a conversation can never be

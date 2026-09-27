@@ -13,6 +13,7 @@
  */
 
 import { type Component, For, Show } from "solid-js";
+import { acpTranscript } from "../../stores/acpTranscript";
 import type {
 	AcpSessionConfigOption,
 	AcpSessionConfigSelectGroup,
@@ -86,7 +87,11 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 					}}
 				>
 					<For each={sessions()}>
-						{(session) => <option value={session.sessionId}>{session.title || session.sessionId}</option>}
+						{(session) => (
+							<option value={session.sessionId}>
+								{acpTranscript.title(session.sessionId) || session.title || session.sessionId}
+							</option>
+						)}
 					</For>
 				</select>
 			</Show>

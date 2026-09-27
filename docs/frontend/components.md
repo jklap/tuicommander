@@ -110,6 +110,8 @@ desktop terminal view.
 `SessionControls` lists ego's durable `session/list` results by `updatedAt` and
 loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
 binding from app config after a fresh document opens.
+ACP session title updates rename the panel header and picker entry. The usage
+footer shows context-window occupancy and the reported cumulative cost.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image
