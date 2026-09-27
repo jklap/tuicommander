@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **External Markdown review saves** — Inline tweak comments on Markdown files outside the active repository now write to the external file. A failed write shows an error and keeps the draft open for retry.
+
 - **MCP file tab identity and visibility** — Native `tuic://open` and `tuic://edit` tabs use the MCP id: distinct ids coexist and repeating an id updates its tab. Tabs stay visible after selecting a terminal in a repository without an active workspace. Clicking an existing path outside registered repositories in terminal output opens it in the native viewer or editor.
 
 - **MCP tab repository scope** — Unpinned native file, HTML and URL tabs opened through `ui action=tab` return when their opening repository is selected again. Pinned MCP tabs remain visible across repositories.
