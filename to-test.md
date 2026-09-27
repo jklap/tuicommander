@@ -12,6 +12,10 @@
 
 # To Test
 
+## Detached CLI commands (story 1100-96bd) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg <log> -- <cmd>` from an isolated managed session. Confirm the launcher returns before the command, `<log>.exit` records its code, and a busy caller receives the completion wake only after becoming idle. The installed CLI cannot load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. Windows behavior is covered by CI-only tests and remains unverified on this Mac.
+
 ## Generic MCP CLI (story 1099-79b8) — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to compare `tuic mcp session '{"action":"list"}' | jq length` with the instance's MCP session count. Run `tuic mcp agent '{"action":"wait","timeout_ms":8000}'` and confirm it waits for the server reply without a three-second socket failure. The installed CLI cannot load the Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.

@@ -7,6 +7,7 @@
 //! When invoked as `tmux` (via symlink), enters tmux-compatibility mode
 //! and translates tmux commands to TUIC equivalents.
 
+mod bg;
 mod ipc;
 mod mcp;
 
@@ -31,6 +32,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a command detached and queue a completion wake to this TUIC session
+    Bg {
+        /// Append command output here; write the exit code to <log>.exit
+        log: String,
+        /// Command and arguments after --
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
+    #[command(name = "__bg-runner", hide = true)]
+    BgRunner {
+        log: String,
+        caller: String,
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
     /// Call a server-owned MCP tool with JSON arguments
     Mcp {
         /// MCP tool name (for example agent or session)
@@ -367,6 +383,12 @@ fn main() {
 fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
+        Command::Bg { log, command } => bg::launch(&log, &command),
+        Command::BgRunner {
+            log,
+            caller,
+            command,
+        } => bg::run(&log, &caller, &command),
         Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
