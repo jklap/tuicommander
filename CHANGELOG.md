@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat conversation recovery** — The last selected ego conversation reopens after a restart. The picker shows previous conversations by title and latest activity, then loads their history once.
+
 - **Headless MCP voice binding** — `tuic-remote` refuses voice calls from connections without a live terminal before reporting that audio is unavailable.
 
 - **Agent inbox FIFO and paging** — A full inbox accepts new mail by evicting its oldest message and reports unread losses in `missed_count`. Limited reads return oldest unread mail with `has_more`; an omitted limit returns all retained fresh mail.

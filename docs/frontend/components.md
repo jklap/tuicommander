@@ -107,6 +107,9 @@ behavioral boundaries rather than generic service wrappers.
 keeps it mounted when hidden. The detached AI Chat adapter loads the same panel
 when its window opens. Neither path loads its markdown renderer before the
 desktop terminal view.
+`SessionControls` lists ego's durable `session/list` results by `updatedAt` and
+loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
+binding from app config after a fresh document opens.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 
