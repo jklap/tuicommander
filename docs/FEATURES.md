@@ -658,7 +658,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 | pi | `pi` | `pi --continue` |
 | Git (background) | `git` | — |
 
-The per-agent **Prevent alternate screen** setting defaults on. New TUIC shells export Claude's environment control and, after a supported-CLI probe, the Codex/Grok `--no-alt-screen` and OpenCode `--mini` choices for manually typed commands. One Rust policy also covers menu, IPC/HTTP/MCP, worktree, and resume launches. A CLI without a verified control receives no invented option; an unexpected alternate-screen entry emits one warning per session.
+The per-agent **Prevent alternate screen** setting defaults on. New TUIC shells export Claude's environment control and, after a supported-CLI probe, the Codex/Grok `--no-alt-screen` and OpenCode `--mini` choices for manually typed commands. A timed-out help probe is cached for that binary version and its child process tree is stopped, so later launches do not repeat the delay. One Rust policy also covers menu, IPC/HTTP/MCP, worktree, and resume launches. A CLI without a verified control receives no invented option; an unexpected alternate-screen entry emits one warning per session.
 
 ### 6.1.1 Session-Aware Resume
 When an agent is detected running in a terminal, TUICommander automatically discovers its session ID from the filesystem and stores it per-terminal (`agentSessionId`). On restore, this enables session-specific resume instead of generic fallback commands.
