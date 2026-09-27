@@ -31,7 +31,9 @@ Switching repository opens a new conversation and leaves the previous one
 running. Coming back to a repository picks its conversation up where it was —
 nothing is relaunched, and the turn that was running kept running. **New** in the
 control bar starts a second conversation on the same repository; the picker
-beside it moves between them.
+beside it lists previous conversations by title, newest first. Selecting one
+loads its history. The last selected conversation is restored after restarting
+TUICommander.
 
 ego reaches terminals and repositories the way any external agent does: by
 calling TUICommander's own MCP server. The entry for it is built by

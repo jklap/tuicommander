@@ -834,7 +834,9 @@ one configured ego binary and speaks ACP to it, per
 - **Bound to a repository and a session, never to a terminal.** A turn ego runs
   outlives any tab and may touch files no tab is showing. Switching repository
   opens a new conversation and leaves the previous one running; coming back
-  picks it up without relaunching anything. One connection per repo root
+  picks it up without relaunching anything. The last selected session ID is
+  saved per root and loaded after an app restart. The conversation picker lists
+  ego's durable sessions by title and latest activity. One connection per repo root
 - Docked on the right, resizable by its left edge (session-scoped width, not
   persisted); detaches into its own window, with `DetachedPlaceholder` in the
   main window meanwhile
