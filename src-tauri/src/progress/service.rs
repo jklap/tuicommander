@@ -238,6 +238,10 @@ pub fn progress_list(project: &str, input: ProgressListInput) -> Result<Progress
     ProgressStore::open()?.list(&project_of(project)?, &input)
 }
 
+pub fn progress_projects() -> Result<Vec<String>, String> {
+    ProgressStore::open()?.recent_projects()
+}
+
 pub fn progress_delete(
     project: &str,
     input: ProgressDeleteInput,

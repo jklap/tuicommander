@@ -76,6 +76,8 @@ entries that arrived since you last opened the dialog.
 An outcome toast's **Go to repo** action also opens the reporting terminal
 in its workspace when that terminal is still open. If it has closed, the
 action opens the repository instead.
+Clicking the toast body closes it without changing the current repository or
+terminal. Use **Go to repo** when you want to navigate.
 
 The dialog opens on the active PTY, newest first. The selector switches to
 another PTY in the project or **All repo**, which combines their histories.

@@ -596,7 +596,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **PR Updates section** — types: Merged, Closed, Conflicts, CI Failed, CI Passed, Changes Requested, Ready
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
-- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Agent-raised MCP toasts derive their repository from the caller's session/cwd, display its name, and retain repository scope in the bell. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
+- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Agent-raised MCP toasts derive their repository from the caller's session/cwd, display its name, and retain repository scope in the bell. Clicking a toast body dismisses it without navigation; **Go to repo** navigates explicitly. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
 - Individual dismiss (×) per notification, section "Dismiss All", auto-dismiss after 5min focused time
@@ -1864,6 +1864,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Refuse files over 1 MB before reading and show a clear message for binary or non-text files
 
 ### 18.3 Session Detail Screen
+- Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
@@ -1888,13 +1889,14 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.5 Activity Feed
 - Chronological event feed grouped by time (NOW, EARLIER, TODAY, OLDER)
-- Reads from shared `activityStore`
+- Hydrates persisted activity from the server when the mobile tab opens; dismissed items stay hidden and current live items remain visible
 - Throttled grouping: items snapshot every 10s to prevent constant reordering with multiple active sessions; new items/removals trigger immediate refresh
 - Sticky section headers, tap to navigate to session
 
 ### 18.6 Session Management
 - **Session kill:** swipe or long-press a session card to kill/close the PTY session
 - **New session:** create a new PTY session from the sessions screen (optional shell/cwd selection)
+- **Progress:** lists projects with journal entries by recent activity, then shows and switches their saved entries without a desktop repository selection
 
 ### 18.7 Settings
 - Connection status: connectivity indicator with real-time Connected/Disconnected state

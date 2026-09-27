@@ -411,6 +411,11 @@ fn progress_list(
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
+fn progress_projects() -> Result<Vec<String>, String> {
+    progress::progress_projects()
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
 fn progress_delete(
     project: String,
     input: progress::ProgressDeleteInput,
@@ -1998,6 +2003,7 @@ pub fn run() {
             clear_repo_caches,
             report_progress_event,
             progress_list,
+            progress_projects,
             progress_delete,
             progress_mark_viewed,
             progress_flow,
