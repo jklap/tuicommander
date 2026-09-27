@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Faster desktop startup** — AI Chat and its markdown renderer load when the conversation opens, keeping the initial desktop bundle within its gzip budget.
+
 - **Stable dev window** — Vite ignores tooling files in `.tmp/` at every directory depth, so temporary HTML cannot reload a live window.
 
 - **Remote agent configuration errors** — Failed remote config loads identify the connection and endpoint, remain retryable, and cannot overwrite the remote file with an empty fallback.

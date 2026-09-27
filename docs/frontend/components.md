@@ -103,6 +103,11 @@ composes them and owns the top-level layout. Git operations retain the
 Each coordinator owns its timers, queues, generations, or locks. These are
 behavioral boundaries rather than generic service wrappers.
 
+`PanelOrchestrator` loads the AI Chat panel after its first inline opening and
+keeps it mounted when hidden. The detached AI Chat adapter loads the same panel
+when its window opens. Neither path loads its markdown renderer before the
+desktop terminal view.
+
 ## Mobile Screens (`src/mobile/`)
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared

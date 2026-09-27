@@ -1,9 +1,12 @@
-import { type Component, onMount } from "solid-js";
-import { AIChatPanel } from "../components/AIChatPanel/AIChatPanel";
+import { type Component, lazy, onMount, Suspense } from "solid-js";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import type { PanelAdapter } from "../panelRouter";
 import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
+
+const AIChatPanel = lazy(() =>
+	import("../components/AIChatPanel/AIChatPanel").then((module) => ({ default: module.AIChatPanel })),
+);
 
 /**
  * The AI Chat panel in its own window.
@@ -22,7 +25,11 @@ const DetachedAIChatPanel: Component<{ params: URLSearchParams }> = (props) => {
 		void initPanelWindow();
 	});
 
-	return <AIChatPanel visible={true} repoPath={repoPath} fsRoot={fsRoot} onClose={() => window.close()} />;
+	return (
+		<Suspense>
+			<AIChatPanel visible={true} repoPath={repoPath} fsRoot={fsRoot} onClose={() => window.close()} />
+		</Suspense>
+	);
 };
 
 /** The worktree the active repository is currently on, where it is on one. */
