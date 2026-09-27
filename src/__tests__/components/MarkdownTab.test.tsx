@@ -24,6 +24,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { setToastBellMirrorResolver, toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { CONVENTION_HEADER, parseTweakComments } from "../../utils/tweakComments";
 
 describe("MarkdownTab agent review actions", () => {
 	beforeEach(() => {
@@ -207,6 +208,71 @@ describe("MarkdownTab agent review actions", () => {
 				),
 			}),
 		);
+	});
+
+	it("saves consecutive question comments beside each selected item and keeps their highlights", async () => {
+		fileContent = [
+			"# Questions",
+			"",
+			...Array.from(
+				{ length: 4 },
+				(_, index) =>
+					`${index + 1}. **Question ${index + 1}** asks for a decision.\n   **Recommendation:** option ${index + 1}.\n`,
+			),
+		].join("\n");
+		mockInvoke.mockImplementation((command: string, args?: { content?: string }) => {
+			if (command === "read_file" || command === "read_external_file") return Promise.resolve(fileContent);
+			if (command === "write_file") fileContent = args?.content ?? fileContent;
+			return Promise.resolve(undefined);
+		});
+		const tabId = mdTabsStore.add("/repo", "docs/questions.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		for (let index = 0; index < 4; index++) {
+			const items = await waitFor(() => {
+				const found = Array.from(container.querySelectorAll<HTMLElement>("li[data-comment-source-start]"));
+				if (found.length !== 4) throw new Error(`item targets not ready after comment ${index}`);
+				return found;
+			});
+			items.forEach((item, itemIndex) => {
+				const top = 20 + itemIndex * 40;
+				item.getBoundingClientRect = () =>
+					({
+						left: 100,
+						right: 500,
+						top,
+						bottom: top + 20,
+						width: 400,
+						height: 20,
+						x: 100,
+						y: top,
+						toJSON() {},
+					}) as DOMRect;
+			});
+			fireEvent.mouseMove(items[index].closest("#markdown-content")!.parentElement!, {
+				clientX: 76,
+				clientY: 25 + index * 40,
+			});
+			fireEvent.mouseDown(await screen.findByRole("button", { name: "Comment on this block" }));
+			fireEvent.input(document.body.querySelector("textarea")!, { target: { value: `Answer ${index + 1}` } });
+			fireEvent.click(screen.getByRole("button", { name: "Save" }));
+			await waitFor(() => expect(fileContent).toContain(`Answer ${index + 1}-->`));
+			expect(parseTweakComments(fileContent).map((comment) => comment.comment)).toContain(`Answer ${index + 1}`);
+			await waitFor(() =>
+				expect(Number(container.querySelector("li")?.getAttribute("data-comment-source-start"))).toBeGreaterThan(
+					CONVENTION_HEADER.length,
+				),
+			);
+			await waitFor(() =>
+				expect(container.querySelectorAll<HTMLElement>("li.tweak-block-highlight").length).toBe(index + 1),
+			);
+		}
+		expect(fileContent.split("<!-- tweak-comments v1:")).toHaveLength(2);
+		for (let index = 1; index <= 4; index++) {
+			expect(fileContent).toMatch(new RegExp(`option ${index}\\.\\n   <!--tweak:item:[^\\n]+\\n   Answer ${index}-->`));
+			fireEvent.click(container.querySelectorAll<HTMLElement>("li.tweak-block-highlight")[index - 1]);
+			expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(`Answer ${index}`);
+			fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		}
 	});
 
 	// The block range comes from the render that was on screen when the popover

@@ -524,6 +524,9 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// that survive a tick are simply skipped.
 		processedContent();
 		incrementalContent();
+		// Comment markers are invisible in the rendered HTML. A source-only edit
+		// still moves block ranges and must refresh their DOM metadata.
+		if (props.commentableBlocks && !props.incremental) props.content;
 		if (!containerRef) return;
 		const raf = requestAnimationFrame(() => {
 			if (!containerRef) return;
