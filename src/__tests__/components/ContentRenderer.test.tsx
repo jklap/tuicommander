@@ -73,6 +73,30 @@ describe("ContentRenderer", () => {
 		expect(container.querySelector("ol[data-comment-source-start]")).toBeNull();
 	});
 
+	it("refreshes comment source ranges and highlights when a saved file replaces the rendered source", async () => {
+		const initial = "1. First question\n2. Second question\n";
+		const [source, setSource] = createSignal(initial);
+		const first = findTweakCommentBlocks(initial).find((block) => block.tag === "LI")!;
+		const { container } = render(() => <ContentRenderer content={source()} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		setSource(
+			insertTweakBlockComment(
+				initial,
+				{
+					id: "c_first",
+					highlighted: initial.slice(first.start, first.end),
+					comment: "Yes",
+					createdAt: "2026-09-27T12:00:00.000Z",
+				},
+				first,
+			),
+		);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		const items = Array.from(container.querySelectorAll<HTMLElement>("li"));
+		expect(Number(items[0].dataset.commentSourceStart)).toBeGreaterThan(initial.length);
+		expect(items[0].classList.contains("tweak-block-highlight")).toBe(true);
+	});
+
 	it("keeps structural markdown intact and highlights an existing block comment", async () => {
 		const source = "# Heading\n\nParagraph.";
 		const heading = findTweakCommentBlocks(source)[0];

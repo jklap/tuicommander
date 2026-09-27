@@ -16,6 +16,10 @@
 
 - [x] An MCP caller in repository A opens an unpinned external Markdown tab while repository B is visible: the focused tab switches to A and remains in A's tab bar; `focus=false` leaves B visible and the tab appears on return to A. Inline HTML/URL tabs use the same caller scope. _(verified: targeted `useAppInit` and `mdTabs` Vitest tests cover focused/background external files and caller-scoped HTML.)_
 
+## Sequential Markdown comments (story 1103-d5ae)
+
+- [x] Add block comments to several different numbered Markdown items in one open file. Each marker stays beside its item, the convention header appears once, and each highlight reopens its own comment. _(verified: `MarkdownTab.test.tsx` exercises four sequential saves through the tab, source positions, parsed comments, highlights, and reopen; `ContentRenderer.test.tsx` verifies source-only updates refresh block metadata.)_
+
 ## Mobile remote sessions, Progress, and Activity — Rust restart required
 
 - [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone.
