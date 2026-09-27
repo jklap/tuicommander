@@ -4022,6 +4022,7 @@ or credential is touched.
 
 ## Peer mail wake after Rust restart
 
+- [ ] After restarting an isolated `make dev` build, send a 10 KiB message to a disposable external Claude client subscribed to MCP SSE. Confirm the channel shows the sender UUID, message ID, size, and first-line preview without the body; `agent action=inbox` returns the complete message once. The running Rust backend cannot load this change until restart.
 - [ ] After restarting `make dev`, spawn one disposable agent through MCP
       `agent action=spawn` and one through `POST /sessions/agent`. Confirm each
       `GET /sessions` row reports `tuic_session` equal to its `session_id` before
