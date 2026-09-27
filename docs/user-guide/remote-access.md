@@ -128,6 +128,8 @@ notification opens that session.
 - **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
+- **Progress** — Select a project with journal entries to read its recent reports
+- **Remote sessions** — Open live output and close a session on its connected owning machine from the same phone page
 - **Notification sounds** — Audio alerts for questions, errors, completions, and rate limits
 
 ### Tips

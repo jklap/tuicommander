@@ -366,6 +366,19 @@ impl ProgressStore {
         self.list_limited(project, input, LIST_LIMIT)
     }
 
+    /// Projects with journal entries, ordered by their most recent entry.
+    pub fn recent_projects(&self) -> Result<Vec<String>, String> {
+        let conn = self.connect()?;
+        let mut statement = conn
+            .prepare("SELECT project FROM entries GROUP BY project ORDER BY MAX(id) DESC")
+            .map_err(db_error("prepare recent progress projects"))?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_error("read recent progress projects"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error("read a progress project"))
+    }
+
     /// `list` with an explicit row cap. The Flow reads one row past
     /// `LIST_LIMIT` so it can tell a journal of exactly that many entries from
     /// one that was cut.

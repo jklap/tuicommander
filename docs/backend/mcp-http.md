@@ -1613,5 +1613,8 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Live output**: WebSocket to `/sessions/{id}/stream` with JSON framing (`output`, `parsed`, `exit`)
 - **Input**: `POST /sessions/{id}/write` sends text to PTY (used by quick-reply chips and command input)
 - **History**: `GET /sessions/{id}/output?format=text` fetches initial ANSI-stripped output buffer
+- **Mirrored sessions**: the desktop server routes session-scoped HTTP calls and WebSockets to the connected owning daemon. It replaces the phone's credential with the owner connection token and returns 503 when that connection is unavailable. The daemon itself serves only local PTYs.
+- **Progress projects**: authenticated `GET /progress/projects` reads the local journal's project names for the phone's selector.
+- **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.

@@ -14,6 +14,7 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_session_proxy;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
 mod static_files;
@@ -466,6 +467,16 @@ async fn post_progress_list(
     }
     json_result(crate::progress::progress_list(&q.path, input))
 }
+
+async fn get_progress_projects(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+) -> Response {
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    json_result(crate::progress::progress_projects())
+}
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoryActionRequest {
@@ -869,6 +880,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // inserts `Authenticated` before the handler runs.
         .route("/progress/report", post(post_progress_report))
         .route("/progress/list", post(post_progress_list))
+        .route("/progress/projects", get(get_progress_projects))
         .route("/progress/delete", post(post_progress_delete))
         .route("/progress/viewed", post(post_progress_viewed))
         .route("/progress/flow", post(post_progress_flow))
@@ -2054,6 +2066,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     let routes = routes
         .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            remote_session_proxy::proxy_http,
+        ))
         .layer(cors)
         // DefaultPredicate auto-excludes SSE (text/event-stream) and WebSocket upgrades.
         // Do NOT replace with a bare SizeAbove — it would break streaming endpoints.
@@ -3279,6 +3295,43 @@ mod tests {
         assert_eq!(stored.entries[0].text, "HTTP transport is equivalent.");
     }
 
+    /// A phone has no desktop active repository. The journal itself must name
+    /// projects with entries, newest activity first, so an empty mobile tab
+    /// cannot mistake "no selected project" for "no progress".
+    #[tokio::test]
+    async fn mobile_progress_lists_projects_with_recent_entries_first() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let store = crate::progress::ProgressStore::open().unwrap();
+        for (project, text) in [("/older", "first done"), ("/newer", "later blocked")] {
+            store
+                .record(
+                    project,
+                    &crate::progress::NewProgressEntry {
+                        kind: if project == "/older" {
+                            crate::progress::ProgressKind::Done
+                        } else {
+                            crate::progress::ProgressKind::Blocked
+                        },
+                        text: text.into(),
+                        step: None,
+                        agent_name: None,
+                    },
+                )
+                .unwrap();
+        }
+        let response = build_router(test_state(), false, true)
+            .oneshot(get_localhost("/progress/projects"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let projects: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(projects, serde_json::json!(["/newer", "/older"]));
+    }
+
     #[tokio::test]
     async fn shared_routes_surface_is_locked_and_desktop_only_excluded() {
         // Drift guard (#094-ec55): shared_routes() is the single source both build_router
@@ -3356,6 +3409,7 @@ mod tests {
             // unguarded — so pin every route, not a representative one.
             "/progress/report",
             "/progress/list",
+            "/progress/projects",
             "/progress/delete",
             "/progress/viewed",
             "/progress/flow",
@@ -3601,6 +3655,203 @@ mod tests {
         assert_eq!(json[0]["session_id"], "vps-sess");
         assert_eq!(json[0]["connection_id"], "vps");
         assert_eq!(json[0]["display_name"], "claude on the vps");
+    }
+
+    /// A mirror row is a real session on its owner daemon, even though it has
+    /// no local PTY. The phone's same-origin output request must reach that
+    /// daemon, using the owner's credential rather than the caller's token.
+    #[tokio::test]
+    async fn mirrored_session_output_reaches_its_owner_without_forwarding_the_phone_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let remote = Router::new().route(
+            "/sessions/remote-phone/output",
+            get(|Query(query): Query<std::collections::HashMap<String, String>>| async move {
+                if query.get("token").map(String::as_str) != Some("owner-secret") {
+                    return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"bad token"})));
+                }
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"lines":[{"spans":[{"text":"remote line"}]}],"total_lines":1})),
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, remote).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{addr}"),
+            Some("owner-secret"),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(
+                "/sessions/remote-phone/output?format=log&token=phone-secret",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let output: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(output["lines"][0]["spans"][0]["text"], "remote line");
+        server.abort();
+    }
+
+    /// The kill button must terminate the mirrored session on its owner once.
+    /// A local 404 leaves the remote process alive, which is Boss's symptom.
+    #[tokio::test]
+    async fn mirrored_session_close_reaches_owner_once() {
+        let closes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::clone(&closes);
+        let remote = Router::new().route(
+            "/sessions/remote-phone",
+            delete(move || {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Json(serde_json::json!({"ok":true}))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, remote).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{addr}"),
+            Some("owner-secret"),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::delete("/sessions/remote-phone")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(closes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn disconnected_mirrored_session_reports_unavailable_instead_of_local_not_found() {
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost("/sessions/remote-phone/output?format=log"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn mirrored_session_websocket_streams_owner_log_frames() {
+        use axum::extract::ws::{Message, WebSocketUpgrade};
+        use futures_util::{SinkExt, StreamExt};
+
+        let owner_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let owner_addr = owner_listener.local_addr().unwrap();
+        let (input_sender, input_receiver) = tokio::sync::oneshot::channel();
+        let input_sender = Arc::new(std::sync::Mutex::new(Some(input_sender)));
+        let owner = Router::new().route(
+            "/sessions/remote-phone/stream",
+            get(move |Query(query): Query<std::collections::HashMap<String, String>>, ws: WebSocketUpgrade| {
+                let input_sender = Arc::clone(&input_sender);
+                async move {
+                    if query.get("token").map(String::as_str) != Some("owner-secret") {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    ws.on_upgrade(move |mut socket| async move {
+                        let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
+                            if let Some(sender) = input_sender.lock().unwrap().take() {
+                                let _ = sender.send(input.to_string());
+                            }
+                        }
+                    }).into_response()
+                }
+            }),
+        );
+        let owner_task =
+            tokio::spawn(async move { axum::serve(owner_listener, owner).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{owner_addr}"),
+            Some("owner-secret"),
+        );
+        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_listener.local_addr().unwrap();
+        let local = tokio::spawn(async move {
+            axum::serve(
+                local_listener,
+                build_router(state, false, true)
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        let (mut stream, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{local_addr}/sessions/remote-phone/stream?format=log"
+        ))
+        .await
+        .expect("mirrored session must accept the phone WebSocket");
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(frame.into_text().unwrap().contains("live remote line"));
+        stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "phone input".into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), input_receiver)
+                .await
+                .unwrap()
+                .unwrap(),
+            "phone input"
+        );
+        let _ = stream.close(None).await;
+        local.abort();
+        owner_task.abort();
     }
 
     #[tokio::test]
