@@ -17,10 +17,11 @@ BOLD_YELLOW='\033[1;33m'
 BOLD_UNDERLINED='\033[1;4m'
 BOLD='\033[1m'
 
-if ! [ -x "$(command -v sccache)" ]; then
-    echo -e "${BOLD_RED}Missing sccache${OFF}"
-    exit 1
-fi
+RUN_ALL="${RUN_ALL:-}"
+BUILD="${BUILD:-yes}"
+SIGN="${SIGN:-yes}"
+CHECK_SIGNING="${CHECK_SIGNING:-yes}"
+UPDATE_PLUGINS="${UPDATE_PLUGINS:-yes}"
 
 if [ -n "$RUN_ALL" ]; then
     # Typecheck
@@ -46,167 +47,184 @@ if [ -n "$RUN_ALL" ]; then
     pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
 fi
 
-HASH=$(git rev-parse --short HEAD)
-DIRTY=""
-if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules)" ]; then
-    DIRTY="-dirty"
-fi
-
-# NOTE: the below logic was stolen from the "nightly.yml" GHA
-# Append nightly timestamp to current version (strip any existing -nightly suffix first)
-RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
-VERSION="${RAW_VERSION%%-nightly*}"
-#NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)c"
-NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).${HASH}${DIRTY}"
-echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
-
-# Patch tauri.conf.json: version + add nightly updater endpoint
-python3 -c "
-import json
-c = json.load(open('src-tauri/tauri.conf.json'))
-c['version'] = '${NIGHTLY}'
-nightly_ep = 'https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json'
-ep = c['plugins']['updater']['endpoints']
-if nightly_ep not in ep:
-    ep.insert(0, nightly_ep)
-json.dump(c, open('src-tauri/tauri.conf.json','w'), indent=2)
-print('Patched tauri.conf.json')
-"
-
-# Patch Cargo.toml version
-sed -I '' "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml"
-
-export RUSTC_WRAPPER="sccache"
-export CMAKE_C_COMPILER_LAUNCHER="sccache"
-export CMAKE_CXX_COMPILER_LAUNCHER="sccache"
-
-# do a local signing of the app (and the sidecars)
-export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
-
-make build
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}Build failed${OFF}"
-    exit 1
-fi
-
-# enable debug level logging in the app's Info.plist
-/usr/libexec/PlistBuddy \
-    -c "Add :LSEnvironment dict" \
-    -c "Add :LSEnvironment:RUST_LOG string 'info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug'" \
-    src-tauri/target/release/bundle/macos/TUICommander.app/Contents/Info.plist
-
-echo -e "${GREEN}codesign: ${BOLD_GREEN}TUICommander.app${OFF}"
-# sign post changes to Info.plist
-codesign \
-    --force \
-    --deep \
-    --sign $APPLE_SIGNING_IDENTITY \
-	--identifier "com.tuic.commander" \
-	--entitlements src-tauri/Entitlements.plist \
-	--options runtime \
-    src-tauri/target/release/bundle/macos/TUICommander.app
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}codesign failed${OFF}"
-    exit 1
-fi
-
-echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
-codesign \
-    --verify \
-    --verbose \
-    src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
-    | grep --color=always -E 'valid on disk|satisfies its Designated Requirement|$'
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}codesign failed${OFF}"
-    exit 1
-fi
-
-echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
-codesign \
-    --display \
-    --check-notarization \
-    --entitlements - \
-    --xml \
-    --requirements - \
-    --verbose=4 \
-    src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
-    | grep --color=always -E 'CodeDirectory.*|Signature.*|$'
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}codesign failed${OFF}"
-    exit 1
-fi
-
-echo -e "${GREEN}notarization verification: ${BOLD_GREEN}TUICommander.app${OFF}"
-codesign \
-    --display \
-    --check-notarization \
-    -vvv \
-    src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
-    | grep --color=always -E 'CodeDirectory.*|$'
-if [ $? -ne 0 ]; then
-    echo -e "  ${BOLD_RED}codesign failed${OFF}"
-    exit 1
-fi
-
-echo -e "${GREEN}Gatekeeper verification: ${BOLD_GREEN}TUICommander.app${OFF}"
-spctl \
-    --assess \
-    --verbose \
-    src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
-    | grep --color=always -E 'rejected|$'
-if [ $? -ne 0 ] && [ "$APPLE_SIGNING_IDENTITY" != '-' ]; then
-    # we only care about the Gatekeeper check if it's not a local dev signing
-    echo -e "${BOLD_RED}Failed Gatekeeper check"
-    exit 1
-fi
-
-# spot checks, all should be good, only report if not
-{ codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic && \
-    codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-bridge && \
-    codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-hook && \
-    codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-remote ; \
-} || { echo "Unable to verify status of all sidecar code-signing"; exit 1; }
-
-open src-tauri/target/release/bundle/
-
-echo -e "${GREEN}Build complete${OFF}"
-
-echo -e "${GREEN}Restoring version files${OFF}"
-diff_check() {
-    local FILE="$1"
-    git diff --quiet \
-        -I '(^version =|"version": |download/nightly)' \
-        --ignore-cr-at-eol \
-        -- \
-        "$FILE"
-    if [ $? -eq 0 ]; then
-        git restore -- "$FILE"
+if [ -n "$BUILD" ]; then
+    # checking building requirements:
+    # brew: sccache, pnpm, rustup, agent-browser, gh, nvm
+    # cargo: tauri-cli, cargo-llvm-cov, cargo-audit, cargo-crap, mdbook
+    # cargo: --locked cargo-nextest
+    # brew (optional): mdkb, rtk
+    if ! [ -x "$(command -v sccache)" ]; then
+        echo -e "${BOLD_RED}Missing sccache${OFF}"
+        exit 1
     fi
-}
 
-diff_check "src-tauri/Cargo.lock"
-diff_check "src-tauri/Cargo.toml"
-diff_check "src-tauri/tauri.conf.json"
+    HASH=$(git rev-parse --short HEAD)
+    DIRTY=""
+    if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules)" ]; then
+        DIRTY="-dirty"
+    fi
 
-echo -e "${GREEN}Updating plugins${OFF}"
-rsync -aPvF \
-    --delete \
-    plugins/build-cleaner \
-    plugins/md-kanban \
-    plugins/mdkb-dashboard \
-    plugins/plan \
-    plugins/rtk-dashboard \
-    plugins/stories-ticker \
-    plugins/tuic-vscode-icons \
-    plugins/wiz-kanban \
-    plugins/csv-preview \
-    plugins/docx-preview \
-    plugins/xlsx-preview \
-    examples/plugins/repo-dashboard \
-    examples/plugins/claude-status \
-    examples/plugins/report-watcher \
-    --exclude "main.test.js" \
-    ~/Library/Application\ Support/com.tuic.commander/plugins/
+    # NOTE: the below logic was stolen from the "nightly.yml" GHA
+    # Append nightly timestamp to current version (strip any existing -nightly suffix first)
+    RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
+    VERSION="${RAW_VERSION%%-nightly*}"
+    #NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)c"
+    NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).${HASH}${DIRTY}"
+    echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
+
+    # Patch tauri.conf.json: version + add nightly updater endpoint
+    python3 -c "
+    import json
+    c = json.load(open('src-tauri/tauri.conf.json'))
+    c['version'] = '${NIGHTLY}'
+    nightly_ep = 'https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json'
+    ep = c['plugins']['updater']['endpoints']
+    if nightly_ep not in ep:
+        ep.insert(0, nightly_ep)
+    json.dump(c, open('src-tauri/tauri.conf.json','w'), indent=2)
+    print('Patched tauri.conf.json')
+    "
+
+    # Patch Cargo.toml version
+    sed -I '' "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml"
+
+    export RUSTC_WRAPPER="sccache"
+    export CMAKE_C_COMPILER_LAUNCHER="sccache"
+    export CMAKE_CXX_COMPILER_LAUNCHER="sccache"
+
+    # do a local signing of the app (and the sidecars)
+    export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+
+    make build-dmg
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}Build failed${OFF}"
+        exit 1
+    fi
+
+    # enable debug level logging in the app's Info.plist
+    /usr/libexec/PlistBuddy \
+        -c "Add :LSEnvironment dict" \
+        -c "Add :LSEnvironment:RUST_LOG string 'info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug'" \
+        src-tauri/target/release/bundle/macos/TUICommander.app/Contents/Info.plist
+
+    echo -e "${GREEN}Restoring version files${OFF}"
+    diff_check() {
+        local FILE="$1"
+        git diff --quiet \
+            -I '(^version =|"version": |download/nightly)' \
+            --ignore-cr-at-eol \
+            -- \
+            "$FILE"
+        if [ $? -eq 0 ]; then
+            git restore -- "$FILE"
+        fi
+    }
+
+    diff_check "src-tauri/Cargo.lock"
+    diff_check "src-tauri/Cargo.toml"
+    diff_check "src-tauri/tauri.conf.json"
+
+    open src-tauri/target/release/bundle/
+fi
+
+if [ -n "$SIGN" ]; then
+    echo -e "${GREEN}codesign: ${BOLD_GREEN}TUICommander.app${OFF}"
+    # sign post changes to Info.plist
+    codesign \
+        --force \
+        --deep \
+        --sign $APPLE_SIGNING_IDENTITY \
+        --identifier "com.tuic.commander" \
+        --entitlements src-tauri/Entitlements.plist \
+        --options runtime \
+        src-tauri/target/release/bundle/macos/TUICommander.app
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+fi
+
+if [ -n "$CHECK_SIGNING" ]; then
+    echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --verify \
+        --verbose \
+        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        | grep --color=always -E 'valid on disk|satisfies its Designated Requirement|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}codesign verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --display \
+        --check-notarization \
+        --entitlements - \
+        --xml \
+        --requirements - \
+        --verbose=4 \
+        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        | grep --color=always -E 'CodeDirectory.*|Signature.*|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}notarization verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    codesign \
+        --display \
+        --check-notarization \
+        -vvv \
+        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        | grep --color=always -E 'CodeDirectory.*|$'
+    if [ $? -ne 0 ]; then
+        echo -e "  ${BOLD_RED}codesign failed${OFF}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Gatekeeper verification: ${BOLD_GREEN}TUICommander.app${OFF}"
+    spctl \
+        --assess \
+        --verbose \
+        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        | grep --color=always -E 'rejected|$'
+    if [ $? -ne 0 ] && [ "$APPLE_SIGNING_IDENTITY" != '-' ]; then
+        # we only care about the Gatekeeper check if it's not a local dev signing
+        echo -e "${BOLD_RED}Failed Gatekeeper check"
+        exit 1
+    fi
+
+    # spot checks, all should be good, only report if not
+    { codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic && \
+        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-bridge && \
+        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-hook && \
+        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-remote ; \
+    } || { echo "Unable to verify status of all sidecar code-signing"; exit 1; }
+fi
+
+
+if [ -n "$UPDATE_PLUGINS" ]; then
+    echo -e "${GREEN}Updating plugins${OFF}"
+    rsync -aPvF \
+        --delete \
+        plugins/build-cleaner \
+        plugins/md-kanban \
+        plugins/mdkb-dashboard \
+        plugins/plan \
+        plugins/rtk-dashboard \
+        plugins/stories-ticker \
+        plugins/tuic-vscode-icons \
+        plugins/wiz-kanban \
+        plugins/csv-preview \
+        plugins/docx-preview \
+        plugins/xlsx-preview \
+        examples/plugins/repo-dashboard \
+        examples/plugins/claude-status \
+        examples/plugins/report-watcher \
+        --exclude "main.test.js" \
+        ~/Library/Application\ Support/com.tuic.commander/plugins/
+fi
 
 exit 0
 
