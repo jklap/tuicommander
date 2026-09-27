@@ -15,6 +15,13 @@
 ## Queued agent command diagnostics — Rust restart required
 
 - [ ] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it.
+- [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`,
+      queue a command for a throwaway Codex session while it is busy. Confirm it
+      runs once when Codex reaches Ready and the queue reaches zero. If the shell
+      first becomes idle without confirmed readiness, logs must name
+      `defer_reason=idle_unconfirmed`, then `Ready confirmed after shell became
+      idle` before the successful flush. The current backend cannot load this
+      fix without a restart.
 
 ## Consumed MCP agent inbox mail (story 1105-966b) — Rust restart required
 

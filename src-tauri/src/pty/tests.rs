@@ -10618,6 +10618,143 @@ fn enqueue_parks_command_while_agent_is_busy() {
     );
 }
 
+/// Regression: a silence-only idle edge leaves the queue parked; a later
+/// stable Ready screen must wake it even when no second shell edge or PTY read
+/// occurs. A callback writer observes the actual queue-to-PTY boundary.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
+    struct WriteChannel(std::sync::mpsc::Sender<Vec<u8>>);
+
+    impl std::io::Write for WriteChannel {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    tokio::time::pause();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "codex-ready-after-idle";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
+
+    let enqueued = enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    assert_eq!((enqueued.typed, enqueued.queued), (false, 1));
+    assert!(
+        received.try_recv().is_err(),
+        "busy turn must receive no input"
+    );
+
+    // This state sequence is observed in :9876: shell idle with
+    // idle_confirmed=false, then a queued flush is deferred. The reader's
+    // cached Ready verdict subsequently matures without another output chunk.
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    {
+        let mut silence = silence.lock();
+        let forty_minutes_ago = std::time::Instant::now() - std::time::Duration::from_secs(40 * 60);
+        silence.force_idle_unconfirmed();
+        silence.cached_screen_activity = AgentScreenActivity::Ready;
+        silence.last_output_at = forty_minutes_ago;
+        silence.last_chunk_at = forty_minutes_ago;
+        silence.screen_ready_pending_since = Some(forty_minutes_ago);
+    }
+    assert!(!should_inject_now(&state, sid));
+    flush_pending_injections_blocking(&state, sid);
+    assert!(received.try_recv().is_err());
+    assert_eq!(queued_command_count(&state, sid), 1);
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    for expected in [b"\x15".as_slice(), b"resume queued work", b"\r"] {
+        let actual = received
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .expect("ready confirmation must submit queued command without a new shell edge");
+        assert_eq!(actual, expected);
+    }
+    assert!(
+        received.try_recv().is_err(),
+        "the command must be submitted once"
+    );
+    assert_eq!(queued_command_count(&state, sid), 0);
+
+    // A later timer tick must not replay the command after the first drain.
+    let running = Arc::new(AtomicBool::new(true));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    assert!(received.try_recv().is_err());
+    assert_eq!(queued_command_count(&state, sid), 0);
+}
+
+/// A quiet PTY is not a ready composer while Codex still paints Working.
+/// The readiness retry must leave that queued user command untouched.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_codex_command_waits_when_idle_shell_still_shows_working() {
+    tokio::time::pause();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "codex-working-on-idle-shell";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let bytes = insert_recording_session(&state, sid);
+    assert_eq!(
+        enqueue_user_command(&state, sid, "wait for completion")
+            .unwrap()
+            .queued,
+        1
+    );
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut silence = silence.lock();
+        silence.force_idle_unconfirmed();
+        silence.cached_screen_activity = AgentScreenActivity::Working;
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "Working must not receive queued input"
+    );
+    assert_eq!(queued_command_count(&state, sid), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn enqueue_refuses_shells_and_dead_sessions() {

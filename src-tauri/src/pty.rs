@@ -4479,6 +4479,7 @@ fn try_timer_idle_transition(
             };
         }
 
+        let idle_was_confirmed = silence.idle_confirmed();
         let protocol_stale =
             screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
@@ -4506,6 +4507,13 @@ fn try_timer_idle_transition(
             .shell_states
             .get(session_id)
             .is_some_and(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
+        if !is_busy && screen_confirms_idle && !idle_was_confirmed {
+            tracing::debug!(
+                session_id,
+                queued_commands = queued_command_count(state, session_id),
+                "Ready confirmed after shell became idle"
+            );
+        }
         if !is_busy || screen_activity == AgentScreenActivity::Working {
             return TimerIdleTransition {
                 transitioned: false,
@@ -4786,6 +4794,14 @@ fn spawn_silence_timer(
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
+                } else if transition.screen_confirms_idle
+                    && !shell_is_busy
+                    && queued_command_count(&state, &session_id) > 0
+                {
+                    // Silence can mark the shell idle before the Ready screen
+                    // stabilizes. That later confirmation has no second shell
+                    // edge, so it must retry the existing self-guarded flush.
+                    flush_pending_injections(&state, &session_id);
                 }
             }
 
@@ -9055,10 +9071,24 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     let claim = match claim_idle_for_injection(state, session_id) {
         Some(claim) => claim,
         None => {
+            let defer_reason = if !session_is_agent(state, session_id) {
+                "not_agent"
+            } else if shell_state != "idle" {
+                "shell_not_idle"
+            } else if !idle_is_confirmed(state, session_id) {
+                "idle_unconfirmed"
+            } else if blocked_on_confident_question(state, session_id) {
+                "confident_question"
+            } else if has_partial_user_input(state, session_id) {
+                "partial_composer"
+            } else {
+                "claim_lost"
+            };
             tracing::info!(
                 session_id,
                 agent_state,
                 shell_state,
+                defer_reason,
                 queued_before,
                 queued_after = queued_before,
                 typed = "no",

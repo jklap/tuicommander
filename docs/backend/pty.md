@@ -641,6 +641,11 @@ the session id, agent and shell states at the attempt, queued counts before and
 after, whether text reached the composer, whether submission completed, and
 whether Enter was sent separately. An uncertain write reports uncertain fields
 rather than claiming a completed submission; command text is never logged.
+Deferred attempts include `defer_reason` (unavailable agent, shell busy,
+unconfirmed idle, confident question, partial composer, or a lost claim). If a
+Ready screen becomes confirmed after silence already marked the shell idle, the
+timer retries this same guarded flush without waiting for another shell
+transition; a debug record names that ordering and the pending queue depth.
 
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 
