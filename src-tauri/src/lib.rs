@@ -50,7 +50,7 @@ pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;
-pub(crate) mod github_debug;
+pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;

@@ -88,7 +88,7 @@ src-tauri/src/
 ├── main.rs               # Entry point
 ├── pty.rs                # PTY session lifecycle
 ├── git.rs                # Git cache and Tauri command adapters
-├── github.rs             # GitHub API integration
+├── github.rs             # GitHub API and state adapters
 ├── config.rs             # Configuration management
 ├── state.rs              # Global state (sessions, buffers, metrics)
 ├── agent.rs              # Agent binary detection and spawning
@@ -107,7 +107,7 @@ src-tauri/src/
 src-tauri/crates/tuic-dictation/src/  # Audio, hands-free and speech domain
 ```
 
-`src-tauri/crates/` is a sibling of `src-tauri/src/`. `tuic-core` owns shared configuration and path utilities; `tuic-terminal` owns terminal parsing and buffers; `tuic-git` owns blocking Git reads, subprocesses, branch and worktree operations, and artifact warming; the root Git adapters own Tokio scheduling and Tauri commands.
+`src-tauri/crates/` is a sibling of `src-tauri/src/`. `tuic-core` owns shared configuration and path utilities; `tuic-terminal` owns terminal parsing and buffers; `tuic-git` owns blocking Git reads, subprocesses, branch and worktree operations, artifact warming, and pure GitHub models and parsing. Root Git and GitHub adapters own Tokio scheduling, API clients, state, event emission, and Tauri commands.
 
 ## Application Startup Flow
 

@@ -1,6 +1,6 @@
 ## Crate split restart
 
-- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git`, and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check push-to-talk transcription and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout.
+- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout.
 
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP

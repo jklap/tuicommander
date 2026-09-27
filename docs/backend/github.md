@@ -1,6 +1,6 @@
 # GitHub Integration
 
-**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`, `src-tauri/src/github_poller.rs`
+**Modules:** `src-tauri/crates/tuic-git/src/{github,github_account,github_auth,github_poller,circleci,pr_review,changelog,github_debug}.rs` contains GitHub data types and pure decisions. The matching modules under `src-tauri/src/` keep API clients, credential and config storage, polling, event emission, ego calls, and Tauri commands; they re-export the domain items at their existing paths.
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
