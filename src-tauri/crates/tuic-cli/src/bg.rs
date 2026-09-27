@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use crate::ipc;
+use crate::{ipc, mcp};
 
 pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
     let caller = std::env::var("TUIC_SESSION").unwrap_or_default();
@@ -102,10 +102,32 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
         .map_err(|e| format!("Cannot write exit file {exit_file}: {e}"))?;
     let wake = format!("BG DONE exit={code} log={log} cmd={}", command.join(" "));
     let wake_status = match queue_wake(caller, &wake) {
-        Ok(()) => serde_json::json!({"status": "accepted"}),
-        Err(e) => {
-            let _ = writeln!(output, "tuic bg: wake failed: {e}");
-            serde_json::json!({"status": "failed", "error": e})
+        Ok(()) => serde_json::json!({"status": "queued"}),
+        Err(queue_error) => {
+            let _ = writeln!(output, "tuic bg: queue wake failed: {queue_error}");
+            let message = format!("{wake}\ntuic bg: queue wake failed: {queue_error}");
+            let mail_result = mcp::McpClient::connect()
+                .and_then(|client| mcp::agent_send(&client, caller, &message))
+                .and_then(|report| {
+                    if report["delivered"] == true {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Mail stayed inbox-only ({})",
+                            report["delivery_path"]
+                        ))
+                    }
+                });
+            match mail_result {
+                Ok(()) => serde_json::json!({"status": "mailed", "queue_error": queue_error}),
+                Err(mail_error) => {
+                    let _ = writeln!(output, "tuic bg: mail wake failed: {mail_error}");
+                    serde_json::json!({
+                        "status": "failed",
+                        "error": format!("queue: {queue_error}; mail: {mail_error}")
+                    })
+                }
+            }
         }
     };
     let wake_file = format!("{log}.wake");
