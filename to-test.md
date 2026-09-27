@@ -14,7 +14,7 @@
 
 ## Detached CLI wake status — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `accepted` when the queue takes the request. For an unbound caller or rejected queue, confirm `.wake` says `failed` with the reason. The installed CLI cannot load this Rust change until rebuilt.
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `queued` when the queue takes the request. For an unbound caller, confirm MCP mail surfaces `BG DONE` with the queue error and `.wake` says `mailed`; when both channels fail, `.wake` says `failed` with both reasons. The installed CLI cannot load this Rust change until rebuilt.
 
 ## Queued agent command diagnostics — Rust restart required
 

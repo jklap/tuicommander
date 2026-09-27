@@ -144,9 +144,13 @@ and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
 When it finishes, `tuic` requests one `BG DONE exit=<code> log=<log> cmd=…`
 wake for the originating session. If that session is busy, the wake is queued
 until it becomes idle. `<log>.wake` records the request outcome as JSON:
-`{"status":"accepted"}` or `{"status":"failed","error":"…"}`. Acceptance
-means the queue took the request; it does not prove the agent later submitted
-it. The command works on macOS, Linux, and Windows.
+`{"status":"queued"}`, `{"status":"mailed","queue_error":"…"}`, or
+`{"status":"failed","error":"…"}`. A queue lookup or request failure falls
+back to MCP agent mail addressed to the same `TUIC_SESSION`; that mail includes
+the `BG DONE` text and the queue error. `queued` means the queue took the
+request, not that the agent later submitted it. `mailed` means the mail was
+surfaced to the caller; inbox-only mail remains a failure. The command works
+on macOS, Linux, and Windows.
 
 ```bash
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
@@ -155,8 +159,8 @@ tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
 and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`
-for command completion and `.wake` for a failed wake request. A wake request
-failure is also appended to the log. Neither status file can start a new agent
+for command completion and `.wake` for both queue and mail failures. Both
+errors are also appended to the log. Neither status file can start a new agent
 turn while TUICommander is unavailable.
 
 ```bash

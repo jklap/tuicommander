@@ -126,7 +126,7 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "7");
     let wake_status: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
-    assert_eq!(wake_status["status"], "accepted");
+    assert_eq!(wake_status["status"], "queued");
     let log_text = std::fs::read_to_string(&log).unwrap();
     assert!(
         log_text.contains("previous\n")
@@ -153,15 +153,36 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
 }
 
 #[test]
-fn bg_records_wake_failure_when_caller_is_missing() {
+fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
     let log = test_path("unbound.log");
     let socket = test_path("unbound.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let request = read_request(&mut stream);
+        let lookup = read_request(&mut stream);
         reply(&mut stream, "[]");
-        request
+        let (mut stream, _) = listener.accept().unwrap();
+        let initialize = read_request(&mut stream);
+        let init_body = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nMcp-Session-Id: mcp-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{init_body}",
+            init_body.len()
+        )
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let mail = read_request(&mut stream);
+        let report = serde_json::json!({
+            "message_id": "mail-1",
+            "delivered": true,
+            "delivery_path": "wake_notification_and_inbox"
+        });
+        let response = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2,
+            "result": {"content": [{"type": "text", "text": report.to_string()}]}
+        });
+        reply(&mut stream, &response.to_string());
+        (lookup, initialize, mail)
     });
     let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
@@ -176,9 +197,79 @@ fn bg_records_wake_failure_when_caller_is_missing() {
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "0");
     let wake_status: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake_status["status"], "mailed");
+    let (lookup, initialize, mail) = server.join().unwrap();
+    assert_eq!(lookup.0, "GET /sessions HTTP/1.1");
+    assert_eq!(initialize.0, "POST /mcp HTTP/1.1");
+    assert_eq!(initialize.1["method"], "initialize");
+    assert_eq!(mail.0, "POST /mcp HTTP/1.1");
+    assert_eq!(mail.1["params"]["name"], "agent");
+    assert_eq!(mail.1["params"]["arguments"]["action"], "send");
+    assert_eq!(mail.1["params"]["arguments"]["to"], "caller-1");
+    let message = mail.1["params"]["arguments"]["message"].as_str().unwrap();
+    assert!(message.contains("BG DONE exit=0"));
+    assert!(message.contains("wake failed"));
+    assert!(message.contains("found 0"));
+    std::fs::remove_file(exit_file).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn bg_does_not_call_inbox_only_mail_a_wake() {
+    let log = test_path("inbox-only.log");
+    let socket = test_path("inbox-only.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let lookup = read_request(&mut stream);
+        reply(&mut stream, "[]");
+        let (mut stream, _) = listener.accept().unwrap();
+        let initialize = read_request(&mut stream);
+        let init_body = r#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nMcp-Session-Id: mcp-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{init_body}",
+            init_body.len()
+        )
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let mail = read_request(&mut stream);
+        let report = serde_json::json!({
+            "message_id": "mail-2", "delivered": false, "delivery_path": "inbox_only"
+        });
+        let response = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2,
+            "result": {"content": [{"type": "text", "text": report.to_string()}]}
+        });
+        reply(&mut stream, &response.to_string());
+        (lookup, initialize, mail)
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 3"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    wait_for(&wake_file);
+    assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "3");
+    let wake_status: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
     assert_eq!(wake_status["status"], "failed");
-    assert!(wake_status["error"].as_str().unwrap().contains("found 0"));
-    assert_eq!(server.join().unwrap().0, "GET /sessions HTTP/1.1");
+    assert!(
+        wake_status["error"]
+            .as_str()
+            .unwrap()
+            .contains("inbox_only")
+    );
+    let (lookup, initialize, mail) = server.join().unwrap();
+    assert_eq!(lookup.0, "GET /sessions HTTP/1.1");
+    assert_eq!(initialize.1["method"], "initialize");
+    assert_eq!(mail.1["params"]["arguments"]["to"], "caller-1");
     std::fs::remove_file(exit_file).unwrap();
     std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
@@ -198,6 +289,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
             r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
         );
         let (mut stream, _) = listener.accept().unwrap();
+        drop(listener);
         let second = read_request(&mut stream);
         let body = r#"{"error":"Session is not running an agent"}"#;
         write!(
@@ -223,6 +315,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
         serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
     assert_eq!(wake_status["status"], "failed");
     assert!(wake_status["error"].as_str().unwrap().contains("HTTP 400"));
+    assert!(wake_status["error"].as_str().unwrap().contains("mail:"));
     let (first, second) = server.join().unwrap();
     assert_eq!(first.0, "GET /sessions HTTP/1.1");
     assert_eq!(second.0, "POST /sessions/pty-1/queue HTTP/1.1");
