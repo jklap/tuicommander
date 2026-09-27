@@ -136,6 +136,23 @@ arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
 peer binding; callers outside TUICommander register an external identity for
 that invocation.
 
+### Detached commands
+
+Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
+once while the command runs in a separate process group. The command's stdout
+and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
+When it finishes, TUICommander sends one `BG DONE exit=<code> log=<log> cmd=…`
+wake to the originating session. If that session is busy, the wake is queued
+until it becomes idle. The command works on macOS, Linux, and Windows.
+
+```bash
+tuic bg "$HOME/Gits/.tmp/build.log" -- make check
+```
+
+`TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
+command. A wake delivery failure is appended to the log after the exit file
+is written.
+
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)
 tuic agent spawn claude "review the failing tests"
