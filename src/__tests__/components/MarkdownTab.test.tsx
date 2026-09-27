@@ -169,6 +169,46 @@ describe("MarkdownTab agent review actions", () => {
 		await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
 	});
 
+	// Catches: saving at the whole-list offset or under a neighboring task.
+	it("writes a task comment below the selected bullet in the file", async () => {
+		fileContent = "- first\n- [ ] chosen\n- third\n";
+		const tabId = mdTabsStore.add("/repo", "docs/tasks.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const items = await waitFor(() => {
+			const found = Array.from(container.querySelectorAll<HTMLElement>("li[data-comment-source-start]"));
+			if (found.length !== 3) throw new Error("list-item targets not ready");
+			return found;
+		});
+		items.forEach((item, index) => {
+			const top = 20 + index * 40;
+			item.getBoundingClientRect = () =>
+				({
+					left: 100,
+					right: 500,
+					top,
+					bottom: top + 20,
+					width: 400,
+					height: 20,
+					x: 100,
+					y: top,
+					toJSON() {},
+				}) as DOMRect;
+		});
+		fireEvent.mouseMove(items[1].closest("#markdown-content")!.parentElement!, { clientX: 76, clientY: 65 });
+		fireEvent.mouseDown(await screen.findByRole("button", { name: "Comment on this block" }));
+		fireEvent.input(document.body.querySelector("textarea")!, { target: { value: "Clarify chosen" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", {
+				repoPath: "/repo",
+				file: "docs/tasks.md",
+				content: expect.stringMatching(
+					/- first\n- \[ \] chosen\n {2}<!--tweak:item:\S+ @\S+\n {2}Clarify chosen-->\n- third\n$/,
+				),
+			}),
+		);
+	});
+
 	// The block range comes from the render that was on screen when the popover
 	// opened. If the file changes while the user types, saving at those offsets
 	// would write the marker into unrelated text.

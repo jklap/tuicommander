@@ -59,6 +59,20 @@ describe("ContentRenderer", () => {
 		);
 	});
 
+	// Catches: assigning the list's range to every item or omitting nested/task/ordered items.
+	it("gives each plain, task, nested, and ordered item its own source target", async () => {
+		const source = "- parent\n  - nested\n- [ ] task\n- sibling\n\n1. ordered\n";
+		const { container } = render(() => <ContentRenderer content={source} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		const items = Array.from(container.querySelectorAll<HTMLElement>("li[data-comment-source-start]"));
+		expect(items).toHaveLength(5);
+		expect(
+			items.map((item) => source.slice(Number(item.dataset.commentSourceStart), Number(item.dataset.commentSourceEnd))),
+		).toEqual(["- parent", "  - nested", "- [ ] task", "- sibling", "1. ordered"]);
+		expect(container.querySelector("ul[data-comment-source-start]")).toBeNull();
+		expect(container.querySelector("ol[data-comment-source-start]")).toBeNull();
+	});
+
 	it("keeps structural markdown intact and highlights an existing block comment", async () => {
 		const source = "# Heading\n\nParagraph.";
 		const heading = findTweakCommentBlocks(source)[0];
@@ -257,9 +271,7 @@ describe("ContentRenderer", () => {
 	])("does not let raw HTML pre-seed the dispatched link", (content) => {
 		vi.mocked(handleOpenUrl).mockClear();
 		const onLinkClick = vi.fn();
-		const { container } = render(() => (
-			<ContentRenderer content={content} onLinkClick={onLinkClick} />
-		));
+		const { container } = render(() => <ContentRenderer content={content} onLinkClick={onLinkClick} />);
 		fireEvent.click(container.querySelector("a")!);
 		expect(onLinkClick).toHaveBeenCalledWith("docs/guide.md");
 		expect(handleOpenUrl).not.toHaveBeenCalledWith("https://evil.example");
@@ -267,7 +279,9 @@ describe("ContentRenderer", () => {
 
 	it("removes forms and image-map links from raw Markdown HTML", () => {
 		const { container } = render(() => (
-			<ContentRenderer content={'<form action="?mode=panel"><button>go</button></form><map><area href="?mode=panel"></map>'} />
+			<ContentRenderer
+				content={'<form action="?mode=panel"><button>go</button></form><map><area href="?mode=panel"></map>'}
+			/>
 		));
 		expect(container.querySelector("form, map, area")).toBeNull();
 	});

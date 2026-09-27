@@ -45,7 +45,7 @@ export interface ContentRendererProps {
 	contentRef?: (el: HTMLDivElement) => void;
 	/** Override the root font size in pixels (children use em, so everything scales). */
 	fontSize?: number;
-	/** Add exact raw-source ranges to top-level Markdown blocks for gutter comments. */
+	/** Add exact raw-source ranges to Markdown blocks and individual list items for gutter comments. */
 	commentableBlocks?: boolean;
 	/**
 	 * Render a growing answer as a committed prefix plus a live tail, so a tick
@@ -68,18 +68,26 @@ export function applyCommentBlockMetadata(container: HTMLElement, source: string
 	const comments = parseTweakComments(source, blocks).filter((comment) => comment.anchor === "block");
 	const renderRoot = container.firstElementChild ?? container;
 	const elements = Array.from(renderRoot.children) as HTMLElement[];
+	const listItems = Array.from(renderRoot.querySelectorAll<HTMLElement>("li"));
 	let elementIndex = 0;
+	let itemIndex = 0;
 	// DEFERRED (2026-09-23) — pairing is by tag only. A raw HTML token (e.g.
 	// `<p align="center">`) renders an element with no entry in `blocks`, so the
 	// next same-tag block binds to it and every later one shifts by one. The fix
 	// needs per-token element counts for `html` tokens (after DOMPurify), which
 	// is more than a local change; the save path already refuses a stale range.
 	for (const block of blocks) {
-		while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
-		const element = elements[elementIndex++];
+		let element: HTMLElement | undefined;
+		if (block.tag === "LI") element = listItems[itemIndex++];
+		else {
+			while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
+			element = elements[elementIndex++];
+		}
 		if (!element) break;
-		element.dataset.commentSourceStart = String(block.start);
-		element.dataset.commentSourceEnd = String(block.end);
+		if (block.tag !== "UL" && block.tag !== "OL") {
+			element.dataset.commentSourceStart = String(block.start);
+			element.dataset.commentSourceEnd = String(block.end);
+		}
 		const comment = comments.find(
 			(candidate) => candidate.sourceStart === block.start && candidate.sourceEnd === block.end,
 		);
