@@ -1815,6 +1815,40 @@ describe("Sidebar", () => {
 			expect(mockNavigateToTerminal).toHaveBeenCalledWith("t2");
 		});
 
+		it("shows an idle session row when the tab is finished despite stale working agent state", () => {
+			mockTerminalsGet.mockReturnValue({
+				name: "tuic-backlog",
+				agentType: "codex",
+				sessionId: "089ffa34",
+				shellState: "idle",
+				agentState: "working",
+				backgroundWork: false,
+				awaitingInput: null,
+				unseen: false,
+				lastActivityAt: Date.now() - 70 * 60_000,
+			});
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const dot = container.querySelector(".branchTabItem .branchTabDot");
+			expect(dot?.classList.contains("branchTabDotIdle")).toBe(true);
+			expect(dot?.classList.contains("branchTabDotBusy")).toBe(false);
+		});
+
 		it("tags a sub-agent row with its parent and leaves other rows untagged", () => {
 			mockTerminalsGet.mockImplementation((id: string) => ({
 				name: id === "t1" ? "Orchestrator" : "Worker",
