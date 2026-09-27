@@ -845,6 +845,9 @@ one configured ego binary and speaks ACP to it, per
 - **Permission requests** are answered with one of the option ids ego published.
   **Elicitations** are drawn as a form, and only in `form` mode — the client
   declines every other mode before it reaches a person
+- While AI Chat is hidden, its status-bar toggle counts pending permissions and
+  forms. Each new question produces one desktop notification, cleared when the
+  question settles
 - **Model, reasoning effort and mode** come from the options the session
   publishes through `set_config_option`. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each

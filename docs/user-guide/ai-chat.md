@@ -70,6 +70,10 @@ A question raised while this window was not listening is still shown: the panel
 fetches what is open when it attaches, rather than waiting for an announcement
 that already happened.
 
+When AI Chat is hidden, its status-bar button shows the number of unanswered
+permissions and forms. The desktop sends one notification for each new question;
+answering it removes the badge and closes its notification.
+
 ## When it misses something
 
 - **"Missed part of this conversation"** means the journal no longer holds the

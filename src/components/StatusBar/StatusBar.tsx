@@ -15,15 +15,18 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
 import { formatWaitTime } from "../../rate-limit";
+import { acpStore } from "../../stores/acp";
 import { appLogger } from "../../stores/appLogger";
 import { dictationStore } from "../../stores/dictation";
 import { ideasStore } from "../../stores/ideas";
+import { notificationsStore } from "../../stores/notifications";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -56,6 +59,18 @@ export interface StatusBarProps {
 }
 
 export const StatusBar: Component<StatusBarProps> = (props) => {
+	const pendingAcpCount = createMemo(() =>
+		Object.values(acpStore.state.connections).reduce((count, connection) => count + connection.interactions.length, 0),
+	);
+	createEffect(() => {
+		const interactions = Object.entries(acpStore.state.connections).flatMap(([connectionId, connection]) =>
+			connection.interactions.map((interaction) => ({
+				id: `${connectionId}:${interaction.requestId}`,
+				kind: interaction.kind,
+			})),
+		);
+		notificationsStore.syncAcpAttention(interactions, !uiStore.state.aiChatPanelVisible);
+	});
 	const [showPrDetailPopover, setShowPrDetailPopover] = createSignal(false);
 	const [cwdCopied, setCwdCopied] = createSignal(false);
 
@@ -471,6 +486,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
 							<path d="M3 2a2 2 0 00-2 2v6a2 2 0 002 2h1v2.5L7.5 12H13a2 2 0 002-2V4a2 2 0 00-2-2H3z" />
 						</svg>
+						<CountBadge count={uiStore.state.aiChatPanelVisible ? 0 : pendingAcpCount()} tone="error" />
 					</button>
 				</Show>
 
