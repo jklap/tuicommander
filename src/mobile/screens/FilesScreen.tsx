@@ -13,7 +13,12 @@ interface FileEntry {
 
 const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
-export function FilesScreen() {
+interface FilesScreenProps {
+	initialRepo?: { worktreePath: string | null; cwd: string | null };
+	onExit?: () => void;
+}
+
+export function FilesScreen(props: FilesScreenProps) {
 	const [repos, setRepos] = createSignal<string[]>([]);
 	const [repo, setRepo] = createSignal<string | null>(null);
 	const [dir, setDir] = createSignal("");
@@ -28,8 +33,34 @@ export function FilesScreen() {
 
 	onMount(async () => {
 		try {
+			const worktreePath = props.initialRepo?.worktreePath?.trim();
+			if (worktreePath) {
+				await openDirectory(worktreePath, "");
+				return;
+			}
+			const cwd = props.initialRepo?.cwd?.trim();
+			if (props.initialRepo && !cwd) {
+				setError("Repository path is unavailable for this session.");
+				return;
+			}
 			const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
-			setRepos(Object.keys(config.repos ?? {}));
+			const registered = Object.keys(config.repos ?? {});
+			if (cwd) {
+				const normalizedCwd = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
+				const matching = registered
+					.filter((path) => {
+						const root = path.replaceAll("\\", "/").replace(/\/+$/, "");
+						return normalizedCwd === root || normalizedCwd.startsWith(`${root}/`);
+					})
+					.sort((a, b) => b.length - a.length);
+				if (matching.length === 0) {
+					setError("No registered repository contains this session directory.");
+					return;
+				}
+				await openDirectory(matching[0], "");
+			} else {
+				setRepos(registered);
+			}
 		} catch (err) {
 			setError(`Could not load repositories: ${String(err)}`);
 		}
@@ -94,7 +125,8 @@ export function FilesScreen() {
 			void openDirectory(repo()!, dir().split("/").slice(0, -1).join("/"));
 			return;
 		}
-		setRepo(null);
+		if (props.onExit) props.onExit();
+		else setRepo(null);
 	}
 
 	async function save() {
@@ -120,8 +152,8 @@ export function FilesScreen() {
 	return (
 		<div class={styles.screen}>
 			<header class={styles.header}>
-				<Show when={repo() !== null}>
-					<button class={styles.back} onClick={goBack} aria-label="Back">
+				<Show when={repo() !== null || props.onExit}>
+					<button class={styles.back} onClick={goBack} aria-label={props.onExit ? "Back to session" : "Back"}>
 						‹ Back
 					</button>
 				</Show>
@@ -135,7 +167,7 @@ export function FilesScreen() {
 			<Show when={busy()}>
 				<p class={styles.status}>Loading…</p>
 			</Show>
-			<Show when={repo() === null}>
+			<Show when={repo() === null && !props.initialRepo}>
 				<Show when={repos().length > 0} fallback={<p class={styles.status}>No repositories configured</p>}>
 					<For each={repos()}>
 						{(path) => (

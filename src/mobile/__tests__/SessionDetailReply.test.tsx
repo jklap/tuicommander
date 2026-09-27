@@ -6,7 +6,10 @@ import type { SessionInfo } from "../useSessions";
 const { rpc } = vi.hoisted(() => ({
 	rpc: vi.fn(async (_command: string, _args: Record<string, unknown>) => ({ submitted: true, acknowledged: true })),
 }));
-vi.mock("../../transport", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../transport")>()), rpc }));
+vi.mock("../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../transport")>()),
+	rpc,
+}));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div /> }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
@@ -29,12 +32,16 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 			last_activity_ms: 1,
 		},
 	};
-	const { container } = render(() => <SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} />);
+	const { container } = render(() => (
+		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+	));
 	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Approve the change" } });
 	expect(rpc).not.toHaveBeenCalled();
 	await fireEvent.click(container.querySelector("button[type=button]")!);
-	await waitFor(() => expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
-		sessionId: "coordinator-session",
-		input: "Approve the change",
-	}));
+	await waitFor(() =>
+		expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
+			sessionId: "coordinator-session",
+			input: "Approve the change",
+		}),
+	);
 });
