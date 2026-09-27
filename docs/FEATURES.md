@@ -845,6 +845,8 @@ one configured ego binary and speaks ACP to it, per
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
   replaced whole each time it changes
+- Session title updates rename the panel header and picker entry. The footer
+  shows context-window use and the cumulative cost when ego reports it
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn

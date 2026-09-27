@@ -437,6 +437,71 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	it("shows a new ACP session title in the header and conversation picker", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: ROOT, title: "Conversation 1", updatedAt: "2026-09-27T09:00:00Z" },
+				{ sessionId: "other", cwd: ROOT, title: "Other", updatedAt: "2026-09-26T09:00:00Z" },
+			],
+			nextCursor: null,
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Review architecture" } });
+		await settle();
+
+		expect(container.querySelector('select[title="Conversation"]')?.textContent).toContain("Review architecture");
+		expect(container.querySelector('[class*="headerLeft"]')?.textContent).toContain("Review architecture");
+	});
+
+	it("renders context occupancy and cost from one ACP usage update", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 50000, size: 200000, cost: { amount: 0.001035, currency: "USD" } },
+		});
+		await settle();
+
+		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("USD 0.001035");
+	});
+
+	it("renders context occupancy without a missing cost", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
+		await settle();
+
+		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).not.toContain("NaN");
+		expect(container.textContent).not.toContain("USD");
+	});
+
+	it("does not carry a previous cost into a costless usage update", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 100, size: 400, cost: { amount: 2, currency: "USD" } },
+		});
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
+		await settle();
+
+		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).not.toContain("USD 2");
+	});
+
+	it("does not render a percentage for a zero context window", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
+		await settle();
+
+		expect(container.textContent).not.toContain("Context");
+		expect(container.textContent).not.toContain("Infinity");
+	});
+
 	it("does not replace a saved binding when config cannot be read", async () => {
 		vi.mocked(invoke).mockRejectedValue(new Error("Config unavailable"));
 		const { container } = renderPanel();

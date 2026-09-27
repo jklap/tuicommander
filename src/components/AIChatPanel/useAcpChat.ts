@@ -239,6 +239,14 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 		attachment,
 		interactions,
 		entries,
+		title: () => {
+			const session = sessionId();
+			return session ? acpTranscript.title(session) : null;
+		},
+		usage: () => {
+			const session = sessionId();
+			return session ? acpTranscript.usage(session) : null;
+		},
 		busy,
 		held,
 

@@ -424,6 +424,9 @@ from a notification burst to overlap.
 ACP interaction notifications are keyed by connection and request ID, so a
 re-render cannot send a duplicate. Settlement closes the matching notification.
 
+`acpTranscript` also projects ACP session titles and usage by session ID. The
+AI Chat header, conversation picker and usage footer read that projection.
+
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state — plus the speech
 assets, the hands-free conversation and the spoken-reply status the Dictation

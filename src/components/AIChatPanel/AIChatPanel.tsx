@@ -82,6 +82,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						AI Chat
 					</span>
 					<Show when={root()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
+					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
 				</div>
 				<div class={s.headerActions}>
 					<PanelWindowControls
@@ -145,6 +146,20 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 
 			<Show when={chat.phase() === "live"}>
 				<Composer chat={chat} />
+			</Show>
+			<Show when={chat.usage()}>
+				{(usage) => (
+					<div class={s.usageFooter}>
+						<span>Context {Math.round((usage().used / usage().size) * 100)}%</span>
+						<Show when={usage().cost}>
+							{(cost) => (
+								<span>
+									{cost().currency} {cost().amount}
+								</span>
+							)}
+						</Show>
+					</div>
+				)}
 			</Show>
 		</div>
 	);
