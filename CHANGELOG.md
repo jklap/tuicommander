@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **MCP tabs stay with their repository** — Native file, HTML and URL tabs opened through `ui action=tab` return when their opening repository is selected again. Pinned MCP tabs remain scoped to that repository.
+- **MCP tab repository scope** — Unpinned native file, HTML and URL tabs opened through `ui action=tab` return when their opening repository is selected again. Pinned MCP tabs remain visible across repositories.
 
 - **Open links from the code editor** — Cmd/Ctrl+click opens web URLs, Markdown links, local paths and directories. Paths can point outside a repository, and missing files show a toast. MCP `tuic://open` now previews external Markdown files as Markdown.
 

@@ -1382,8 +1382,9 @@ Absolute files outside a registered repository use the active repository as
 their tab scope. HTML and URL tabs use the repository active when opened as
 well, falling back to the MCP caller's registered repository if none is active.
 These tabs remain in the existing tab stores while another repository is
-selected and reappear when the opening repository is selected again; pinning
-does not make them global.
+selected. Unpinned tabs reappear when the opening repository is selected again;
+pinned MCP tabs remain visible across repositories. Unpinning restores the
+opening repository scope.
 
 ### Protocol
 

@@ -875,6 +875,35 @@ describe("TabBar", () => {
 	});
 
 	describe("markdown tabs", () => {
+		it.each(["markdown", "editor"])("keeps an active pinned MCP %s tab visible across a repo switch", (kind) => {
+			for (const path of ["/repo-a", "/repo-b"]) {
+				repositoriesStore.add({ path, displayName: path });
+				repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+				repositoriesStore.setActiveWorkspace(path, "main");
+			}
+			repositoriesStore.setActive("/repo-a");
+			const id =
+				kind === "markdown"
+					? mdTabsStore.openUiTab("pinned-preview", "Preview", "<p>test</p>", true)
+					: editorTabsStore.add("/repo-a", "/outside/notes.txt");
+			const tabs = kind === "markdown" ? mdTabsStore : editorTabsStore;
+			if (kind === "editor") editorTabsStore.setPinned(id, true, true);
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			repositoriesStore.setActive("/repo-b");
+			expect(tabs.state.activeId).toBe(id);
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			tabs.setPinned(id, false);
+			expect(tabs.state.activeId).toBeNull();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+		});
 		it("hides an active MCP tab on repo switch and restores it on return", () => {
 			for (const path of ["/repo-a", "/repo-b"]) {
 				repositoriesStore.add({ path, displayName: path });

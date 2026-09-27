@@ -616,17 +616,39 @@ describe("mdTabsStore", () => {
 			{ pinned: true, url: undefined },
 			{ pinned: false, url: "https://example.test/report" },
 			{ pinned: true, url: "https://example.test/report" },
-		])("keeps an MCP tab in its opening repo after a round trip (pinned=$pinned, url=$url)", ({ pinned, url }) => {
+		])(
+			"shows pinned MCP tabs across repos and restores unpinned tabs on return (pinned=$pinned, url=$url)",
+			({ pinned, url }) => {
+				testInScope(() => {
+					for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+						repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+						repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+						repositoriesStore.setActiveWorkspace(path, "main");
+					}
+					repositoriesStore.setActive("/Gits/alpha");
+					const id = store.openUiTab(`mcp-${pinned}`, "Preview", "<p>test</p>", pinned, url, true);
+					store.setActive(null);
+					repositoriesStore.setActive("/Gits/beta");
+					if (pinned) expect(store.getVisibleIds("/Gits/beta|main")).toContain(id);
+					else expect(store.getVisibleIds("/Gits/beta|main")).not.toContain(id);
+					repositoriesStore.setActive("/Gits/alpha");
+					expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+				});
+			},
+		);
+		it("returns a pinned MCP tab to repo scope when unpinned", () => {
 			testInScope(() => {
 				for (const path of ["/Gits/alpha", "/Gits/beta"]) {
-					repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+					repositoriesStore.add({ path, displayName: path });
 					repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
 					repositoriesStore.setActiveWorkspace(path, "main");
 				}
 				repositoriesStore.setActive("/Gits/alpha");
-				const id = store.openUiTab(`mcp-${pinned}`, "Preview", "<p>test</p>", pinned, url, true);
+				const id = store.openUiTab("reversible-pin", "Preview", "<p>test</p>", true);
 				store.setActive(null);
 				repositoriesStore.setActive("/Gits/beta");
+				expect(store.getVisibleIds("/Gits/beta|main")).toContain(id);
+				store.setPinned(id, false);
 				expect(store.getVisibleIds("/Gits/beta|main")).not.toContain(id);
 				repositoriesStore.setActive("/Gits/alpha");
 				expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);

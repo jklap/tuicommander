@@ -1776,7 +1776,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open a Markdown file in a native tab. MCP `ui action=tab` also accepts absolute Markdown paths outside registered repositories; the iframe SDK keeps its repository path validation.
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
-- MCP `ui action=tab` tabs, including external native files and HTML/URL previews, stay in the repository active when opened. Switching to another repository hides them; returning restores them. Pinning does not make them visible across repositories.
+- MCP `ui action=tab` tabs, including external native files and HTML/URL previews, retain their opening repository. Unpinned tabs hide in other repositories and return when the opening repository is selected; pinned tabs remain visible across repositories.
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
   - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog
