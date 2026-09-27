@@ -3996,3 +3996,7 @@ or credential is touched.
 - [ ] On that rebuilt isolated instance, run
       `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude --capacity`.
       Confirm mail 101 is accepted and returned after the first 100 were read.
+
+## Activity Dashboard window after Rust restart
+
+- [ ] After restarting an isolated `make dev` build, restore Activity Dashboard with saved geometry larger than 550×650. The detached OS window opens at 550×650 while retaining its saved position; a smaller saved size remains unchanged. The running Rust backend cannot load this fix until restart.

@@ -20,6 +20,26 @@ fn load_geometry() -> PanelGeometryMap {
     crate::config::load_json_config(PANEL_GEOMETRY_FILE)
 }
 
+fn initial_size(
+    panel_id: &str,
+    saved: Option<&PanelGeometry>,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> (f64, f64) {
+    let default_width = width.unwrap_or(500.0);
+    let default_height = height.unwrap_or(600.0);
+    let saved_width = saved.map_or(default_width, |g| f64::from(g.width));
+    let saved_height = saved.map_or(default_height, |g| f64::from(g.height));
+    if panel_id == "activity" {
+        (
+            saved_width.min(default_width),
+            saved_height.min(default_height),
+        )
+    } else {
+        (saved_width, saved_height)
+    }
+}
+
 fn validate_panel_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
@@ -59,8 +79,7 @@ pub async fn open_panel_window(
     let saved = load_geometry();
     let geo = saved.get(&panel_id);
 
-    let w = geo.map_or_else(|| width.unwrap_or(500.0), |g| f64::from(g.width));
-    let h = geo.map_or_else(|| height.unwrap_or(600.0), |g| f64::from(g.height));
+    let (w, h) = initial_size(&panel_id, geo, width, height);
 
     let url = tauri::WebviewUrl::App(format!("/?{query}").into());
     let mut builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
@@ -185,5 +204,40 @@ mod tests {
             "exactly 64 chars"
         );
         assert!(validate_panel_id("ABC-123-def").is_ok(), "mixed case");
+    }
+
+    #[test]
+    fn restored_activity_window_stays_compact_with_saved_oversized_geometry() {
+        // The installed app saved this geometry and restores the activity panel
+        // on startup. The adapter requests a 550x650 window.
+        let saved: PanelGeometry =
+            serde_json::from_str(r#"{"x":4460,"y":612,"width":2532,"height":1898}"#).unwrap();
+        assert_eq!(
+            initial_size("activity", Some(&saved), Some(550.0), Some(650.0)),
+            (550.0, 650.0)
+        );
+    }
+
+    #[test]
+    fn saved_smaller_activity_geometry_and_other_panel_sizes_survive_restore() {
+        let saved = PanelGeometry {
+            x: 0,
+            y: 0,
+            width: 420,
+            height: 500,
+        };
+        assert_eq!(
+            initial_size("activity", Some(&saved), Some(550.0), Some(650.0)),
+            (420.0, 500.0)
+        );
+        let large = PanelGeometry {
+            width: 2532,
+            height: 1898,
+            ..saved
+        };
+        assert_eq!(
+            initial_size("ai-chat", Some(&large), Some(700.0), Some(600.0)),
+            (2532.0, 1898.0)
+        );
     }
 }

@@ -507,6 +507,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 ### 3.12 Activity Dashboard (`Cmd+Shift+A`)
 - Real-time view of all active terminal sessions in a compact list
 - The inline overlay stays close to the detached window's compact width and fits narrow main windows
+- An oversized saved detached Activity window opens at its compact 550×650 default after restart; smaller saved sizes remain available
 - Each row shows: terminal name, project name badge (last segment of CWD), agent type, status, last activity time
 - A PTY spawned by another agent (`agent action=spawn`) shows the same monochrome robot-head icon in the dashboard and nested sidebar row. Its tooltip and accessible name read `Spawned by <parent tab name>`, resolved from either the parent's PTY ID or live TUIC identity; an absent parent tab reads `Spawned by external agent`
 - Sub-rows (up to one shown per terminal, in priority order):

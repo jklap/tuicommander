@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Activity Dashboard window size** — An oversized saved detached window now reopens at the compact 550×650 default instead of filling most of the display.
+
 - **MCP tab repository ownership** — External file and HTML/URL tabs opened by an MCP caller now belong to that caller's registered repository, even when another repository is visible. Focused opens switch to the caller's repository; background opens keep the current view.
 
 - **Terminal link positions** — File links with `:line:col` now place the editor cursor at the requested column. Clicking another position in an open file navigates the existing tab without discarding edits.
