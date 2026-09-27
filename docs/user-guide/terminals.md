@@ -239,6 +239,7 @@ File paths appearing in terminal output are automatically detected and become cl
 
 - `.md` / `.mdx` files open in the Markdown viewer panel
 - Other source files open in the built-in editor
+- A `:line` suffix opens the built-in editor at that line, including for Markdown files
 
 Paths are validated against the filesystem before becoming clickable — only real files show as links.
 Absolute paths can point outside a registered repository, including files in hidden directories.

@@ -39,4 +39,15 @@ describe("terminal file opening", () => {
 			expect(mdTabsStore.getActive()).toMatchObject({ repoPath: "/repo", filePath: "docs/readme.md" });
 		});
 	});
+
+	it("opens a terminal file link at its printed line, including a numbered Markdown file", () => {
+		testInScope(() => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setActive("/repo");
+			openTerminalFilePath("/repo/src/main.rs", undefined, 42);
+			expect(editorTabsStore.getActive()).toMatchObject({ filePath: "src/main.rs", initialLine: 42 });
+			openTerminalFilePath("/repo/docs/notes.md", undefined, 7);
+			expect(editorTabsStore.getActive()).toMatchObject({ filePath: "docs/notes.md", initialLine: 7 });
+		});
+	});
 });
