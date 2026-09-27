@@ -14,6 +14,7 @@
 
 ## Editor links and external Markdown tabs (2026-09-27)
 
+- [x] MCP native file and HTML/URL tabs are hidden in another repository and return when their opening repository is selected again, whether pinned or not. _(verified: targeted `useAppInit`, `mdTabs`, `tabManager`, and `TabBar` Vitest cases exercise scope, visibility, and retention.)_
 - [x] Cmd/Ctrl+click opens editor web links in the system browser, local paths in the matching TUICommander view, and missing paths with a toast. MCP `tuic://open` opens external Markdown in a Markdown tab. _(verified: targeted editor and MCP tab Vitest cases exercise these routes; browser and native window appearance require a visual check after integration.)_
 
 ## Mobile notification tags (story 1042-f5ca) — updated service worker

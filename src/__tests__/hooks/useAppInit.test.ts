@@ -254,6 +254,43 @@ describe("initApp", () => {
 		expect(mdTabsStore.getVisibleIds(null).length).toBe(1);
 	});
 
+	it.each(["open", "edit"])("keeps an external tuic://%s tab in its opening repository", async (command) => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		for (const path of ["/repos/alpha", "/repos/beta"]) {
+			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+			repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setActiveWorkspace(path, "main");
+		}
+		repositoriesStore.setActive("/repos/alpha");
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: `external-${command}`,
+				title: "External",
+				html: "",
+				pinned: false,
+				url: `tuic://${command}//Users/boss/Gits/.tmp/boss/ego-ux-eval.${command === "open" ? "md" : "txt"}`,
+				focus: true,
+			},
+		});
+		const tabs = command === "open" ? mdTabsStore : editorTabsStore;
+		const tabId = tabs.state.activeId!;
+		expect(tabs.get(tabId)?.repoPath).toBe("/repos/alpha");
+		tabs.setActive(null);
+		repositoriesStore.setActive("/repos/beta");
+		expect(tabs.getVisibleIds("/repos/beta|main")).not.toContain(tabId);
+		repositoriesStore.setActive("/repos/alpha");
+		expect(tabs.getVisibleIds("/repos/alpha|main")).toContain(tabId);
+	});
+
 	it("re-adopts surviving PTY sessions", async () => {
 		const deps = createMockDeps({
 			pty: {

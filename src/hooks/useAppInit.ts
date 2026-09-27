@@ -283,7 +283,10 @@ function assignSessionToRepoBranch(
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-	appLogger.info("app", `WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`);
+	appLogger.info(
+		"app",
+		`WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`,
+	);
 	appLogger.info("app", `initApp called — existing terminals: [${terminalsStore.getIds().join(", ")}]`);
 	appLogger.debug("app", "SolidJS App mounted");
 	const preInitTerminalIds = terminalsStore.getIds();
@@ -674,17 +677,17 @@ export async function initApp(deps: AppInitDeps) {
 					else mdTabsStore.add(repoPath, relPath);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
 					if (classifyFile(filePath) === "markdown") {
-						if (background) mdTabsStore.addFileBackground("", filePath);
-						else mdTabsStore.add("", filePath);
+						if (background) mdTabsStore.addFileBackground(activeRepoPath ?? "", filePath);
+						else mdTabsStore.add(activeRepoPath ?? "", filePath);
 					} else {
-						editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
+						editorTabsStore.add(activeRepoPath ?? "", filePath, undefined, { externalEditable: false, background });
 					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
 						editorTabsStore.add(repoPath, relPath, line || undefined, { background });
 					} else if (isAbsolutePath(filePath)) {
-						editorTabsStore.add("__external__", filePath, line || undefined, {
+						editorTabsStore.add(activeRepoPath ?? "", filePath, line || undefined, {
 							externalEditable: true,
 							background,
 						});
