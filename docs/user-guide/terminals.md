@@ -238,9 +238,10 @@ The bell behavior when receiving BEL character (\x07) is set by `bell_style` in 
 File paths appearing in terminal output are automatically detected and become clickable links. Hover over a path to see the link underline, then click to open it.
 
 - `.md` / `.mdx` files open in the Markdown viewer panel
-- All other code files open in your configured IDE, at the line number if a `:line` or `:line:col` suffix is present
+- Other source files open in the built-in editor
 
 Paths are validated against the filesystem before becoming clickable — only real files show as links.
+Absolute paths can point outside a registered repository, including files in hidden directories.
 
 Recognized extensions include: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.java`, `.css`, `.html`, `.json`, `.yaml`, `.toml`, `.sql`, and many more.
 

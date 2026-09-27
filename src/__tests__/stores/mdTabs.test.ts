@@ -597,7 +597,64 @@ describe("mdTabsStore", () => {
 	});
 
 	describe("openUiTab() repo routing", () => {
-		it("scopes tab to the origin repo, NOT the active repo, when originRepoPath is given", () => {
+		it("keeps SDK plugin dashboards global", () => {
+			testInScope(() => {
+				for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+					repositoriesStore.add({ path, displayName: path });
+					repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+					repositoriesStore.setActiveWorkspace(path, "main");
+				}
+				repositoriesStore.setActive("/Gits/alpha");
+				const id = store.addPluginPanel("sdk-plugin", "dashboard", "Dashboard", "<p>stats</p>");
+				store.setActive(null);
+				repositoriesStore.setActive("/Gits/beta");
+				expect(store.getVisibleIds("/Gits/beta|main")).toContain(id);
+			});
+		});
+		it.each([
+			{ pinned: false, url: undefined },
+			{ pinned: true, url: undefined },
+			{ pinned: false, url: "https://example.test/report" },
+			{ pinned: true, url: "https://example.test/report" },
+		])(
+			"shows pinned MCP tabs across repos and restores unpinned tabs on return (pinned=$pinned, url=$url)",
+			({ pinned, url }) => {
+				testInScope(() => {
+					for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+						repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+						repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+						repositoriesStore.setActiveWorkspace(path, "main");
+					}
+					repositoriesStore.setActive("/Gits/alpha");
+					const id = store.openUiTab(`mcp-${pinned}`, "Preview", "<p>test</p>", pinned, url, true);
+					store.setActive(null);
+					repositoriesStore.setActive("/Gits/beta");
+					if (pinned) expect(store.getVisibleIds("/Gits/beta|main")).toContain(id);
+					else expect(store.getVisibleIds("/Gits/beta|main")).not.toContain(id);
+					repositoriesStore.setActive("/Gits/alpha");
+					expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+				});
+			},
+		);
+		it("returns a pinned MCP tab to repo scope when unpinned", () => {
+			testInScope(() => {
+				for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+					repositoriesStore.add({ path, displayName: path });
+					repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+					repositoriesStore.setActiveWorkspace(path, "main");
+				}
+				repositoriesStore.setActive("/Gits/alpha");
+				const id = store.openUiTab("reversible-pin", "Preview", "<p>test</p>", true);
+				store.setActive(null);
+				repositoriesStore.setActive("/Gits/beta");
+				expect(store.getVisibleIds("/Gits/beta|main")).toContain(id);
+				store.setPinned(id, false);
+				expect(store.getVisibleIds("/Gits/beta|main")).not.toContain(id);
+				repositoriesStore.setActive("/Gits/alpha");
+				expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+			});
+		});
+		it("scopes an MCP tab to the active repo when its caller belongs elsewhere", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
@@ -605,11 +662,11 @@ describe("mdTabsStore", () => {
 
 				const id = store.openUiTab("wiz-panel", "MCF", "<p/>", false, undefined, true, "/Gits/alpha/src");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBe("/Gits/alpha");
+				expect(tab?.repoPath).toBe("/Gits/beta");
 			});
 		});
 
-		it("scopes pinned tabs to the origin repo as well (MCP caller always wins)", () => {
+		it("scopes pinned MCP tabs to the active repo", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
@@ -617,99 +674,29 @@ describe("mdTabsStore", () => {
 
 				const id = store.openUiTab("wiz-pinned", "Pinned", "<p/>", true, undefined, true, "/Gits/alpha");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBe("/Gits/alpha");
+				expect(tab?.repoPath).toBe("/Gits/beta");
 			});
 		});
 
-		it("leaves unpinned tabs unscoped when origin cannot be resolved", () => {
+		it("scopes unpinned MCP tabs to the active repo when origin cannot be resolved", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
 				repositoriesStore.setActive("/Gits/beta");
 
 				const id = store.openUiTab("wiz-unknown", "X", "<p/>", false, undefined, true, "/not/a/registered/repo");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBeUndefined();
+				expect(tab?.repoPath).toBe("/Gits/beta");
 			});
 		});
 
-		it("leaves pinned tabs globally scoped (no repoPath) when origin is unresolved", () => {
+		it("scopes pinned MCP tabs to the active repo when origin is absent", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
 				repositoriesStore.setActive("/Gits/beta");
 
 				const id = store.openUiTab("wiz-global", "G", "<p/>", true);
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBeUndefined();
-			});
-		});
-	});
-
-	describe("evictNonPinnedPluginPanelsForOtherRepos() (story 1283-1d9b)", () => {
-		// Without eviction, every visited repo leaves a stale non-pinned plugin-panel
-		// entry in state.tabs. getVisibleIds already hides them, but the HTML is
-		// retained forever. Eviction runs on repo switch, keyed by repoPath.
-		it("evicts non-pinned plugin-panel tabs belonging to other repos", () => {
-			testInScope(() => {
-				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
-				repositoriesStore.setActive("/Gits/alpha");
-				const aId = store.openUiTab("plug-a", "A", "<p/>", false, undefined, true, "/Gits/alpha");
-				repositoriesStore.setActive("/Gits/beta");
-				const bId = store.openUiTab("plug-b", "B", "<p/>", false, undefined, true, "/Gits/beta");
-				expect(store.getCount()).toBe(2);
-
-				// Switch back to alpha — beta's non-pinned tab must be gone, alpha's still here.
-				store.evictNonPinnedPluginPanelsForOtherRepos("/Gits/alpha");
-				expect(store.get(aId)).toBeDefined();
-				expect(store.get(bId)).toBeUndefined();
-			});
-		});
-
-		it("preserves pinned plugin-panel tabs regardless of repo", () => {
-			testInScope(() => {
-				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
-				repositoriesStore.setActive("/Gits/beta");
-				const pinnedId = store.openUiTab("plug-pin", "Pin", "<p/>", true, undefined, true, "/Gits/beta");
-
-				store.evictNonPinnedPluginPanelsForOtherRepos("/Gits/alpha");
-				expect(store.get(pinnedId)).toBeDefined();
-			});
-		});
-
-		it("does not touch non-plugin-panel tabs (file/virtual/pr-diff untouched)", () => {
-			testInScope(() => {
-				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
-				repositoriesStore.setActive("/Gits/beta");
-				const fileId = store.add("/Gits/beta", "docs/README.md");
-				const diffId = store.addPrDiff("/Gits/beta", 42, "PR title", "diff");
-
-				store.evictNonPinnedPluginPanelsForOtherRepos("/Gits/alpha");
-				expect(store.get(fileId)).toBeDefined();
-				expect(store.get(diffId)).toBeDefined();
-			});
-		});
-
-		it("preserves plugin-panel tabs with no repoPath (globally scoped)", () => {
-			testInScope(() => {
-				// Pinned + no originRepoPath leaves repoPath undefined → globally visible.
-				const globalId = store.openUiTab("plug-global", "Global", "<p/>", true);
-				store.evictNonPinnedPluginPanelsForOtherRepos("/Gits/alpha");
-				expect(store.get(globalId)).toBeDefined();
-			});
-		});
-
-		it("clears activeId if it pointed at an evicted tab", () => {
-			testInScope(() => {
-				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
-				repositoriesStore.setActive("/Gits/beta");
-				const bId = store.openUiTab("plug-b", "B", "<p/>", false, undefined, true, "/Gits/beta");
-				expect(store.state.activeId).toBe(bId);
-
-				store.evictNonPinnedPluginPanelsForOtherRepos("/Gits/alpha");
-				expect(store.state.activeId).toBeNull();
+				expect(tab?.repoPath).toBe("/Gits/beta");
 			});
 		});
 	});

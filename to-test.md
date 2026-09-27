@@ -16,6 +16,12 @@
 
 - [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, open a `.md` file in rendered View, switch to Edit, change its source and save, then confirm the updated rendered View and saved content from the desktop. Check another text file stays plain text and that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior.
 
+## Editor links and external Markdown tabs (2026-09-27)
+
+- [x] MCP file tabs remain visible after selecting a terminal in a repository with no active workspace; distinct MCP ids coexist and a repeated id updates its native file tab. A terminal link to an existing external Markdown path under `~/Gits/.tmp/` opens in the Markdown viewer. _(verified: targeted TabBar, useAppInit, and terminal file opening Vitest tests.)_
+- [x] Unpinned MCP native file and HTML/URL tabs hide in another repository and return when their opening repository is selected again; pinned MCP tabs stay visible across repositories. _(verified: targeted `useAppInit`, `mdTabs`, `tabManager`, and `TabBar` Vitest cases exercise scope, visibility, pinning, and retention.)_
+- [x] Cmd/Ctrl+click opens editor web links in the system browser, local paths in the matching TUICommander view, and missing paths with a toast. MCP `tuic://open` opens external Markdown in a Markdown tab. _(verified: targeted editor and MCP tab Vitest cases exercise these routes; browser and native window appearance require a visual check after integration.)_
+
 ## Mobile notification tags (story 1042-f5ca) — updated service worker
 
 - [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.
@@ -355,6 +361,8 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [x] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed. _(verified 2026-09-23: returned `404` on :9876.)_
 
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
+
+- [x] An MCP-opened absolute Markdown file outside the active repository writes tweak comments through the external file route; a rejected write shows an error and leaves the draft available to retry. _(verified: `MarkdownTab.test.tsx` exercises external save and rejected-then-successful retry.)_
 
 - [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block.
 - [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line.

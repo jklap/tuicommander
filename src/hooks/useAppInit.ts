@@ -22,6 +22,7 @@ import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
+import { classifyFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -282,7 +283,10 @@ function assignSessionToRepoBranch(
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-	appLogger.info("app", `WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`);
+	appLogger.info(
+		"app",
+		`WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`,
+	);
 	appLogger.info("app", `initApp called — existing terminals: [${terminalsStore.getIds().join(", ")}]`);
 	appLogger.debug("app", "SolidJS App mounted");
 	const preInitTerminalIds = terminalsStore.getIds();
@@ -669,16 +673,35 @@ export async function initApp(deps: AppInitDeps) {
 				const background = focus === false;
 
 				if (cmd === "open" && repoPath) {
-					if (background) mdTabsStore.addFileBackground(repoPath, relPath);
-					else mdTabsStore.add(repoPath, relPath);
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
-					editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
+					if (classifyFile(filePath) === "markdown") {
+						editorTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						mdTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, pinned, background);
+					} else {
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
+					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
-						editorTabsStore.add(repoPath, relPath, line || undefined, { background });
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, repoPath, relPath, line || undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
 					} else if (isAbsolutePath(filePath)) {
-						editorTabsStore.add("__external__", filePath, line || undefined, {
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, line || undefined, pinned, {
 							externalEditable: true,
 							background,
 						});
@@ -694,6 +717,8 @@ export async function initApp(deps: AppInitDeps) {
 			return;
 		}
 
+		mdTabsStore.closeMcpFile(id);
+		editorTabsStore.closeMcpFile(id);
 		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 

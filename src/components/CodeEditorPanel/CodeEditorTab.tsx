@@ -30,18 +30,21 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { referencesStore } from "../../stores/references";
-import { repositoriesStore } from "../../stores/repositories";
+import { locateFile, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
-import { isAbsolutePath } from "../../utils/pathUtils";
+import { handleOpenUrl } from "../../utils/openUrl";
+import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import { markPerf } from "../../utils/perfTrace";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility } from "../shared/SearchBar";
 import s from "./CodeEditorTab.module.css";
 import { EditorSearch } from "./EditorSearch";
+import { editorLinkAt } from "./editorLinks";
 import { type GutterChange, gitChangeGutter, setChangesEffect } from "./gitGutter";
 import { type BlameLine, inlineBlame, setBlameEffect, setBlameEnabledEffect } from "./inlineBlame";
 import { detectLanguage, editorWrapKind } from "./languageDetection";
@@ -192,7 +195,9 @@ function hoverLinkHandlers(): Extension {
 				view.dispatch({ effects: setHoverLink.of(null) });
 				return false;
 			}
-			const range = wordRangeAt(view, pos);
+			const line = view.state.doc.lineAt(pos);
+			const link = editorLinkAt(line.text, pos - line.from);
+			const range = link ? { from: line.from + link.from, to: line.from + link.to } : wordRangeAt(view, pos);
 			view.dispatch({ effects: setHoverLink.of(range) });
 			return false;
 		},
@@ -651,7 +656,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	createExtension(hoverLinkTheme);
 	createExtension(hoverLinkHandlers());
 
-	// Cmd+Click (Mac) / Ctrl+Click (other) → go to definition via mdkb
+	// Cmd+Click (Mac) / Ctrl+Click (other) opens links, then falls back to definitions.
 	createExtension(
 		EditorView.domEventHandlers({
 			click(event: MouseEvent, view: EditorView) {
@@ -661,6 +666,40 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				if (pos === null) return false;
 				const line = view.state.doc.lineAt(pos);
 				const col = pos - line.from;
+				const link = editorLinkAt(line.text, col);
+				if (link) {
+					if (link.web) {
+						handleOpenUrl(link.target);
+					} else {
+						const match = link.target.match(/:(\d+)(?::\d+)?$/);
+						const targetLine = match ? Number(match[1]) : undefined;
+						const cwd = isAbsolutePath(props.filePath)
+							? pathDirname(props.filePath)
+							: joinPath(fsRoot(), pathDirname(props.filePath));
+						const resolve = (directory: string) =>
+							invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
+								cwd: directory,
+								candidate: link.target,
+							});
+						void resolve(cwd)
+							.then((result) => result ?? (fsRoot() !== cwd ? resolve(fsRoot()) : null))
+							.then((result) => {
+								if (!result) {
+									toastsStore.add("File not found", link.target, "warn");
+									return;
+								}
+								if (result.is_directory) {
+									uiStore.setFileBrowserExternalRoot(result.absolute_path);
+									uiStore.setFileBrowserPanelVisible(true);
+									return;
+								}
+								const { repoPath, fsRoot: root, filePath } = locateFile(result.absolute_path);
+								openFileAction(filePath, repoPath, root, targetLine);
+							})
+							.catch((error) => appLogger.debug("editor", "Link lookup failed", { error: String(error) }));
+					}
+					return true;
+				}
 				invoke<{ filePath: string; line: number } | null>("mdkb_goto_definition", {
 					repoPath: props.repoPath,
 					filePath: props.filePath,
