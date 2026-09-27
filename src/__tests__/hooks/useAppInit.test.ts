@@ -73,6 +73,18 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 }
 
 describe("initApp", () => {
+	it("explains the browser fallback when desktop navigation blocks an external iframe link", async () => {
+		let onBlocked: ((event: { payload: string }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: string }) => void) => {
+			if (event === "navigation-blocked") onBlocked = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		expect(onBlocked).toBeTypeOf("function");
+		onBlocked!({ payload: "https://example.org/help" });
+		const toast = toastsStore.toasts.find((item) => item.title === "External link blocked");
+		expect(toast?.message).toContain("Open in Browser");
+	});
 	beforeEach(() => {
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());

@@ -1566,6 +1566,12 @@ pub fn run() {
                     if is_app_navigation(url, dev_url) {
                         return true;
                     }
+                    // The callback has no user-gesture or frame identity. Tell the
+                    // UI what was blocked, but never open it from here: scripts in
+                    // an embedded dashboard could otherwise spam the OS browser.
+                    if matches!(url.scheme(), "http" | "https" | "mailto") {
+                        let _ = webview.emit("navigation-blocked", url.as_str());
+                    }
                     tracing::debug!(url = %url, "Blocked implicit WebView navigation");
                     false
                 })

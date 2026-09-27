@@ -13,6 +13,7 @@ import { themeGeneration } from "../../themes";
 import { writeClipboard } from "../../utils/clipboard";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SEARCH_SCRIPT } from "../../utils/iframeSearch";
+import { handleOpenUrl } from "../../utils/openUrl";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { PLUGIN_BASE_CSS } from "./pluginBaseStyles";
@@ -281,6 +282,12 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 				}
 				const tabId = mdTabsStore.add(resolved.repoPath, resolved.relPath);
 				if (data.pinned) mdTabsStore.setPinned(tabId, true);
+				return;
+			}
+			case "tuic:open-url": {
+				// URL-mode pages can post arbitrary messages without a user click.
+				if (props.tab.url && !props.tab.url.startsWith("file://")) return;
+				if (typeof data.url === "string") handleOpenUrl(data.url);
 				return;
 			}
 			case "tuic:edit": {
