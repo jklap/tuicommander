@@ -845,6 +845,8 @@ pub struct AcpClientError {
     pub session_id: Option<v1::SessionId>,
     pub operation: Option<AcpOperation>,
     pub retryable: bool,
+    #[serde(skip)]
+    agent_code: Option<i32>,
 }
 
 impl AcpClientError {
@@ -1131,6 +1133,7 @@ impl AcpClientError {
             session_id: None,
             operation: None,
             retryable: false,
+            agent_code: None,
         }
     }
 

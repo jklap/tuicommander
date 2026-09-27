@@ -99,6 +99,12 @@ thing this client knows about it is no longer true. The caller is answered with
 `protocol_violation`, and only then does the connection settle as failed: a host
 that asked deserves to be told why, not just that the connection is gone.
 
+When ego answers a prompt with its dedicated `-32011` pause error, the client
+settles that turn and records the attachment as `paused`. The AI Chat control
+bar therefore keeps Resume available until `_ego/resume` reports `running`.
+Other prompt errors settle the attachment to `idle`, even if their message
+mentions a pause; the numeric error code is the state signal.
+
 ## Two transports, one set of judgements
 
 `acp_commands.rs` and `acp_routes.rs` are both thin. Neither decides what is
