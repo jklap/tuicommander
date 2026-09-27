@@ -1,4 +1,4 @@
-import { type Component, lazy, Show, Suspense } from "solid-js";
+import { type Component, createEffect, createSignal, lazy, Show, Suspense } from "solid-js";
 import { diffTabsStore } from "../stores/diffTabs";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { progressStore } from "../stores/progress";
@@ -10,7 +10,6 @@ import {
 	queueTextToActiveTerminal,
 	sendTextToActiveTerminal,
 } from "../utils/sendToActiveTerminal";
-import { AIChatPanel } from "./AIChatPanel";
 import { FileBrowserPanel } from "./FileBrowserPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { IdeasPanel } from "./IdeasPanel";
@@ -19,7 +18,10 @@ import { OutlinePanel } from "./OutlinePanel";
 import { ProgressDialog } from "./ProgressDialog";
 import { ReferencesPanel } from "./ReferencesPanel";
 
-const StoriesDialog = lazy(() => import("./StoriesDialog/StoriesDialog").then((module) => ({ default: module.StoriesDialog })));
+const StoriesDialog = lazy(() =>
+	import("./StoriesDialog/StoriesDialog").then((module) => ({ default: module.StoriesDialog })),
+);
+const AIChatPanel = lazy(() => import("./AIChatPanel").then((module) => ({ default: module.AIChatPanel })));
 
 export interface PanelOrchestratorProps {
 	repoPath: string | null;
@@ -29,6 +31,10 @@ export interface PanelOrchestratorProps {
 }
 
 export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
+	const [aiChatRequested, setAiChatRequested] = createSignal(uiStore.state.aiChatPanelVisible);
+	createEffect(() => {
+		if (uiStore.state.aiChatPanelVisible) setAiChatRequested(true);
+	});
 	return (
 		<>
 			<Show when={!uiStore.isDetached("file-browser")}>
@@ -79,13 +85,15 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 				/>
 			</Show>
 
-			<Show when={settingsStore.isAiChatEnabled() && !uiStore.isDetached("ai-chat")}>
-				<AIChatPanel
-					visible={uiStore.state.aiChatPanelVisible}
-					repoPath={props.repoPath}
-					fsRoot={props.fsRoot}
-					onClose={() => uiStore.toggleAiChatPanel()}
-				/>
+			<Show when={settingsStore.isAiChatEnabled() && !uiStore.isDetached("ai-chat") && aiChatRequested()}>
+				<Suspense>
+					<AIChatPanel
+						visible={uiStore.state.aiChatPanelVisible}
+						repoPath={props.repoPath}
+						fsRoot={props.fsRoot}
+						onClose={() => uiStore.toggleAiChatPanel()}
+					/>
+				</Suspense>
 			</Show>
 
 			<Show when={progressStore.dialogVisible()}>
