@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -191,9 +191,9 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
-function compactActivityAge(timestamp: number | null): string {
+function compactActivityAge(timestamp: number | null, now: number): string {
 	if (!timestamp) return "";
-	const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+	const minutes = Math.max(0, Math.floor((now - timestamp) / 60_000));
 	if (minutes < 1) return "<1m";
 	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
@@ -203,6 +203,9 @@ function compactActivityAge(timestamp: number | null): string {
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+	const [now, setNow] = createSignal(Date.now());
+	const clock = setInterval(() => setNow(Date.now()), 60_000);
+	onCleanup(() => clearInterval(clock));
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={props.terminalIds}>
@@ -272,7 +275,7 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 											<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 										)}
 									</Show>
-									<span class={s.branchAgentTime}>{compactActivityAge(t().lastDataAt)}</span>
+									<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
 								</button>
 							)}
 						</Show>

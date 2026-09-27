@@ -631,7 +631,12 @@ describe("initApp", () => {
 					{
 						session_id: "sess-context",
 						cwd: "/repo",
-						state: { agent_type: "claude", agent_intent: "Answering a question", last_prompt: "what is the role" },
+						state: {
+							agent_type: "claude",
+							agent_intent: "Answering a question",
+							last_prompt: "what is the role",
+							last_activity_ms: 1_234_567,
+						},
 					},
 					{ session_id: "sess-bare", cwd: "/repo", state: { agent_type: "claude" } },
 				]),
@@ -642,11 +647,12 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
-		expect(bySession("sess-context")).toMatchObject({
-			agentIntent: "Answering a question",
-			lastPrompt: "what is the role",
-		});
-		expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null });
+			expect(bySession("sess-context")).toMatchObject({
+				agentIntent: "Answering a question",
+				lastPrompt: "what is the role",
+				lastActivityAt: 1_234_567,
+			});
+			expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null, lastActivityAt: null });
 	});
 
 	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {
