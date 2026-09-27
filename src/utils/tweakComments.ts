@@ -1,4 +1,4 @@
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 
 /**
  * Inline review comments for markdown files.
@@ -32,7 +32,7 @@ export interface TweakComment {
 export interface TweakCommentBlock {
 	start: number;
 	end: number;
-	tag: "P" | "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "UL" | "OL" | "BLOCKQUOTE" | "PRE" | "TABLE";
+	tag: "P" | "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "UL" | "OL" | "LI" | "BLOCKQUOTE" | "PRE" | "TABLE";
 }
 
 export const CONVENTION_HEADER =
@@ -49,6 +49,7 @@ export const CONVENTION_HEADER =
 // cannot contain `-->` (escaped at write time).
 const FULL_RE = /<!--tweak:begin:([A-Za-z0-9_-]+)-->([\s\S]*?)<!--tweak:end:\1 @(\S+)\s([\s\S]*?)-->/g;
 const BLOCK_RE = /<!--tweak:block:([A-Za-z0-9_-]+) @(\S+)\s([\s\S]*?)-->\r?\n?/g;
+const ITEM_RE = /^([ \t]*)<!--tweak:item:([A-Za-z0-9_-]+) @(\S+)( eof)?\r?\n([\s\S]*?)-->\r?\n?/gm;
 
 /** Escape the only sequence that would break the enclosing HTML comment. */
 function escapeBody(body: string): string {
@@ -69,7 +70,11 @@ export function serializeTweakComment(c: TweakComment): string {
  *  `blocks` may carry a `findTweakCommentBlocks(source)` result the caller
  *  already holds, so the document is not lexed twice. */
 export function parseTweakComments(source: string, blocks?: TweakCommentBlock[]): TweakComment[] {
-	const indexed = [...indexInlineComments(source), ...indexBlockComments(source, blocks)];
+	const indexed = [
+		...indexInlineComments(source),
+		...indexBlockComments(source, blocks),
+		...indexItemComments(source, blocks),
+	];
 	return indexed.sort((a, b) => a.index - b.index).map(({ comment }) => comment);
 }
 
@@ -115,6 +120,37 @@ function indexBlockComments(source: string, knownBlocks?: TweakCommentBlock[]): 
 				anchor: "block",
 				sourceStart: block?.start,
 				sourceEnd: block?.end,
+			},
+		});
+	}
+	return indexed;
+}
+
+function indexItemComments(source: string, knownBlocks?: TweakCommentBlock[]): IndexedComment[] {
+	if (!source.includes("<!--tweak:item:")) return [];
+	const items = (knownBlocks ?? findTweakCommentBlocks(source)).filter((block) => block.tag === "LI");
+	const indexed: IndexedComment[] = [];
+	ITEM_RE.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = ITEM_RE.exec(source)) !== null) {
+		const [, indent, id, createdAt, , rawBody] = match;
+		const markerStart = match.index;
+		const item = items.filter((candidate) => candidate.end <= markerStart).at(-1);
+		indexed.push({
+			index: match.index,
+			comment: {
+				id,
+				highlighted: item ? source.slice(item.start, item.end) : "",
+				comment: unescapeBody(
+					rawBody
+						.split(/\r?\n/)
+						.map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
+						.join("\n"),
+				),
+				createdAt,
+				anchor: "block",
+				sourceStart: item?.start,
+				sourceEnd: item?.end,
 			},
 		});
 	}
@@ -178,6 +214,66 @@ export function findTweakCommentBlocks(source: string): TweakCommentBlock[] {
 		while (visibleEnd > tokenStart && /\s/.test(visible[visibleEnd - 1])) visibleEnd--;
 		if (visibleEnd <= tokenStart || map[tokenStart] === undefined || map[visibleEnd - 1] === undefined) continue;
 		blocks.push({ start: map[tokenStart], end: map[visibleEnd - 1] + 1, tag });
+		if (token.type === "list" && "items" in token) {
+			const lines = visible.slice(tokenStart, cursor).split("\n");
+			const lineOffsets: number[] = [];
+			let offset = tokenStart;
+			for (const line of lines) {
+				lineOffsets.push(offset);
+				offset += line.length + 1;
+			}
+			const locate = (firstLine: string, from: number, to: number, indentMin = 0): number => {
+				for (let i = from; i < to; i++) {
+					const line = lines[i];
+					if (line.trimStart() === firstLine.trimStart() && line.length - line.trimStart().length >= indentMin)
+						return i;
+				}
+				return -1;
+			};
+			const visit = (list: Tokens.List, first: number, limit: number, indentMin: number) => {
+				let scan = first;
+				for (let index = 0; index < list.items.length; index++) {
+					const item = list.items[index];
+					const startLine = locate(item.raw.split("\n", 1)[0], scan, limit, indentMin);
+					if (startLine < 0) continue;
+					const indent = lines[startLine].length - lines[startLine].trimStart().length;
+					let siblingLine = limit;
+					for (let i = startLine + 1; i < limit; i++) {
+						const line = lines[i];
+						if (
+							line.trimStart() === list.items[index + 1]?.raw.split("\n", 1)[0]?.trimStart() &&
+							line.length - line.trimStart().length === indent
+						) {
+							siblingLine = i;
+							break;
+						}
+					}
+					const nested = item.tokens.filter((child): child is Tokens.List => child.type === "list");
+					const childLine = nested.length
+						? locate(nested[0].items[0]?.raw.split("\n", 1)[0] ?? "", startLine + 1, siblingLine, indent + 1)
+						: -1;
+					const ownLimit = childLine >= 0 ? childLine : siblingLine;
+					let ownEnd = lineOffsets[ownLimit] ?? cursor;
+					while (ownEnd > lineOffsets[startLine] && /\s/.test(visible[ownEnd - 1])) ownEnd--;
+					if (map[lineOffsets[startLine]] !== undefined && map[ownEnd - 1] !== undefined) {
+						blocks.push({ start: map[lineOffsets[startLine]], end: map[ownEnd - 1] + 1, tag: "LI" });
+					}
+					let nextChildLine = childLine;
+					for (let childIndex = 0; childIndex < nested.length; childIndex++) {
+						const childList = nested[childIndex];
+						if (nextChildLine < 0) break;
+						const following = nested[childIndex + 1];
+						const childLimit = following
+							? locate(following.items[0]?.raw.split("\n", 1)[0] ?? "", nextChildLine + 1, siblingLine, indent + 1)
+							: siblingLine;
+						visit(childList, nextChildLine, childLimit < 0 ? siblingLine : childLimit, indent + 1);
+						nextChildLine = childLimit;
+					}
+					scan = siblingLine;
+				}
+			};
+			visit(token as Tokens.List, 0, lines.length, 0);
+		}
 	}
 	return blocks;
 }
@@ -200,6 +296,27 @@ export function insertTweakBlockComment(
 	}
 	// Match the file's line endings so a CRLF file does not gain a lone LF line.
 	const eol = source.includes("\r\n") ? "\r\n" : "\n";
+	if (
+		findTweakCommentBlocks(source).some(
+			(candidate) => candidate.tag === "LI" && candidate.start === block.start && candidate.end === block.end,
+		)
+	) {
+		const line = source.slice(
+			source.lastIndexOf("\n", block.start - 1) + 1,
+			source.indexOf("\n", block.start) < 0 ? source.length : source.indexOf("\n", block.start),
+		);
+		const prefix = /^(\s*(?:[-*+]|\d+[.)])\s+)/.exec(line)?.[1] ?? "  ";
+		const indent = " ".repeat(prefix.length);
+		const hadLineEnding = source.slice(block.end).startsWith(eol);
+		const marker = `${indent}<!--tweak:item:${comment.id} @${comment.createdAt}${hadLineEnding ? "" : " eof"}${eol}${comment.comment
+			.split("\n")
+			.map((part) => indent + escapeBody(part))
+			.join(eol)}-->${eol}`;
+		const afterLine = hadLineEnding ? block.end + eol.length : block.end;
+		return ensureConventionHeader(
+			source.slice(0, afterLine) + (afterLine === block.end ? eol : "") + marker + source.slice(afterLine),
+		);
+	}
 	const marker = `${serializeTweakBlockComment(comment)}${eol}`;
 	return ensureConventionHeader(source.slice(0, block.start) + marker + source.slice(block.start));
 }
@@ -276,6 +393,8 @@ function buildVisibilityMask(source: string): boolean[] {
 	BLOCK_RE.lastIndex = 0;
 	let blockMatch: RegExpExecArray | null;
 	while ((blockMatch = BLOCK_RE.exec(source)) !== null) hide(blockMatch.index, blockMatch.index + blockMatch[0].length);
+	ITEM_RE.lastIndex = 0;
+	while ((blockMatch = ITEM_RE.exec(source)) !== null) hide(blockMatch.index, blockMatch.index + blockMatch[0].length);
 	return visible;
 }
 
@@ -426,6 +545,14 @@ export function removeTweakComment(source: string, id: string): string {
 		changed = true;
 		return "";
 	});
+	const itemRe = new RegExp(
+		`(\\r?\\n)([ \\t]*)<!--tweak:item:${escapedId} @\\S+( eof)?\\r?\\n[\\s\\S]*?-->\\r?\\n?`,
+		"g",
+	);
+	out = out.replace(itemRe, (_, precedingEol, _indent, eof) => {
+		changed = true;
+		return eof ? "" : precedingEol;
+	});
 	if (!changed) return source;
 	if (parseTweakComments(out).length === 0) {
 		return removeConventionHeader(out);
@@ -447,6 +574,14 @@ export function updateTweakComment(source: string, id: string, newComment: strin
 	out = out.replace(blockRe, (_, createdAt) =>
 		serializeTweakBlockComment({ id, highlighted: "", comment: newComment, createdAt, anchor: "block" }),
 	);
+	const itemRe = new RegExp(`^([ \\t]*)<!--tweak:item:${escapedId} @(\\S+)( eof)?\\r?\\n[\\s\\S]*?-->`, "gm");
+	out = out.replace(itemRe, (_, indent, createdAt, eof) => {
+		const eol = source.includes("\r\n") ? "\r\n" : "\n";
+		return `${indent}<!--tweak:item:${id} @${createdAt}${eof ?? ""}${eol}${newComment
+			.split("\n")
+			.map((part) => indent + escapeBody(part))
+			.join(eol)}-->`;
+	});
 	return out;
 }
 
@@ -482,6 +617,8 @@ export function injectTweakSentinels(source: string): string {
 	out = out.replace(FULL_RE, (_, id, highlighted) => `${tweakBeginSentinel(id)}${highlighted}${tweakEndSentinel(id)}`);
 	BLOCK_RE.lastIndex = 0;
 	out = out.replace(BLOCK_RE, "");
+	ITEM_RE.lastIndex = 0;
+	out = out.replace(ITEM_RE, "");
 	return out;
 }
 

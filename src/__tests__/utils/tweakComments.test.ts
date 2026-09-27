@@ -40,6 +40,8 @@ describe("tweakComments parser/serializer", () => {
 				{ source: "# Product thesis", tag: "H1" },
 				{ source: "A **formatted** paragraph with a [reference](SPEC.md).", tag: "P" },
 				{ source: "- first item\n- second item", tag: "UL" },
+				{ source: "- first item", tag: "LI" },
+				{ source: "- second item", tag: "LI" },
 			]);
 		});
 
@@ -65,6 +67,84 @@ describe("tweakComments parser/serializer", () => {
 				]),
 			);
 			expect(removeTweakComment(out, "c_block")).toBe(source);
+		});
+
+		// Catches: placing a marker between sibling bullets and splitting one list into two.
+		it("stores a task comment under its own bullet without splitting the list", () => {
+			const source = "- first\n- [ ] chosen\n- last\n";
+			const item = findTweakCommentBlocks(source).find(
+				(block) => source.slice(block.start, block.end) === "- [ ] chosen",
+			)!;
+			const out = insertTweakBlockComment(
+				source,
+				{
+					id: "c_task",
+					highlighted: "- [ ] chosen",
+					comment: "Do this first",
+					createdAt: "2026-09-27T12:00:00.000Z",
+				},
+				item,
+			);
+			expect(out).toContain(
+				"- [ ] chosen\n  <!--tweak:item:c_task @2026-09-27T12:00:00.000Z\n  Do this first-->\n- last",
+			);
+			const rendered = document.createElement("div");
+			rendered.innerHTML = marked.parse(out) as string;
+			expect(rendered.querySelectorAll("ul")).toHaveLength(1);
+			expect(Array.from(rendered.querySelectorAll("ul > li")).map((item) => item.textContent?.trim())).toEqual([
+				"first",
+				"chosen",
+				"last",
+			]);
+			expect(parseTweakComments(out)).toEqual([
+				expect.objectContaining({ id: "c_task", highlighted: "- [ ] chosen", anchor: "block" }),
+			]);
+			expect(removeTweakComment(out, "c_task")).toBe(source);
+		});
+
+		// Catches: attaching a child note to its parent or consuming nested source in the parent anchor.
+		it("anchors parent and nested comments separately, preserving their Markdown list", () => {
+			const source = "- parent\n  continuation\n  - child\n- sibling\n";
+			const parent = findTweakCommentBlocks(source).find(
+				(block) => source.slice(block.start, block.end) === "- parent\n  continuation",
+			)!;
+			let out = insertTweakBlockComment(
+				source,
+				{
+					id: "c_parent",
+					highlighted: "- parent\n  continuation",
+					comment: "Parent note",
+					createdAt: "2026-09-27T12:00:00.000Z",
+				},
+				parent,
+			);
+			const child = findTweakCommentBlocks(out).find((block) => out.slice(block.start, block.end) === "  - child")!;
+			out = insertTweakBlockComment(
+				out,
+				{ id: "c_child", highlighted: "  - child", comment: "Child note", createdAt: "2026-09-27T12:01:00.000Z" },
+				child,
+			);
+			expect(parseTweakComments(out).map((comment) => [comment.id, comment.highlighted])).toEqual([
+				["c_parent", "- parent\n  continuation"],
+				["c_child", "  - child"],
+			]);
+			expect(out).toContain("  continuation\n  <!--tweak:item:c_parent");
+			expect(out).toContain("  - child\n    <!--tweak:item:c_child");
+			expect(marked.parse(injectTweakSentinels(out))).toMatch(
+				/<ul>[\s\S]*<li>parent[\s\S]*<ul>[\s\S]*<li>child<\/li>[\s\S]*<\/ul>[\s\S]*<li>sibling<\/li>[\s\S]*<\/ul>/,
+			);
+		});
+
+		// Catches: a temporary marker changing a file that originally has no final newline.
+		it("removes an item comment without adding a final newline", () => {
+			const source = "- first\n- last";
+			const item = findTweakCommentBlocks(source).find((block) => source.slice(block.start, block.end) === "- last")!;
+			const out = insertTweakBlockComment(
+				source,
+				{ id: "c_eof", highlighted: "- last", comment: "Check ending", createdAt: "2026-09-27T12:00:00.000Z" },
+				item,
+			);
+			expect(removeTweakComment(out, "c_eof")).toBe(source);
 		});
 
 		// marked normalizes line endings before it lexes, so its token lengths are
