@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Urgent agent mail** — `agent send` now distinguishes default `normal` mail from `urgency="urgent"`. Urgent mail keeps its body in the inbox and submits a payload-free notice to a busy Claude Code or Codex recipient when the composer is safe. The CLI presents it at the next tool boundary without interrupting the current tool. The sender gets a receipt for the notice write or a queued-fallback reason; repeated urgent mail from one sender uses one unread notice until the inbox is read.
+
 - **Claude activity status** — An idle Claude session no longer stays marked Working indefinitely when a mail wake reaches its detailed transcript view without starting a turn. Shell state changes now have a consistent trace.
 
 - **Push-to-talk release and long audio** — Fn release stops microphone capture even while the WebView is busy, focus loss recovers missed key-up events, and slow streaming passes no longer discard the first 30 seconds of pending audio without a warning. File logs retain timing and length diagnostics without transcript text.

@@ -1469,6 +1469,21 @@ pub(crate) enum AgentDeliveryAssignment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UrgentNoticeReservation {
+    AlreadyRead,
+    InFlight,
+    Written,
+    Reserved,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UrgentNotice {
+    first_through: u64,
+    through: u64,
+    written: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AgentInboxFull;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1527,6 +1542,7 @@ pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
     active_waiters: std::collections::HashSet<u64>,
     owners: HashMap<String, AgentDeliveryOwner>,
+    urgent_notices: HashMap<String, UrgentNotice>,
     orchestrator_wake_pending_through: Option<u64>,
     orchestrator_wake_needed_through: Option<u64>,
     orchestrator_observed_through: u64,
@@ -1543,6 +1559,7 @@ impl Default for AgentDeliveryGate {
             next_lease: 0,
             active_waiters: std::collections::HashSet::new(),
             owners: HashMap::new(),
+            urgent_notices: HashMap::new(),
             orchestrator_wake_pending_through: None,
             orchestrator_wake_needed_through: None,
             orchestrator_observed_through: 0,
@@ -2460,6 +2477,8 @@ impl AppState {
                 .map(|message| message.timestamp)
                 .max()
                 .unwrap_or(since);
+            gate.urgent_notices
+                .retain(|_, notice| notice.through > read_through);
             gate.orchestrator_observed_through =
                 gate.orchestrator_observed_through.max(read_through);
             if read_through == 0
@@ -2479,6 +2498,74 @@ impl AppState {
             gate.reset_orchestrator_wake_budget_if_observed();
         }
         finish
+    }
+
+    /// Reserve one unread urgent notice per sender and recipient. This shares
+    /// the inbox delivery gate so reads and concurrent sends agree on the
+    /// covered logical cursor.
+    pub(crate) fn reserve_urgent_notice(
+        &self,
+        recipient: &str,
+        sender: &str,
+        through: u64,
+    ) -> UrgentNoticeReservation {
+        let gate_entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = gate_entry.lock();
+        if self
+            .agent_read_cursor
+            .get(recipient)
+            .is_some_and(|cursor| *cursor >= through)
+        {
+            return UrgentNoticeReservation::AlreadyRead;
+        }
+        match gate.urgent_notices.get_mut(sender) {
+            Some(notice) => {
+                notice.through = notice.through.max(through);
+                if notice.written {
+                    UrgentNoticeReservation::Written
+                } else {
+                    UrgentNoticeReservation::InFlight
+                }
+            }
+            None => {
+                gate.urgent_notices.insert(
+                    sender.to_string(),
+                    UrgentNotice {
+                        first_through: through,
+                        through,
+                        written: false,
+                    },
+                );
+                UrgentNoticeReservation::Reserved
+            }
+        }
+    }
+
+    pub(crate) fn finish_urgent_notice(
+        &self,
+        recipient: &str,
+        sender: &str,
+        first_through: u64,
+        written: bool,
+    ) {
+        let Some(gate_entry) = self.active_agent_waiters.get(recipient) else {
+            return;
+        };
+        let mut gate = gate_entry.lock();
+        if gate
+            .urgent_notices
+            .get(sender)
+            .is_some_and(|notice| notice.first_through == first_through)
+        {
+            if written {
+                gate.urgent_notices.get_mut(sender).unwrap().written = true;
+            } else {
+                gate.urgent_notices.remove(sender);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -2795,6 +2882,8 @@ impl AppState {
             gate.owners
                 .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
         }
+        gate.urgent_notices
+            .retain(|_, notice| notice.through > read_through);
         let no_pending_mail = self.agent_inbox.get(tuic_session).is_none_or(|inbox| {
             inbox.iter().all(|message| {
                 gate.owners.get(&message.id) != Some(&AgentDeliveryOwner::TerminalPending)

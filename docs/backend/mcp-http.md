@@ -1454,9 +1454,23 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    `delivery_path` for the sender and the `agent_msg` tracing line for the operator. When the recipient is a
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
-4. **Receive** — three layers, most-immediate first:
+4. **Receive** — the following paths surface buffered mail:
+   - **Urgent notice**: `agent send urgency="urgent"` retains the peer body only
+     in the inbox. A busy managed Claude Code or Codex session with a safe,
+     empty composer gets a payload-free notice through the guarded PTY writer.
+     The writer sends Enter, which both probed CLIs queue until the next tool
+     boundary. It does not interrupt the current tool. A draft, confident
+     dialog, unknown agent type or exited PTY prevents this submission. The
+     notice names the sender by validated UUID, never by a peer-controlled
+     display name. The sender receives `urgent_delivered=true` for a notice
+     write, coalesced unread notice, active waiter, or already observed inbox;
+     `false` includes `urgent_fallback_reason` for the queued fallback. The
+     receipt cannot prove the model acted. One unread notice per sender and
+     recipient covers further urgent mail until inbox observation clears it.
+     The recorded CLI contract, including unused immediate-send gesture
+     findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
-   - **PTY injection**: an ordinary managed agent receives a payload-free `agent action=inbox` notice when its composer is safe, or on its next safe idle transition. A busy turn, question, or partial draft is left untouched. Managed Claude peers use this path even with an active SSE stream, because a channel push during one turn cannot start a later turn for unread mail. An idle/completed orchestrator receives the coalesced inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered.
+   - **Normal PTY notice**: an ordinary managed agent receives a payload-free `agent action=inbox` notice when its composer is safe, or on its next safe idle transition. A busy turn, question, or partial draft is left untouched. Managed Claude peers use this path even with an active SSE stream, because a channel push during one turn cannot start a later turn for unread mail. An idle/completed orchestrator receives the coalesced inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered by normal mail.
    - **Inbox poll**: `agent action=inbox` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
