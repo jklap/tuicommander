@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Terminal link positions** — File links with `:line:col` now place the editor cursor at the requested column. Clicking another position in an open file navigates the existing tab without discarding edits.
+
 - **Terminal file line links** — Clicking a file path with `:line` now opens the built-in editor at that line, including for Markdown files.
 
 - **External Markdown review saves** — Inline tweak comments on Markdown files outside the active repository now write to the external file. A failed write shows an error and keeps the draft open for retry.

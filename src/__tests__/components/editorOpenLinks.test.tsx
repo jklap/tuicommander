@@ -7,6 +7,7 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { openTerminalFilePath } from "../../utils/filePreview";
 
 const { mockInvoke, mockOpenUrl } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockOpenUrl: vi.fn() }));
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
@@ -30,7 +31,7 @@ describe("editor links", () => {
 		mockInvoke.mockReset();
 		mockOpenUrl.mockReset();
 		mockInvoke.mockImplementation(async (command: string, args: Record<string, string>) => {
-			if (command === "read_editor_file") return source;
+			if (command === "read_editor_file" || command === "read_editor_file_external") return source;
 			if (command === "stat_path") return { exists: true, modified_at: 1, size: source.length };
 			if (command === "mdkb_outline" || command === "get_gutter_changes" || command === "get_file_blame") return [];
 			if (command === "resolve_terminal_path") {
@@ -76,6 +77,50 @@ describe("editor links", () => {
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 		return { ...rendered, view };
 	}
+
+	it("moves an already-open editor to a new terminal line without losing unsaved text", async () => {
+		const path = "/Users/boss/Gits/.tmp/results/absolute.txt";
+		const id = editorTabsStore.add("", path, undefined, { externalEditable: true });
+		const rendered = render(() => <CodeEditorTab id={id} repoPath="" filePath={path} externalEditable />);
+		const view = await waitFor(() => {
+			const el = rendered.container.querySelector<HTMLElement>(".cm-editor");
+			if (!el) throw new Error("editor missing");
+			const found = EditorView.findFromDOM(el)!;
+			if (found.state.doc.toString() !== source) throw new Error("document not loaded");
+			return found;
+		});
+		view.dispatch({ changes: { from: view.state.doc.length, insert: "\nunsaved" } });
+		openTerminalFilePath(path, undefined, 3);
+		await waitFor(() => expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from));
+		openTerminalFilePath(path, undefined, 4, 999);
+		expect(editorTabsStore.getActive()?.id).toBe(id);
+		expect(view.state.selection.main.head).toBe(view.state.doc.line(4).to);
+		expect(view.state.doc.toString()).toContain("unsaved");
+	});
+
+	it("places a new editor caret at a terminal line and column", async () => {
+		const path = "/Users/boss/Gits/.tmp/results/absolute.txt";
+		openTerminalFilePath(path, undefined, 3, 6);
+		const tab = editorTabsStore.getActive()!;
+		const rendered = render(() => (
+			<CodeEditorTab
+				id={tab.id}
+				repoPath={tab.repoPath}
+				filePath={tab.filePath}
+				initialLine={tab.initialLine}
+				initialCol={tab.initialCol}
+				externalEditable
+			/>
+		));
+		const view = await waitFor(() => {
+			const el = rendered.container.querySelector<HTMLElement>(".cm-editor");
+			if (!el) throw new Error("editor missing");
+			const found = EditorView.findFromDOM(el)!;
+			if (found.state.doc.toString() !== source) throw new Error("document not loaded");
+			return found;
+		});
+		await waitFor(() => expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from + 5));
+	});
 
 	it("opens a Markdown target at its line from link text and underlines only with Cmd", async () => {
 		const { view, unmount } = await mount();
