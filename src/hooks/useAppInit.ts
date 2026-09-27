@@ -671,31 +671,54 @@ export async function initApp(deps: AppInitDeps) {
 				// deliberately not switched, so an active tab in another repo has its
 				// own tab button filtered out of the bar.
 				const background = focus === false;
+				let openedTab: { id: string | null; kind: "markdown" | "editor" } | null = null;
 
 				if (cmd === "open" && repoPath) {
-					if (background) mdTabsStore.addFileBackground(repoPath, relPath);
-					else mdTabsStore.add(repoPath, relPath);
+					openedTab = {
+						id: background ? mdTabsStore.addFileBackground(repoPath, relPath) : mdTabsStore.add(repoPath, relPath),
+						kind: "markdown",
+					};
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
 					if (classifyFile(filePath) === "markdown") {
-						if (background) mdTabsStore.addFileBackground(activeRepoPath ?? "", filePath);
-						else mdTabsStore.add(activeRepoPath ?? "", filePath);
+						openedTab = {
+							id: background
+								? mdTabsStore.addFileBackground(activeRepoPath ?? "", filePath)
+								: mdTabsStore.add(activeRepoPath ?? "", filePath),
+							kind: "markdown",
+						};
 					} else {
-						editorTabsStore.add(activeRepoPath ?? "", filePath, undefined, { externalEditable: false, background });
+						openedTab = {
+							id: editorTabsStore.add(activeRepoPath ?? "", filePath, undefined, {
+								externalEditable: false,
+								background,
+							}),
+							kind: "editor",
+						};
 					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
-						editorTabsStore.add(repoPath, relPath, line || undefined, { background });
+						openedTab = {
+							id: editorTabsStore.add(repoPath, relPath, line || undefined, { background }),
+							kind: "editor",
+						};
 					} else if (isAbsolutePath(filePath)) {
-						editorTabsStore.add(activeRepoPath ?? "", filePath, line || undefined, {
-							externalEditable: true,
-							background,
-						});
+						openedTab = {
+							id: editorTabsStore.add(activeRepoPath ?? "", filePath, line || undefined, {
+								externalEditable: true,
+								background,
+							}),
+							kind: "editor",
+						};
 					} else {
 						appLogger.warn("app", `tuic://edit relative path without active repo: ${filePath}`);
 					}
 				} else {
 					appLogger.warn("app", `tuic:// unhandled: cmd=${cmd} path=${filePath} repo=${repoPath}`);
+				}
+				if (openedTab?.id) {
+					if (openedTab.kind === "markdown") mdTabsStore.setPinned(openedTab.id, pinned, true);
+					else editorTabsStore.setPinned(openedTab.id, pinned, true);
 				}
 			} catch (err) {
 				appLogger.warn("app", `tuic:// URL parse error: ${url}`, err);

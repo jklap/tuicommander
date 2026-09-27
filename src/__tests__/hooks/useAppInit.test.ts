@@ -254,7 +254,12 @@ describe("initApp", () => {
 		expect(mdTabsStore.getVisibleIds(null).length).toBe(1);
 	});
 
-	it.each(["open", "edit"])("keeps an external tuic://%s tab in its opening repository", async (command) => {
+	it.each([
+		{ command: "open", pinned: false },
+		{ command: "edit", pinned: false },
+		{ command: "open", pinned: true },
+		{ command: "edit", pinned: true },
+	])("scopes an external tuic://$command tab with pinned=$pinned", async ({ command, pinned }) => {
 		let uiTabCallback:
 			| ((event: {
 					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
@@ -276,7 +281,7 @@ describe("initApp", () => {
 				id: `external-${command}`,
 				title: "External",
 				html: "",
-				pinned: false,
+				pinned,
 				url: `tuic://${command}//Users/boss/Gits/.tmp/boss/ego-ux-eval.${command === "open" ? "md" : "txt"}`,
 				focus: true,
 			},
@@ -286,7 +291,8 @@ describe("initApp", () => {
 		expect(tabs.get(tabId)?.repoPath).toBe("/repos/alpha");
 		tabs.setActive(null);
 		repositoriesStore.setActive("/repos/beta");
-		expect(tabs.getVisibleIds("/repos/beta|main")).not.toContain(tabId);
+		if (pinned) expect(tabs.getVisibleIds("/repos/beta|main")).toContain(tabId);
+		else expect(tabs.getVisibleIds("/repos/beta|main")).not.toContain(tabId);
 		repositoriesStore.setActive("/repos/alpha");
 		expect(tabs.getVisibleIds("/repos/alpha|main")).toContain(tabId);
 	});

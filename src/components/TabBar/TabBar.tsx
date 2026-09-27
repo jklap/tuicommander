@@ -512,6 +512,38 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		),
 	);
 
+	// Unpinning a cross-repo MCP tab restores its opening-repo scope immediately.
+	let previousMdPin: { id: string | null; pinned: boolean | undefined } | null = null;
+	createEffect(() => {
+		const id = mdTabsStore.state.activeId;
+		const pinned = id ? mdTabsStore.get(id)?.pinned : undefined;
+		if (
+			id &&
+			previousMdPin?.id === id &&
+			previousMdPin.pinned &&
+			!pinned &&
+			!mdTabsStore.getVisibleIds(activeBranchKey(), false).includes(id)
+		) {
+			mdTabsStore.setActive(null);
+		}
+		previousMdPin = { id, pinned };
+	});
+	let previousEditPin: { id: string | null; pinned: boolean | undefined } | null = null;
+	createEffect(() => {
+		const id = editorTabsStore.state.activeId;
+		const pinned = id ? editorTabsStore.get(id)?.pinned : undefined;
+		if (
+			id &&
+			previousEditPin?.id === id &&
+			previousEditPin.pinned &&
+			!pinned &&
+			!editorTabsStore.getVisibleIds(activeBranchKey(), false).includes(id)
+		) {
+			editorTabsStore.setActive(null);
+		}
+		previousEditPin = { id, pinned };
+	});
+
 	const tabTypeOf = (tabId: string): "terminal" | "markdown" | "diff" | "editor" | null => {
 		if (activeTerminals().includes(tabId)) return "terminal";
 		if (visibleMdIds().includes(tabId)) return "markdown";

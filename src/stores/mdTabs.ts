@@ -377,6 +377,7 @@ function createMdTabsStore() {
 					base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
 					base._setState("tabs", existing.id, "url" as keyof MdTabData, url as MdTabData[keyof MdTabData]);
 				});
+				base.setPinned(existing.id, pinned, true);
 				if (focus) base.setActive(existing.id);
 				return existing.id;
 			}
@@ -392,6 +393,7 @@ function createMdTabsStore() {
 				pluginId,
 				html: url ? "" : html,
 				pinned,
+				pinAcrossRepos: true,
 				selfStyled: true,
 			};
 			const repoPath = repositoriesStore.state.activeRepoPath ?? resolveRepoForCwd(originRepoPath);
