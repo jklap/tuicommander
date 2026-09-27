@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **MCP tabs stay with their repository** — Native file, HTML and URL tabs opened through `ui action=tab` return when their opening repository is selected again. Pinned MCP tabs remain scoped to that repository.
+
 - **Open links from the code editor** — Cmd/Ctrl+click opens web URLs, Markdown links, local paths and directories. Paths can point outside a repository, and missing files show a toast. MCP `tuic://open` now previews external Markdown files as Markdown.
 
 - **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.

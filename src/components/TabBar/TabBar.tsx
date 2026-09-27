@@ -496,28 +496,21 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			activeBranchKey,
 			() => {
 				const diffActive = diffTabsStore.state.activeId;
-				if (diffActive && !visibleDiffIds().includes(diffActive)) {
+				if (diffActive && !diffTabsStore.getVisibleIds(activeBranchKey(), false).includes(diffActive)) {
 					diffTabsStore.setActive(null);
 				}
 				const mdActive = mdTabsStore.state.activeId;
-				if (mdActive && !visibleMdIds().includes(mdActive)) {
+				if (mdActive && !mdTabsStore.getVisibleIds(activeBranchKey(), false).includes(mdActive)) {
 					mdTabsStore.setActive(null);
 				}
 				const editActive = editorTabsStore.state.activeId;
-				if (editActive && !visibleEditIds().includes(editActive)) {
+				if (editActive && !editorTabsStore.getVisibleIds(activeBranchKey(), false).includes(editActive)) {
 					editorTabsStore.setActive(null);
 				}
 			},
 			{ defer: true },
 		),
 	);
-
-	// Evict non-pinned plugin-panel tabs from other repos on repo switch — they
-	// would otherwise pile up forever, invisible but still holding HTML in memory.
-	createEffect(() => {
-		const current = repositoriesStore.state.activeRepoPath;
-		mdTabsStore.evictNonPinnedPluginPanelsForOtherRepos(current);
-	});
 
 	const tabTypeOf = (tabId: string): "terminal" | "markdown" | "diff" | "editor" | null => {
 		if (activeTerminals().includes(tabId)) return "terminal";

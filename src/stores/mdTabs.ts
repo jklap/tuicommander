@@ -1,6 +1,6 @@
 import { batch } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
-import { branchKeyFor, resolveRepoPathFor } from "./repositories";
+import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
@@ -332,11 +332,8 @@ function createMdTabsStore() {
 			}
 
 			const id = base._nextId("md");
-			// pinned: an SDK dashboard is global, not a per-repo view — it carries no
-			// repoPath, so evictNonPinnedPluginPanelsForOtherRepos would leave it
-			// alone either way. The flag is the honest label for a tab the user opened
-			// deliberately and expects to find again, and it is what protects the
-			// panel the day one of these does become repo-scoped.
+			// SDK dashboards are global, so they carry no repoPath. Pinning also
+			// describes the panel the user opened deliberately and expects to find again.
 			const tabId = base._addTab({
 				type: "plugin-panel",
 				id,
@@ -354,9 +351,8 @@ function createMdTabsStore() {
 		 * Open or update a UI tab (MCP-driven). Deduplicates on pluginId alone.
 		 * focus=true (default): switch to this tab. focus=false: update content silently.
 		 *
-		 * originRepoPath: repo/cwd of the MCP caller. When resolvable to a
-		 * registered repo, the tab is scoped there. When unresolvable, the tab
-		 * is left unscoped (visible in all repos) rather than guessing from focus.
+		 * Scope to the repo visible when opened. If none is active, use the
+		 * caller's registered repo as a fallback.
 		 */
 		openUiTab(
 			pluginId: string,
@@ -398,8 +394,11 @@ function createMdTabsStore() {
 				pinned,
 				selfStyled: true,
 			};
-			const resolvedRepo = resolveRepoForCwd(originRepoPath) ?? undefined;
-			if (resolvedRepo) tab.repoPath = resolvedRepo;
+			const repoPath = repositoriesStore.state.activeRepoPath ?? resolveRepoForCwd(originRepoPath);
+			if (repoPath) {
+				tab.repoPath = repoPath;
+				tab.branchKey = branchKeyFor(repoPath);
+			}
 			if (url) tab.url = url;
 			if (focus) {
 				return base._addTab(tab);
@@ -443,7 +442,13 @@ function createMdTabsStore() {
 			}
 
 			const id = base._nextId("md");
-			const tabId = base._addTab({ type: "claude-usage", id, title: "Claude Usage", pinned: true, sessionId } as ClaudeUsageTab);
+			const tabId = base._addTab({
+				type: "claude-usage",
+				id,
+				title: "Claude Usage",
+				pinned: true,
+				sessionId,
+			} as ClaudeUsageTab);
 
 			return tabId;
 		},
@@ -625,21 +630,6 @@ function createMdTabsStore() {
 		/** Retrieve the imperative handle for a tab */
 		getHandle<T = unknown>(tabId: string): T | undefined {
 			return handles.get(tabId) as T | undefined;
-		},
-
-		/**
-		 * Evict non-pinned plugin-panel tabs whose repoPath is set and doesn't match
-		 * the given repo. Without this, every visited repo leaves a stale UI tab in
-		 * state.tabs forever — invisible (getVisibleIds hides them) but still holding
-		 * HTML in memory. Called on repo switch. Pinned tabs and tabs with no
-		 * repoPath (globally scoped) are preserved. Non-plugin-panel tabs (file,
-		 * virtual, pr-diff, html-preview, etc.) are untouched — they have their own
-		 * lifecycle and users rely on them persisting across repo switches.
-		 */
-		evictNonPinnedPluginPanelsForOtherRepos(currentRepoPath: string | null): void {
-			base._clearWhere(
-				(tab) => tab.type === "plugin-panel" && !tab.pinned && !!tab.repoPath && tab.repoPath !== currentRepoPath,
-			);
 		},
 
 		/** Clear all file-based markdown tabs for a repository (virtual tabs are unaffected) */

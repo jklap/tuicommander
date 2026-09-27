@@ -875,6 +875,31 @@ describe("TabBar", () => {
 	});
 
 	describe("markdown tabs", () => {
+		it("hides an active MCP tab on repo switch and restores it on return", () => {
+			for (const path of ["/repo-a", "/repo-b"]) {
+				repositoriesStore.add({ path, displayName: path });
+				repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+				repositoriesStore.setActiveWorkspace(path, "main");
+			}
+			repositoriesStore.setActive("/repo-a");
+			const id = mdTabsStore.openUiTab("repo-preview", "Preview", "<p>test</p>", false);
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			repositoriesStore.setActive("/repo-b");
+			expect(mdTabsStore.state.activeId).toBeNull();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+			repositoriesStore.setActive("/repo-a");
+			expect(mdTabsStore.get(id)).toBeDefined();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+		});
 		function setupActiveRepo() {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setActive("/repo");

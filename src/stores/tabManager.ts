@@ -276,7 +276,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 
 		/** Get tab IDs visible for the given branch key (pinned + matching branch + unscoped).
 		 *  Respects user-defined drag order (_order array) when present. */
-		getVisibleIds(currentBranchKey: string | null): string[] {
+		getVisibleIds(currentBranchKey: string | null, includeActive = true): string[] {
 			const isVisible = (id: string): boolean => {
 				const tab = state.tabs[id];
 				if (!tab) return false;
@@ -288,7 +288,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 				// correctly filed under the repo that owns the file, and the repo gate
 				// below then hid it. Exempt only the active tab — exempting foreign
 				// tabs generally would leak every repo's tabs into every tab bar.
-				if (id === state.activeId) return true;
+				if (includeActive && id === state.activeId) return true;
 				if (tab.repoPath) {
 					if (!currentBranchKey?.startsWith(tab.repoPath + "|")) return false;
 				}
