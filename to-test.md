@@ -12,6 +12,10 @@
 
 # To Test
 
+## CLI blocking waits (story 1060-df82) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic agent wait --timeout-ms 8000 --json` and `tuic session wait <busy-session> --until exited --timeout-ms 8000 --json` against an isolated test instance. Confirm each returns after the server's response rather than failing after three seconds. The running app and installed CLI do not load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.
+
 ## Mobile notification tags (story 1042-f5ca) — updated service worker
 
 - [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.

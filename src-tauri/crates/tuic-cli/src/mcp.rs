@@ -33,10 +33,32 @@ fn post(
     body: &Value,
     session: Option<&str>,
     tuic_session: Option<&str>,
+    read_timeout: Option<std::time::Duration>,
 ) -> Result<ipc::Response, String> {
     let extra = mcp_headers(session, tuic_session);
-    ipc::request_with_headers("POST", "/mcp", Some(&body.to_string()), &extra)
-        .map_err(|e| e.to_string())
+    ipc::request_with_headers_and_timeout(
+        "POST",
+        "/mcp",
+        Some(&body.to_string()),
+        &extra,
+        read_timeout,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn wait_read_timeout(tool: &str, arguments: &Value) -> Option<std::time::Duration> {
+    if !matches!(tool, "agent" | "session")
+        || arguments.get("action").and_then(Value::as_str) != Some("wait")
+    {
+        return None;
+    }
+    let wait_ms = arguments
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .filter(|timeout| *timeout > 0)
+        .unwrap_or(60_000)
+        .min(300_000);
+    Some(std::time::Duration::from_millis(wait_ms + 5_000))
 }
 
 fn mcp_headers<'a>(
@@ -104,7 +126,7 @@ impl McpClient {
                 "clientInfo": { "name": "tuic-cli", "version": env!("CARGO_PKG_VERSION") },
             }
         });
-        let resp = post(&init, None, tuic_session.as_deref())?;
+        let resp = post(&init, None, tuic_session.as_deref(), None)?;
         if !resp.is_success() {
             return Err(format!("MCP initialize failed: HTTP {}", resp.status));
         }
@@ -142,7 +164,12 @@ impl McpClient {
             "method": "tools/call",
             "params": { "name": tool, "arguments": arguments }
         });
-        let response = post(&call, Some(&self.session), self.tuic_session.as_deref())?;
+        let response = post(
+            &call,
+            Some(&self.session),
+            self.tuic_session.as_deref(),
+            wait_read_timeout(tool, &arguments),
+        )?;
         unwrap_tool_result(&response)
     }
 }
