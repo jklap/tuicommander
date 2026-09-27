@@ -12,8 +12,8 @@
 //! caller, so a test states the timeline instead of sleeping through it and a
 //! loaded machine cannot turn a behaviour assertion into a flake.
 //!
-//! Delivery is a port: [`VoiceSink`]. The only production implementation is
-//! [`PtyVoiceSink`], which types the turn into the bound agent's composer
+//! Delivery is a port: [`VoiceSink`]. The application's PTY adapter types the
+//! turn into the bound agent's composer
 //! through `pty::write_voice_turn` — at once, even while the agent works, the
 //! way a line typed by hand reaches a working agent. It is not the Compose
 //! queue: that queue is "one message, let the agent work, then the next", and
@@ -46,8 +46,39 @@
 //! whatever stops playback, the words that follow are new model input and stay
 //! gated whenever a phrase is configured.
 
-use crate::pty::VoiceWrite;
-use crate::state::AppState;
+/// What became of a hands-free turn written to an agent's composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceWrite {
+    /// Typed and submitted. Also returned when the write was cut short after
+    /// its first byte: typing it again could submit it twice.
+    Written,
+    /// Nothing typed. The hands-free side keeps the turn and retries.
+    Held(VoiceHold),
+}
+
+/// Why a hands-free turn was not typed yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceHold {
+    /// A confident question or permission dialog owns the composer.
+    Question,
+    /// The user has a draft in the composer.
+    Draft,
+    /// Another write holds the composer, or an earlier one is uncertain.
+    InFlight,
+    /// The PTY refused the first byte.
+    WriteNotStarted,
+}
+
+impl VoiceHold {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Question => "confident question on screen",
+            Self::Draft => "partial user input in the composer",
+            Self::InFlight => "another write holds the composer",
+            Self::WriteNotStarted => "the write did not start",
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Utterance segmentation
@@ -618,7 +649,7 @@ pub struct HandsFree {
     pending: Option<PendingSend>,
     /// Why the last write was held, so a hold that lasts many ticks is
     /// reported once rather than on every tick.
-    last_hold: Option<crate::pty::VoiceHold>,
+    last_hold: Option<VoiceHold>,
     last_error: Option<String>,
     /// Spoken turns typed into the composer, and turns the activation
     /// gate dropped. Monotonic for the process, never reset on arm: a client
@@ -898,7 +929,7 @@ impl HandsFree {
     /// Put a due turn back because the composer held it. It stays due, so the
     /// next tick retries it; a transcript that arrives meanwhile joins it.
     /// Returns whether this is a new hold, for a log that is not per tick.
-    fn hold(&mut self, send: VoiceSend, reason: crate::pty::VoiceHold) -> bool {
+    fn hold(&mut self, send: VoiceSend, reason: VoiceHold) -> bool {
         if send.generation == self.generation && self.binding.is_some() {
             self.pending = Some(PendingSend {
                 generation: send.generation,
@@ -911,7 +942,7 @@ impl HandsFree {
         self.note_hold(reason)
     }
 
-    fn note_hold(&mut self, reason: crate::pty::VoiceHold) -> bool {
+    fn note_hold(&mut self, reason: VoiceHold) -> bool {
         self.last_hold.replace(reason) != Some(reason)
     }
 
@@ -1016,15 +1047,6 @@ pub trait VoiceSink {
     fn write(&self, session_id: &str, text: &str) -> Result<VoiceWrite, String>;
 }
 
-/// Production adapter: `pty::write_voice_turn`, nothing else.
-pub struct PtyVoiceSink<'a>(pub &'a AppState);
-
-impl VoiceSink for PtyVoiceSink<'_> {
-    fn write(&self, session_id: &str, text: &str) -> Result<VoiceWrite, String> {
-        crate::pty::write_voice_turn(self.0, session_id, text)
-    }
-}
-
 /// What one delivery attempt did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
@@ -1034,10 +1056,7 @@ pub enum Delivery {
     Notice,
     /// Nothing was typed; the mode keeps what it tried. `first` is false while
     /// the same hold lasts, so the runtime logs it once.
-    Held {
-        reason: crate::pty::VoiceHold,
-        first: bool,
-    },
+    Held { reason: VoiceHold, first: bool },
 }
 
 /// What a spoken turn looks like once it reaches the model.
@@ -1274,14 +1293,10 @@ pub trait TargetProbe {
     fn accepts(&self, session_id: &str) -> bool;
 }
 
-/// Production probe: the same predicate `arm` checked, re-asked every tick.
-pub struct PtyTargetProbe<'a>(pub &'a AppState);
+/// The production loop needs both ports from the same application adapter.
+pub trait VoicePort: VoiceSink + TargetProbe + Send + Sync {}
 
-impl TargetProbe for PtyTargetProbe<'_> {
-    fn accepts(&self, session_id: &str) -> bool {
-        crate::pty::session_accepts_voice(self.0, session_id)
-    }
-}
+impl<T: VoiceSink + TargetProbe + Send + Sync> VoicePort for T {}
 
 /// How long a stream may deliver nothing before it counts as a dead device.
 ///
@@ -1549,13 +1564,9 @@ impl Drop for HandsFreeRuntime {
     }
 }
 
-/// Run the hands-free loop against a real session until it disarms.
-///
-/// The thread owns nothing but the audio endpoint: the target probe and the
-/// sink are both built from `AppState` on each tick, and the sink is the only
-/// way out.
+/// Run the hands-free loop against the supplied delivery port until it disarms.
 pub fn spawn_runtime(
-    state: std::sync::Arc<AppState>,
+    port: std::sync::Arc<dyn VoicePort>,
     mode: std::sync::Arc<parking_lot::Mutex<HandsFree>>,
     mut endpoint: Box<dyn VoiceEndpoint>,
     config: SegmenterConfig,
@@ -1578,8 +1589,8 @@ pub fn spawn_runtime(
                     &mut capture,
                     &mode,
                     endpoint.as_mut(),
-                    &PtyTargetProbe(&state),
-                    &PtyVoiceSink(&state),
+                    port.as_ref(),
+                    port.as_ref(),
                     now_ms,
                 );
                 match outcome {
@@ -1597,7 +1608,7 @@ pub fn spawn_runtime(
                         // microphone — so a model that was told the mode began
                         // has to be told it ended here too, not only on the
                         // manual path in `commands::disarm_hands_free`.
-                        report_exit_hint(&PtyVoiceSink(&state), &disarmed);
+                        report_exit_hint(port.as_ref(), &disarmed);
                         break;
                     }
                     Tick::Running {
@@ -1667,7 +1678,7 @@ pub(super) fn log_delivery(mode: &HandsFree, delivery: Delivery) {
 /// The two disarm paths — the user's and this loop's — both want the notice
 /// sent and neither has anybody to hand a failure to: by the time it is sent
 /// the mode is already gone.
-pub(super) fn report_exit_hint(sink: &dyn VoiceSink, disarmed: &Disarmed) {
+pub fn report_exit_hint(sink: &dyn VoiceSink, disarmed: &Disarmed) {
     match deliver_exit_hint(sink, disarmed) {
         Some(Ok(VoiceWrite::Written)) => tracing::info!(
             source = "dictation",
@@ -2344,7 +2355,7 @@ mod tests {
     #[derive(Default)]
     struct FakeSink {
         written: RefCell<Vec<(String, String)>>,
-        hold: RefCell<Option<crate::pty::VoiceHold>>,
+        hold: RefCell<Option<VoiceHold>>,
         fail: RefCell<Option<String>>,
     }
 
@@ -2448,13 +2459,13 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeSink::default();
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Question);
         mode.accept_transcript(generation, "yes, go on", None, 0);
 
         assert_eq!(
             deliver_due(&mut mode, &queue, 1_500),
             Some(Ok(Delivery::Held {
-                reason: crate::pty::VoiceHold::Question,
+                reason: VoiceHold::Question,
                 first: true
             }))
         );
@@ -2464,7 +2475,7 @@ mod tests {
         assert_eq!(
             deliver_due(&mut mode, &queue, 1_550),
             Some(Ok(Delivery::Held {
-                reason: crate::pty::VoiceHold::Question,
+                reason: VoiceHold::Question,
                 first: false
             })),
             "the same hold is not news on the next tick"
@@ -2486,7 +2497,7 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeSink::default();
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Draft);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Draft);
         mode.accept_transcript(generation, "first", None, 0);
         deliver_due(&mut mode, &queue, 1_500);
 
@@ -2510,7 +2521,7 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeSink::default();
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Question);
         mode.accept_transcript(generation, "delete it", None, 0);
         deliver_due(&mut mode, &queue, 1_500);
 
@@ -2646,7 +2657,7 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeSink::default();
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Question);
 
         let sent =
             deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("it")).expect("armed");
@@ -2683,7 +2694,7 @@ mod tests {
     fn a_start_notice_the_model_never_read_is_not_contradicted() {
         let mut mode = armed();
         let queue = FakeSink::default();
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Question);
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed")
             .expect("held");
@@ -2729,13 +2740,13 @@ mod tests {
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed")
             .expect("written");
-        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        *queue.hold.borrow_mut() = Some(VoiceHold::Question);
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
 
         assert_eq!(
             deliver_exit_hint(&queue, &disarmed),
-            Some(Ok(VoiceWrite::Held(crate::pty::VoiceHold::Question)))
+            Some(Ok(VoiceWrite::Held(VoiceHold::Question)))
         );
         assert_eq!(
             queue.written.borrow().as_slice(),
@@ -2810,80 +2821,6 @@ mod tests {
     }
 
     // --- The real sink ----------------------------------------------------
-
-    /// "Unsupported targets stay unavailable" is a refusal at the sink, not a
-    /// fallback somewhere else: there is no other exit from this module.
-    #[test]
-    fn the_real_sink_refuses_a_target_that_cannot_take_hands_free_input() {
-        let state = crate::state::tests_support::make_test_app_state();
-
-        assert_eq!(
-            PtyVoiceSink(&state).write("no-such-session", "hello"),
-            Err("Session not found".to_string())
-        );
-        assert_eq!(
-            PtyVoiceSink(&state).write("no-such-session", "   "),
-            Err("Command text is empty".to_string())
-        );
-    }
-
-    /// Boss's rule against the real sink: a working agent takes the turn at
-    /// once, as it takes a line typed by hand; a dialog holds it. The idle case
-    /// is the control — without it "typed" would be equally true of a harness
-    /// that types into anything.
-    ///
-    /// The dialog row is the one with a user-visible failure behind it: a raw
-    /// write would answer an open permission prompt with whatever the user
-    /// happened to say in the room. None of the three ends the conversation.
-    #[cfg(unix)]
-    #[test]
-    fn a_busy_target_takes_the_turn_a_dialog_holds_it_and_all_stay_targets() {
-        let state = crate::state::tests_support::make_test_app_state();
-        for (session, shell) in [
-            ("voice-idle", crate::pty::SHELL_IDLE),
-            ("voice-busy", crate::pty::SHELL_BUSY),
-            ("voice-dialog", crate::pty::SHELL_IDLE),
-        ] {
-            crate::test_support::agent_session(&state, session, shell);
-            crate::test_support::insert_recording_session(&state, session);
-        }
-        // Idle, but a confident question owns the composer.
-        state
-            .session_maps
-            .session_states
-            .get_mut("voice-dialog")
-            .expect("the session was just inserted")
-            .question_confident = true;
-
-        let spoken = |session: &str| {
-            PtyVoiceSink(&state)
-                .write(session, "esegui i test")
-                .expect("a live agent session takes the entry")
-        };
-
-        assert_eq!(spoken("voice-idle"), VoiceWrite::Written);
-        assert_eq!(
-            spoken("voice-busy"),
-            VoiceWrite::Written,
-            "a working agent takes a spoken turn mid-turn, as it takes a typed line"
-        );
-        assert_eq!(
-            spoken("voice-dialog"),
-            VoiceWrite::Held(crate::pty::VoiceHold::Question),
-            "an open prompt must not be answered with speech the user aimed at the agent"
-        );
-        for session in ["voice-idle", "voice-busy", "voice-dialog"] {
-            assert_eq!(
-                crate::pty::queued_command_count(&state, session),
-                0,
-                "{session}: speech never enters the Compose queue"
-            );
-            assert!(
-                PtyTargetProbe(&state).accepts(session),
-                "{session} is still a target"
-            );
-        }
-    }
 
     /// Late asynchronous work is the failure this whole generation scheme
     /// exists for: a whisper pass that finishes after the abort must not send.
@@ -3471,11 +3408,10 @@ mod tests {
         let queue = FakeSink::default();
 
         let reply = speech(500);
-        echo.lock()
-            .note_rendered(&crate::dictation::speech::SpeechAudio {
-                samples: reply.clone(),
-                sample_rate: SAMPLE_RATE,
-            });
+        echo.lock().note_rendered(&crate::speech::SpeechAudio {
+            samples: reply.clone(),
+            sample_rate: SAMPLE_RATE,
+        });
         endpoint.feed(reply);
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
 
@@ -3506,11 +3442,10 @@ mod tests {
         let queue = FakeSink::default();
 
         let reply = speech(500);
-        echo.lock()
-            .note_rendered(&crate::dictation::speech::SpeechAudio {
-                samples: reply.clone(),
-                sample_rate: SAMPLE_RATE,
-            });
+        echo.lock().note_rendered(&crate::speech::SpeechAudio {
+            samples: reply.clone(),
+            sample_rate: SAMPLE_RATE,
+        });
 
         // The microphone hears the reply and nothing else.
         let mut heard = reply;
@@ -3570,11 +3505,10 @@ mod tests {
         let queue = FakeSink::default();
 
         let reply = speech(500);
-        echo.lock()
-            .note_rendered(&crate::dictation::speech::SpeechAudio {
-                samples: reply.clone(),
-                sample_rate: SAMPLE_RATE,
-            });
+        echo.lock().note_rendered(&crate::speech::SpeechAudio {
+            samples: reply.clone(),
+            sample_rate: SAMPLE_RATE,
+        });
         // The user interrupts: playback stops, so the rest of the reply is
         // never heard and must stop being treated as reference.
         echo.lock().note_stopped();
@@ -3778,71 +3712,6 @@ mod tests {
             }
             other => panic!("a disconnected owner must disarm, got {other:?}"),
         }
-    }
-
-    /// The browser half of the rule above (832-e730 criterion 3).
-    ///
-    /// A `FakeEndpoint` proves the *runtime* disarms when an endpoint says it
-    /// is gone; it cannot prove the browser endpoint ever says so. Driven
-    /// through the real `BrowserVoiceEndpoint` over a closed link, this asks
-    /// the question that matters: a tab that closed must end the conversation
-    /// it owned, by the same path and with the same reason as a desktop
-    /// endpoint released on shutdown — including the cancellation of the
-    /// entries it had queued.
-    #[test]
-    fn a_browser_client_that_closed_its_socket_disarms_the_conversation_it_owned() {
-        /// Recognises nothing: whether the tab is gone is decided before any
-        /// audio is looked at, and a recogniser here would need a model.
-        struct Deaf;
-
-        impl super::super::transcribe::Transcriber for Deaf {
-            fn transcribe(
-                &self,
-                _audio: &[f32],
-                _language: Option<&str>,
-                _gates: super::super::transcribe::VoiceGates,
-            ) -> Result<super::super::transcribe::TranscribeResult, String> {
-                Ok(super::super::transcribe::TranscribeResult {
-                    text: String::new(),
-                    skip_reason: None,
-                    language: None,
-                })
-            }
-        }
-
-        let endpoints = super::super::browser::BrowserEndpoints::default();
-        let link = endpoints.connect("browser-42");
-        let mut endpoint = super::super::browser::BrowserVoiceEndpoint::new(
-            link.clone(),
-            std::sync::Arc::new(Deaf),
-            None,
-            super::super::transcribe::VoiceGates::default(),
-        );
-        let mode = armed_shared();
-        let mut capture = runtime_capture();
-        let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeSink::default();
-
-        // Still connected, so the conversation survives a tick — the control
-        // that keeps the assertion below from passing against an endpoint that
-        // was never alive.
-        assert!(matches!(
-            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0),
-            Tick::Running { .. }
-        ));
-
-        endpoints.disconnect("browser-42", &link);
-
-        match tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0) {
-            Tick::Disarmed(disarmed) => {
-                assert_eq!(disarmed.reason, DisarmReason::OwnerDisconnected);
-            }
-            other => panic!("a closed browser socket must disarm, got {other:?}"),
-        }
-        assert!(
-            mode.lock().binding().is_none(),
-            "nothing stays bound to a tab that is gone"
-        );
     }
 
     /// A hard capture error is a device failure, and the message reaches the
@@ -4190,11 +4059,10 @@ mod tests {
         // the far end's two-second buffer: a longer one loses its head, and the
         // two streams would start the run already out of step.
         let reply = tone(REPLY_MS, 440.0);
-        echo.lock()
-            .note_rendered(&crate::dictation::speech::SpeechAudio {
-                samples: reply.clone(),
-                sample_rate: SAMPLE_RATE,
-            });
+        echo.lock().note_rendered(&crate::speech::SpeechAudio {
+            samples: reply.clone(),
+            sample_rate: SAMPLE_RATE,
+        });
 
         // A different pitch from the reply, so a canceller cannot subtract the
         // user by subtracting the echo and still look like it worked.

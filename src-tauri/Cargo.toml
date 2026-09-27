@@ -5,6 +5,7 @@ members = [
     "crates/tuic-test-support",
     "crates/tuic-core",
     "crates/tuic-git",
+    "crates/tuic-dictation",
     "crates/tuic-bridge",
     "crates/tuic-cli",
     "patches/alacritty_terminal",
@@ -158,6 +159,7 @@ tauri-build = { version = "2", features = [], optional = true }
 tuic-terminal = { path = "crates/tuic-terminal" }
 tuic-core = { path = "crates/tuic-core" }
 tuic-git = { path = "crates/tuic-git" }
+tuic-dictation = { path = "crates/tuic-dictation", optional = true }
 agent-client-protocol = { version = "=2.0.0", features = [
     "unstable_elicitation",
     "unstable_end_turn_token_usage",
@@ -218,37 +220,7 @@ rfd = { version = "0.16", default-features = false, features = [
     "common-controls-v6",
 ], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
-whisper-rs = { version = "0.16", optional = true }
-cpal = { version = "0.17.3", optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
-# Speech synthesis (dictation::speech::pocket). `load-dynamic` on purpose: the
-# default `download-binaries` fetches onnxruntime during the build and then has
-# to be bundled into the app on three platforms. The speech model is a
-# download-on-demand asset anyway, so the runtime library travels with it and a
-# missing one is a typed `ModelUnavailable` instead of a build-time network call.
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic"], optional = true }
-# The Pocket TTS bundles ship a SentencePiece Unigram tokenizer. Read the model
-# proto here and run the Viterbi through `tokenizers`: the C++ `sentencepiece`
-# crate statically links protobuf 3.14 while onnxruntime links 3.21, and the two
-# abort the process on first use.
-sentencepiece-model = { version = "0.1", optional = true }
-# `fancy-regex` rather than the default `onig`: the Unigram model needs neither,
-# but the crate insists on one of the two, and onig is a C library to build.
-tokenizers = { version = "0.22", default-features = false, features = [
-    "fancy-regex",
-], optional = true }
-# Voice states are safetensors files, keyed `module/key`.
-safetensors = { version = "0.6", optional = true }
-# Acoustic echo cancellation for hands-free replies (dictation::speaker). The
-# microphone hears the speaker, so raw-energy VAD would interrupt the model with
-# its own voice. `bundled` statically links the WebRTC APM rather than looking
-# for a system library: there is one on Linux, a brew-only one on macOS, and
-# none at all on Windows. It needs `meson` and `ninja` at build time and fetches
-# abseil-cpp from github.com while it runs — see `[patch.crates-io]` below for
-# what we had to change to make that work on Windows.
-webrtc-audio-processing = { version = "2.1.0", features = [
-    "bundled",
-], optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two
@@ -323,6 +295,7 @@ ssh2-config = "0.7"
 [features]
 default = ["desktop"]
 desktop = [
+    "dep:tuic-dictation",
     "dep:chromey",
     "dep:sourcemap",
     "dep:tauri",
@@ -338,14 +311,7 @@ desktop = [
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-global-shortcut",
     "dep:drag",
-    "dep:whisper-rs",
-    "dep:cpal",
     "dep:rodio",
-    "dep:ort",
-    "dep:sentencepiece-model",
-    "dep:tokenizers",
-    "dep:safetensors",
-    "dep:webrtc-audio-processing",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
@@ -354,12 +320,11 @@ desktop = [
 # GPU features for Linux builds (macOS always has Metal via target dep; Windows
 # is CPU-only — the whisper.cpp Vulkan backend's vulkan-shaders-gen sub-build is
 # chronically broken on the Windows runner (MAX_PATH/MSBuild), so we ship CPU).
-cuda = ["whisper-rs/cuda"]
-vulkan = ["whisper-rs/vulkan"]
+cuda = ["tuic-dictation/cuda"]
+vulkan = ["tuic-dictation/vulkan"]
 tokio-console = ["console-subscriber"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.16", features = ["metal"], optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSDictionary", "NSString", "NSValue"], optional = true }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "block2"], optional = true }
@@ -369,7 +334,6 @@ block2 = { version = "0.6", optional = true }
 # CPU-only on Windows: the Vulkan backend (vulkan-shaders-gen) fails to build on
 # the CI runner. Dictation runs on CPU; re-enable "vulkan" only once the
 # whisper.cpp Windows shader build is stabilized.
-whisper-rs = { version = "0.16", optional = true }
 windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Foundation", "Win32_System_ProcessStatus", "Wdk_System_Threading"] }
 
 [patch.crates-io]

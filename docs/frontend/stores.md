@@ -425,6 +425,7 @@ from a notification burst to overlap.
 Whisper dictation config, model management, recording state — plus the speech
 assets, the hands-free conversation and the spoken-reply status the Dictation
 settings panel renders.
+The backend crate split leaves its IPC and HTTP response shapes unchanged.
 
 - `speechAssets` / `speechDownloads` — the installable languages and ONNX
   runtime, and a percent per asset **keyed by asset id**, because the runtime

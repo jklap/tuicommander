@@ -1,19 +1,24 @@
-pub mod audio;
+pub use tuic_dictation::audio;
+mod adapters;
+mod asset_download;
 pub mod browser;
 pub mod commands;
-pub mod continuous;
-pub mod corrections;
-pub mod echo;
+pub use tuic_dictation::continuous;
+pub use tuic_dictation::corrections;
+pub use tuic_dictation::echo;
 pub mod fn_key_monitor;
-pub mod language;
-pub mod loudness;
-pub mod model;
-pub mod permission;
-pub mod speaker;
-pub mod speech;
-pub mod streaming;
-pub mod transcribe;
-pub mod vad;
+#[allow(unused_imports)] // Keep the old module path for callers outside this adapter.
+pub use tuic_dictation::language;
+pub use tuic_dictation::loudness;
+pub use tuic_dictation::model;
+mod model_download;
+pub use tuic_dictation::permission;
+pub use tuic_dictation::speaker;
+pub use tuic_dictation::speech;
+pub use tuic_dictation::streaming;
+pub use tuic_dictation::transcribe;
+#[allow(unused_imports)] // Keep the old module path for callers outside this adapter.
+pub use tuic_dictation::vad;
 
 use parking_lot::Mutex;
 use std::sync::Arc;

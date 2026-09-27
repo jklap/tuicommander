@@ -26,7 +26,7 @@ use super::bundle::{
 };
 use super::tokenizer::{Tokenizer, prepare_text, split_into_chunks};
 use super::{Result, failed, unavailable};
-use crate::dictation::speech::{SpeechCancel, SpeechError};
+use crate::speech::{SpeechCancel, SpeechError};
 
 /// Above this the model is asking to stop. Taken from the reference runtime.
 const EOS_LOGIT_THRESHOLD: f32 = -4.0;

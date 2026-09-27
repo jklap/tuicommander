@@ -461,11 +461,6 @@ impl Speaker {
         *self.shared.loudness.lock() = Some(loudness);
     }
 
-    #[cfg(test)]
-    pub(crate) fn loudness(&self) -> Option<Loudness> {
-        *self.shared.loudness.lock()
-    }
-
     /// What became of a reply, or `None` if this speaker never issued that id
     /// or has forgotten it — see [`MAX_TRACKED`].
     pub fn utterance(&self, id: UtteranceId) -> Option<Utterance> {
@@ -730,7 +725,7 @@ impl DeviceOutput {
     pub fn open(device_name: Option<&str>) -> Result<Self, String> {
         // The same resolution notification sounds use: named device first,
         // system default second. One spelling of "which speaker" per app.
-        let stream = crate::notification_sound::resolve_output_stream(device_name)
+        let stream = crate::audio_output::resolve_output_stream(device_name)
             .ok_or_else(|| "no audio output device could be opened".to_string())?;
         let player = rodio::Player::connect_new(stream.mixer());
         Ok(Self {

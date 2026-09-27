@@ -464,7 +464,7 @@ When modifying git operations, worktree logic, or GitHub API:
 | `docs/api/tauri-commands.md` | Git/worktree commands |
 
 ### Voice dictation, spoken replies and hands-free
-When modifying `src-tauri/src/dictation/**` or the Voice settings page (`DictationSettings.tsx`):
+When modifying `src-tauri/src/dictation/**`, `src-tauri/crates/tuic-dictation/**`, or the Voice settings page (`DictationSettings.tsx`):
 
 | File | What to update |
 |------|----------------|

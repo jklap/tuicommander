@@ -1,4 +1,194 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+#[cfg(feature = "desktop")]
+mod dictation_config {
+    use super::*;
+
+    /// Dictation configuration persisted to <config_dir>/dictation-config.json
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DictationConfig {
+        pub enabled: bool,
+        pub hotkey: String,
+        pub language: String,
+        /// Selected whisper model name (e.g. "large-v3-turbo", "small")
+        #[serde(default = "default_model")]
+        pub model: String,
+        /// Selected audio input device name. None or empty = system default.
+        #[serde(default)]
+        pub device: Option<String>,
+        /// Long-press threshold in milliseconds for push-to-talk activation.
+        /// A short press (below this duration) passes through as normal input.
+        #[serde(default = "default_long_press_ms")]
+        pub long_press_ms: u32,
+        /// Automatically send (press Enter) after injecting transcribed text.
+        /// On by default; a stored `false` is kept.
+        #[serde(default = "default_auto_send")]
+        pub auto_send: bool,
+        /// Minimum RMS before audio is sent to Whisper. See [`VoiceGates`].
+        #[serde(default = "default_rms_threshold")]
+        pub rms_threshold: f32,
+        /// Maximum `no_speech_probability` accepted for a segment. See [`VoiceGates`].
+        #[serde(default = "default_no_speech_threshold")]
+        pub no_speech_threshold: f32,
+        /// Visible hold-back between a hands-free transcript and its enqueue, in
+        /// milliseconds. Zero would send every utterance the instant it lands, so a
+        /// config written before hands-free existed takes the default instead.
+        #[serde(default = "default_hold_back_ms")]
+        pub hands_free_hold_back_ms: u32,
+        /// Optional activation phrase for hands-free dictation. Empty means every
+        /// recognised utterance is a turn. Set, it must open each new turn: the
+        /// match runs locally on the whisper transcript and the phrase is removed
+        /// before anything is submitted, so a model never reads it and unrelated
+        /// speech never leaves the machine.
+        #[serde(default)]
+        pub hands_free_activation_phrase: String,
+        /// Tell the bound model when hands-free starts and when it stops.
+        ///
+        /// On by default: the `voice` tool is listed whether or not this is set,
+        /// and a model with no reason to speak writes text — so an unset default
+        /// would ship a voice nobody ever hears. Turning it off silences both
+        /// notices and nothing else; disarming still revokes speech, because that
+        /// is a fact about this machine rather than a message to a model.
+        #[serde(default = "default_notify_model")]
+        pub hands_free_notify_model: bool,
+        /// The start notice sent when `hands_free_notify_model` is on. Empty means
+        /// the built-in text, which [`get_hands_free_default_notice`] returns so a
+        /// settings surface can show it and reset to it. Folded to one line before
+        /// it is sent — see [`continuous::entry_hint_text`].
+        #[serde(default)]
+        pub hands_free_start_notice: String,
+        /// Play a short sound on the owning client when a spoken turn reaches the
+        /// agent, and a softer one when the activation phrase drops it. On by
+        /// default. Read by the frontend only; the backend reports the turns
+        /// either way (`HandsFreeStatus::delivered_turns`).
+        #[serde(default = "default_earcons")]
+        pub hands_free_earcons: bool,
+        /// A speech engine the user supplies, as argv rather than a shell line.
+        /// Empty means the bundled engine. See
+        /// [`crate::dictation::speech::external`](crate::dictation::speech::external) for the
+        /// markers and for what it means that this runs as the user.
+        #[serde(default)]
+        pub speech_command: Vec<String>,
+        /// Which of the language's voices to speak with. Empty means the first one
+        /// it ships, which is what a configuration written before this setting
+        /// existed says. Ignored by a user-supplied engine, which names its own
+        /// voices inside its command template. See [`choose_voice`].
+        #[serde(default)]
+        pub speech_voice: String,
+        /// The speech level every reply is brought to, in dBFS (-30..=-12). See
+        /// [`crate::dictation::loudness`](crate::dictation::loudness).
+        #[serde(default = "default_speech_volume_db")]
+        pub speech_volume_db: f32,
+        /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
+        #[serde(default = "default_speech_levelling")]
+        pub speech_levelling: f32,
+        /// Set only on a read response when malformed fields were replaced by
+        /// defaults. It is cleared before persistence.
+        #[serde(default)]
+        pub recovered_from_corruption: bool,
+    }
+
+    pub(crate) fn default_model() -> String {
+        "large-v3-turbo".to_string()
+    }
+
+    pub(crate) fn default_long_press_ms() -> u32 {
+        400
+    }
+
+    pub(crate) fn default_rms_threshold() -> f32 {
+        crate::dictation::transcribe::DEFAULT_RMS_THRESHOLD
+    }
+
+    pub(crate) fn default_no_speech_threshold() -> f32 {
+        crate::dictation::transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+    }
+
+    /// Long enough to read a transcript and stop it, short enough not to feel like
+    /// a delay. The number is a setting; this is only where it starts.
+    pub(crate) fn default_hold_back_ms() -> u32 {
+        1_500
+    }
+
+    /// See [`DictationConfig::hands_free_notify_model`].
+    pub(crate) fn default_auto_send() -> bool {
+        true
+    }
+
+    pub(crate) fn default_notify_model() -> bool {
+        true
+    }
+
+    /// See [`DictationConfig::hands_free_earcons`].
+    pub(crate) fn default_earcons() -> bool {
+        true
+    }
+
+    /// See [`DictationConfig::speech_volume_db`].
+    pub(crate) fn default_speech_volume_db() -> f32 {
+        -18.0
+    }
+
+    /// See [`DictationConfig::speech_levelling`].
+    pub(crate) fn default_speech_levelling() -> f32 {
+        0.67
+    }
+
+    impl DictationConfig {
+        /// The speech gates this configuration asks for.
+        pub fn gates(&self) -> crate::dictation::transcribe::VoiceGates {
+            crate::dictation::transcribe::VoiceGates {
+                rms_threshold: self.rms_threshold,
+                no_speech_threshold: self.no_speech_threshold,
+            }
+        }
+
+        /// The level replies are brought to.
+        pub fn loudness(&self) -> crate::dictation::loudness::Loudness {
+            crate::dictation::loudness::Loudness {
+                // A hand-edited config may hold anything: keep the documented range.
+                volume_db: if self.speech_volume_db.is_finite() {
+                    self.speech_volume_db.clamp(-30.0, -12.0)
+                } else {
+                    default_speech_volume_db()
+                },
+                levelling: self.speech_levelling,
+            }
+        }
+    }
+
+    impl Default for DictationConfig {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                hotkey: "F5".to_string(),
+                language: "auto".to_string(),
+                model: default_model(),
+                device: None,
+                long_press_ms: default_long_press_ms(),
+                auto_send: default_auto_send(),
+                rms_threshold: default_rms_threshold(),
+                no_speech_threshold: default_no_speech_threshold(),
+                hands_free_hold_back_ms: default_hold_back_ms(),
+                hands_free_activation_phrase: String::new(),
+                hands_free_notify_model: default_notify_model(),
+                hands_free_start_notice: String::new(),
+                hands_free_earcons: default_earcons(),
+                speech_command: Vec::new(),
+                speech_voice: String::new(),
+                speech_volume_db: default_speech_volume_db(),
+                speech_levelling: default_speech_levelling(),
+                recovered_from_corruption: false,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+pub use dictation_config::DictationConfig;
+#[cfg(feature = "desktop")]
+pub(crate) use dictation_config::default_hold_back_ms;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -3514,7 +3704,7 @@ pub(crate) struct ConfigDefaults {
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "desktop")]
-    pub(crate) dictation: crate::dictation::commands::DictationConfig,
+    pub(crate) dictation: DictationConfig,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -3527,7 +3717,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         agents: AgentsConfig::default(),
         github_accounts: crate::github_account::GitHubAccountRegistry::default(),
         #[cfg(feature = "desktop")]
-        dictation: crate::dictation::commands::DictationConfig::default(),
+        dictation: DictationConfig::default(),
     }
 }
 
