@@ -1,4 +1,5 @@
 import { pathBasename } from "../utils/pathUtils";
+import { clampFontSize, FONT_STEP } from "../utils/terminalZoom";
 import { branchKeyFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
@@ -34,6 +35,33 @@ function createEditorTabsStore() {
 		getVisibleIds: base.getVisibleIds,
 		getActive: base.getActive,
 		getCount: base.getCount,
+
+		/** Keep zoom on the open editor tab, like terminal zoom. */
+		zoomIn(defaultFontSize: number): void {
+			const id = base.state.activeId;
+			if (!id) return;
+			base._setState(
+				"tabs",
+				id,
+				"fontSize",
+				clampFontSize((base.state.tabs[id]?.fontSize ?? defaultFontSize) + FONT_STEP),
+			);
+		},
+		zoomOut(defaultFontSize: number): void {
+			const id = base.state.activeId;
+			if (!id) return;
+			base._setState(
+				"tabs",
+				id,
+				"fontSize",
+				clampFontSize((base.state.tabs[id]?.fontSize ?? defaultFontSize) - FONT_STEP),
+			);
+		},
+		zoomReset(defaultFontSize: number): void {
+			const id = base.state.activeId;
+			if (!id) return;
+			base._setState("tabs", id, "fontSize", clampFontSize(defaultFontSize));
+		},
 		setPinned: base.setPinned,
 		reorderByIds: base.reorderByIds,
 

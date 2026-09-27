@@ -997,7 +997,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 						editorDiv = el;
 						ref(el);
 					}}
-					style={{ display: loading() || error() ? "none" : undefined }}
+					style={{
+						display: loading() || error() ? "none" : undefined,
+						"font-size": `${editorTabsStore.state.tabs[props.id]?.fontSize ?? settingsStore.state.defaultFontSize}px`,
+					}}
 				/>
 				<EditorSearch
 					visible={searchVisible()}
