@@ -45,6 +45,7 @@ import { createSearchVisibility } from "../shared/SearchBar";
 import s from "./CodeEditorTab.module.css";
 import { EditorSearch } from "./EditorSearch";
 import { editorLinkAt } from "./editorLinks";
+import { navigateEditorTo } from "./editorNavigation";
 import { type GutterChange, gitChangeGutter, setChangesEffect } from "./gitGutter";
 import { type BlameLine, inlineBlame, setBlameEffect, setBlameEnabledEffect } from "./inlineBlame";
 import { detectLanguage, editorWrapKind } from "./languageDetection";
@@ -57,7 +58,8 @@ export interface CodeEditorTabProps {
 	/** On-disk root for file I/O (worktree path when active, otherwise repoPath). */
 	fsRoot?: string;
 	filePath: string;
-	initialLine?: number; // Line to scroll to on first mount (1-based)
+	initialLine?: number; // Line to select on first mount (1-based)
+	initialCol?: number; // Column to select on first mount (1-based)
 	externalEditable?: boolean; // External files start unlocked when true, locked (but unlockable) when false
 	onClose?: () => void;
 }
@@ -263,6 +265,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		openSearch: () => openSearchBar(),
 		save: () => handleSave(),
 		isDirty: () => dirty(),
+		goToPosition: (line: number, col?: number) => {
+			const view = editorView();
+			if (view) navigateEditorTo(view, line, col);
+		},
 	});
 	onCleanup(() => editorTabsStore.clearHandle(props.id));
 	/** Current symbol under cursor (for breadcrumb) */
@@ -288,7 +294,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 			.then((stat) => (stat.exists ? { modifiedAt: stat.modified_at, size: stat.size } : null))
 			.catch(() => null);
 
-	/** Guard: scroll to initialLine only once on first file load */
+	/** Guard: select initialLine only once on first file load */
 	let didScrollToInitialLine = false;
 
 	/**
@@ -340,15 +346,14 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					// Large but under the hard cap: open as normal, warn it may be slow.
 					setLargeFile(content.length > WARN_FILE_BYTES);
 
-					// Scroll to initialLine on the very first load only
+					// Select the requested position on the very first load only.
 					if (props.initialLine !== undefined && !didScrollToInitialLine) {
 						didScrollToInitialLine = true;
 						const targetLine = props.initialLine;
 						requestAnimationFrame(() => {
 							const view = editorView();
 							if (!view) return;
-							const line = view.state.doc.line(Math.max(1, Math.min(targetLine, view.state.doc.lines)));
-							view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+							navigateEditorTo(view, targetLine, props.initialCol);
 						});
 					}
 				} catch (err) {
@@ -997,7 +1002,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 						editorDiv = el;
 						ref(el);
 					}}
-					style={{ display: loading() || error() ? "none" : undefined }}
+					style={{
+						display: loading() || error() ? "none" : undefined,
+						"font-size": `${editorTabsStore.state.tabs[props.id]?.fontSize ?? settingsStore.state.defaultFontSize}px`,
+					}}
 				/>
 				<EditorSearch
 					visible={searchVisible()}

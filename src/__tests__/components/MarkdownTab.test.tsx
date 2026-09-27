@@ -156,7 +156,13 @@ describe("MarkdownTab agent review actions", () => {
 		await startBlockComment(path);
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-		await waitFor(() => expect(addToast).toHaveBeenCalledWith("Couldn't save Markdown file", expect.stringContaining("permission denied"), "error"));
+		await waitFor(() =>
+			expect(addToast).toHaveBeenCalledWith(
+				"Couldn't save Markdown file",
+				expect.stringContaining("permission denied"),
+				"error",
+			),
+		);
 		expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Clarify");
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(writeAttempts).toBe(2));

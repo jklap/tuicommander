@@ -85,9 +85,9 @@ A configurable OS-level shortcut to toggle TUICommander's visibility from any ap
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd+=` (or `Cmd++`) | Zoom in (active terminal) |
-| `Cmd+-` | Zoom out (active terminal) |
-| `Cmd+0` | Reset zoom to default (active terminal) |
+| `Cmd+=` (or `Cmd++`) | Zoom in (active terminal or code editor) |
+| `Cmd+-` | Zoom out (active terminal or code editor) |
+| `Cmd+0` | Reset zoom to default (active terminal or code editor) |
 | `Cmd+Shift+=` (or `Cmd+Shift++`) | Zoom in all terminals |
 | `Cmd+Shift+-` | Zoom out all terminals |
 | `Cmd+Shift+0` | Reset zoom all terminals |
