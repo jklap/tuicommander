@@ -229,6 +229,51 @@ describe("acpClient: a stream that stops", () => {
 });
 
 describe("acpClient: talking to a session", () => {
+	// Catches: a caller bypasses the composer and sends an image to an incapable agent.
+	it("refuses image blocks at the shared client boundary without image capability", async () => {
+		await client.connect(ROOT);
+		await expect(
+			client.prompt(CONNECTION, SESSION, "look", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }]),
+		).rejects.toThrow("does not support images");
+		expect(mockInvoke.mock.calls.some(([command]) => command === "acp_session_prompt")).toBe(false);
+	});
+
+	// Catches: the IPC adapter silently strips the image block from an image-only turn.
+	it("sends a base64 image content block in an image-only prompt", async () => {
+		const capable = snapshot({
+			capabilities: {
+				protocol: 1,
+				load: true,
+				list: true,
+				resume: true,
+				fork: false,
+				delete: false,
+				close: true,
+				additionalDirectories: true,
+				promptImage: true,
+				promptAudio: false,
+				promptEmbeddedContext: false,
+				mcpStdio: false,
+				mcpHttp: true,
+				mcpSse: false,
+				clientFormElicitation: true,
+				clientBooleanConfig: false,
+				egoHoldVersion: null,
+				egoCompactVersion: null,
+			},
+		});
+		mockInvoke.mockImplementation(answering({ acp_connect: capable }));
+		await client.connect(ROOT);
+		await client.prompt(CONNECTION, SESSION, "", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }]);
+
+		expect(mockInvoke).toHaveBeenCalledWith("acp_session_prompt", {
+			connectionId: CONNECTION,
+			sessionId: SESSION,
+			prompt: [{ type: "image", mimeType: "image/png", data: "iVBORw==" }],
+		});
+		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "Image" })]);
+	});
+
 	it("sends a prompt as one text content block", async () => {
 		await client.connect(ROOT);
 		await client.prompt(CONNECTION, SESSION, "hello");
@@ -272,9 +317,7 @@ describe("acpClient: talking to a session", () => {
 		await client.connect(ROOT);
 		acpTranscript.noteUserMessage(SESSION, "what was said before");
 		mockInvoke.mockImplementation((command: string) =>
-			command === "acp_session_load"
-				? Promise.reject(new Error("no such session"))
-				: answering()(command),
+			command === "acp_session_load" ? Promise.reject(new Error("no such session")) : answering()(command),
 		);
 
 		await expect(client.loadSession(CONNECTION, SESSION, ROOT)).rejects.toThrow("no such session");
@@ -350,9 +393,7 @@ describe("acpClient: connections that coexist", () => {
 	function answeringBothRoots() {
 		return (command: string, args?: Record<string, unknown>) => {
 			if (command === "acp_connect") {
-				return Promise.resolve(
-					args?.root === OTHER_ROOT ? snapshot({ connectionId: OTHER }) : snapshot(),
-				);
+				return Promise.resolve(args?.root === OTHER_ROOT ? snapshot({ connectionId: OTHER }) : snapshot());
 			}
 			return answering()(command);
 		};
@@ -381,9 +422,7 @@ describe("acpClient: replacing a connection", () => {
 
 	function answeringReconnect() {
 		return (command: string) =>
-			command === "acp_reconnect"
-				? Promise.resolve(snapshot({ connectionId: FRESH }))
-				: answering()(command);
+			command === "acp_reconnect" ? Promise.resolve(snapshot({ connectionId: FRESH })) : answering()(command);
 	}
 
 	// The backend mints a new id, so the old entry is not overwritten — it is
