@@ -310,6 +310,23 @@ describe("a repo registered on a remote machine runs its work there", () => {
 			expect(configs.getDefaultConfig("claude")?.command).toBe("/opt/claude/bin/claude");
 		});
 
+		it("identifies the remote machine and endpoint when its config route is missing", async () => {
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+				ok: false,
+				status: 404,
+				statusText: "Not Found",
+				text: async () => "Not Found",
+			});
+
+			await expect(registry.ensureAgentConfigsForRepo(REMOTE_REPO)).rejects.toThrow(
+				`${CONNECTION} (${BASE_URL}/config/agents): RPC load_agents_config failed: 404`,
+			);
+			expect(fetchedUrls().filter((url) => url.startsWith(BASE_URL))).toEqual([
+				`${BASE_URL}/config/agents?token=${TOKEN}`,
+			]);
+			expect(registry.agentConfigsForRepo(REMOTE_REPO).state.loaded).toBe(false);
+		});
+
 		it("hands the tab the env of the machine it will run on", async () => {
 			const configs = await registry.ensureAgentConfigsForRepo(REMOTE_REPO);
 

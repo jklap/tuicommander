@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Stable dev window** — Vite ignores tooling files in `.tmp/` at every directory depth, so temporary HTML cannot reload a live window.
+
+- **Remote agent configuration errors** — Failed remote config loads identify the connection and endpoint, remain retryable, and cannot overwrite the remote file with an empty fallback.
+
 - **Claude activity status** — An idle Claude session no longer stays marked Working indefinitely when a mail wake reaches its detailed transcript view without starting a turn. Shell state changes now have a consistent trace.
 
 - **Push-to-talk release and long audio** — Fn release stops microphone capture even while the WebView is busy, focus loss recovers missed key-up events, and slow streaming passes no longer discard the first 30 seconds of pending audio without a warning. File logs retain timing and length diagnostics without transcript text.

@@ -12,13 +12,13 @@ import { Features } from "lightningcss";
 const host = process.env.TAURI_DEV_HOST;
 
 // Only frontend inputs can affect Vite's output. A repository-local tooling
-// checkout may contain any filename, including index.html, so excluding a
-// fixed list of scratch directories would leave future tools able to reload
-// the live WebView.
+// checkout may contain any filename, including index.html. Ignore `.tmp/` at
+// every depth so tooling output cannot reload the live WebView.
 const ignoreNonFrontendFile = (path: string): boolean => {
   const file = relative(process.cwd(), path).split(sep).join("/");
   if (file === "") return false; // Keep the root itself watchable.
   if (file === ".." || file.startsWith("../") || isAbsolute(file)) return true;
+  if (file.split("/").includes(".tmp")) return true;
   if (file === "src" || file.startsWith("src/")) return false;
   if (file === "public" || file.startsWith("public/")) return false;
   if (!file.includes("/") && file.endsWith(".html")) return false;
