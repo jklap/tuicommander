@@ -484,7 +484,9 @@ system and never turns an absent provider value into zero.
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
 
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
-in its detached window. `SubAgentIcon` supplies the shared 11px robot marker
+in its detached window. On startup and reopening, saved detached geometry cannot
+make the Activity window larger than its 550×650 default; smaller saved sizes
+remain in effect. `SubAgentIcon` supplies the shared 11px robot marker
 for both the dashboard and sidebar; only its tooltip/accessible name contains
 the parent name. The session list supplies each parent's live `tuic_session`
 when its PTY ID differs from that identity.
