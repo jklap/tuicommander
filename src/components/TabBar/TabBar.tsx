@@ -466,7 +466,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	// Branch key for filtering non-terminal tabs. A legitimate use of focus: this
 	// asks "what should be on screen for the repo the user is looking at", not
 	// "which repo owns this tab".
-	const activeBranchKey = () => currentBranchKey() ?? null;
+	const activeBranchKey = () => {
+		const repoPath = repositoriesStore.state.activeRepoPath;
+		// A repo may be active before workspace discovery completes. Keep its
+		// repo-scoped, branchless tabs visible when they stop being active.
+		return currentBranchKey() ?? (repoPath ? `${repoPath}|` : null);
+	};
 
 	const visibleDiffIds = () => diffTabsStore.getVisibleIds(activeBranchKey());
 	const visibleMdIds = () => mdTabsStore.getVisibleIds(activeBranchKey());

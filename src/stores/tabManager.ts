@@ -5,6 +5,8 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store";
  */
 export interface BaseTab {
 	id: string;
+	/** MCP ui action=tab identity; distinct ids must never deduplicate by file path. */
+	mcpUiId?: string;
 	/** When true, tab is visible across all branches (within the same repo if repoPath is set) */
 	pinned?: boolean;
 	/** MCP UI tabs may use pinning across repositories while retaining their opening repo. */

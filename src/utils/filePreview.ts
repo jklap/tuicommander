@@ -1,6 +1,7 @@
 import { filePreviewRegistry } from "../plugins/filePreviewRegistry";
 import { editorTabsStore } from "../stores/editorTabs";
 import { mdTabsStore } from "../stores/mdTabs";
+import { locateFile } from "../stores/repositories";
 
 /** Classification of how a file should be opened in the UI. */
 export type FileOpenTarget = "markdown" | "preview" | "editor";
@@ -81,4 +82,10 @@ export function openFileAction(
 		const tabId = editorTabsStore.add(repoPath, filePath, line, { fsRoot: fsRoot || repoPath });
 		onEditorTab?.(tabId);
 	}
+}
+
+/** Open a resolved absolute file path clicked in terminal output. */
+export function openTerminalFilePath(absolutePath: string, onEditorTab?: (tabId: string) => void): void {
+	const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
+	openFileAction(filePath, repoPath, fsRoot, undefined, onEditorTab);
 }

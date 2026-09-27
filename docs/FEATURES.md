@@ -121,6 +121,7 @@ per cell and the configured history limit still apply.
 
 ### 1.7 Clickable File Paths
 - File paths in terminal output are auto-detected and become clickable links
+- Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
 - `.md`/`.mdx` → opens in Markdown panel; preview-capable files (HTML, PDF, images, video, audio, plain text/data) → open in the Preview tab (section 3.15); all other code files → open in the built-in code editor
 - `file://` URLs are recognized in addition to plain paths — the prefix is stripped and the path resolved like any other
@@ -1777,6 +1778,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `tuic://open/<path>` — Open a Markdown file in a native tab. MCP `ui action=tab` also accepts absolute Markdown paths outside registered repositories; the iframe SDK keeps its repository path validation.
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
 - MCP `ui action=tab` tabs, including external native files and HTML/URL previews, retain their opening repository. Unpinned tabs hide in other repositories and return when the opening repository is selected; pinned tabs remain visible across repositories.
+- Native MCP file tabs use the supplied `id` for identity: different ids remain separate even when they target the same path, and repeating an id updates that tab. Tabs remain visible when another terminal is selected in the same repository, including before a workspace is chosen.
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
   - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog

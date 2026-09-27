@@ -671,54 +671,45 @@ export async function initApp(deps: AppInitDeps) {
 				// deliberately not switched, so an active tab in another repo has its
 				// own tab button filtered out of the bar.
 				const background = focus === false;
-				let openedTab: { id: string | null; kind: "markdown" | "editor" } | null = null;
 
 				if (cmd === "open" && repoPath) {
-					openedTab = {
-						id: background ? mdTabsStore.addFileBackground(repoPath, relPath) : mdTabsStore.add(repoPath, relPath),
-						kind: "markdown",
-					};
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
 					if (classifyFile(filePath) === "markdown") {
-						openedTab = {
-							id: background
-								? mdTabsStore.addFileBackground(activeRepoPath ?? "", filePath)
-								: mdTabsStore.add(activeRepoPath ?? "", filePath),
-							kind: "markdown",
-						};
+						editorTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						mdTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, pinned, background);
 					} else {
-						openedTab = {
-							id: editorTabsStore.add(activeRepoPath ?? "", filePath, undefined, {
-								externalEditable: false,
-								background,
-							}),
-							kind: "editor",
-						};
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
 					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
-						openedTab = {
-							id: editorTabsStore.add(repoPath, relPath, line || undefined, { background }),
-							kind: "editor",
-						};
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, repoPath, relPath, line || undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
 					} else if (isAbsolutePath(filePath)) {
-						openedTab = {
-							id: editorTabsStore.add(activeRepoPath ?? "", filePath, line || undefined, {
-								externalEditable: true,
-								background,
-							}),
-							kind: "editor",
-						};
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, line || undefined, pinned, {
+							externalEditable: true,
+							background,
+						});
 					} else {
 						appLogger.warn("app", `tuic://edit relative path without active repo: ${filePath}`);
 					}
 				} else {
 					appLogger.warn("app", `tuic:// unhandled: cmd=${cmd} path=${filePath} repo=${repoPath}`);
-				}
-				if (openedTab?.id) {
-					if (openedTab.kind === "markdown") mdTabsStore.setPinned(openedTab.id, pinned, true);
-					else editorTabsStore.setPinned(openedTab.id, pinned, true);
 				}
 			} catch (err) {
 				appLogger.warn("app", `tuic:// URL parse error: ${url}`, err);
@@ -726,6 +717,8 @@ export async function initApp(deps: AppInitDeps) {
 			return;
 		}
 
+		mdTabsStore.closeMcpFile(id);
+		editorTabsStore.closeMcpFile(id);
 		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 

@@ -875,6 +875,48 @@ describe("TabBar", () => {
 	});
 
 	describe("markdown tabs", () => {
+		it("retains an MCP file tab after selecting a terminal in a repo without a workspace", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setActive("/repo");
+			const terminalId = addTerminal();
+			const id = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/ego-coordinator-proposal.md");
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			terminalsStore.setActive(terminalId);
+			expect(mdTabsStore.get(id)).toBeDefined();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			repositoriesStore.add({ path: "/other", displayName: "other" });
+			repositoriesStore.setActive("/other");
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+			repositoriesStore.setActive("/repo");
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+		});
+
+		it("shows two different MCP file tabs together in a repo without a workspace", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setActive("/repo");
+			const first = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/ego-coordinator-proposal.md");
+			const second = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/tuic-mobile-files.md");
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(first).not.toBe(second);
+			expect(container.querySelector(`[data-tab-id="${first}"]`)).not.toBeNull();
+			expect(container.querySelector(`[data-tab-id="${second}"]`)).not.toBeNull();
+		});
 		it.each(["markdown", "editor"])("keeps an active pinned MCP %s tab visible across a repo switch", (kind) => {
 			for (const path of ["/repo-a", "/repo-b"]) {
 				repositoriesStore.add({ path, displayName: path });
