@@ -12,6 +12,10 @@
 
 # To Test
 
+## Managed Claude mail wake — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send mail to a throwaway managed Claude peer while its turn is busy and its MCP SSE stream is connected. Let it become idle without reading the inbox during the turn. Confirm one payload-free `[TUIC] message available` notice starts a new turn and `agent action=inbox` returns the mail. Repeat with an inbox read before idle and confirm no stale notice is submitted. The current live backend cannot load this Rust change until restart.
+
 ## Detached CLI wake status — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `queued` when the queue takes the request. For an unbound caller, confirm MCP mail surfaces `BG DONE` with the queue error and `.wake` says `mailed`; when both channels fail, `.wake` says `failed` with both reasons. The installed CLI cannot load this Rust change until rebuilt.

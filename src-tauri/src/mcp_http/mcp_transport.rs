@@ -118,37 +118,14 @@ fn detect_claude_code_from_headers(headers: &HeaderMap) -> bool {
         .is_some_and(|ua| ua.contains("claude") || ua.contains("tuic-bridge"))
 }
 
-/// Whether the recipient can consume `notifications/claude/channel` inside an
-/// already active turn. Every MCP client may own an SSE stream, but the channel
-/// notification is a Claude Code extension and transport receipt does not
-/// submit a new prompt. Managed sessions therefore use the channel only while
-/// Claude has an active turn. A confirmed-ready composer held `working` only
-/// by background work must take the PTY submission path. External peers have
-/// no PTY fallback and retain the owner capability as their authority.
-fn recipient_supports_active_claude_channel(
-    state: &AppState,
-    recipient: &str,
-    mcp_session_id: &str,
-    managed_recipient: bool,
-) -> bool {
-    let owner_supports_channel = state
+/// External Claude clients can consume channel mail while subscribed to SSE.
+/// Managed peers use their PTY wake so unread mail starts a later turn.
+fn external_recipient_supports_claude_channel(state: &AppState, mcp_session_id: &str) -> bool {
+    state
         .mcp
         .sessions
         .get(mcp_session_id)
-        .is_some_and(|session| session.is_claude_code && session.has_sse_stream);
-    if !owner_supports_channel {
-        return false;
-    }
-    if !managed_recipient {
-        return true;
-    }
-    state
-        .session_state_with_shell(recipient)
-        .is_some_and(|session| {
-            session.agent_type.as_deref() == Some("claude")
-                && session.agent_state.as_deref() == Some("working")
-                && !crate::pty::managed_mail_wake_allowed(state, recipient)
-        })
+        .is_some_and(|session| session.is_claude_code && session.has_sse_stream)
 }
 
 /// Map MCP client name to TUICommander agent type key.
@@ -4873,42 +4850,41 @@ fn handle_messaging(
                 );
                 return response;
             }
-            // The channel-eligibility probe reads agent lifecycle state, which is
-            // filed under the PTY key like everything else.
-            let channel_pty = live_pty.clone();
+            // External Claude clients have no PTY; their SSE channel can
+            // surface mail while managed peers keep a deferred terminal wake.
             let recipient_mcp_sid = state.peer_agents.get(to).map(|p| p.mcp_session_id.clone());
-            let notification = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/claude/channel",
-                "params": {
-                    "content": format!("Message from {}: {}", sender_name, message),
-                    "meta": {
-                        "from_tuic_session": sender_tuic,
-                        "from_name": sender_name,
-                        "message_id": msg_id,
-                    }
-                }
-            });
-            let notification = serde_json::to_string(&notification).unwrap_or_default();
             let (delivery_assignment, pushed) = state.assign_agent_delivery_with_channel_attempt(
                 to,
                 &msg_id,
                 managed_recipient,
                 || {
+                    // Managed mail must retain the PTY's idle wake. An SSE push
+                    // during a turn cannot start a new turn after it completes.
+                    if managed_recipient {
+                        return false;
+                    }
                     let Some(mcp_sid) = recipient_mcp_sid.as_ref() else {
                         return false;
                     };
-                    if !recipient_supports_active_claude_channel(
-                        state,
-                        channel_pty.as_deref().unwrap_or(to),
-                        mcp_sid,
-                        managed_recipient,
-                    ) {
+                    if !external_recipient_supports_claude_channel(state, mcp_sid) {
                         return false;
                     }
                     let Some(channel) = state.session_maps.messaging_channels.get(mcp_sid) else {
                         return false;
                     };
+                    let notification = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/claude/channel",
+                        "params": {
+                            "content": format!("Message from {}: {}", sender_name, message),
+                            "meta": {
+                                "from_tuic_session": sender_tuic,
+                                "from_name": sender_name,
+                                "message_id": msg_id,
+                            }
+                        }
+                    });
+                    let notification = serde_json::to_string(&notification).unwrap_or_default();
                     channel.send(notification).is_ok()
                 },
             );
@@ -4937,15 +4913,13 @@ fn handle_messaging(
             {
                 tracing::debug!(session = %pty_session, error = %e, "Wake on message delivery failed");
             }
-            // Event-driven wake: tell an idle recipient it has mail so it acts
-            // without polling. The line typed is `PEER_MAIL_WAKE` — a pointer,
-            // never the payload. Skip when already pushed over the SSE channel
-            // (Claude Code consumes that notification itself, so a PTY wake
-            // would be redundant). The inbox always holds the message itself.
+            // Event-driven wake: tell a managed recipient it has mail without
+            // polling. The line typed is `PEER_MAIL_WAKE` — a pointer, never
+            // the payload. External SSE recipients have no PTY to wake.
             let terminal_outcome =
                 live_pty
                     .as_ref()
-                    .filter(|_| terminal_owned && !pushed)
+                    .filter(|_| terminal_owned)
                     .map(|pty_session| {
                         crate::pty::deliver_notice_to_managed_pty(
                             state,
@@ -8852,7 +8826,7 @@ mod tests {
         state: &Arc<AppState>,
         session_id: &str,
     ) -> Arc<std::sync::Mutex<Vec<u8>>> {
-        insert_managed_test_session(state, session_id, "/tmp");
+        insert_managed_test_session(state, session_id, env!("CARGO_MANIFEST_DIR"));
         let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let writer: Box<dyn std::io::Write + Send> = Box::new(SubmissionRecordingWriter {
             bytes: Arc::clone(&bytes),
@@ -8886,6 +8860,47 @@ mod tests {
             parking_lot::Mutex::new(OutputRingBuffer::new(4096)),
         );
         bytes
+    }
+
+    #[cfg(unix)]
+    fn busy_claude_mail_probe(
+        state: &Arc<AppState>,
+    ) -> (
+        Arc<std::sync::Mutex<Vec<u8>>>,
+        tokio::sync::broadcast::Receiver<String>,
+    ) {
+        register_peer(state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        let (channel, receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let bytes = install_atomic_submit_test_session(state, TEST_UUID_B);
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .agent_type = Some("claude".to_string());
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+        (bytes, receiver)
     }
 
     #[cfg(unix)]
@@ -12679,6 +12694,8 @@ mod tests {
 
     /// A draft in Claude's composer must keep peer mail out of the PTY even
     /// when the shell is idle and a descendant is still running.
+    /// Catches: injecting a notice into a partial draft or diverting its mail
+    /// into an SSE push that cannot start the next turn.
     #[cfg(unix)]
     #[test]
     fn mcp_send_does_not_type_into_partial_claude_composer_with_background_work() {
@@ -12701,7 +12718,7 @@ mod tests {
             .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
-        let _submitted_output =
+        let submitted_output =
             install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
         state
             .session_maps
@@ -12730,8 +12747,11 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(sent["delivery_path"], "sse_channel_and_inbox");
-        assert!(receiver.try_recv().is_ok());
+        assert_eq!(sent["delivery_path"], "wake_notification_and_inbox");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
         assert_eq!(
             state
                 .session_state_with_shell(TEST_UUID_B)
@@ -12739,12 +12759,21 @@ mod tests {
                 .turn_epoch,
             0
         );
+        assert!(matches!(
+            submitted_output.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        state.session_maps.input_buffers.remove(TEST_UUID_B);
+        crate::pty::flush_pending_injections_blocking(&state, TEST_UUID_B);
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the freed composer must submit its queued wake");
         assert!(
-            state
-                .pending_injections
-                .get(TEST_UUID_B)
-                .is_none_or(|pending| pending.is_empty())
+            output
+                .contains("SUBMITTED:[TUIC] message available — read it with: agent action=inbox"),
+            "{output:?}"
         );
+        assert!(!output.contains("do not splice"), "{output:?}");
     }
 
     /// A queued wake must not hold already-read mail in the bounded inbox.
@@ -13167,9 +13196,11 @@ mod tests {
         );
     }
 
+    /// Catches: a busy Claude recipient is steered mid-turn rather than
+    /// keeping a wake for the next safe composer.
     #[cfg(unix)]
     #[test]
-    fn mcp_delivery_regression_working_claude_keeps_sse_turn_delivery() {
+    fn mcp_delivery_regression_working_claude_queues_wake_without_steering_turn() {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -13223,16 +13254,157 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["delivery_path"], "sse_channel_and_inbox");
-        assert!(receiver.try_recv().is_ok());
+        assert_eq!(result["delivery_path"], "wake_notification_and_inbox");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_some_and(|pending| !pending.is_empty())
+        );
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         assert_eq!(snapshot.turn_epoch, 0);
     }
 
+    /// Catches: treating a successful SSE write as final delivery strands
+    /// unread mail after the current turn ends.
+    #[cfg(unix)]
+    #[test]
+    fn busy_claude_with_channel_gets_unread_mail_wake_on_idle() {
+        let state = test_state();
+        let (bytes, mut receiver) = busy_claude_mail_probe(&state);
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "private result"}),
+            Some("mcp-sender"),
+        );
+        assert!(sent.get("error").is_none(), "{sent}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "busy Claude must keep its composer"
+        );
+
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        crate::pty::flush_pending_injections_blocking(&state, TEST_UUID_B);
+        let written = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(
+            written.contains("[TUIC] message available — read it with: agent action=inbox"),
+            "unread mail did not wake idle Claude: {written:?}; send={sent}"
+        );
+        assert!(
+            !written.contains("private result"),
+            "the payload escaped the inbox: {written:?}"
+        );
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "managed mail has one wake path"
+        );
+    }
+
+    /// Catches: leaving a queued notice after its mail was read starts a
+    /// duplicate, empty follow-up turn.
+    #[cfg(unix)]
+    #[test]
+    fn reading_busy_claude_mail_before_idle_cancels_its_wake() {
+        let state = test_state();
+        let (bytes, mut receiver) = busy_claude_mail_probe(&state);
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "already read"}),
+            Some("mcp-sender"),
+        );
+        assert!(sent.get("error").is_none(), "{sent}");
+
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["messages"][0]["content"], "already read");
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        crate::pty::flush_pending_injections_blocking(&state, TEST_UUID_B);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "an inbox read must cancel the queued wake"
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    /// Catches: assigning a message to both an active waiter and the PTY
+    /// starts a duplicate turn after the waiter already received it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn agent_wait_returns_sse_mail_before_advancing_its_implicit_cursor() {
+    async fn active_waiter_receives_busy_claude_mail_without_terminal_wake() {
+        let state = test_state();
+        let (bytes, mut receiver) = busy_claude_mail_probe(&state);
+        let waiting_state = Arc::clone(&state);
+        let waiter = tokio::spawn(async move {
+            handle_agent_wait(
+                &waiting_state,
+                &serde_json::json!({"action": "wait", "timeout_ms": 60_000}),
+                Some("mcp-recipient"),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !state.has_active_agent_waiter(TEST_UUID_B) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("waiter did not become active");
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "waiter owns this"}),
+            Some("mcp-sender"),
+        );
+        let received = waiter.await.unwrap();
+        assert_eq!(sent["delivery_path"], "waiter_and_inbox");
+        assert_eq!(received["messages"][0]["content"], "waiter owns this");
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        crate::pty::flush_pending_injections_blocking(&state, TEST_UUID_B);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "the waiter must not get a second PTY wake"
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    /// Catches: an external channel push advancing the inbox cursor and
+    /// hiding the message from the recipient's later wait.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_channel_mail_remains_available_to_wait_before_cursor_advances() {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -13252,28 +13424,6 @@ mod tests {
             .session_maps
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
-        let _submitted_output =
-            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
-        state
-            .session_maps
-            .session_states
-            .get_mut(TEST_UUID_B)
-            .unwrap()
-            .suggested_actions = None;
-        state
-            .session_maps
-            .silence_states
-            .get(TEST_UUID_B)
-            .unwrap()
-            .lock()
-            .reset_suggest_memory();
-        state
-            .session_maps
-            .shell_states
-            .get(TEST_UUID_B)
-            .unwrap()
-            .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
-
         let sent = handle_messaging(
             &state,
             &serde_json::json!({
