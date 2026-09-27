@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Agent inbox FIFO and paging** — A full inbox accepts new mail by evicting its oldest message and reports unread losses in `missed_count`. Limited reads return oldest unread mail with `has_more`; an omitted limit returns all retained fresh mail.
 
+- **MCP agent spawn configuration** — Spawn accepts per-child environment variables, with TUIC peer identity protected. Run configs can set an optional model that the spawn call overrides; legacy `--model` arguments keep their existing conflict behavior.
+
 - **Faster desktop startup** — AI Chat and its markdown renderer load when the conversation opens, keeping the initial desktop bundle within its gzip budget.
 
 - **Stable dev window** — Vite ignores tooling files in `.tmp/` at every directory depth, so temporary HTML cannot reload a live window.

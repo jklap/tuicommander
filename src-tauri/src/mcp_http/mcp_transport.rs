@@ -1174,6 +1174,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
+                "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Child environment overrides. Applied after run-config env and before protected TUIC_SESSION/TUIC_PARENT (action=spawn)" },
                 "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
                 "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
                 "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, aider, goose, gemini, ...). Case-insensitive. (action=spawn)" },
@@ -3779,6 +3780,15 @@ fn handle_agent_with_parent_cwd(
                 Some(p) => p.to_string(),
                 None => return serde_json::json!({"error": "Action 'spawn' requires 'prompt'"}),
             };
+            let caller_env: std::collections::HashMap<String, String> = match args.get("env") {
+                Some(value) => match serde_json::from_value(value.clone()) {
+                    Ok(env) => env,
+                    Err(_) => {
+                        return serde_json::json!({"error": "Action 'spawn' requires 'env' to be a map of string values"});
+                    }
+                },
+                None => Default::default(),
+            };
             let pty_description = match parse_pty_description(args) {
                 Ok(update) => resolve_spawn_pty_description(update, &prompt),
                 Err(error) => return error,
@@ -3829,6 +3839,9 @@ fn handle_agent_with_parent_cwd(
                 .or_else(|| args["agent_type"].as_str().map(|s| s.to_string()));
             let effective_agent_type =
                 resolve_spawn_agent_type(&binary_path, configured_agent_type.as_deref());
+            let effective_model = args["model"]
+                .as_str()
+                .or_else(|| resolved.as_ref().and_then(|rc| rc.model.as_deref()));
             let codex_wrapper_warning =
                 codex_wrapper_launch_warning(effective_agent_type.as_deref(), &binary_path);
 
@@ -3874,22 +3887,37 @@ fn handle_agent_with_parent_cwd(
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-            let empty_env = std::collections::HashMap::new();
-            let screen_env = resolved.as_ref().map(|rc| &rc.env).unwrap_or(&empty_env);
-
-            // Inject peer env vars so spawned agents know their identity and parent.
-            if let Some(ref parent) = caller_tuic {
-                cmd.env("TUIC_PARENT", parent);
-            }
-
-            // Inject run config env vars
+            let mut screen_env = resolved
+                .as_ref()
+                .map(|rc| rc.env.clone())
+                .unwrap_or_default();
+            // Run-config values are defaults; caller values take precedence.
             if let Some(ref rc) = resolved {
                 for (k, v) in &rc.env {
                     cmd.env(k, v);
                 }
             }
+            for (k, v) in &caller_env {
+                if k == "TUIC_SESSION" || k == "TUIC_PARENT" {
+                    continue;
+                }
+                cmd.env(k, v);
+                screen_env.insert(k.clone(), v.clone());
+            }
+            let mut env_keys: Vec<_> = screen_env.keys().collect();
+            env_keys.sort();
+            tracing::debug!(
+                ?env_keys,
+                "MCP agent spawn environment applied (values redacted)"
+            );
+            // Peer identity always wins over config and caller environment.
+            if let Some(ref parent) = caller_tuic {
+                cmd.env("TUIC_PARENT", parent);
+            } else {
+                cmd.env_remove("TUIC_PARENT");
+            }
             crate::pty::bind_pty_identity(state, &mut cmd, &session_id, None);
-            crate::pty::apply_agent_screen_env(&mut cmd, screen_env);
+            crate::pty::apply_agent_screen_env(&mut cmd, &screen_env);
 
             // Initial prompt withheld from argv for prefill-only TUIs (codex):
             // queued into pending_injections after session registration below.
@@ -3912,7 +3940,7 @@ fn handle_agent_with_parent_cwd(
                     binary_path: &binary_path,
                     args: &explicit_args,
                     prompt: &effective_prompt,
-                    model: args["model"].as_str(),
+                    model: effective_model,
                     print_mode: args["print_mode"].as_bool().unwrap_or(false),
                     output_format: args["output_format"].as_str(),
                     default_template: false,
@@ -3935,7 +3963,7 @@ fn handle_agent_with_parent_cwd(
                         &binary_path,
                         rc_args,
                         &effective_prompt,
-                        args["model"].as_str(),
+                        effective_model,
                         args["print_mode"].as_bool().unwrap_or(false),
                         args["output_format"].as_str(),
                     ) {
@@ -3959,7 +3987,7 @@ fn handle_agent_with_parent_cwd(
                                     binary_path: &binary_path,
                                     args: &template,
                                     prompt: &effective_prompt,
-                                    model: args["model"].as_str(),
+                                    model: effective_model,
                                     print_mode: args["print_mode"].as_bool().unwrap_or(false),
                                     output_format: args["output_format"].as_str(),
                                     default_template: true,
@@ -3987,7 +4015,7 @@ fn handle_agent_with_parent_cwd(
                         binary_path: &binary_path,
                         args: &template,
                         prompt: &effective_prompt,
-                        model: args["model"].as_str(),
+                        model: effective_model,
                         print_mode: args["print_mode"].as_bool().unwrap_or(false),
                         output_format: args["output_format"].as_str(),
                         default_template: true,
@@ -4005,7 +4033,7 @@ fn handle_agent_with_parent_cwd(
                         launch_args.push("--output-format".to_string());
                         launch_args.push(format.to_string());
                     }
-                    if let Some(model) = args["model"].as_str() {
+                    if let Some(model) = effective_model {
                         launch_args.push("--model".to_string());
                         launch_args.push(model.to_string());
                     }
@@ -7229,6 +7257,7 @@ struct ResolvedRunConfig {
     command: Option<String>,
     /// Override args from the matched run config, if any.
     args: Option<Vec<String>>,
+    model: Option<String>,
     /// Env vars from the matched run config, if any.
     env: std::collections::HashMap<String, String>,
 }
@@ -7253,6 +7282,7 @@ fn resolve_run_config(
                     agent_type: agent_key.clone(),
                     command: Some(cfg.command.clone()),
                     args: Some(cfg.args.clone()),
+                    model: cfg.model.clone(),
                     env: cfg.env.clone(),
                 };
             }
@@ -7264,6 +7294,7 @@ fn resolve_run_config(
         agent_type: agent_type.to_string(),
         command: None,
         args: None,
+        model: None,
         env: Default::default(),
     }
 }
@@ -10272,6 +10303,172 @@ mod tests {
             );
         }
         assert_eq!(state.tasks.len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_spawn_layers_caller_env_and_protects_peer_identity() {
+        let root = tempfile::Builder::new()
+            .prefix("mcp-spawn-env-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let output = root.path().join("child-env");
+        let command = format!(
+            "printf '%s|%s|%s|%s|%s' \"$CLAUDE_CONFIG_DIR\" \"$TUIC_SESSION\" \"$TUIC_PARENT\" \"$LAYER\" \"$ONLY_RUN\" > '{}'",
+            output.display()
+        );
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "agents": {"aider": {"run_configs": [{
+                "name": "Env Profile", "command": "/bin/sh", "args": ["-c", command],
+                "env": {"CLAUDE_CONFIG_DIR": "/run", "LAYER": "run", "ONLY_RUN": "present",
+                        "TUIC_SESSION": "run-spoof", "TUIC_PARENT": "run-spoof"}
+            }]}}
+        }))
+        .unwrap();
+        crate::config::save_agents_config(config).unwrap();
+        let state = test_state();
+        state
+            .mcp
+            .to_session
+            .insert("mcp-env-test".into(), "parent-peer".into());
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn", "agent_type": "Env Profile", "prompt": "inspect env",
+                "env": {"CLAUDE_CONFIG_DIR": "/caller", "LAYER": "caller",
+                        "TUIC_SESSION": "spoofed", "TUIC_PARENT": "spoofed"}
+            }),
+            Some("mcp-env-test"),
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let session_id = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !output.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let actual = std::fs::read_to_string(&output).expect("child writes its environment");
+        assert_eq!(
+            actual,
+            format!("/caller|{session_id}|parent-peer|caller|present")
+        );
+        std::fs::remove_file(&output).unwrap();
+        let unparented = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn", "agent_type": "Env Profile", "prompt": "inspect env",
+                "env": {"TUIC_PARENT": "spoofed"}
+            }),
+            None,
+        );
+        assert!(
+            unparented.get("error").is_none(),
+            "spawn failed: {unparented}"
+        );
+        let unparented_id = unparented["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !output.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            format!("/run|{unparented_id}||run|present")
+        );
+    }
+
+    #[test]
+    fn agent_spawn_schema_exposes_caller_env_map() {
+        let definitions = test_mcp_tool_definitions();
+        let agent = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "agent")
+            .unwrap();
+        assert_eq!(agent["inputSchema"]["properties"]["env"]["type"], "object");
+        assert_eq!(
+            agent["inputSchema"]["properties"]["env"]["additionalProperties"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn agent_spawn_rejects_non_string_caller_env_before_creating_a_session() {
+        let state = test_state();
+        let rejected = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn", "prompt": "task", "binary_path": "/bin/sh",
+                "env": {"CLAUDE_CONFIG_DIR": 42}
+            }),
+            None,
+        );
+        assert_eq!(
+            rejected["error"],
+            "Action 'spawn' requires 'env' to be a map of string values"
+        );
+        assert!(state.session_maps.sessions.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_spawn_run_config_model_is_overridable_and_legacy_args_keep_conflict() {
+        let root = tempfile::Builder::new()
+            .prefix("mcp-spawn-model-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let output = root.path().join("argv");
+        let command = format!("printf '%s|%s' \"$0\" \"$1\" > '{}'", output.display());
+        let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "agents": {"aider": {"run_configs": [
+                {"name": "Structured", "command": "/bin/sh", "args": ["-c", command], "model": "sonnet"},
+                {"name": "Legacy", "command": "/bin/sh", "args": ["-c", "exit 0", "--model", "opus"]}
+            ]}}
+        })).unwrap();
+        crate::config::save_agents_config(config).unwrap();
+        let state = test_state();
+        for (requested_model, expected) in
+            [(None, "--model|sonnet"), (Some("opus"), "--model|opus")]
+        {
+            let mut request = serde_json::json!({"action": "spawn", "agent_type": "Structured", "prompt": "task"});
+            if let Some(model) = requested_model {
+                request["model"] = serde_json::json!(model);
+            }
+            let spawned = handle_agent(&state, "127.0.0.1:1".parse().unwrap(), &request, None);
+            assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !output.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+            std::fs::remove_file(&output).unwrap();
+        }
+        let legacy = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action": "spawn", "agent_type": "Legacy", "prompt": "task"}),
+            None,
+        );
+        assert!(
+            legacy.get("error").is_none(),
+            "legacy config must still spawn: {legacy}"
+        );
+        let legacy = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action": "spawn", "agent_type": "Legacy", "prompt": "task", "model": "sonnet"}),
+            None,
+        );
+        assert!(
+            legacy["error"].as_str().is_some_and(
+                |error| error.contains("Conflict: run config already contains --model")
+            ),
+            "legacy args must remain authoritative: {legacy}"
+        );
     }
 
     /// A spawn that never reaches the PTY (bad binary) must also leave no task.
@@ -20484,6 +20681,7 @@ mod tests {
                             "--model".to_string(),
                             "qwen3.5".to_string(),
                         ],
+                        model: None,
                         env: [("OLLAMA_HOST".to_string(), "localhost:11434".to_string())]
                             .into_iter()
                             .collect(),
@@ -20493,6 +20691,7 @@ mod tests {
                         name: "Default".to_string(),
                         command: "claude".to_string(),
                         args: vec![],
+                        model: None,
                         env: std::collections::HashMap::new(),
                         is_default: true,
                     },
@@ -20507,6 +20706,7 @@ mod tests {
                     name: "codex-fast".to_string(),
                     command: "codex".to_string(),
                     args: vec!["--fast".to_string()],
+                    model: None,
                     env: std::collections::HashMap::new(),
                     is_default: true,
                 }],

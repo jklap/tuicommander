@@ -1249,7 +1249,21 @@ deferred PTY-injection path after their ready prompt appears.
 Configured run-config argv retains its established authoritative behavior:
 `{prompt}` is substituted where authored, otherwise the prompt is appended as
 the final positional argument rather than converted to deferred PTY delivery.
-Structured `model` is composed with `args`; direct Codex commands include the approval-bypass default. Outside authoritative run-config argv, direct executable identity also selects Codex prompt deferral and parser state, even when `agent_type` is omitted or disagrees. That bypass-default step leaves canonical Codex wrapper run-config argv untouched and adds `launch_warning` because TUIC cannot validate the wrapper's internal Codex flags. Structured parameters retain their established composition independently, including appending a caller-supplied `model`.
+Structured `model` is composed with `args`; a matching run config can supply a
+default `model`, overridden by the spawn parameter. Existing `--model` in
+run-config `args` stays authoritative and conflicts with an explicit model
+parameter. Direct Codex commands include the approval-bypass default. Outside
+authoritative run-config argv, direct executable identity also selects Codex
+prompt deferral and parser state, even when `agent_type` is omitted or
+disagrees. That bypass-default step leaves canonical Codex wrapper run-config
+argv untouched and adds `launch_warning` because TUIC cannot validate the
+wrapper's internal Codex flags.
+
+The optional `env` map uses the same field name and string values as HTTP
+`POST /sessions/agent` and desktop IPC spawn. Its values override run-config
+environment values. TUIC applies `TUIC_SESSION` and `TUIC_PARENT` afterward,
+so callers cannot replace peer identity. Environment values are redacted from
+spawn logs.
 
 `name` optionally assigns a non-empty peer and PTY display name at spawn time.
 The parent-assigned name is stored before prompt delivery, returned in the spawn

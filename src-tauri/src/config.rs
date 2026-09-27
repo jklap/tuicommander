@@ -1527,6 +1527,8 @@ pub(crate) struct AgentRunConfig {
     pub(crate) command: String,
     #[serde(default)]
     pub(crate) args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
     #[serde(default)]
     pub(crate) env: HashMap<String, String>,
     #[serde(default)]
@@ -5231,6 +5233,7 @@ mod tests {
                         name: "Default".to_string(),
                         command: "claude".to_string(),
                         args: vec![],
+                        model: None,
                         env: HashMap::new(),
                         is_default: true,
                     },
@@ -5242,6 +5245,7 @@ mod tests {
                             "sonnet".to_string(),
                             "--print".to_string(),
                         ],
+                        model: None,
                         env,
                         is_default: false,
                     },
@@ -5278,6 +5282,21 @@ mod tests {
         assert_eq!(claude.intent_tab_title, Some(false));
         assert_eq!(claude.suggest_followups, None);
         assert_eq!(claude.progress_tracking, Some(false));
+    }
+
+    #[test]
+    fn run_config_model_survives_config_round_trip_without_rewriting_legacy_args() {
+        let original = serde_json::json!({
+            "agents": {"claude": {"run_configs": [
+                {"name": "Structured", "command": "claude", "args": [], "model": "sonnet"},
+                {"name": "Legacy", "command": "claude", "args": ["--model", "opus"]}
+            ]}}
+        });
+        let parsed: AgentsConfig = serde_json::from_value(original).unwrap();
+        let saved = serde_json::to_value(parsed).unwrap();
+        let configs = &saved["agents"]["claude"]["run_configs"];
+        assert_eq!(configs[0]["model"], "sonnet");
+        assert_eq!(configs[1]["args"], serde_json::json!(["--model", "opus"]));
     }
 
     #[test]
