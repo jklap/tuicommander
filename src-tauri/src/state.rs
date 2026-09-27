@@ -1484,9 +1484,6 @@ struct UrgentNotice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AgentInboxFull;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
     Waiter,
     WakeSubmitted,
@@ -1614,10 +1611,7 @@ pub(crate) enum MarkerKind {
 /// Max messages per agent inbox before FIFO eviction.
 pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 
-/// Message-id prefix marking auto-generated lifecycle/system notifications
-/// (child exited/idle/died). These are low-volume and critical — losing one
-/// silently strands the orchestrator waiting on a child it thinks is alive —
-/// so `push_agent_inbox` protects them from eviction by chatty peer `send`s.
+/// Message-id prefix marking auto-generated lifecycle/system notifications.
 pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
 
 /// Max message body size in bytes (64 KB).
@@ -2066,8 +2060,8 @@ pub struct AppState {
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
     /// Capped at AGENT_INBOX_CAPACITY messages per agent, old messages evicted FIFO.
     pub agent_inbox: DashMap<String, VecDeque<AgentMessage>>,
-    /// Cumulative eviction count per agent since last inbox read (tuic_session → count).
-    /// Incremented on each FIFO eviction; consumed and reset by the inbox action.
+    /// Unread eviction count per agent since last inbox read (tuic_session → count).
+    /// Consumed and reset by the inbox action.
     pub(crate) agent_inbox_evictions: DashMap<String, u64>,
     /// Last read position per agent (tuic_session → logical unix-millis cursor).
     ///
@@ -2312,39 +2306,9 @@ impl AppState {
             .subscribe()
     }
 
-    /// Buffer a system message, logging back-pressure when every retained
-    /// message is still owned by an uncompleted delivery.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> Option<u64> {
-        let message_id = msg.id.clone();
-        match self.try_push_agent_inbox(recipient, msg) {
-            Ok(timestamp) => Some(timestamp),
-            Err(AgentInboxFull) => {
-                *self
-                    .agent_inbox_evictions
-                    .entry(recipient.to_string())
-                    .or_insert(0) += 1;
-                tracing::warn!(
-                    source = "agent",
-                    recipient,
-                    message_id,
-                    "agent inbox is full of in-flight messages; rejecting new system mail"
-                );
-                None
-            }
-        }
-    }
-
-    /// Buffer a message into `recipient`'s inbox with bounded FIFO eviction.
-    /// Already-read mail is reclaimed first; it was delivered and does not count
-    /// as missed. Otherwise only a replaceable lifecycle notice can be evicted,
-    /// and that increments `missed_count`. Unread mail assigned to a waiter or
-    /// pending terminal delivery remains protected. Reject when no safe candidate
-    /// exists so the sender can retry.
-    pub(crate) fn try_push_agent_inbox(
-        &self,
-        recipient: &str,
-        mut msg: AgentMessage,
-    ) -> Result<u64, AgentInboxFull> {
+    /// Buffer a message into `recipient`'s bounded FIFO inbox. A full inbox
+    /// always gives its oldest slot to the new message.
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())
@@ -2365,29 +2329,12 @@ impl AppState {
                 msg.timestamp = last_timestamp.saturating_add(1);
             }
             let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
-                let consumed_idx = inbox.iter().position(|message| {
-                    read_cursor.is_some_and(|cursor| message.timestamp <= cursor)
-                        && matches!(
-                            gate.owners.get(&message.id),
-                            None | Some(AgentDeliveryOwner::WaiterObserved)
-                                | Some(AgentDeliveryOwner::TerminalDispatched)
-                        )
-                });
-                let evict_idx = consumed_idx
-                    .or_else(|| {
-                        inbox.iter().position(|message| {
-                            message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
-                                && matches!(
-                                    gate.owners.get(&message.id),
-                                    None | Some(AgentDeliveryOwner::WaiterObserved)
-                                        | Some(AgentDeliveryOwner::TerminalDispatched)
-                                )
-                        })
-                    })
-                    .ok_or(AgentInboxFull)?;
-                inbox
-                    .remove(evict_idx)
-                    .map(|message| (message.id, consumed_idx.is_none()))
+                inbox.pop_front().map(|message| {
+                    let observed = read_cursor.is_some_and(|cursor| message.timestamp <= cursor)
+                        || gate.owners.get(&message.id)
+                            == Some(&AgentDeliveryOwner::WaiterObserved);
+                    (message.id, message.timestamp, !observed)
+                })
             } else {
                 None
             };
@@ -2395,7 +2342,7 @@ impl AppState {
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
-        if let Some((evicted_id, missed)) = evicted {
+        if let Some((evicted_id, evicted_through, missed)) = evicted {
             if missed {
                 *self
                     .agent_inbox_evictions
@@ -2403,11 +2350,13 @@ impl AppState {
                     .or_insert(0) += 1;
             }
             gate.owners.remove(&evicted_id);
+            gate.urgent_notices
+                .retain(|_, notice| notice.through > evicted_through);
         }
         gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
         let revision = gate.inbox_revision;
         gate.inbox_events.send_replace(revision);
-        Ok(stored_timestamp)
+        stored_timestamp
     }
 
     #[cfg(test)]
@@ -2851,24 +2800,33 @@ impl AppState {
         tuic_session: &str,
         since: u64,
         limit: usize,
-    ) -> Vec<AgentMessage> {
+    ) -> (Vec<AgentMessage>, bool, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
             .or_default();
         let mut gate = gate_entry.lock();
-        let messages: Vec<_> = self
+        let mut messages: Vec<_> = self
             .agent_inbox
             .get(tuic_session)
             .map(|inbox| {
                 inbox
                     .iter()
                     .filter(|message| message.timestamp > since)
-                    .take(limit)
+                    .take(limit.saturating_add(1))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default();
+        let has_more = messages.len() > limit;
+        if has_more {
+            messages.pop();
+        }
+        let missed_count = self
+            .agent_inbox_evictions
+            .remove(tuic_session)
+            .map(|(_, count)| count)
+            .unwrap_or(0);
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
@@ -2920,7 +2878,7 @@ impl AppState {
             gate.orchestrator_wake_needed_through = None;
         }
         gate.reset_orchestrator_wake_budget_if_observed();
-        messages
+        (messages, has_more, missed_count)
     }
 
     /// Record one marker emission or one submitted turn for `session_id`.
@@ -5081,35 +5039,28 @@ mod tests {
         );
     }
 
-    // ── push_agent_inbox: lifecycle notifications yield before peer mail ──
+    // ── push_agent_inbox: one FIFO for peer and lifecycle mail ──
 
     #[test]
-    fn push_agent_inbox_evicts_lifecycle_before_peer_mail() {
+    fn push_agent_inbox_evicts_oldest_across_peer_and_lifecycle_mail() {
         let state = tests_support::make_test_app_state();
         let rcpt = "orchestrator";
 
-        // Lifecycle notices are coalescible state observations; a peer result is
-        // not. Fill the inbox with notices plus one durable peer message.
+        state.push_agent_inbox(rcpt, make_msg("oldest-peer"));
         for i in 0..(AGENT_INBOX_CAPACITY - 1) {
             state.push_agent_inbox(rcpt, make_msg(&format!("tuic-auto-state-{i}")));
         }
-        state.push_agent_inbox(rcpt, make_msg("peer-result"));
-
-        // Another state update must replace an older lifecycle notice, never the
-        // peer message which a parent may not otherwise recover.
-        state
-            .try_push_agent_inbox(rcpt, make_msg("tuic-auto-state-overflow"))
-            .expect("an unleased lifecycle notice leaves an eviction slot");
+        state.push_agent_inbox(rcpt, make_msg("tuic-auto-state-overflow"));
 
         let inbox = state.agent_inbox.get(rcpt).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
         assert!(
-            inbox.iter().any(|m| m.id == "peer-result"),
-            "peer mail must survive lifecycle eviction pressure"
+            !inbox.iter().any(|m| m.id == "oldest-peer"),
+            "the oldest peer message must be evicted before newer lifecycle mail"
         );
         assert!(
-            !inbox.iter().any(|m| m.id == "tuic-auto-state-0"),
-            "the oldest lifecycle notice is evicted first"
+            inbox.iter().any(|m| m.id == "tuic-auto-state-0"),
+            "a newer lifecycle notice must remain"
         );
         assert!(
             *state.agent_inbox_evictions.get(rcpt).unwrap() > 0,
@@ -5118,7 +5069,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_falls_back_to_oldest_when_all_lifecycle() {
+    fn push_agent_inbox_evicts_oldest_when_all_lifecycle() {
         let state = tests_support::make_test_app_state();
         let rcpt = "orchestrator";
 
@@ -5138,7 +5089,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_does_not_evict_terminal_pending_mail() {
+    fn push_agent_inbox_evicts_oldest_terminal_pending_mail() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5154,16 +5105,20 @@ mod tests {
         state.push_agent_inbox(recipient, make_msg("overflow"));
 
         assert!(
-            state
+            !state
                 .agent_inbox
                 .get(recipient)
                 .is_some_and(|inbox| inbox.iter().any(|message| message.id == "terminal-pending")),
-            "a terminal-pending message must remain available for requeue after delivery failure"
+            "the oldest message must leave the bounded inbox"
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "terminal-pending"),
+            None
         );
     }
 
     #[test]
-    fn push_agent_inbox_rejects_peer_only_overflow_after_waiter_delivery() {
+    fn push_agent_inbox_evicts_peer_only_overflow_after_waiter_delivery() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5183,21 +5138,18 @@ mod tests {
             state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
         }
 
-        assert_eq!(
-            state.try_push_agent_inbox(recipient, make_msg("overflow")),
-            Err(AgentInboxFull)
-        );
+        state.push_agent_inbox(recipient, make_msg("overflow"));
 
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
-        assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
+        assert!(!inbox.iter().any(|message| message.id == "terminal-pending"));
         assert!(
             inbox.iter().any(|message| message.id == "waiter-observed"),
-            "returned peer mail is not an eviction candidate"
+            "newer mail remains after the oldest is evicted"
         );
     }
 
     #[test]
-    fn push_agent_inbox_rejects_overflow_when_every_message_is_in_flight() {
+    fn push_agent_inbox_accepts_overflow_when_every_message_is_in_flight() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5210,13 +5162,82 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            state.try_push_agent_inbox(recipient, make_msg("overflow")),
-            Err(AgentInboxFull)
-        );
+        state.push_agent_inbox(recipient, make_msg("overflow"));
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
-        assert!(inbox.iter().all(|message| message.id != "overflow"));
+        assert_eq!(inbox.front().unwrap().id, "pending-1");
+        assert_eq!(inbox.back().unwrap().id, "overflow");
+    }
+
+    #[test]
+    fn inbox_eviction_is_per_recipient_and_paging_skips_only_evicted_mail() {
+        let state = tests_support::make_test_app_state();
+        state.push_agent_inbox("other", make_msg("other-oldest"));
+        for index in 0..AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox("peer", make_msg(&format!("mail-{index}")));
+        }
+        let (first, has_more, missed_count) = state.observe_agent_inbox("peer", 0, 2);
+        assert!(has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            first.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["mail-0", "mail-1"]
+        );
+        for index in AGENT_INBOX_CAPACITY..(AGENT_INBOX_CAPACITY + 3) {
+            state.push_agent_inbox("peer", make_msg(&format!("mail-{index}")));
+        }
+        let cursor = first.last().unwrap().timestamp;
+        let (second, has_more, missed_count) = state.observe_agent_inbox("peer", cursor, 2);
+        assert!(has_more);
+        assert_eq!(missed_count, 1);
+        assert_eq!(
+            second.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["mail-3", "mail-4"]
+        );
+        assert_eq!(
+            state.agent_inbox.get("other").unwrap()[0].id,
+            "other-oldest"
+        );
+        assert!(!state.agent_inbox_evictions.contains_key("peer"));
+        assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    #[test]
+    fn urgent_notice_reservation_survives_partial_read_and_clears_after_eviction() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let first_through = state.push_agent_inbox(recipient, make_msg("urgent-0"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first_through),
+            UrgentNoticeReservation::Reserved
+        );
+        state.finish_urgent_notice(recipient, "sender", first_through, true);
+        let second_through = state.push_agent_inbox(recipient, make_msg("urgent-1"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second_through),
+            UrgentNoticeReservation::Written
+        );
+        state.observe_agent_inbox(recipient, 0, 1);
+        let third_through = state.push_agent_inbox(recipient, make_msg("urgent-2"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third_through),
+            UrgentNoticeReservation::Written
+        );
+        state.observe_agent_inbox(recipient, first_through, 2);
+        let fourth_through = state.push_agent_inbox(recipient, make_msg("urgent-3"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth_through),
+            UrgentNoticeReservation::Reserved
+        );
+
+        for index in 0..AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(recipient, make_msg(&format!("filler-{index}")));
+        }
+        let after_eviction = state.push_agent_inbox(recipient, make_msg("urgent-after-eviction"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", after_eviction),
+            UrgentNoticeReservation::Reserved
+        );
     }
 
     #[test]
@@ -5237,16 +5258,16 @@ mod tests {
             AgentDeliveryAssignment::Waiter
         );
         state.push_agent_inbox(recipient, make_msg("consumed"));
-        let observed = state.observe_agent_inbox(recipient, 0, 3);
+        let (observed, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 3);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
         assert_eq!(observed.len(), 3);
         assert_eq!(observed[2].id, "consumed");
 
         for index in 0..(AGENT_INBOX_CAPACITY - 3) {
             state.push_agent_inbox(recipient, make_msg(&format!("unread-{index}")));
         }
-        state
-            .try_push_agent_inbox(recipient, make_msg("new-mail"))
-            .expect("consumed peer mail frees one slot");
+        state.push_agent_inbox(recipient, make_msg("new-mail"));
 
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
@@ -5270,17 +5291,16 @@ mod tests {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
+        state.push_agent_inbox(recipient, make_msg("oldest-lifecycle"));
         state.push_agent_inbox(recipient, make_msg("terminal-pending"));
         assert_eq!(
             state.assign_agent_delivery(recipient, "terminal-pending", true),
             AgentDeliveryAssignment::Terminal
         );
-        for index in 0..(AGENT_INBOX_CAPACITY - 1) {
+        for index in 0..(AGENT_INBOX_CAPACITY - 2) {
             state.push_agent_inbox(recipient, make_msg(&format!("tuic-auto-state-{index}")));
         }
-        state
-            .try_push_agent_inbox(recipient, make_msg("tuic-auto-state-overflow"))
-            .expect("safe lifecycle mail leaves an eviction slot");
+        state.push_agent_inbox(recipient, make_msg("tuic-auto-state-overflow"));
 
         state.release_terminal_delivery(recipient, "terminal-pending");
 
