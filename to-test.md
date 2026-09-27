@@ -12,6 +12,16 @@
 
 # To Test
 
+## Mobile remote sessions, Progress, and Activity — Rust restart required
+
+- [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone.
+- [ ] [HUMAN] A connected remote session should show live output through WebSocket; create and close only a throwaway remote session from mobile, then confirm it disappears on its owner. Disconnect that machine and confirm the stale session shows unavailable rather than a misleading local 404.
+- [ ] [HUMAN] Open mobile Progress with no desktop repository selected. It should select the newest journal project, show saved done/blocked entries, and allow switching projects. Open Activity and confirm persisted active events appear while dismissed events stay hidden. The backend routes and store shape have targeted automated tests; the real phone remains to be checked.
+
+## Progress toast dismissal (story 1061-7694) — after the fixed frontend loads
+
+- [ ] Tap a Progress toast body on desktop while another repository is active; it should close without changing the repository or terminal. On a second toast, use **Go to repo** and confirm it opens the reporting workspace. On mobile, tapping the toast body should close it without opening its action. Targeted component tests verify these paths; check the loaded UI after this branch is integrated.
+
 ## Embedded external links (story 989-63fa) — after Rust rebuild
 
 - [ ] After the next `make dev` restart, use an isolated `TUIC_APP_INSTANCE` test instance to click an HTTPS link in an HTML preview and an inline plugin panel: each should open outside the app. Open a cross-origin dashboard URL in a tab, attempt an external navigation, and confirm the blocked-link toast directs users to the tab menu's Open in Browser action. The live Boss backend has not restarted for the Rust navigation event.

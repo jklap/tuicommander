@@ -179,6 +179,7 @@
 /progress/flow
 /progress/flow/detail
 /progress/list
+/progress/projects
 /progress/report
 /progress/viewed
 /prompt/execute-headless

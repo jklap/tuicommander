@@ -397,6 +397,8 @@ confirmation cannot authorize changed state.
  Native plan and story records have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The desktop and browser UI exposes plan and story lists, criteria, dependencies, and manual transitions. WontFix is terminal for plan aggregation but does not satisfy a dependency or promote a dependent; a nonempty plan with only Done/WontFix stories is Done, while an empty plan is Draft. A human can remove a direct WontFix dependency only from a Backlog story with a current revision. That story becomes Ready only after every remaining dependency is Done, and an explicitly Blocked story is never auto-unblocked. Rust derives direct and transitive abandoned dependency indicators and the WontFix count on `plan_view` reads; the UI renders them. Import/export is excluded.
 Progress is one append-only journal per project, read from a dialog. The dialog
 opens on the active PTY and can switch to another PTY or the repository aggregate.
+On mobile, where there is no desktop active repository, the journal supplies a
+newest-first project list; selecting one loads that project's entries.
 The toolbar bell entry stays visible with zero unread updates; the command palette
 and `Cmd/Ctrl+Shift+P` open the same dialog.
 It answers "what happened while I was not watching?" and nothing else.

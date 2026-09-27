@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
+import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { ideasStore } from "../stores/ideas";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
@@ -71,6 +72,26 @@ export default function MobileApp() {
 	});
 
 	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
+	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
+	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
+	createEffect(() => {
+		if (activeTab() !== "progress") return;
+		let cancelled = false;
+		setProgressProjects(undefined);
+		setProgressProjectsError(null);
+		void invoke<string[]>("progress_projects")
+			.then((projects) => {
+				if (!cancelled) setProgressProjects(projects);
+			})
+			.catch((error: unknown) => {
+				if (cancelled) return;
+				setProgressProjectsError("Progress projects are unavailable.");
+				appLogger.warn("network", "Could not list Progress projects", error);
+			});
+		onCleanup(() => {
+			cancelled = true;
+		});
+	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
 	useMobileNotifications(sessions);
@@ -154,7 +175,11 @@ export default function MobileApp() {
 									<FilesScreen />
 								</Match>
 								<Match when={activeTab() === "progress"}>
-									<ProgressDialog embedded />
+									<ProgressDialog
+										embedded
+										projects={progressProjects()}
+										projectsError={progressProjectsError() ?? undefined}
+									/>
 								</Match>
 								<Match when={activeTab() === "settings"}>
 									<SettingsScreen isConnected={error() === null} />

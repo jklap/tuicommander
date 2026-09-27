@@ -12,14 +12,16 @@ The project path is resolved to its canonical owner, so a managed worktree share
 
 ## Project Progress
 
-Six routes, all `POST`, and normal route authentication. All but
-`/progress/flow/detail` require an explicit `path` query naming a registered
-project.
+Six `POST` routes and one `GET` route, all with normal route authentication.
+The mobile PWA uses `GET /progress/projects` to discover journal projects,
+newest activity first. The `POST` routes other than `/progress/flow/detail`
+require an explicit `path` query naming a registered project.
 
 | Route | Body | Response |
 |---|---|---|
 | `/progress/report` | `{ type, text, step? }`, `type` is `done` or `blocked` | `{ id }` |
 | `/progress/list` | `{ blockedOnly?, ptyId? }` | `{ project, entries, ptyIds, lastViewedMs? }` |
+| `GET /progress/projects` | none | Array of project paths with journal entries, newest first |
 | `/progress/delete` | `{ ids }` | `{ deleted }` |
 | `/progress/viewed?ptyId=<id>` | none | `{ lastViewedMs }` |
 | `/progress/flow` | `{ ptyId? }` | `ProgressFlow` |
