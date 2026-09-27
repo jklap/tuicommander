@@ -11756,7 +11756,7 @@ fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
     // over-threshold path (one extra IPC round trip per frame) and arrived in
     // JS as a `number[]` to be walked back into bytes. `Response` carries the
     // bytes as `Raw` and the frontend already accepts an ArrayBuffer.
-    if let Err(error) = ch.send(tauri::ipc::Response::new(bytes)) {
+    if let Err(error) = ch.channel.send(tauri::ipc::Response::new(bytes)) {
         // A frame that never reached the webview will never be acked, and the
         // counters are absolute: leaving this one counted would put the gate one
         // frame behind for the rest of the session, i.e. every later frame would

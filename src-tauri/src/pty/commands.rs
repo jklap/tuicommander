@@ -921,13 +921,21 @@ pub(crate) fn subscribe_terminal_grid(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     channel: tauri::ipc::Channel<tauri::ipc::Response>,
+    webview: tauri::Webview,
 ) -> u64 {
     // A fresh gate, counting from zero — the frontend resets its receipt counter
     // on the same call.
     let gate = Arc::new(crate::grid_gate::GridGate::new());
     let epoch = gate.epoch();
     state.grid.gates.insert(session_id.clone(), gate);
-    state.grid.channels.insert(session_id, channel);
+    state.grid.channels.insert(
+        session_id,
+        crate::state::DesktopGridChannel {
+            channel,
+            webview_label: webview.label().to_string(),
+            epoch,
+        },
+    );
     epoch
 }
 
