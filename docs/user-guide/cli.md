@@ -172,7 +172,7 @@ tuic agent type <id-or-name> "fix the tests"
 # Wait for mail or inspect peers without polling
 tuic agent wait --timeout-ms 60000 --json
 tuic agent inbox --json
-tuic agent list-peers --json
+tuic agent list-peers --path /path/to/repo --json
 tuic agent stats --json
 
 # Server-owned session state and output
@@ -183,7 +183,7 @@ tuic session output <id-or-name> --limit 50 --json
 # Server-owned worktree lifecycle
 tuic repo worktree-list /path/to/repo --json
 tuic repo worktree-create /path/to/repo --branch feature/task --spawn-session --json
-tuic repo worktree-remove /path/to/repo <workspace-id> --json
+tuic repo worktree-remove /path/to/repo <branch> --json
 ```
 
 `agent wait` and `session wait` size their IPC read timeout from `--timeout-ms`

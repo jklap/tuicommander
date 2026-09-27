@@ -134,15 +134,15 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 > needs no separate inbox call. Ordinary idle workers receive direct terminal delivery. An idle
 > orchestrator instead receives a payload-free `agent action=inbox` wake; an active wait suppresses it.
 
-1. **Register** *(optional — sets name/project)* — the agent reads its `$TUIC_SESSION`:
+1. **Register** *(optional — sets name/path)* — the agent reads its `$TUIC_SESSION`:
    ```
-   agent action=register tuic_session="$TUIC_SESSION" name="worker-1" project="/path/to/repo"
+   agent action=register tuic_session="$TUIC_SESSION" name="worker-1" path="/path/to/repo"
    ```
 
 2. **Discover peers** — Find other agents connected to TUICommander:
    ```
    agent action=list_peers
-   agent action=list_peers project="/path/to/repo"   # filter by repo
+   agent action=list_peers path="/path/to/repo"   # filter by repo
    ```
 
 3. **Send a message** — Address by the recipient's `tuic_session` UUID:
@@ -205,7 +205,7 @@ If you run Claude Code outside TUICommander but still want to use TUIC messaging
 
 2. **Register identity** — omit the UUID for a generated identity scoped to this MCP connection:
    ```text
-   agent action=register name="external-reviewer" project="/path/to/repo"
+   agent action=register name="external-reviewer" path="/path/to/repo"
    ```
    Pass `tuic_session="<stable-uuid>"` instead when a future reconnect must reclaim the same identity.
    Registration never creates a PTY.
@@ -223,7 +223,7 @@ If you run Claude Code outside TUICommander but still want to use TUIC messaging
 | **Transport** | MCP tool call → server-side routing | File append + polling (`~/.claude/teams/`) |
 | **Real-time push** | Yes (MCP channel notifications) | No (polling only) |
 | **Cross-app** | Any MCP client can participate | Claude Code processes only |
-| **Discovery** | `list_peers` with project filter | Team config file |
+| **Discovery** | `list_peers` with path filter | Team config file |
 | **Persistence** | In-memory ring buffer (lost on TUIC restart) | Files on disk (survives restart) |
 
 Both systems work simultaneously. Claude Code agents spawned by TUICommander can use either or both.

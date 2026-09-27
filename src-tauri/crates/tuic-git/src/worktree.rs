@@ -2142,11 +2142,11 @@ pub fn delete_integrated_local_branch_with_pr(
         WorkspaceCommitStatus::Merged => merge_proof
             .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
         WorkspaceCommitStatus::Unmerged => {
-            if patches_integrated(repo, "HEAD", &tip)? {
+            if patches_integrated(repo, &default_branch, &tip)? {
                 "patch_equivalence"
             } else {
                 return Err(format!(
-                    "Cannot delete '{branch_name}': unmerged commits are not in the integration branch"
+                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch"
                 ));
             }
         }
@@ -7045,6 +7045,53 @@ branch refs/heads/feat
 
         assert_eq!(outcome.removal_rule, "patch_equivalence");
         assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn branch_delete_and_worktree_remove_reject_a_patch_only_on_current_nondefault_branch() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "feature");
+        commit_file(&worktree, "feature.txt", "unique patch\n");
+        git_cmd(&repo)
+            .args(["checkout", "-b", "integration"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "integration.txt", "integration-only advance\n");
+        git_cmd(&repo)
+            .args(["cherry-pick", "feature"])
+            .run()
+            .unwrap();
+
+        let remove_error =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "feature", true, None, false)
+                .unwrap_err();
+        assert!(remove_error.contains("unmerged commits"), "{remove_error}");
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "feature", false, None, false)
+            .unwrap();
+        let delete_error =
+            delete_integrated_local_branch(&repo.to_string_lossy(), "feature").unwrap_err();
+        assert!(delete_error.contains("unmerged commits"), "{delete_error}");
+        assert!(
+            git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/feature"])
+                .run()
+                .is_ok(),
+            "branch must remain after both safety refusals"
+        );
     }
 
     #[test]

@@ -91,20 +91,24 @@ fn run_with_stub_delay(
     let (path, listener) = socket();
     let response = tool_response(tool_text, is_error);
     let external = session.is_none();
+    let with_health = args.first() != Some(&"mcp");
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for index in 0..(if external { 3 } else { 2 }) {
+        for index in 0..(if external { 3 } else { 2 }) + usize::from(with_health) {
             let (mut stream, _) = listener.accept().unwrap();
             requests.push(read_request(&mut stream));
-            let body = if index == 0 {
+            let protocol_index = index.saturating_sub(usize::from(with_health));
+            let body = if with_health && index == 0 {
+                r#"{"ok":true}"#.to_string()
+            } else if protocol_index == 0 {
                 r#"{"jsonrpc":"2.0","result":{}}"#.to_string()
-            } else if external && index == 1 {
+            } else if external && protocol_index == 1 {
                 tool_response(r#"{"ok":true}"#, false)
             } else {
                 std::thread::sleep(delay);
                 response.clone()
             };
-            respond(&mut stream, &body, index == 0);
+            respond(&mut stream, &body, index == usize::from(with_health));
         }
         requests
     });
@@ -147,6 +151,89 @@ fn run_with_stub_delay(
     let requests = server.join().unwrap();
     std::fs::remove_file(path).unwrap();
     (output, requests)
+}
+
+#[test]
+fn agent_stats_uses_the_equivalent_single_request_http_route() {
+    let (path, listener) = socket();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let health = read_request(&mut stream);
+        respond(&mut stream, r#"{"ok":true}"#, false);
+        let (mut stream, _) = listener.accept().unwrap();
+        let stats = read_request(&mut stream);
+        respond(
+            &mut stream,
+            r#"{"active_sessions":2,"max_sessions":4,"available_slots":2}"#,
+            false,
+        );
+        (health, stats)
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["agent", "stats", "--json"])
+        .env("TUIC_SOCKET", &path)
+        .output()
+        .unwrap();
+    let (health, stats) = server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        health.0[0].starts_with("GET /health HTTP/1.1"),
+        "{:?}",
+        health.0
+    );
+    assert!(
+        stats.0[0].starts_with("GET /stats HTTP/1.1"),
+        "{:?}",
+        stats.0
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["available_slots"], 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn renamed_cli_inputs_reach_mcp_with_path_and_branch() {
+    let (output, requests) = run_with_stub(
+        &["agent", "list-peers", "--path", "/repo"],
+        None,
+        Some("peer-1"),
+        r#"{"peers":[]}"#,
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests[2].1["params"]["arguments"]["path"], "/repo");
+    assert!(
+        requests[2].1["params"]["arguments"]
+            .get("project")
+            .is_none()
+    );
+
+    let (output, requests) = run_with_stub(
+        &["repo", "worktree-remove", ".", "feature"],
+        None,
+        Some("peer-1"),
+        r#"{"ok":true}"#,
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests[2].1["params"]["arguments"]["branch"], "feature");
+    assert!(
+        requests[2].1["params"]["arguments"]
+            .get("workspace_id")
+            .is_none()
+    );
 }
 
 #[test]
