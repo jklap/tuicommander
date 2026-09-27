@@ -862,21 +862,12 @@ pub fn parse_osc94(text: &str) -> Option<ParsedEvent> {
 /// `\x1b]777;notify;TITLE;BODY\x07`.
 ///
 /// OSC 777 describes a desktop notification, not an awaiting-state transition.
-/// Claude also emits the generic observed body `Claude Code needs your
-/// attention`, which may announce completion and must not latch a confident
-/// question. Only response-required wording becomes `Question`: permission,
-/// approval, or waiting-for-input. This retains the plan/skill picker signal
-/// (`Claude is waiting for your input`) that native hooks do not cover.
-///
-/// That last body carries two meanings Claude does not distinguish: a blocked
-/// picker, and the 60s idle timer of a turn that simply finished. Observed
-/// 2026-08-11 — a session that printed its recap 17h earlier still read
-/// "question", because a confident question is retracted by nothing but real
-/// user input. So it is emitted with `confident: false`: the badge still
-/// appears, and `emit_question_cleared_if_stale` drops it on the next quiet
-/// tick when no prompt is on screen. A picker keeps it — the screen, not the
-/// notification body, is what tells the two apart. Permission and approval
-/// wording is unambiguous and stays confident.
+/// Claude also emits `Claude Code needs your attention` and `Claude is waiting
+/// for your input` after a completed turn at its ready composer. Neither body
+/// proves a question is on screen; promoting the latter flashed an awaiting
+/// badge until the silence timer retracted it. Ink/choice picker screen signals
+/// and OSC 7770 `state=awaiting` cover actual dialogs. Only unambiguous
+/// permission and approval wording becomes a confident `Question` here.
 ///
 /// The `prompt_text` is the body when present, else the title.
 pub fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
@@ -903,8 +894,7 @@ pub fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
             let normalized = prompt_text.to_ascii_lowercase();
             let confident = normalized.contains("needs your permission")
                 || normalized.contains("approval required");
-            let requires_response = confident || normalized.contains("is waiting for your input");
-            requires_response.then(|| ParsedEvent::Question {
+            confident.then(|| ParsedEvent::Question {
                 prompt_text: prompt_text.to_string(),
                 confident,
             })
@@ -6008,26 +5998,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     // --- OSC 777 notify: the agent asking for the user in protocol ---
 
-    /// Both payloads are verbatim from live Claude Code sessions observed while
-    /// a plan picker sat blocked and the tab still showed a "working" dot. They
-    /// are the regression this parser exists for.
-    ///
-    /// The confidence differs because the wording does. Permission is a request
-    /// with no other reading; `is waiting for your input` is also what Claude
-    /// says on its 60s idle timer after a finished turn, so it must stay
-    /// retractable.
+    /// Permission and approval wording requires a response. The generic idle
+    /// wording does not, even when it follows a reply ending in a question mark.
     #[test]
-    fn osc777_notify_reports_awaiting_with_wording_dependent_confidence() {
-        for (raw, expected, expect_confident) in [
+    fn osc777_notify_reports_only_unambiguous_awaiting() {
+        for (raw, expected) in [
             (
                 "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
                 "Claude needs your permission",
-                true,
             ),
             (
-                "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07",
-                "Claude is waiting for your input",
-                false,
+                "\x1b]777;notify;Codex;approval required\x07",
+                "approval required",
             ),
         ] {
             match parse_osc777_notify(raw) {
@@ -6036,14 +6018,15 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     confident,
                 }) => {
                     assert_eq!(prompt_text, expected);
-                    assert_eq!(
-                        confident, expect_confident,
-                        "wrong confidence for {raw:?} — a retractable body must not latch"
-                    );
+                    assert!(confident, "permission wording is a certain wait");
                 }
                 other => panic!("expected Question for {raw:?}, got {other:?}"),
             }
         }
+        assert!(
+            parse_osc777_notify("\x1b]777;notify;Claude Code;Claude is waiting for your input\x07")
+                .is_none()
+        );
     }
 
     /// ST-terminated form: some terminals/agents close OSC with ESC-backslash
@@ -6107,14 +6090,14 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert!(parse_osc777_notify("\x1b]9;4;1;50\x07").is_none());
     }
 
-    /// Several notifications in one chunk: the newest is the current state.
+    /// An ambiguous notification after a permission request must not replace it.
     #[test]
-    fn osc777_notify_takes_the_last_notification_in_a_chunk() {
+    fn osc777_notify_keeps_permission_before_ambiguous_idle_notification() {
         let raw = "\x1b]777;notify;Claude Code;Claude needs your permission\x07 output \
                    \x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
         assert!(matches!(
             parse_osc777_notify(raw),
-            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "Claude is waiting for your input"
+            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "Claude needs your permission"
         ));
     }
 

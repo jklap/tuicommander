@@ -5212,11 +5212,9 @@ pub(crate) fn hook_instrumented_for(
 /// Deliberately separate from the clean-row parsers: everything appended here
 /// skips `suppress_heuristic_question`. That filter exists to stop regex
 /// *guesses* from double-firing against the hook's `state=awaiting`; the OSC 777
-/// parser first classifies whether the protocol notification actually requires
-/// a response. A qualifying OSC 777 notification is the only awaiting signal
-/// for a hook-instrumented agent whose prompt is not
-/// `PreToolUse(AskUserQuestion)` — a plan or skill Ink picker emits no hook
-/// state at all, which is why such a session sat blocked behind a "working" dot.
+/// parser accepts only unambiguous permission or approval wording. Claude's
+/// generic idle notification is not a question. Plan and skill Ink pickers
+/// without a hook state use the visible footer's presence recovery instead.
 ///
 /// Shared with the fixture harness (`awaiting_signal_fixtures`) so a test can
 /// never assert against a composition that production does not run.
