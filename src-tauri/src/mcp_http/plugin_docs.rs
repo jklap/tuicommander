@@ -553,6 +553,10 @@ Crash safety: all boundaries are try/catch wrapped. A broken plugin produces a c
 
 Models MUST use the MCP HTTP API to create worktrees — never raw `git worktree add` directly.
 Using the API ensures user settings (storage strategy, path conventions) are respected.
+For the native `repo` MCP tool, pass the repository root as `path` and a linked
+worktree's branch as `branch` to `worktree_lifecycle` or `worktree_remove`.
+`worktree_create` still returns both `branch` and `workspace_id` for parity with HTTP.
+Its `spawn_session=true` option opens a bare shell PTY; launch an agent separately.
 
 ### Creating a worktree
 

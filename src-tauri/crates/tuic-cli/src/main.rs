@@ -7,10 +7,12 @@
 //! When invoked as `tmux` (via symlink), enters tmux-compatibility mode
 //! and translates tmux commands to TUIC equivalents.
 
+mod bg;
 mod ipc;
 mod mcp;
 
 use clap::{Parser, Subcommand};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -30,6 +32,28 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a command detached and queue a completion wake to this TUIC session
+    Bg {
+        /// Append command output here; write the exit code to <log>.exit
+        log: String,
+        /// Command and arguments after --
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
+    #[command(name = "__bg-runner", hide = true)]
+    BgRunner {
+        log: String,
+        caller: String,
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
+    /// Call a server-owned MCP tool with JSON arguments
+    Mcp {
+        /// MCP tool name (for example agent or session)
+        tool: String,
+        /// JSON object, or - to read it from stdin (defaults to {})
+        arguments: Option<String>,
+    },
     /// Open a file or directory in TUICommander
     Open {
         /// Path to open (file or directory)
@@ -249,7 +273,7 @@ enum AgentAction {
     /// List registered peers
     ListPeers {
         #[arg(long)]
-        project: Option<String>,
+        path: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -309,7 +333,7 @@ enum RepoAction {
     },
     WorktreeRemove {
         path: String,
-        workspace_id: String,
+        branch: String,
         #[arg(long)]
         force: bool,
         #[arg(long)]
@@ -359,6 +383,13 @@ fn main() {
 fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
+        Command::Bg { log, command } => bg::launch(&log, &command),
+        Command::BgRunner {
+            log,
+            caller,
+            command,
+        } => bg::run(&log, &caller, &command),
+        Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
         Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()).map(|_| ()),
@@ -394,6 +425,33 @@ fn dispatch(cmd: Command) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+fn cmd_mcp(tool: &str, arguments: Option<&str>) -> Result<(), String> {
+    let mut stdin_text = String::new();
+    let text = if arguments == Some("-") {
+        std::io::stdin()
+            .read_to_string(&mut stdin_text)
+            .unwrap_or_else(|e| {
+                mcp_usage_error(&format!("Cannot read MCP arguments from stdin: {e}"))
+            });
+        stdin_text.as_str()
+    } else {
+        arguments.unwrap_or("{}")
+    };
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .unwrap_or_else(|e| mcp_usage_error(&format!("MCP arguments must be a JSON object: {e}")));
+    if !parsed.is_object() {
+        mcp_usage_error("MCP arguments must be a JSON object");
+    }
+    let result = mcp::McpClient::connect_for_orchestration()?.call_text(tool, parsed)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn mcp_usage_error(message: &str) -> ! {
+    eprintln!("tuic: {message}");
+    std::process::exit(2)
+}
 
 fn cmd_story(action: &str, project: Option<&str>, session_id: Option<&str>) -> Result<(), String> {
     let action: serde_json::Value = serde_json::from_str(action)
@@ -820,19 +878,19 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 json,
             );
         }
-        AgentAction::ListPeers { project, json } => {
+        AgentAction::ListPeers { path, json } => {
             let payload = optional_fields(
                 serde_json::json!({"action": "list_peers"}),
-                [("project", project.map(serde_json::Value::from))],
+                [("path", path.map(serde_json::Value::from))],
             );
             print_mcp_payload(&mcp::McpClient::connect()?.call("agent", payload)?, json);
         }
         AgentAction::Stats { json } => {
-            print_mcp_payload(
-                &mcp::McpClient::connect()?
-                    .call("agent", serde_json::json!({"action": "stats"}))?,
-                json,
-            );
+            let response = ipc::get("/stats").map_err(|e| e.to_string())?;
+            if !response.is_success() {
+                return Err(format!("Server error: {}", response.status));
+            }
+            print_mcp_payload(&response.json().map_err(|e| e.to_string())?, json);
         }
     }
 
@@ -1015,11 +1073,11 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
         ),
         RepoAction::WorktreeRemove {
             path,
-            workspace_id,
+            branch,
             force,
             json,
         } => (
-            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "workspace_id": workspace_id, "force": force}),
+            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "branch": branch, "force": force}),
             json,
         ),
     };
@@ -1696,6 +1754,12 @@ mod tests {
             Some(Command::Story { action, project: Some(project), session_id: None })
                 if action == "{\"action\":\"list_plans\"}" && project == "/repo"
         ));
+    }
+
+    #[test]
+    fn agent_peer_filter_uses_path_name() {
+        let parsed = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"]);
+        assert!(parsed.is_ok(), "{}", parsed.err().unwrap());
     }
 
     fn tokens(args: &[&str]) -> Vec<String> {
