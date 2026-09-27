@@ -7,9 +7,9 @@
 /// Follows the `stream.cpp` pattern from whisper.cpp:
 /// - Overlapping windows with `keep_ms` of previous context
 /// - `set_single_segment(true)` + `set_no_timestamps(true)` for short windows
-use crate::dictation::transcribe::{Transcriber, VoiceGates};
+use crate::transcribe::{Transcriber, VoiceGates};
 #[cfg(test)]
-use crate::dictation::vad;
+use crate::vad;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -333,7 +333,7 @@ fn transcribe_window(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dictation::transcribe::{TranscribeResult, Transcriber};
+    use crate::transcribe::{TranscribeResult, Transcriber};
     use std::sync::atomic::AtomicUsize;
 
     /// Mock transcriber that echoes the sample count as text.

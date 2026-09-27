@@ -3,7 +3,7 @@
 Shared by `verify_voices.py` and `gen_voice_catalogue.py`, so the voices the
 gate renders are the voices the generator pins. The Rust side
 (`voice_revision!` and the revision constants in
-`src-tauri/src/dictation/speech/assets.rs`) is pinned by the tests there.
+`src-tauri/crates/tuic-dictation/src/speech/assets.rs`) is pinned by the tests there.
 """
 
 # The ONNX export, pinned like `POCKET_ONNX_REVISION` in `speech/assets.rs`.

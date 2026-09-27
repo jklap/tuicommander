@@ -853,13 +853,15 @@ repository maps to which machine.
 
 **Type:** `DictationConfig`
 
+Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation command adapter. It is desktop-gated; the audio and speech domain lives in `tuic-dictation`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `false` | Dictation enabled |
-| `hotkey` | `String` | `"CommandOrControl+Shift+D"` | Push-to-talk hotkey |
-| `language` | `String` | `"en"` | Transcription language |
+| `hotkey` | `String` | `"F5"` | Push-to-talk hotkey |
+| `language` | `String` | `"auto"` | Transcription language |
 | `model` | `String` | `"large-v3-turbo"` | Whisper model name |
-| `auto_send` | `bool` | `false` | Auto-submit after transcription |
+| `auto_send` | `bool` | `true` | Auto-submit after transcription |
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(config)`
 

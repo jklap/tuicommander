@@ -1100,6 +1100,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 
 ## 9. Voice Dictation
 
+The `tuic-dictation` Rust crate implements audio, transcription and speech; the desktop application retains the commands, browser transport and event emission.
+
 ### 9.1 Whisper Inference
 - Local processing via `whisper-rs` (no cloud)
 - macOS: GPU-accelerated via Metal

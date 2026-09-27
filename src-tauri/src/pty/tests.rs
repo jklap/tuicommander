@@ -10653,6 +10653,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     assert_eq!(queued_command_count(&state, "blank"), 0);
 }
 
+#[cfg(feature = "desktop")]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -10662,6 +10663,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
+#[cfg(feature = "desktop")]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps
@@ -10676,7 +10678,7 @@ fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
 /// agent queues or takes mid-turn itself. The Compose queue is for something
 /// else (one message, let the agent work, then the next), so the turn never
 /// enters it. Parking it there until idle cost a median 103 s, max 594 s.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10703,7 +10705,7 @@ fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
 
 /// An idle agent takes it too, through the same claim the queue uses, and is
 /// busy afterwards — the write started a turn.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10723,7 +10725,7 @@ fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
 
 /// A confident question owns the composer even mid-turn: speech aimed at the
 /// agent must not answer a permission dialog.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_held_by_a_confident_question() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10745,7 +10747,7 @@ fn a_voice_turn_is_held_by_a_confident_question() {
 
 /// A draft in the composer holds the turn: the Ctrl-U that opens every write
 /// would erase what the user is typing.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_held_by_partial_input() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10768,7 +10770,7 @@ fn a_voice_turn_is_held_by_partial_input() {
 
 /// The Compose queue is not touched: a typed entry parked for the next idle
 /// stays parked, in place, and a busy agent still receives nothing of it.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_leaves_the_compose_queue_alone() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10797,7 +10799,7 @@ fn a_voice_turn_leaves_the_compose_queue_alone() {
 
 /// A write that never started is held, not lost, and leaves the agent busy:
 /// releasing a claim that never took the idle atom must not invent an idle edge.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10828,7 +10830,7 @@ fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() 
 }
 
 /// Refused outright, as before: not an agent, gone, or empty.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_refused_for_shells_dead_sessions_and_empty_text() {
     use std::sync::atomic::AtomicU8;

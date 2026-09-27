@@ -463,6 +463,8 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 
 ## Voice Dictation (`dictation/`)
 
+These commands stay in the root `dictation/commands.rs` adapter; their audio and speech operations use `tuic-dictation`. The command names and payloads are unchanged by the crate split.
+
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `start_dictation` | -- | `()` | Start recording |
