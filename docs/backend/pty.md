@@ -402,6 +402,8 @@ Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current wo
 
 Additionally, `CLAUDECODE` is removed from the environment (`env_remove`) to prevent nested-session detection when TUICommander itself runs inside a Claude Code session. `NO_COLOR` is also removed from every PTY command immediately after construction because it may belong to a Codex parent that launched TUICommander, not to the independent child session. This does not force application color or override explicit command flags; a deliberate per-agent environment may restore `NO_COLOR` after sanitization.
 
+The same PTY command sanitizer removes `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, `CARGO_MANIFEST_PATH`, `CARGO_PKG_*`, `OUT_DIR`, and `RUSTDOC` inherited from TUICommander's own Cargo/mbx development launch. Those values describe the TUIC build, not the repository opened in the PTY. Other shell variables, including `CARGO_HOME`, remain inherited; explicit per-agent environment values applied after sanitization can restore a build target when requested.
+
 ## Child Process Priority
 
 Each spawned shell is given a lower scheduling priority right after spawn

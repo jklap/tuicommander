@@ -79,6 +79,26 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
     // sessions. Commands can still request monochrome output through their own
     // explicit CLI flags or per-command environment.
     cmd.env_remove("NO_COLOR");
+
+    // `make dev` launches through Cargo/mbx, which passes TUICommander's own
+    // build context to the app. A PTY working in another repository must not
+    // compile into this repository's target or use its package/build paths.
+    for key in [
+        "CARGO_TARGET_DIR",
+        "CARGO_MANIFEST_DIR",
+        "CARGO_MANIFEST_PATH",
+        "OUT_DIR",
+        "RUSTDOC",
+    ] {
+        cmd.env_remove(key);
+    }
+    let package_keys: Vec<String> = cmd
+        .iter_full_env_as_str()
+        .filter_map(|(key, _)| key.starts_with("CARGO_PKG_").then(|| key.to_owned()))
+        .collect();
+    for key in package_keys {
+        cmd.env_remove(key);
+    }
 }
 
 /// Inject the Unix-style env vars that Claude Code / Ink need to detect
