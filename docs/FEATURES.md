@@ -384,6 +384,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Save: `Cmd+S` (when editor tab is focused)
 - Read-only toggle: padlock icon in editor header
 - Line wrapping: header toggle or `Alt+Z`; text-like and Markdown files start wrapped, code files start unwrapped; each kind remembers its choice
+- Per-tab font zoom: `Cmd+=` / `Cmd+-` changes the active editor by 2px (8–32px); `Cmd+0` resets it to the configured default
 - Unsaved changes: dot indicator in tab bar and header
 - Disk conflict detection: banner with "Reload" (discard local) or "Keep mine" options
 - Auto-reloads silently when file changes on disk and editor is clean
@@ -1651,6 +1652,7 @@ All data persisted to platform config directory via Rust:
 ### Code Editor (when focused)
 | Shortcut | Action |
 |----------|--------|
+| `Cmd+=` / `Cmd+-` / `Cmd+0` | Zoom editor text in, out, or reset |
 | `Cmd+F` | Find |
 | `Cmd+G` | Find next |
 | `Cmd+Shift+G` | Find previous |
@@ -1852,6 +1854,12 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Loading skeletons during initial data fetch
 - Empty state with instructional hint
 - Tap card to open session detail
+
+### 18.2.1 Files Screen
+- Select a configured repository and browse its directories one level at a time
+- Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
+- Switch from View to Edit for source changes, then save through the existing file commands and return to View
+- Refuse files over 1 MB before reading and show a clear message for binary or non-text files
 
 ### 18.3 Session Detail Screen
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
