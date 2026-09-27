@@ -16,7 +16,11 @@ export function escapeShellArg(arg: string): string {
 		const escaped = arg.replace(/"/g, '""').replace(/([%^&<>|])/g, "^$1");
 		return `"${escaped}"`;
 	}
-	// POSIX: replace single quotes with '\'' (end quote, escaped quote, start quote)
+	return escapePosixShellArg(arg);
+}
+
+/** Quote one argument for a POSIX shell, including fish and POSIX shells on Windows. */
+export function escapePosixShellArg(arg: string): string {
 	return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
