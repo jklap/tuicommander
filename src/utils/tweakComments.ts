@@ -37,12 +37,34 @@ export interface TweakCommentBlock {
 
 export const CONVENTION_HEADER =
 	"<!-- tweak-comments v1: inline review comments.\n" +
+	"     Inline: [tweak:begin:ID]selected text[tweak:end:ID @ISO-TIMESTAMP\n" +
+	"     comment body]. Block: [tweak:block:ID @ISO-TIMESTAMP\n" +
+	"     comment body] immediately before the selected block.\n" +
+	"     Item: [tweak:item:ID @ISO-TIMESTAMP\n" +
+	"     comment body] after the selected list item, within the list.\n" +
+	"     Square brackets stand for HTML comment delimiters, not literal brackets.\n" +
+	"     Escape HTML comment closing sequences as '--&gt;' in comment bodies.\n" +
+	"     Read each comment, apply the feedback to the selected text or block,\n" +
+	"     then remove the tweak markers. -->\n\n";
+
+const LEGACY_CONVENTION_HEADER =
+	"<!-- tweak-comments v1: inline review comments.\n" +
 	"     Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP\n" +
 	"     comment body (free text, may span multiple lines)\n" +
 	"     ] — where [ ] are the HTML comment delimiters <!-- -->.\n" +
 	"     The only escape is '-->' → '--&gt;' inside the comment body.\n" +
 	"     Read each comment, apply the feedback to the highlighted text,\n" +
 	"     then remove the tweak markers. -->\n\n";
+
+const CONVENTION_HEADERS = [CONVENTION_HEADER, LEGACY_CONVENTION_HEADER];
+
+function conventionHeaderPrefixLength(source: string): number {
+	for (const header of CONVENTION_HEADERS) {
+		if (source.startsWith(header)) return header.length;
+		if (source.startsWith(header.trimEnd())) return header.trimEnd().length;
+	}
+	return 0;
+}
 
 // Matches a full tweak comment span: begin marker, highlighted content,
 // end marker with timestamp + body. Lazy matching is safe because the body
@@ -323,22 +345,17 @@ export function insertTweakBlockComment(
 
 /** Prepend the convention header if not already present. */
 export function ensureConventionHeader(source: string): string {
-	if (source.startsWith(CONVENTION_HEADER)) return source;
 	// Also treat a stripped (whitespace-trimmed) match as present to be resilient
 	// to trailing-newline normalization by editors.
-	if (source.includes(CONVENTION_HEADER.trimEnd())) return source;
+	if (CONVENTION_HEADERS.some((header) => source.includes(header.trimEnd()))) return source;
 	return CONVENTION_HEADER + source;
 }
 
 /** Remove the convention header if present (used when last comment is removed). */
 function removeConventionHeader(source: string): string {
-	if (source.startsWith(CONVENTION_HEADER)) {
-		return source.slice(CONVENTION_HEADER.length);
-	}
-	const trimmed = CONVENTION_HEADER.trimEnd();
-	const idx = source.indexOf(trimmed);
-	if (idx === 0) {
-		let end = trimmed.length;
+	const prefixLength = conventionHeaderPrefixLength(source);
+	if (prefixLength > 0) {
+		let end = prefixLength;
 		while (end < source.length && (source[end] === "\n" || source[end] === "\r")) end++;
 		return source.slice(end);
 	}
@@ -376,12 +393,7 @@ function buildVisibilityMask(source: string): boolean[] {
 		for (let i = start; i < end && i < source.length; i++) visible[i] = false;
 	};
 	// Convention header (exact or trailing-trimmed).
-	if (source.startsWith(CONVENTION_HEADER)) {
-		hide(0, CONVENTION_HEADER.length);
-	} else {
-		const trimmed = CONVENTION_HEADER.trimEnd();
-		if (source.startsWith(trimmed)) hide(0, trimmed.length);
-	}
+	hide(0, conventionHeaderPrefixLength(source));
 	// Marker syntax — begin markers and end markers (bodies included).
 	const beginRe = /<!--tweak:begin:[A-Za-z0-9_-]+-->/g;
 	const endRe = /<!--tweak:end:[A-Za-z0-9_-]+ @\S+\s[\s\S]*?-->/g;
@@ -612,7 +624,7 @@ export function tweakEndSentinel(id: string): string {
  * `applyTweakDomHighlights` operating on the rendered DOM.
  */
 export function injectTweakSentinels(source: string): string {
-	let out = source.startsWith(CONVENTION_HEADER) ? source.slice(CONVENTION_HEADER.length) : source;
+	let out = source.slice(conventionHeaderPrefixLength(source));
 	FULL_RE.lastIndex = 0;
 	out = out.replace(FULL_RE, (_, id, highlighted) => `${tweakBeginSentinel(id)}${highlighted}${tweakEndSentinel(id)}`);
 	BLOCK_RE.lastIndex = 0;
