@@ -113,6 +113,7 @@ Clicking a non-Markdown file opens it in an in-app code editor tab in the main t
 - **Line numbers**, bracket matching, active line highlight, indentation support
 - **Save** — `Cmd+S` saves the file when the editor tab is focused
 - **Wrap lines** — Click the wrap button in the editor header or press `Alt+Z` (`Option+Z` on macOS). Text, logs, unknown file types, and Markdown start wrapped; code starts unwrapped. The choice is remembered separately for text and code files on this client.
+- **Open links** — Hold `Cmd` (macOS) or `Ctrl` (Windows/Linux) to underline a link, then click it. HTTP(S) URLs open in the system browser. Markdown links and absolute, `~/`, file-relative, or repository-relative paths open in TUICommander. Add `:line` to jump to a source line. Directories open in the File Browser; a missing path shows a toast.
 
 ### Read-Only Mode
 

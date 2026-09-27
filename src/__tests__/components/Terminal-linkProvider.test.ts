@@ -15,6 +15,21 @@ describe("linkProvider regexes", () => {
 			expect(matchAll("open /usr/local/bin/test.rs")).toEqual(["/usr/local/bin/test.rs"]);
 		});
 
+		it("matches slash-terminated directories without treating prose as a path", () => {
+			expect(matchAll("browse ~/Gits/.tmp/ego-ux-eval/ and ./assets/ now")).toEqual([
+				"~/Gits/.tmp/ego-ux-eval/",
+				"./assets/",
+			]);
+		});
+
+		it("matches paths without a known extension when they contain a directory", () => {
+			expect(matchAll("open /repo/Makefile and src/scripts/build")).toEqual(["/repo/Makefile", "src/scripts/build"]);
+		});
+
+		it("matches absolute Windows paths with backslash separators", () => {
+			expect(matchAll("open C:\\Users\\boss\\notes.md:12")).toEqual(["C:\\Users\\boss\\notes.md:12"]);
+		});
+
 		it("matches relative ./ paths", () => {
 			expect(matchAll("edit ./src/main.ts")).toEqual(["./src/main.ts"]);
 		});

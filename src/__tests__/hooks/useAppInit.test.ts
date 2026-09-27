@@ -11,9 +11,10 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { appLogger } from "../../stores/appLogger";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
-import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
@@ -32,6 +33,9 @@ function resetStores() {
 	}
 	for (const id of mdTabsStore.getIds()) {
 		mdTabsStore.remove(id);
+	}
+	for (const id of editorTabsStore.getIds()) {
+		editorTabsStore.remove(id);
 	}
 	// Toasts dedup on title+message+level+repoPath, so one left behind by an
 	// earlier test silently suppresses the next test's identical toast.
@@ -196,6 +200,58 @@ describe("initApp", () => {
 		expect(tab).toBeDefined();
 		expect(tab!.repoPath).toBe(targetRepo);
 		expect(mdTabsStore.getActive()?.id).not.toBe(tab!.id);
+	});
+
+	it("opens an external Markdown MCP link as a visible Markdown tab", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: "external-report",
+				title: "Report",
+				html: "",
+				pinned: false,
+				url: "tuic://open//Users/boss/Gits/.tmp/boss/ego-ux-eval.md",
+				focus: true,
+			},
+		});
+		const tab = mdTabsStore.getActive();
+		expect(tab).toMatchObject({ type: "file", filePath: "/Users/boss/Gits/.tmp/boss/ego-ux-eval.md" });
+		expect(mdTabsStore.getVisibleIds(null)).toContain(tab!.id);
+		expect(editorTabsStore.getActive()).toBeUndefined();
+	});
+
+	it("keeps an external Markdown MCP tab in the background when focus is false", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: "background-report",
+				title: "Report",
+				html: "",
+				pinned: false,
+				url: "tuic://open//Users/boss/Gits/.tmp/boss/ego-ux-eval.md",
+				focus: false,
+			},
+		});
+		expect(mdTabsStore.getActive()).toBeUndefined();
+		expect(mdTabsStore.getVisibleIds(null).length).toBe(1);
 	});
 
 	it("re-adopts surviving PTY sessions", async () => {
