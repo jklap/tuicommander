@@ -69,6 +69,7 @@ const client = vi.hoisted(() => ({
 	disconnect: vi.fn(),
 	newSession: vi.fn(),
 	loadSession: vi.fn(),
+	listSessions: vi.fn(),
 	prompt: vi.fn(),
 	cancel: vi.fn(),
 	answerPermission: vi.fn(),
@@ -82,6 +83,7 @@ const client = vi.hoisted(() => ({
 
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
 
+import { invoke } from "@tauri-apps/api/core";
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
@@ -201,6 +203,10 @@ function renderPanel() {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "load_config") return { ai_chat_sessions: {} };
+		return undefined;
+	});
 	sequence = 0;
 	supportsImages = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
@@ -219,6 +225,7 @@ beforeEach(() => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
 		return SESSION;
 	});
+	client.listSessions.mockResolvedValue({ sessions: [], nextCursor: null });
 	client.reconnect.mockImplementation(async () => {
 		const opened = snapshot({ attachments: [attachment()] });
 		acpStore.applySnapshot(opened);
@@ -426,6 +433,184 @@ describe("AIChatPanel: a turn", () => {
 
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.newSession).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("AIChatPanel: durable conversations", () => {
+	it("does not replace a saved binding when config cannot be read", async () => {
+		vi.mocked(invoke).mockRejectedValue(new Error("Config unavailable"));
+		const { container } = renderPanel();
+		await settle();
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_config")).toBe(false);
+		expect(container.textContent).toContain("Config unavailable");
+	});
+
+	it("opens a conversation when the agent does not advertise listing", async () => {
+		client.connect.mockImplementation(async () => {
+			const opened = snapshot({ capabilities: { ...snapshot().capabilities!, list: false } });
+			acpStore.applySnapshot(opened);
+			acpStore.markStreaming(CONNECTION);
+			return opened;
+		});
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					capabilities: { ...snapshot().capabilities!, list: false },
+					attachments: [attachment()],
+				}),
+			);
+			return SESSION;
+		});
+		const { container } = renderPanel();
+		await settle();
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
+		expect(client.listSessions).not.toHaveBeenCalled();
+		expect(container.querySelector("textarea")).not.toBeNull();
+		const next = [...container.querySelectorAll("button")].find((button) => button.textContent === "New");
+		next?.click();
+		await settle();
+		expect(client.newSession).toHaveBeenCalledTimes(2);
+		expect(client.listSessions).not.toHaveBeenCalled();
+	});
+
+	it("saves the selected session and restores it from the next document's config", async () => {
+		const saved: Record<string, string> = {};
+		vi.mocked(invoke).mockImplementation(async (command, args) => {
+			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
+			if (command === "save_config")
+				Object.assign(
+					saved,
+					(args as { config: { ai_chat_sessions: Record<string, string> } }).config.ai_chat_sessions,
+				);
+			return undefined;
+		});
+		const first = renderPanel();
+		await settle();
+		expect(saved[ROOT]).toBe(SESSION);
+		first.unmount();
+		resetAcpChatBindings();
+		vi.clearAllMocks();
+
+		renderPanel();
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+		expect(client.newSession).not.toHaveBeenCalled();
+	});
+
+	it("includes later ACP list pages before ordering the picker", async () => {
+		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
+			cursor
+				? {
+						sessions: [{ sessionId: "newest", cwd: ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						nextCursor: null,
+					}
+				: {
+						sessions: [{ sessionId: SESSION, cwd: ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						nextCursor: "page-2",
+					},
+		);
+		const { container } = renderPanel();
+		await settle();
+		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
+		expect([...picker.options].map((option) => option.textContent)).toEqual(["New page", "First page"]);
+	});
+
+	it("keeps the current conversation visible when a picked load is refused", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: ROOT, title: "Current", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: "unavailable", cwd: ROOT, title: "Unavailable", updatedAt: "2026-09-25T09:00:00Z" },
+			],
+			nextCursor: null,
+		});
+		client.loadSession.mockRejectedValue(new Error("Session unavailable"));
+		const { container } = renderPanel();
+		await settle();
+		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
+		picker.value = "unavailable";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		expect(picker.value).toBe(SESSION);
+		expect(container.textContent).toContain("Session unavailable");
+	});
+
+	it("loads the saved conversation after a fresh document opens", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: { [ROOT]: "prior-session" } };
+			return undefined;
+		});
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: "prior-session", cwd: ROOT, title: "Design review", updatedAt: "2026-09-26T12:00:00Z" }],
+			nextCursor: null,
+		});
+		client.loadSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: "prior-session" })] }));
+			feed(
+				{
+					kind: "sessionUpdate",
+					update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Earlier answer" } },
+				},
+				"prior-session",
+			);
+		});
+
+		const { container } = renderPanel();
+		await settle();
+
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", ROOT);
+		expect(container.textContent).toContain("Earlier answer");
+	});
+
+	it("lists durable conversation titles in latest activity order", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: "old", cwd: ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
+				{ sessionId: SESSION, cwd: ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "newest", cwd: ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+			],
+			nextCursor: null,
+		});
+		const { container } = renderPanel();
+		await settle();
+
+		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
+		expect([...picker.options].map((option) => option.textContent)).toEqual([
+			"Latest topic",
+			"Current topic",
+			"Old topic",
+		]);
+	});
+
+	it("loads a picked conversation once and shows its replay without duplication", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: ROOT, title: "Current", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "prior-session", cwd: ROOT, title: "Earlier", updatedAt: "2026-09-24T09:00:00Z" },
+			],
+			nextCursor: null,
+		});
+		client.loadSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: "prior-session" })] }));
+			feed(
+				{
+					kind: "sessionUpdate",
+					update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Only once" } },
+				},
+				"prior-session",
+			);
+		});
+		const { container } = renderPanel();
+		await settle();
+		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
+		picker.value = "prior-session";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+
+		expect(client.loadSession).toHaveBeenCalledTimes(1);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", ROOT);
+		expect(container.textContent?.split("Only once")).toHaveLength(2);
 	});
 });
 

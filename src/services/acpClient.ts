@@ -31,6 +31,18 @@ import type {
 import { randomUuid } from "../utils/randomId";
 import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
 
+export interface AcpListedSession {
+	sessionId: AcpSessionId;
+	cwd: string;
+	title?: string | null;
+	updatedAt?: string | null;
+}
+
+export interface AcpSessionList {
+	sessions: AcpListedSession[];
+	nextCursor?: string | null;
+}
+
 /**
  * How many times a dropped stream may be reopened before the client stops.
  *
@@ -241,10 +253,11 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			await this.refresh(connectionId);
 		},
 
-		async listSessions(connectionId: AcpConnectionId, cwd?: string) {
-			return invoke<{ sessions: { sessionId: AcpSessionId; cwd: string }[] }>("acp_session_list", {
+		async listSessions(connectionId: AcpConnectionId, cwd?: string, cursor?: string): Promise<AcpSessionList> {
+			return invoke<AcpSessionList>("acp_session_list", {
 				connectionId,
 				cwd,
+				cursor,
 			});
 		},
 
