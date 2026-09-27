@@ -380,6 +380,11 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+Shift+= / ${mod}+Shift+- / ${mod}+Shift+0`,
 	},
 	{
+		feature: "Code Editor Zoom",
+		description: "Zoom the open code editor without changing your terminal or another editor tab.",
+		shortcut: `${mod}+= / ${mod}+- / ${mod}+0`,
+	},
+	{
 		feature: "Global Workspace",
 		description:
 			"Promote terminals from different repos into a single cross-repo view. Right-click a tab → Promote, then toggle the workspace with the shortcut. Tabs show a globe icon when promoted.",

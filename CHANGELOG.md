@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Terminal link positions** — File links with `:line:col` now place the editor cursor at the requested column. Clicking another position in an open file navigates the existing tab without discarding edits.
+
+- **Terminal file line links** — Clicking a file path with `:line` now opens the built-in editor at that line, including for Markdown files.
+
 - **External Markdown review saves** — Inline tweak comments on Markdown files outside the active repository now write to the external file. A failed write shows an error and keeps the draft open for retry.
 
 - **MCP file tab identity and visibility** — Native `tuic://open` and `tuic://edit` tabs use the MCP id: distinct ids coexist and repeating an id updates its tab. Tabs stay visible after selecting a terminal in a repository without an active workspace. Clicking an existing path outside registered repositories in terminal output opens it in the native viewer or editor.
@@ -13,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **MCP tab repository scope** — Unpinned native file, HTML and URL tabs opened through `ui action=tab` return when their opening repository is selected again. Pinned MCP tabs remain visible across repositories.
 
 - **Open links from the code editor** — Cmd/Ctrl+click opens web URLs, Markdown links, local paths and directories. Paths can point outside a repository, and missing files show a toast. MCP `tuic://open` now previews external Markdown files as Markdown.
+
+- **Code editor font zoom** — `Cmd/Ctrl` plus, minus and zero now zoom or reset the active editor tab with the same font range and step as a terminal.
 
 - **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.
 

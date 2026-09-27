@@ -126,7 +126,7 @@ per cell and the configured history limit still apply.
 - `.md`/`.mdx` → opens in Markdown panel; preview-capable files (HTML, PDF, images, video, audio, plain text/data) → open in the Preview tab (section 3.15); all other code files → open in the built-in code editor
 - `file://` URLs are recognized in addition to plain paths — the prefix is stripped and the path resolved like any other
 - OSC 8 hyperlinks: programs that emit hyperlink escape sequences (e.g. Claude Code, modern `ls`) produce clickable links; hover underline spans the full link text (via `terminal_hyperlink_span` backend API)
-- Supports `:line` and `:line:col` suffixes for precise navigation
+- Supports `:line` and `:line:col` suffixes; the built-in editor moves to that position even when the file is already open
 - Single left-click opens the link instantly (UI-first — opening is a primary action, not gated behind a modifier); drag-select over a link still copies text without opening
 - Right-click on a link shows a context menu with **Open** and **Copy link** (copy the resolved path/URL without opening). Right-clicking elsewhere shows the standard terminal context menu
 - Recognized extensions: rs, ts, tsx, js, jsx, py, go, java, kt, swift, c, cpp, cs, rb, php, lua, zig, css, scss, html, vue, svelte, json, yaml, toml, sql, graphql, tf, sh, dockerfile, and more
@@ -384,6 +384,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Save: `Cmd+S` (when editor tab is focused)
 - Read-only toggle: padlock icon in editor header
 - Line wrapping: header toggle or `Alt+Z`; text-like and Markdown files start wrapped, code files start unwrapped; each kind remembers its choice
+- Per-tab font zoom: `Cmd+=` / `Cmd+-` changes the active editor by 2px (8–32px); `Cmd+0` resets it to the configured default
 - Unsaved changes: dot indicator in tab bar and header
 - Disk conflict detection: banner with "Reload" (discard local) or "Keep mine" options
 - Auto-reloads silently when file changes on disk and editor is clean
@@ -1651,6 +1652,7 @@ All data persisted to platform config directory via Rust:
 ### Code Editor (when focused)
 | Shortcut | Action |
 |----------|--------|
+| `Cmd+=` / `Cmd+-` / `Cmd+0` | Zoom editor text in, out, or reset |
 | `Cmd+F` | Find |
 | `Cmd+G` | Find next |
 | `Cmd+Shift+G` | Find previous |

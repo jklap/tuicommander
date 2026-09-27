@@ -332,8 +332,8 @@ Features:
 | Cmd+O | Open file… |
 | Cmd+N | New file… |
 | Cmd+1-9 | Switch to tab N |
-| Cmd++/- | Zoom in/out |
-| Cmd+0 | Reset zoom |
+| Cmd++/- | Zoom in/out in the active terminal, Markdown tab or code editor |
+| Cmd+0 | Reset zoom in the active terminal, Markdown tab or code editor |
 | Cmd+F | Find in terminal |
 | Cmd+E | Toggle file browser |
 | Cmd+[ | Toggle sidebar |
