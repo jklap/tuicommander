@@ -14801,10 +14801,7 @@ fn awaiting_prompts(events: &[ParsedEvent]) -> Vec<String> {
         .collect()
 }
 
-/// Every prompt the pipeline reported, whatever its confidence. A signal
-/// that badges the tab but stays retractable — Claude's `is waiting for
-/// your input` notify — is invisible to `awaiting_prompts`, so asserting
-/// "the notify survived the pipeline" needs this view instead.
+/// Every prompt the pipeline reported, whatever its confidence.
 fn awaiting_prompts_any_confidence(events: &[ParsedEvent]) -> Vec<String> {
     events
         .iter()
@@ -14815,44 +14812,32 @@ fn awaiting_prompts_any_confidence(events: &[ParsedEvent]) -> Vec<String> {
         .collect()
 }
 
-/// Regression, captured 2026-08-08 from a live session parked on a plan
-/// picker while its tab showed a "working" dot.
-///
-/// The session is hook-instrumented Claude, so every regex Question is
-/// dropped by design — and the picker is not `PreToolUse(AskUserQuestion)`,
-/// so the hook emitted no `state=awaiting` either. Both channels silent, the
-/// agent blocked. The one thing Claude did say is in these bytes:
-/// `ESC]777;notify;Claude Code;Claude is waiting for your input BEL`.
-/// Before that sequence was parsed this assertion found nothing.
+/// The old fixture name calls this a plan picker, but its bytes show a ready
+/// `❯` composer followed by Claude's generic desktop notification. There is
+/// no Ink footer or visible picker in the captured suffix. This notification
+/// is therefore insufficient evidence of awaiting even for a hooked session.
 #[test]
-fn hook_instrumented_session_still_reports_awaiting_via_osc777() {
+fn hooked_claude_generic_notify_capture_is_not_a_question() {
     let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), true);
-    // Retractable on purpose: the same body arrives on Claude's 60s idle
-    // timer after a finished turn. The picker keeps the badge because the
-    // prompt stays on screen, not because the notify is trusted forever.
     let prompts = awaiting_prompts_any_confidence(&events);
-
     assert!(
-        prompts
+        !prompts
             .iter()
             .any(|p| p == "Claude is waiting for your input"),
-        "hook suppression must not swallow the agent's own notification; \
-             questions seen: {prompts:?}"
+        "the ready-composer notification is not a question: {prompts:?}"
     );
 }
 
-/// The same capture with hook instrumentation off: the notify is a property
-/// of the agent's output, not of our suppression, so it must survive either
-/// way. Guards against "fixed it by disabling the filter".
+/// The OSC notification's ambiguity is independent of hook configuration.
 #[test]
-fn osc777_awaiting_does_not_depend_on_hook_instrumentation() {
+fn generic_osc777_notify_is_not_a_question_with_or_without_hooks() {
     for hook in [true, false] {
         let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), hook);
         assert!(
-            awaiting_prompts_any_confidence(&events)
+            !awaiting_prompts_any_confidence(&events)
                 .iter()
                 .any(|p| p == "Claude is waiting for your input"),
-            "notify lost with hook_instrumented={hook}"
+            "generic notify badged a session with hook_instrumented={hook}"
         );
     }
 }
@@ -14870,6 +14855,198 @@ fn generic_osc777_attention_does_not_report_awaiting() {
             "generic notification became awaiting with hook_instrumented={hook}: {events:?}"
         );
     }
+}
+
+/// The OSC body is taken from the recorded Claude PTY sequence in
+/// `claude-plan-picker.raw`. A normal completed turn leaves a ready composer;
+/// the same generic desktop notification arrives later even without a dialog.
+/// Both prose endings were observed on live Claude screens on 2026-09-27.
+#[test]
+fn completed_claude_prose_notification_does_not_flash_awaiting() {
+    let capture = agent_prompt_fixture("claude-plan-picker.raw");
+    let notify = "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
+    assert!(
+        capture
+            .windows(notify.len())
+            .any(|bytes| bytes == notify.as_bytes())
+    );
+
+    for answer in ["The review is complete.", "Would you like a summary?"] {
+        let sid = "claude-completed-notify";
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, sid, SHELL_IDLE);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_type = Some("claude".into());
+            session.hook_instrumented = true;
+        }
+        state.grid.vt_log_buffers.insert(
+            sid.into(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 100, 2000)),
+        );
+        let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+        silence.lock().startup_settled = true;
+        let mut processor = ChunkProcessor::new(None, None);
+        let screen = format!(
+            "\x1b[2J\x1b[H{answer}\r\n✻ Cooked for 15s · done\r\n────────────────────────\r\n❯\r\n────────────────────────"
+        );
+        processor.process_chunk(&screen, &silence, sid, &state);
+        processor.process_chunk("\x1b]7770;state=idle\x07", &silence, sid, &state);
+        assert!(silence.lock().hook_state_seen);
+        let mut events = state.event_bus.subscribe();
+        processor.process_chunk(notify, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::PtyParsed { parsed, .. }
+                    if parsed["type"] == "question"),
+                "a desktop idle notification after {answer:?} must not badge Waiting input"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hooked_claude_prose_question_stays_idle_after_silence_tick() {
+    tokio::time::pause();
+    let sid = "claude-ready-prose-question";
+    let state = accumulating_state(sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.hook_instrumented = true;
+    }
+    let mut vt = crate::state::VtLogBuffer::new(24, 100, 2000);
+    vt.process("\x1b[2J\x1b[HWould you like a summary?\r\n────\r\n❯".as_bytes());
+    assert_eq!(
+        current_chat_question(&vt.screen_rows()),
+        CurrentChatQuestion::PromptAnchored(Some("Would you like a summary?".into())),
+        "the screen really has the candidate the silence timer would consider"
+    );
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.startup_settled = true;
+        sl.note_explicit_state(SHELL_IDLE, true);
+        sl.last_output_at = std::time::Instant::now() - SILENCE_QUESTION_THRESHOLD;
+    }
+    let mut events = state.event_bus.subscribe();
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed["type"] == "question"),
+            "hooked Claude prose must not produce a silence-timer question"
+        );
+    }
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+}
+
+#[test]
+fn recorded_claude_ready_notification_does_not_report_awaiting() {
+    let notify = b"\x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
+    for fixture in [
+        "claude-ready-idle-notify.tcap",
+        "claude-ready-idle-notify-statement.tcap",
+    ] {
+        let bytes = agent_prompt_fixture(fixture);
+        let capture = crate::pty_capture::decode_capture(&bytes).expect("recorded PTY capture");
+        assert!(
+            capture
+                .records
+                .iter()
+                .any(|record| { record.data.windows(notify.len()).any(|part| part == notify) })
+        );
+        assert!(
+            awaiting_prompts_any_confidence(&replay_capture(&bytes, true)).is_empty(),
+            "{fixture}: a ready composer plus generic idle notify must not report a question"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn visible_dialog_and_explicit_permission_still_badge_awaiting() {
+    let ink = askuserquestion_wizard_screen(0);
+    let choice: Vec<String> = ["Proceed with deletion?", "❯ 1. Yes", "  2. No"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let signals = [
+        rearm_awaiting_for_open_dialog(&ink, false, false, false)
+            .expect("the visible Ink footer is a real dialog"),
+        crate::output_parser::parse_choice_prompt(&choice)
+            .expect("the numbered choice is a real dialog"),
+        crate::output_parser::parse_osc777_notify(
+            "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
+        )
+        .expect("permission wording requires a response"),
+    ];
+    for (index, signal) in signals.into_iter().enumerate() {
+        let sid = format!("real-awaiting-{index}");
+        let state = accumulating_state(&sid);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: sid.clone(),
+            parsed: serde_json::to_value(&signal).unwrap().into(),
+        });
+        assert!(
+            await_session(&state, &sid, |s| s.awaiting_input && s.question_confident).await,
+            "a real interactive signal must reach the badge: {signal:?}"
+        );
+    }
+}
+
+#[test]
+fn codex_ready_prompt_remains_idle_and_deliverable() {
+    let sid = "codex-ready-no-question";
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .unwrap()
+        .lock()
+        .confirm_idle();
+    let rows = vec![
+        "• Done. Updated Cargo.toml.".to_string(),
+        "› Improve documentation in @filename".to_string(),
+        "  gpt-5.5 high · ~/Gits/LS/agent2".to_string(),
+    ];
+    assert_eq!(
+        detect_codex_screen_activity(&rows),
+        AgentScreenActivity::Ready
+    );
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(
+        should_inject_now(&state, sid),
+        "the idle composer must accept the next turn"
+    );
 }
 
 // --- Awaiting RETRACTION -----------------------------------------------
@@ -14970,22 +15147,11 @@ async fn stale_heuristic_awaiting_is_retracted_when_the_prompt_leaves_the_screen
     );
 }
 
-/// Regression, observed 2026-08-11 on a live Claude tab: the turn had ended
-/// 17h earlier, its recap was the last thing on screen, no prompt anywhere —
-/// and the tab still read "question". The session carried
-/// `question_text = "Claude is waiting for your input"`, which is what Claude
-/// notifies on its 60s idle timer as well as on a blocked picker. Parsed as
-/// confident, it was retractable by nothing but a typed line, and there was
-/// nothing to type.
-///
-/// Both bodies go through the real parser here: hard-coding the JSON would
-/// let the test keep passing after the parser stopped agreeing with it.
+/// Permission wording remains a confident question; the generic idle wording
+/// never reaches the accumulator as a Question.
 #[tokio::test(flavor = "current_thread")]
-async fn osc777_notify_retraction_follows_the_wording() {
-    for (body, survives) in [
-        ("Claude is waiting for your input", false),
-        ("Claude needs your permission", true),
-    ] {
+async fn osc777_notify_only_badges_unambiguous_permission() {
+    for body in ["Claude needs your permission", "approval required"] {
         let raw = format!("\x1b]777;notify;Claude Code;{body}\x07");
         let notify = crate::output_parser::parse_osc777_notify(&raw)
             .unwrap_or_else(|| panic!("{body:?} must still report awaiting"));
@@ -15003,11 +15169,14 @@ async fn osc777_notify_retraction_follows_the_wording() {
         // The screen is quiet and carries no prompt — the recap case.
         emit_question_cleared_if_stale(&state, "s1");
         let cleared = await_session(&state, "s1", |s| !s.awaiting_input).await;
-        assert_eq!(
-            cleared, !survives,
-            "{body:?}: expected survives={survives}, badge cleared={cleared}"
-        );
+        assert!(!cleared, "{body:?} must remain until user input");
     }
+    assert!(
+        crate::output_parser::parse_osc777_notify(
+            "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07"
+        )
+        .is_none()
+    );
 }
 
 /// grok repaints while it waits, so "not on screen this tick" is not proof
