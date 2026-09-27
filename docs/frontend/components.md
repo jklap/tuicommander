@@ -107,6 +107,8 @@ behavioral boundaries rather than generic service wrappers.
 keeps it mounted when hidden. The detached AI Chat adapter loads the same panel
 when its window opens. Neither path loads its markdown renderer before the
 desktop terminal view.
+The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
+questions while the panel is hidden.
 
 ## Mobile Screens (`src/mobile/`)
 

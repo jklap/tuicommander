@@ -421,6 +421,8 @@ sets a per-busy-cycle latch before playback so idle and exit cannot both chime.
 The playback manager applies one 500 ms gate across every sound type, because
 all types share the same audio output and separate per-type gates allowed tones
 from a notification burst to overlap.
+ACP interaction notifications are keyed by connection and request ID, so a
+re-render cannot send a duplicate. Settlement closes the matching notification.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state — plus the speech
