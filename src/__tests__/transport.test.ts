@@ -273,6 +273,13 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps mobile Progress project discovery to its authenticated HTTP route", () => {
+			expect(mapCommandToHttp("progress_projects", {})).toEqual({
+				method: "GET",
+				path: "/progress/projects",
+			});
+		});
+
 		it("routes native story actions to the owning project", () => {
 			expect(mapCommandToHttp("story_capabilities", {})).toEqual({
 				method: "GET",

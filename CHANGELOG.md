@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Mobile session and feed repair** — Connected remote sessions open live output and close through their owning machine. Mobile Progress discovers projects with journal entries, and Activity loads saved events when opened.
+
 - **Progress toast dismissal** — Tapping a toast closes it without switching repositories or terminals. The dedicated **Go to repo** button still navigates to the reporting workspace.
 
 - **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import type { ActivityItem as ActivityItemData } from "../../plugins/types";
 import { activityStore } from "../../stores/activityStore";
 import { ActivityItem } from "../components/ActivityItem";
@@ -49,6 +49,9 @@ function groupByTime(items: ActivityItemData[]): TimeGroup[] {
 }
 
 export function ActivityScreen(props: ActivityScreenProps) {
+	onMount(() => {
+		void activityStore.hydrate();
+	});
 	const activeItems = createMemo(() => {
 		const items = activityStore.getActive();
 		return [...items].sort((a, b) => b.createdAt - a.createdAt);

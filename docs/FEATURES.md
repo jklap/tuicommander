@@ -1849,6 +1849,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Tap card to open session detail
 
 ### 18.3 Session Detail Screen
+- Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
@@ -1873,13 +1874,14 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.5 Activity Feed
 - Chronological event feed grouped by time (NOW, EARLIER, TODAY, OLDER)
-- Reads from shared `activityStore`
+- Hydrates persisted activity from the server when the mobile tab opens; dismissed items stay hidden and current live items remain visible
 - Throttled grouping: items snapshot every 10s to prevent constant reordering with multiple active sessions; new items/removals trigger immediate refresh
 - Sticky section headers, tap to navigate to session
 
 ### 18.6 Session Management
 - **Session kill:** swipe or long-press a session card to kill/close the PTY session
 - **New session:** create a new PTY session from the sessions screen (optional shell/cwd selection)
+- **Progress:** lists projects with journal entries by recent activity, then shows and switches their saved entries without a desktop repository selection
 
 ### 18.7 Settings
 - Connection status: connectivity indicator with real-time Connected/Disconnected state

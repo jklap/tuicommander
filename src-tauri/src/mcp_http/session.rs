@@ -6,7 +6,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use futures_util::stream::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use portable_pty::PtySize;
 use std::net::SocketAddr;
@@ -1181,7 +1181,40 @@ pub(super) async fn ws_stream(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     if !state.session_maps.sessions.contains_key(&id) {
-        return StatusCode::NOT_FOUND.into_response();
+        let path = format!("/sessions/{id}/stream");
+        let mut params = Vec::new();
+        if let Some(format) = query.format.as_deref() {
+            params.push(("format", format.to_string()));
+        }
+        if let Some(offset) = query.offset {
+            params.push(("offset", offset.to_string()));
+        }
+        let query_string = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+        let Some(owner) =
+            super::remote_session_proxy::owner_url(&state, &id, &path, Some(&query_string))
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let mut url = match owner {
+            Ok(url) => url,
+            Err(status) => return status.into_response(),
+        };
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        if url.set_scheme(scheme).is_err() {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        let upstream = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio_tungstenite::connect_async(url.as_str()),
+        )
+        .await
+        {
+            Ok(Ok((stream, _))) => stream,
+            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        return ws.on_upgrade(move |socket| relay_remote_ws(socket, upstream));
     }
     let format = query.format.as_deref().unwrap_or("raw");
     // A loopback peer is either genuinely on this machine — no link to save —
@@ -1220,6 +1253,41 @@ pub(super) async fn ws_stream(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         handle_ws_session(socket, id, state, log_mode, initial_offset, compression).await;
     })
+}
+
+async fn relay_remote_ws(
+    mut phone: WebSocket,
+    mut owner: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) {
+    use tokio_tungstenite::tungstenite::Message as OwnerMessage;
+    loop {
+        tokio::select! {
+            frame = phone.next() => {
+                let Some(Ok(frame)) = frame else { break };
+                let outgoing = match frame {
+                    Message::Text(value) => OwnerMessage::Text(value.to_string().into()),
+                    Message::Binary(value) => OwnerMessage::Binary(value),
+                    Message::Ping(value) => OwnerMessage::Ping(value),
+                    Message::Pong(value) => OwnerMessage::Pong(value),
+                    Message::Close(_) => break,
+                };
+                if owner.send(outgoing).await.is_err() { break }
+            }
+            frame = owner.next() => {
+                let Some(Ok(frame)) = frame else { break };
+                let outgoing = match frame {
+                    OwnerMessage::Text(value) => Message::Text(value.to_string().into()),
+                    OwnerMessage::Binary(value) => Message::Binary(value),
+                    OwnerMessage::Ping(value) => Message::Ping(value),
+                    OwnerMessage::Pong(value) => Message::Pong(value),
+                    OwnerMessage::Close(_) | OwnerMessage::Frame(_) => break,
+                };
+                if phone.send(outgoing).await.is_err() { break }
+            }
+        }
+    }
 }
 
 /// Handle a WebSocket connection for a PTY session.
