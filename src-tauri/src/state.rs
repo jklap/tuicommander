@@ -2313,9 +2313,9 @@ impl AppState {
     /// Buffer a message into `recipient`'s inbox with bounded FIFO eviction.
     /// Already-read mail is reclaimed first; it was delivered and does not count
     /// as missed. Otherwise only a replaceable lifecycle notice can be evicted,
-    /// and that increments `missed_count`. Mail assigned to a waiter or pending
-    /// terminal delivery remains protected even if its timestamp is behind the
-    /// read cursor. Reject when no safe candidate exists so the sender can retry.
+    /// and that increments `missed_count`. Unread mail assigned to a waiter or
+    /// pending terminal delivery remains protected. Reject when no safe candidate
+    /// exists so the sender can retry.
     pub(crate) fn try_push_agent_inbox(
         &self,
         recipient: &str,
@@ -2788,6 +2788,25 @@ impl AppState {
             .or_insert(0);
         if read_through > *cursor {
             *cursor = read_through;
+        }
+        // Reading is delivery, even when a terminal wake was queued first or a
+        // sender has buffered mail but has not yet assigned its wake owner.
+        for message in &messages {
+            gate.owners
+                .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
+        }
+        let no_pending_mail = self.agent_inbox.get(tuic_session).is_none_or(|inbox| {
+            inbox.iter().all(|message| {
+                gate.owners.get(&message.id) != Some(&AgentDeliveryOwner::TerminalPending)
+            })
+        });
+        if no_pending_mail
+            && let Some(pty_session) = self.live_pty_for_peer(tuic_session)
+            && let Some(mut queue) = self.pending_injections.get_mut(&pty_session)
+        {
+            queue.retain(|entry| {
+                !matches!(entry, PendingInjection::Notice { text, .. } if text == crate::pty::PEER_MAIL_WAKE)
+            });
         }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
         if read_through == 0
@@ -5105,7 +5124,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_reclaims_read_mail_without_touching_delivery_leases() {
+    fn push_agent_inbox_reclaims_read_mail_and_settles_delivery_leases() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
         state.push_agent_inbox("other-peer", make_msg("other-mail"));
@@ -5135,18 +5154,19 @@ mod tests {
 
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
-        assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
+        assert!(inbox.iter().all(|message| message.id != "terminal-pending"));
         assert!(inbox.iter().any(|message| message.id == "waiter-owned"));
+        assert!(inbox.iter().any(|message| message.id == "consumed"));
         assert!(inbox.iter().any(|message| message.id == "unread-0"));
         assert!(inbox.iter().any(|message| message.id == "new-mail"));
-        assert!(!inbox.iter().any(|message| message.id == "consumed"));
         assert!(!state.agent_inbox_evictions.contains_key(recipient));
         assert_eq!(
             state.agent_inbox.get("other-peer").unwrap()[0].id,
             "other-mail"
         );
         drop(inbox);
-        state.finish_agent_wait(recipient, lease, 0, false);
+        let finish = state.finish_agent_wait(recipient, lease, 0, false);
+        assert!(finish.terminal_handoff.is_empty());
     }
 
     #[test]

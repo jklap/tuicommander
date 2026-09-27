@@ -12742,6 +12742,128 @@ mod tests {
         );
     }
 
+    /// A queued wake must not hold already-read mail in the bounded inbox.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_send_accepts_new_mail_after_busy_recipient_reads_full_queued_inbox() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        insert_managed_test_session(&state, TEST_UUID_B, env!("CARGO_MANIFEST_DIR"));
+        state.session_maps.session_states.insert(
+            TEST_UUID_B.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state.session_maps.shell_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": format!("read-{index}")}),
+                Some("mcp-sender"),
+            );
+            assert_eq!(
+                sent["delivery_path"], "wake_notification_and_inbox",
+                "{sent}"
+            );
+        }
+        let first_page = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 50}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(first_page["count"], 50, "{first_page}");
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_some_and(|pending| !pending.is_empty()),
+            "unread mail still needs its queued wake"
+        );
+        let second_page = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 50}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(second_page["count"], 50, "{second_page}");
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_none_or(|pending| pending.is_empty()),
+            "reading all queued mail must clear its stale wake"
+        );
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "unread-101"}),
+            Some("mcp-sender"),
+        );
+        assert!(
+            sent.get("error").is_none(),
+            "read mail must free capacity: {sent}"
+        );
+        let unread = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(unread["count"], 1, "{unread}");
+        assert_eq!(unread["messages"][0]["content"], "unread-101");
+    }
+
+    /// An explicit cursor can skip older terminal-owned mail. Reading newer
+    /// mail must not discard the older message's queued wake.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_inbox_keeps_wake_for_older_unread_mail_after_explicit_cursor_skip() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        insert_managed_test_session(&state, TEST_UUID_B, env!("CARGO_MANIFEST_DIR"));
+        state.session_maps.session_states.insert(
+            TEST_UUID_B.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state.session_maps.shell_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+
+        for message in ["older-unread", "newer-read"] {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": message}),
+                Some("mcp-sender"),
+            );
+            assert_eq!(sent["delivery_path"], "wake_notification_and_inbox");
+        }
+        let older_timestamp = state.agent_inbox.get(TEST_UUID_B).unwrap()[0].timestamp;
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": older_timestamp}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["count"], 1);
+        assert_eq!(read["messages"][0]["content"], "newer-read");
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_some_and(|pending| !pending.is_empty()),
+            "older unread mail still needs the queued wake"
+        );
+    }
+
     /// The regression, as captured live on 2026-09-15: peer mail sent to an
     /// ordinary managed child (not an orchestrator) was typed into that child's
     /// composer. One agent rendered it as literal prompt text; another was left
