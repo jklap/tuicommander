@@ -309,7 +309,7 @@ describe("transport", () => {
 			// Every control the rejected design added — status, pause, resume,
 			// clear, update, read, export — is gone from both transports.
 			for (const command of ["progress_list", "progress_delete"]) {
-				const input = command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a" } : { ids: [1] };
+				const input = command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
 				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
 					method: "POST",
 					path: `/progress/${command.slice(9)}?path=%2Frepo%20a`,

@@ -20,7 +20,7 @@ require an explicit `path` query naming a registered project.
 | Route | Body | Response |
 |---|---|---|
 | `/progress/report` | `{ type, text, step? }`, `type` is `done` or `blocked` | `{ id }` |
-| `/progress/list` | `{ blockedOnly?, ptyId? }` | `{ project, entries, ptyIds, lastViewedMs? }` |
+| `/progress/list` | `{ blockedOnly?, ptyId?, limit?, cursor? }` | `{ project, entries, total, nextCursor, ptyIds, lastViewedMs? }` |
 | `GET /progress/projects` | none | Array of project paths with journal entries, newest first |
 | `/progress/delete` | `{ ids }` | `{ deleted }` |
 | `/progress/viewed?ptyId=<id>` | none | `{ lastViewedMs }` |
@@ -39,8 +39,10 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
 lists the PTYs with stored history, including closed PTYs. The list is
-newest-first and capped at 500 entries per request. There is no paging, no
-cursor and no revision: the journal is append-only, so an entry is written once
+newest-first in pages of 10 entries by default. `limit` is clamped to 1–100;
+`total` counts entries matching the filters before the cursor, and `nextCursor`
+is `null` after the last page. Pass it back as `cursor` to read older entries.
+There is no revision: the journal is append-only, so an entry is written once
 and either kept or deleted. The one exception is a host-written `intent` that
 repeats that PTY's newest intent (same text, same agent): it returns the
 existing entry, because a screen repaint is not a new intent. `delete` is scoped
