@@ -138,6 +138,10 @@ Agent binary detection and terminal launch-argument preparation also use async
 commands that offload CLI lookup, version and bounded `--help` probes to the
 blocking pool. Their HTTP counterparts await the same commands, leaving Tokio
 workers free while a configured CLI takes time to answer.
+Each `--help` probe owns a process group on Unix or a Job Object on Windows,
+so timeout cleanup includes descendants of a launcher script. A timeout is
+cached as unsupported for that binary's path, size and modification time;
+quick inconclusive exits remain retryable after a short cooldown.
 
 ### Known gaps, with reasons
 
