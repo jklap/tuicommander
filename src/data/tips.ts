@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat Images",
+		description: "Paste an image into AI Chat, review its preview, then send it with or without text.",
+		shortcut: `${mod}+V`,
+	},
+	{
 		feature: "Open Editor Links",
 		description: `Hold ${mod} and click a web link or file path in the code editor to open it.`,
 		shortcut: `${mod}+Click`,

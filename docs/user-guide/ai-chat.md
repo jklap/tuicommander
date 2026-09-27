@@ -42,6 +42,12 @@ its own terminals and repositories rather than the default install's.
 
 ## During a turn
 
+Paste a PNG, JPEG, GIF or WebP image into the composer to preview it before
+sending. Remove a preview with its close button if you change your mind. An
+image can be sent without text. The composer refuses images when the connected
+agent did not advertise image prompts, or when the pasted images exceed 10 MiB
+in total. Text paste works as usual.
+
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
 - **Tool calls** appear as one card per call, updated in place — not one card per

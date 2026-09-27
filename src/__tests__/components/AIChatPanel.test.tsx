@@ -98,6 +98,18 @@ import type {
 const ROOT = "/repo/tuicommander";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
+// A real 1x1 PNG admitted by ego's ACP prompt tests.
+const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+let supportsImages = false;
+
+function pasteFile(textarea: HTMLTextAreaElement, file: File): Event {
+	const event = new Event("paste", { bubbles: true, cancelable: true });
+	Object.defineProperty(event, "clipboardData", {
+		value: { items: [{ type: file.type, getAsFile: () => file }] },
+	});
+	textarea.dispatchEvent(event);
+	return event;
+}
 
 const MODEL_OPTION: AcpSessionConfigOption = {
 	id: "model",
@@ -140,7 +152,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			delete: false,
 			close: true,
 			additionalDirectories: true,
-			promptImage: false,
+			promptImage: supportsImages,
 			promptAudio: false,
 			promptEmbeddedContext: false,
 			mcpStdio: false,
@@ -190,6 +202,7 @@ function renderPanel() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	sequence = 0;
+	supportsImages = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
 	acpStore.reset();
 	acpTranscript.reset();
@@ -272,6 +285,99 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	// Catches: an image paste is ignored even though ego advertises image prompts.
+	it("stages a pasted PNG and sends it with the next turn", async () => {
+		supportsImages = true;
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", {
+			type: "image/png",
+		});
+		const event = pasteFile(textarea, file);
+		await vi.waitFor(() => expect(container.querySelector('img[alt="Pasted image"]')).not.toBeNull());
+
+		expect(event.defaultPrevented).toBe(true);
+		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "", [
+			{ type: "image", mimeType: "image/png", data: PNG_1X1 },
+		]);
+	});
+
+	// Catches: a paste is accepted for an agent that cannot read image blocks.
+	it("refuses an image when the connection did not advertise image prompts", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		pasteFile(textarea, new File(["png"], "clip.png", { type: "image/png" }));
+		await settle();
+
+		expect(container.textContent).toContain("does not support images");
+		expect(container.querySelector('img[alt="Pasted image"]')).toBeNull();
+		expect(client.prompt).not.toHaveBeenCalled();
+	});
+
+	// Catches: a large clipboard blob is encoded before any size check.
+	it("refuses an oversized image and reports its size", async () => {
+		supportsImages = true;
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+		pasteFile(textarea, new File([new Uint8Array(10 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" }));
+		await settle();
+
+		expect(container.textContent).toContain("10 MiB");
+		expect(container.querySelector('img[alt="Pasted image"]')).toBeNull();
+		expect(client.prompt).not.toHaveBeenCalled();
+		expect(read).not.toHaveBeenCalled();
+		read.mockRestore();
+	});
+
+	// Catches: two quick paste events each pass the cap while the first read is pending.
+	it("keeps rapid image pastes within the total size cap", async () => {
+		supportsImages = true;
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		pasteFile(textarea, new File([new Uint8Array(6 * 1024 * 1024)], "first.png", { type: "image/png" }));
+		pasteFile(textarea, new File([new Uint8Array(6 * 1024 * 1024)], "second.png", { type: "image/png" }));
+
+		await vi.waitFor(() => expect(container.textContent).toContain("total limit"));
+		expect(container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(1);
+	});
+
+	// Catches: a staged image still goes on the wire after the person removes it.
+	it("removes a staged image before sending the text", async () => {
+		supportsImages = true;
+		const { container } = renderPanel();
+		await settle();
+		pasteFile(
+			container.querySelector("textarea") as HTMLTextAreaElement,
+			new File(["png"], "clip.png", { type: "image/png" }),
+		);
+		await vi.waitFor(() => expect(container.querySelector('button[aria-label="Remove pasted image"]')).not.toBeNull());
+		(container.querySelector('button[aria-label="Remove pasted image"]') as HTMLButtonElement).click();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "text only";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		await settle();
+		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "text only");
+	});
+
+	// Catches: intercepting all paste events breaks the browser's text insertion.
+	it("leaves plain text paste to the textarea", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { items: [], getData: () => "ordinary text" } });
+		textarea.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(false);
+	});
 	it("opens a connection on the repo root and a session on the same root", async () => {
 		renderPanel();
 		await settle();

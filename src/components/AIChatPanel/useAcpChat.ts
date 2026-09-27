@@ -25,6 +25,7 @@ import type {
 	AcpClientError,
 	AcpConnectionId,
 	AcpConnectionSnapshot,
+	AcpContentBlock,
 	AcpElicitationAction,
 	AcpHostRequestId,
 	AcpPendingInteraction,
@@ -217,10 +218,14 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			return id ? acpStore.attachments(id) : [];
 		},
 
-		async send(text: string): Promise<void> {
+		async send(text: string, images: Extract<AcpContentBlock, { type: "image" }>[] = []): Promise<void> {
 			const current = pair();
-			if (!current || !text.trim()) return;
-			await guard("sending the turn", () => client.prompt(current.id, current.session, text));
+			if (!current || (!text.trim() && images.length === 0)) return;
+			await guard("sending the turn", () =>
+				images.length
+					? client.prompt(current.id, current.session, text, images)
+					: client.prompt(current.id, current.session, text),
+			);
 		},
 
 		async cancel(): Promise<void> {

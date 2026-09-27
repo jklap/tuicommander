@@ -109,6 +109,9 @@ when its window opens. Neither path loads its markdown renderer before the
 desktop terminal view.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
+The composer stages pasted images in its shared draft and sends ACP image
+blocks through `acpClient.prompt`. It checks `promptImage` and the 10 MiB cap
+before reading clipboard bytes; each preview can be removed before sending.
 
 ## Mobile Screens (`src/mobile/`)
 
