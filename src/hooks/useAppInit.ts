@@ -22,6 +22,7 @@ import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
+import { classifyFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -672,7 +673,12 @@ export async function initApp(deps: AppInitDeps) {
 					if (background) mdTabsStore.addFileBackground(repoPath, relPath);
 					else mdTabsStore.add(repoPath, relPath);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
-					editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
+					if (classifyFile(filePath) === "markdown") {
+						if (background) mdTabsStore.addFileBackground("", filePath);
+						else mdTabsStore.add("", filePath);
+					} else {
+						editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
+					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {

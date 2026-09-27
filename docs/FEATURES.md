@@ -375,6 +375,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.5 Code Editor (CodeMirror 6)
 - Opens in main tab area when clicking a file in file browser
+- Hold `Cmd` (macOS) or `Ctrl` (Windows/Linux) while hovering to underline a link, then click to open it. HTTP(S) URLs open in the system browser; Markdown links and file paths open in TUICommander. Paths may be absolute, `~/`-prefixed, relative to the edited file, or relative to its repository, with an optional `:line`. Directories open in the File Browser; missing paths show a toast. Other modified clicks keep go-to-definition behavior.
 - Syntax highlighting auto-detected from extension (disabled for files > 500 KB)
 - Line numbers, bracket matching, active line highlight, Tab-to-indent
 - Find/Replace: `Cmd+F` (find), `Cmd+G` / `Cmd+Shift+G` (next/prev), `Cmd+H` (replace), selection match highlighting
@@ -1773,7 +1774,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
 - `tuic://open-repo?path=/path` — Activate a repo already in the sidebar; a folder that is not in it yet is added after one confirmation (this is what `tuic <dir>` sends)
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
-- `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
+- `tuic://open/<path>` — Open a Markdown file in a native tab. MCP `ui action=tab` also accepts absolute Markdown paths outside registered repositories; the iframe SDK keeps its repository path validation.
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
