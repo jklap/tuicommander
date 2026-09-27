@@ -162,7 +162,7 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 - `session action=submit` — submits one command to a confirmed-idle managed agent and returns a bounded terminal-movement receipt in the same response. It never queues or overwrites a partial composer; `session action=input` remains raw and write-only.
 - `session action=status` — returns `{shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}`. Useful for polling agent progress without streaming output.
 - `session action=list` response now includes `shell_state` per entry, plus `tuic_session` (the identity the tab persists) and `alias`. It no longer includes `child_pid` or `foreground_pgid` — no action accepts a raw pid.
-- `session_id` on every action accepts the PTY id, `tuic_session`, alias, unique short PTY-id prefix, or unique display name; `to` on `agent action=send` uses the same resolver. Ambiguous prefixes or names return an error. Resolution lives in `AppState::resolve_session_ref` / `resolve_peer_ref`; an unresolvable reference falls through unchanged so a tombstoned session can still be read.
+- `session_id` on every action accepts the PTY id, `tuic_session`, alias, unique short PTY-id prefix, or unique display name; `to` on `agent action=send` uses the same resolver. Ambiguous prefixes or names return an error. Resolution lives in `AppState::resolve_session_ref_checked` / `resolve_peer_ref_checked`; an unresolvable reference falls through unchanged so a tombstoned session can still be read.
 - `session action=create` (and `POST /sessions`) accept an optional `alias`, which the frontend replays from persisted tab state so an alias survives a restart.
 
 #### Agent tool actions added (swarm inbox)

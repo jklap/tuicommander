@@ -509,11 +509,6 @@ impl ProgressStore {
         Ok(ProgressDeleteReceipt { deleted })
     }
 
-    /// Record that the user has seen the repository aggregate up to now.
-    pub fn mark_viewed(&self, project: &str) -> Result<ProgressViewedReceipt, String> {
-        self.mark_viewed_for_pty(project, None)
-    }
-
     pub fn mark_viewed_for_pty(
         &self,
         project: &str,
@@ -896,7 +891,7 @@ mod tests {
         assert_eq!(select(Some("pty-b")), None);
         assert_eq!(select(None), None);
 
-        store.mark_viewed("/p").unwrap();
+        store.mark_viewed_for_pty("/p", None).unwrap();
         assert!(select(None).is_some());
         assert_eq!(select(Some("pty-b")), None);
     }
@@ -930,7 +925,7 @@ mod tests {
             "another project's delete must not reach this entry"
         );
 
-        store.mark_viewed("/mine").unwrap();
+        store.mark_viewed_for_pty("/mine", None).unwrap();
         assert!(
             store
                 .list("/theirs", &ProgressListInput::default())
@@ -994,7 +989,10 @@ mod tests {
         store
             .record("/p", &entry(ProgressKind::Done, "one"))
             .unwrap();
-        let first = store.mark_viewed("/p").unwrap().last_viewed_ms;
+        let first = store
+            .mark_viewed_for_pty("/p", None)
+            .unwrap()
+            .last_viewed_ms;
         assert_eq!(
             store
                 .list("/p", &ProgressListInput::default())
@@ -1003,7 +1001,10 @@ mod tests {
             Some(first)
         );
         std::thread::sleep(Duration::from_millis(2));
-        let second = store.mark_viewed("/p").unwrap().last_viewed_ms;
+        let second = store
+            .mark_viewed_for_pty("/p", None)
+            .unwrap()
+            .last_viewed_ms;
         assert!(second >= first, "the timestamp is not allowed to go back");
     }
 
