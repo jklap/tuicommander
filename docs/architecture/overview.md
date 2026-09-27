@@ -96,13 +96,15 @@ src-tauri/src/
 ├── prompt.rs             # Prompt template processing
 ├── menu.rs               # Native menu bar
 ├── mcp_http/             # HTTP/WebSocket + MCP server (routes split per area)
-└── dictation/            # Voice dictation (Whisper)
-    ├── mod.rs            # State management
-    ├── audio.rs          # Audio capture (CPAL)
-    ├── commands.rs       # Tauri commands
-    ├── model.rs          # Whisper model management
-    ├── transcribe.rs     # Whisper transcription
-    └── corrections.rs    # Post-processing corrections
+└── dictation/            # Voice application adapters
+    ├── mod.rs            # DictationState and domain re-exports
+    ├── commands.rs       # Tauri commands and event emission
+    ├── browser.rs        # Browser audio transport
+    ├── adapters.rs       # PTY delivery ports
+    ├── model_download.rs # Whisper HTTP download
+    └── asset_download.rs # Speech asset HTTP download
+
+src-tauri/crates/tuic-dictation/src/  # Audio, hands-free and speech domain
 ```
 
 `src-tauri/crates/` is a sibling of `src-tauri/src/`. `tuic-core` owns shared configuration and path utilities; `tuic-terminal` owns terminal parsing and buffers; `tuic-git` owns blocking Git reads, subprocesses, branch and worktree operations, and artifact warming; the root Git adapters own Tokio scheduling and Tauri commands.

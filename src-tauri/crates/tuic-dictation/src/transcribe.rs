@@ -27,7 +27,7 @@ pub(super) fn optimal_n_threads() -> i32 {
 /// Backend label for logging and frontend events.
 /// Always "gpu" because `use_gpu(true)` is set unconditionally — whisper.cpp
 /// attempts GPU first and falls back to CPU transparently.
-pub(super) fn backend_label() -> &'static str {
+pub fn backend_label() -> &'static str {
     "gpu"
 }
 
@@ -724,9 +724,7 @@ mod tests {
     fn a_reused_decoder_state_gives_identical_results_across_calls() {
         use std::f32::consts::PI;
 
-        let path = crate::dictation::model::model_path(
-            crate::dictation::model::WhisperModel::LargeV3Turbo,
-        );
+        let path = crate::model::model_path(crate::model::WhisperModel::LargeV3Turbo);
         let transcriber = WhisperTranscriber::load(&path).expect("model load");
 
         // Two seconds of tone: the text is irrelevant, its stability is not.

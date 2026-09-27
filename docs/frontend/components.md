@@ -248,6 +248,7 @@ one group under a shared label.
 The **Voice** page (nav key `dictation`). One `<h3>` per section. Speech-to-text and
 text-to-speech are separate sections, and each keeps its own advanced controls
 at its bottom — there is deliberately no shared "Advanced" section:
+The Rust dictation crate split does not change these controls or their transport calls.
 
 1. **Dictation** — enable, hotkey, long-press threshold, auto-send
 2. **Speech recognition** (`SpeechRecognition`) — input device (desktop only),

@@ -2,9 +2,9 @@
 
 pub(crate) use crate::fs::system32_exe;
 pub(crate) use tuic_test_support::{
-    chain, copy_file_script, dir_outside_home, fail_with_stderr_script, fake_ssh_script,
-    host_shell, normalize_newlines, print_var_script, replay_file_command,
-    short_socket_test_temp_root, slashed, sleep_script, test_temp_root, touch_script,
+    dir_outside_home, fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines,
+    print_var_script, replay_file_command, short_socket_test_temp_root, slashed, sleep_script,
+    test_temp_root,
 };
 
 #[cfg(test)]

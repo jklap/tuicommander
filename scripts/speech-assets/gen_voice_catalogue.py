@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["huggingface_hub"]
 # ///
-"""Generate `src-tauri/src/dictation/speech/assets_voices.rs`.
+"""Generate `src-tauri/crates/tuic-dictation/src/speech/assets_voices.rs`.
 
 Plan `plans/pocket-voices-and-loudness.md`, Step 2. Every downloadable voice
 is pinned to a URL at an immutable revision and a sha256. The sha256 and the
@@ -35,8 +35,8 @@ from pins import VOICES_REPO as REPO
 from pins import VOICES_REVISIONS as REVISIONS
 
 ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / "src-tauri/src/dictation/speech/assets.rs"
-OUTPUT = ROOT / "src-tauri/src/dictation/speech/assets_voices.rs"
+ASSETS = ROOT / "src-tauri/crates/tuic-dictation/src/speech/assets.rs"
+OUTPUT = ROOT / "src-tauri/crates/tuic-dictation/src/speech/assets_voices.rs"
 
 
 

@@ -1707,6 +1707,8 @@ anything is spawned. Returns `null` on success, matching the `open_in_app` comma
 
 ## Dictation Endpoints
 
+The HTTP routes and Tauri commands share the root dictation adapter. The `tuic-dictation` crate supplies the audio and speech domain without changing these route shapes.
+
 Desktop-only: audio capture and the whisper model live behind the `desktop`
 feature, so the remote daemon serves none of these. Every response is exactly what
 the matching `dictation::commands` Tauri command resolves to — a bare string for

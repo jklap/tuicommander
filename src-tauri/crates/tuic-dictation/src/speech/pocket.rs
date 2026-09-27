@@ -37,9 +37,7 @@ use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
 /// error type that is. Every call into onnxruntime goes through this.
 macro_rules! ort_try {
     ($e:expr) => {
-        ($e).map_err(|e| {
-            $crate::dictation::speech::SpeechError::Failed(format!("onnxruntime: {e}"))
-        })?
+        ($e).map_err(|e| $crate::speech::SpeechError::Failed(format!("onnxruntime: {e}")))?
     };
 }
 
@@ -92,7 +90,7 @@ pub struct PocketSpeech {
 /// Where speech bundles are downloaded, beside the transcription models they
 /// are the other half of.
 pub fn bundles_dir() -> PathBuf {
-    crate::dictation::model::models_dir().join("speech")
+    crate::model::models_dir().join("speech")
 }
 
 impl PocketSpeech {
@@ -495,7 +493,7 @@ mod tests {
         assert_eq!(italian.bundle_dir().parent(), Some(bundles_dir().as_path()));
         assert_eq!(
             bundles_dir().parent(),
-            Some(crate::dictation::model::models_dir().as_path())
+            Some(crate::model::models_dir().as_path())
         );
     }
 

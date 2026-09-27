@@ -244,7 +244,7 @@ fn merge_segments(segments: Vec<(usize, String)>, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dictation::speech::SpeechError;
+    use crate::speech::SpeechError;
 
     fn bundle() -> Bundle {
         Bundle {

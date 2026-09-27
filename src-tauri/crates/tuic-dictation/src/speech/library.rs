@@ -19,6 +19,7 @@
 //! The long part holds nothing. The part that excludes synthesis is a rename.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -301,11 +302,17 @@ impl SpeechLibrary {
     ///
     /// Refuses a second concurrent install of the same asset: two of them would
     /// share one staging directory and each would delete the other's files.
-    pub async fn install(
+    pub async fn install<P, F, Fut>(
         &self,
         asset: &'static Asset,
-        on_progress: impl Fn(u64, u64),
-    ) -> Result<PathBuf, InstallError> {
+        on_progress: P,
+        stage: F,
+    ) -> Result<PathBuf, InstallError>
+    where
+        P: Fn(u64, u64) + Send + 'static,
+        F: FnOnce(&'static Asset, SpeechCancel, P) -> Fut,
+        Fut: Future<Output = Result<PathBuf, InstallError>>,
+    {
         let cancel = SpeechCancel::new();
         {
             let mut downloads = self.downloads.lock();
@@ -318,7 +325,7 @@ impl SpeechLibrary {
             downloads.insert(asset.id.to_string(), cancel.clone());
         }
 
-        let staged = assets::stage(asset, &cancel, on_progress).await;
+        let staged = stage(asset, cancel.clone(), on_progress).await;
         self.downloads.lock().remove(asset.id);
         let staging = staged?;
 
@@ -347,12 +354,12 @@ impl SpeechLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dictation::speech::assets::{CATALOGUE, find};
-    use crate::dictation::speech::pocket::bundle::fixture;
+    use crate::speech::assets::{CATALOGUE, find};
+    use crate::speech::pocket::bundle::fixture;
 
     fn library() -> (tempfile::TempDir, impl Drop, SpeechLibrary) {
         let root = tempfile::tempdir().unwrap();
-        let guard = crate::config::set_config_dir_override(root.path().to_path_buf());
+        let guard = tuic_core::config_dir::set_override(root.path().to_path_buf());
         (root, guard, SpeechLibrary::new())
     }
 

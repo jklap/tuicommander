@@ -62,9 +62,10 @@ mod tests {
         // and not the second is a turn nobody can name — the reply requirement
         // silently disappears and the model answers in whatever it likes.
         let panel = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/stores/dictation.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../src/stores/dictation.ts"),
         )
-        .expect("the dictation store is checked in beside this crate");
+        .expect("the dictation store is checked in at the workspace root");
         let body = panel
             .split_once("WHISPER_LANGUAGES: Record<string, string> = {")
             .expect("WHISPER_LANGUAGES is declared in the dictation store")
