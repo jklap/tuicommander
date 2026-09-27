@@ -844,6 +844,11 @@ up. `set_agent_hook_instrumentation`, `set_agent_native_status_signals` and the 
 MCP config follow the same rule; `install_agent_mcp`, `get_agent_config_path` and the
 upstream OAuth flow do not, having no HTTP route and nothing to open a browser with.
 
+If a machine fails to load `agents.json`, its frontend store records the error and stays
+unloaded so the next read can retry. The error names the connection and `/config/agents`
+endpoint. Saves are refused until a load succeeds, preventing an empty fallback from
+overwriting that machine's config. A daemon that predates this route must be updated.
+
 The families that stay local are the ones describing this app rather than a machine:
 `config.json`, `keybindings.json`, the pane layout, the notification config and
 `repositories.json` — the last definitionally so, since it is the list deciding which

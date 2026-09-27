@@ -441,6 +441,9 @@ The frontend keeps one copy per machine, read the first time that machine is nee
 dropped whenever its connection changes state — a daemon that went away and came back may
 have been reconfigured, or be a different box behind the same name. A local repository
 costs no round trip at all: its config is read once at boot.
+If a remote config cannot be read, the Agents tab shows the connection error and retries
+on the next load. It does not save a fallback empty config over the remote file. A 404
+for `/config/agents` means the remote daemon needs an update that includes this route.
 
 **Stays here — this app owns it.** Theme, keybindings, pane layout, notification config
 and the repository registry describe this window on this desktop. None of them is ever
