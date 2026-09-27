@@ -3,7 +3,9 @@
  *
  * Captures errors, warnings, and info messages from all layers (UI, plugins,
  * git, network, etc.) into a bounded ring buffer. The ErrorLogPanel subscribes
- * to this store for display. Logs are also forwarded to the browser console.
+ * to this store for display. Non-debug messages also reach the browser console;
+ * debug messages do so only while perfDebug is enabled. Console calls omit data
+ * objects so Web Inspector does not retain them as script arguments.
  *
  * The local JS ring buffer serves as a fast reactive cache for the UI.
  * Every push is also fire-and-forget mirrored to the Rust backend ring buffer
@@ -19,6 +21,7 @@
 import { batch, createSignal } from "solid-js";
 import { rpc } from "../transport";
 import { previewLogPayload, setTransportLogger } from "../transportRuntime";
+import { isPerfDebug } from "../utils/perfDebug";
 
 export { previewLogPayload };
 
@@ -296,21 +299,9 @@ function createAppLogger() {
 		// info/debug: written to ring buffer but don't bump revision —
 		// avoids reactive re-renders during high-throughput PTY output.
 
-		// Forward to browser console
-		const tag = `[${source}]`;
-		switch (level) {
-			case "error":
-				console.error(tag, message, data !== undefined ? data : "");
-				break;
-			case "warn":
-				console.warn(tag, message, data !== undefined ? data : "");
-				break;
-			case "info":
-				console.info(tag, message, data !== undefined ? data : "");
-				break;
-			case "debug":
-				console.debug(tag, message, data !== undefined ? data : "");
-				break;
+		// Keep large data objects out of Web Inspector's retained console arguments.
+		if (level !== "debug" || isPerfDebug()) {
+			console[level](`[${source}]`, message);
 		}
 
 		// Mirror info/warn/error to Rust backend for MCP and cross-reload durability.
