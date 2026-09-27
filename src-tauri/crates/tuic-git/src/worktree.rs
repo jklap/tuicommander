@@ -2,7 +2,7 @@ use crate::git_cli::{FETCH_TIMEOUT, git_cmd};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -666,6 +666,56 @@ fn preserve_submodule_refs(
     Ok(())
 }
 
+fn submodule_admin_dir_at(
+    worktree: &Path,
+    worktree_gitdir: &Path,
+    relative_path: &Path,
+) -> Result<PathBuf, String> {
+    let mut owner = worktree.to_path_buf();
+    let mut admin = worktree_gitdir.to_path_buf();
+    let mut remaining = relative_path;
+    loop {
+        let declarations = git_cmd(&owner)
+            .args([
+                "config",
+                "--file",
+                ".gitmodules",
+                "--get-regexp",
+                r"^submodule\..*\.path$",
+            ])
+            .run()
+            .map_err(|e| format!("Cannot resolve submodule {relative_path:?} name: {e}"))?;
+        let matched = declarations
+            .stdout
+            .lines()
+            .filter_map(|line| {
+                let (key, declared_path) = line.split_once(char::is_whitespace)?;
+                let name = key.strip_prefix("submodule.")?.strip_suffix(".path")?;
+                let declared_path = Path::new(declared_path.trim());
+                if name.is_empty()
+                    || !Path::new(name)
+                        .components()
+                        .all(|component| matches!(component, Component::Normal(_)))
+                    || !declared_path
+                        .components()
+                        .all(|component| matches!(component, Component::Normal(_)))
+                {
+                    return None;
+                }
+                let rest = remaining.strip_prefix(declared_path).ok()?;
+                Some((name, declared_path, rest))
+            })
+            .max_by_key(|(_, declared_path, _)| declared_path.components().count())
+            .ok_or_else(|| format!("Cannot resolve submodule {relative_path:?} name"))?;
+        admin = admin.join("modules").join(matched.0);
+        if matched.2.as_os_str().is_empty() {
+            return Ok(admin);
+        }
+        owner = owner.join(matched.1);
+        remaining = matched.2;
+    }
+}
+
 fn verify_submodules_at(path: &Path, base_repo: &Path, force: bool) -> Result<(), String> {
     let output = git_cmd(path)
         .args(["submodule", "status", "--recursive"])
@@ -682,10 +732,12 @@ fn verify_submodules_at(path: &Path, base_repo: &Path, force: bool) -> Result<()
             .map_or(description, |(path, _)| path);
         if state == '-' {
             if path.join(submodule_path).join(".git").exists()
-                || Path::new(&admin_gitdir)
-                    .join("modules")
-                    .join(submodule_path)
-                    .exists()
+                || submodule_admin_dir_at(
+                    path,
+                    Path::new(&admin_gitdir),
+                    Path::new(submodule_path),
+                )?
+                .exists()
             {
                 return Err(format!(
                     "Cannot remove worktree: uninitialized submodule {submodule_path} still has Git state"
@@ -6082,6 +6134,207 @@ branch refs/heads/feat
                 .trim()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn removal_refuses_deinitialized_named_submodule_with_local_commit() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let source = repo.parent().unwrap().join("named-module-source");
+        fs::create_dir(&source).unwrap();
+        git_cmd(&source).args(["init"]).run().unwrap();
+        git_cmd(&source)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&source)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&source, "module.txt", "base commit\n");
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "git-module-name",
+                &source.to_string_lossy(),
+                "modules/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add named submodule"])
+            .run()
+            .unwrap();
+
+        let path = add_worktree(&repo, "deinitialized-named-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/checkout-path");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-only.txt", "local commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+        git_cmd(&path)
+            .args(["submodule", "deinit", "--force", "modules/checkout-path"])
+            .run()
+            .unwrap();
+        assert!(!module.join(".git").exists());
+        assert!(module_gitdir.exists(), "deinit retained module Git admin");
+
+        let worktree = WorktreeInfo {
+            name: "deinitialized-named-module".into(),
+            path: path.clone(),
+            branch: Some("deinitialized-named-module".into()),
+            base_repo: repo,
+        };
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("uninitialized submodule"), "{error}");
+        assert!(path.exists(), "refusal keeps the source worktree");
+        assert!(module_gitdir.exists(), "refusal keeps the module Git store");
+        git_cmd(&worktree.base_repo)
+            .args([
+                "--git-dir",
+                &module_gitdir.to_string_lossy(),
+                "cat-file",
+                "-e",
+                &oid,
+            ])
+            .run()
+            .expect("local-only commit remains recoverable");
+    }
+
+    #[test]
+    fn removal_refuses_deinitialized_nested_named_submodule() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let leaf = repo.parent().unwrap().join("nested-leaf-source");
+        fs::create_dir(&leaf).unwrap();
+        git_cmd(&leaf).args(["init"]).run().unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&leaf, "leaf.txt", "base leaf\n");
+        let outer = repo.parent().unwrap().join("nested-outer-source");
+        fs::create_dir(&outer).unwrap();
+        git_cmd(&outer).args(["init"]).run().unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&outer, "outer.txt", "base outer\n");
+        git_cmd(&outer)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "nested-git-name",
+                &leaf.to_string_lossy(),
+                "nested/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&outer).args(["add", "."]).run().unwrap();
+        git_cmd(&outer)
+            .args(["commit", "-m", "add leaf"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "outer-git-name",
+                &outer.to_string_lossy(),
+                "modules/outer-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add outer"])
+            .run()
+            .unwrap();
+
+        let path = add_worktree(&repo, "deinitialized-nested-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let outer_module = path.join("modules/outer-path");
+        let nested = outer_module.join("nested/checkout-path");
+        git_cmd(&nested)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&nested)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&nested, "local-only.txt", "nested local commit\n");
+        let oid = rev_at(&nested, "HEAD").unwrap();
+        let nested_gitdir = PathBuf::from(rev_at(&nested, "--absolute-git-dir").unwrap());
+        git_cmd(&outer_module)
+            .args(["submodule", "deinit", "--force", "nested/checkout-path"])
+            .run()
+            .unwrap();
+        assert!(nested_gitdir.exists());
+        let worktree = WorktreeInfo {
+            name: "deinitialized-nested-module".into(),
+            path: path.clone(),
+            branch: Some("deinitialized-nested-module".into()),
+            base_repo: repo,
+        };
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("uninitialized submodule"), "{error}");
+        assert!(path.exists());
+        git_cmd(&worktree.base_repo)
+            .args([
+                "--git-dir",
+                &nested_gitdir.to_string_lossy(),
+                "cat-file",
+                "-e",
+                &oid,
+            ])
+            .run()
+            .expect("nested local-only commit remains recoverable");
     }
 
     #[test]
