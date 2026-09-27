@@ -50,7 +50,10 @@ describe("push-to-talk release recovery", () => {
 		expect(onStop).toHaveBeenCalledTimes(2);
 	});
 
-	it("releases native Fn on focus loss even without a key-up event", async () => {
+	// Fn is a global hotkey: its key-up arrives natively whatever window has focus,
+	// and the backend stops capture on it. A focus change while Fn is held (another
+	// app, a notification) must not cut the recording short.
+	it("keeps recording native Fn across focus loss until its key-up", async () => {
 		state.hotkey = "Fn";
 		createRoot((rootDispose) => {
 			dispose = rootDispose;
@@ -60,6 +63,9 @@ describe("push-to-talk release recovery", () => {
 		listeners.get("fn-key-down")?.();
 		window.dispatchEvent(new Event("blur"));
 		expect(onStart).toHaveBeenCalledOnce();
+		expect(onStop).not.toHaveBeenCalled();
+
+		listeners.get("fn-key-up")?.();
 		expect(onStop).toHaveBeenCalledOnce();
 	});
 
