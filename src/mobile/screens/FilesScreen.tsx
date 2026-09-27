@@ -1,4 +1,5 @@
 import { createSignal, For, onMount, Show } from "solid-js";
+import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { rpc } from "../../transport";
 import styles from "./FilesScreen.module.css";
@@ -190,7 +191,18 @@ export function FilesScreen() {
 						<button onClick={() => void save()}>Save</button>
 					</Show>
 				</div>
-				<Show when={editing()} fallback={<pre class={styles.viewer}>{content()}</pre>}>
+				<Show
+					when={editing()}
+					fallback={
+						file()?.toLowerCase().endsWith(".md") ? (
+							<div class={styles.markdownView}>
+								<ContentRenderer content={content()} />
+							</div>
+						) : (
+							<pre class={styles.viewer}>{content()}</pre>
+						)
+					}
+				>
 					<textarea
 						class={styles.editor}
 						aria-label="File content"
