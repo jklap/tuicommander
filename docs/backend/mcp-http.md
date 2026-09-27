@@ -1455,8 +1455,8 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
-   - **Channel push**: real-time `notifications/claude/channel` only when an ordinary managed Claude Code recipient has a working turn, holds an SSE stream (CC + channels flag), and cannot safely accept a new PTY turn. A ready, empty composer with an idle shell uses PTY delivery even if background work keeps the derived state `working`. A managed non-Claude worker or an idle/completed Claude worker also uses PTY delivery. Registered orchestrators never receive peer payloads through this channel.
-   - **PTY injection**: for an ordinary idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy ordinary recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead. An idle/completed orchestrator receives only the generic inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered.
+   - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
+   - **PTY injection**: an ordinary managed agent receives a payload-free `agent action=inbox` notice when its composer is safe, or on its next safe idle transition. A busy turn, question, or partial draft is left untouched. Managed Claude peers use this path even with an active SSE stream, because a channel push during one turn cannot start a later turn for unread mail. An idle/completed orchestrator receives the coalesced inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered.
    - **Inbox poll**: `agent action=inbox` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
@@ -1499,8 +1499,8 @@ Low-risk response compaction also omits an absent peer `path` from `list_peers` 
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
 message is atomically assigned to at most one wake-up owner: an active waiter,
-or PTY delivery. A channel push does not take the lease: it is a best-effort
-notification into a running turn, so the message stays available and a later
+or PTY delivery. An external-client channel push does not take the lease: it is a best-effort
+notification, so the message stays available and a later
 `agent action=wait` or `inbox` returns it once more. Dedupe on
 `meta.message_id`. The deadline path performs its final inbox check while
 releasing the lease, and cancellation hands unobserved waiter-owned messages
@@ -1543,9 +1543,9 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 ### Channel Push Delivery
 
-When an already working ordinary Claude Code worker has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed ordinary managed recipients use PTY submission instead. Registered orchestrators never use this payload-bearing route:
+An external Claude Code client with an active SSE stream (`GET /mcp`) receives `notifications/claude/channel` JSON-RPC notifications. A managed peer with a PTY uses the payload-free terminal wake, including when it is working. Registered orchestrators also keep peer payloads in the inbox:
 
-A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one, nor that the recipient read it. The message therefore stays unowned in the delivery lease, and the recipient's next `agent action=wait` still returns it. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
+A channel notification is transport delivery, not proof that the recipient read the message. It stays unowned in the delivery lease, so the recipient's next `agent action=wait` still returns it. Managed peers instead reserve a terminal wake until the inbox read cursor passes the message; the notice never contains peer payload text.
 
 ```json
 {
