@@ -6,7 +6,13 @@ const { mockDialogs, mockInvoke, mockNavigate, mockStores } = vi.hoisted(() => (
 	mockNavigate: vi.fn(),
 	mockStores: {
 		diff: { state: { activeId: null as string | null }, getHandle: vi.fn(), add: vi.fn() },
-		editor: { state: { activeId: null as string | null }, getHandle: vi.fn() },
+		editor: {
+			state: { activeId: null as string | null },
+			getHandle: vi.fn(),
+			zoomIn: vi.fn(),
+			zoomOut: vi.fn(),
+			zoomReset: vi.fn(),
+		},
 		markdown: {
 			state: { activeId: null as string | null },
 			getHandle: vi.fn(),
@@ -63,7 +69,9 @@ vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: mockStores.markdown }));
 vi.mock("../../stores/promptLibrary", () => ({ promptLibraryStore: mockStores.prompts }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockStores.repositories }));
 vi.mock("../../stores/savedPaneLayouts", () => ({ paneLayoutKey: vi.fn(() => "layout-key") }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { isAiTriageEnabled: vi.fn(() => true) } }));
+vi.mock("../../stores/settings", () => ({
+	settingsStore: { state: { defaultFontSize: 13 }, isAiTriageEnabled: vi.fn(() => true) },
+}));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockStores.terminals }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: mockStores.toasts }));
 vi.mock("../../stores/ui", () => ({ uiStore: mockStores.ui }));
@@ -76,8 +84,8 @@ import { useAppShortcutHandlers } from "../../hooks/useAppShortcutHandlers";
 
 function createOptions() {
 	const terminalLifecycle = new Proxy(
-		{},
-		{ get: (_target, key) => (key === "terminalIds" ? vi.fn(() => []) : vi.fn()) },
+		{ zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() },
+		{ get: (target, key) => Reflect.get(target, key) ?? (key === "terminalIds" ? vi.fn(() => []) : vi.fn()) },
 	);
 	return {
 		terminalLifecycle,
@@ -116,6 +124,21 @@ describe("useAppShortcutHandlers", () => {
 		mockStores.prompts.getAllPrompts.mockReset().mockReturnValue([]);
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 		vi.clearAllMocks();
+	});
+
+	it("routes standard zoom actions to the active code editor", () => {
+		const options = createOptions();
+		const handlers = useAppShortcutHandlers(options as never);
+		mockStores.editor.state.activeId = "editor";
+		handlers.zoomIn();
+		handlers.zoomOut();
+		handlers.zoomReset();
+		expect(mockStores.editor.zoomIn).toHaveBeenCalledOnce();
+		expect(mockStores.editor.zoomOut).toHaveBeenCalledOnce();
+		expect(mockStores.editor.zoomReset).toHaveBeenCalledOnce();
+		expect(options.terminalLifecycle.zoomIn).not.toHaveBeenCalled();
+		expect(options.terminalLifecycle.zoomOut).not.toHaveBeenCalled();
+		expect(options.terminalLifecycle.zoomReset).not.toHaveBeenCalled();
 	});
 
 	it("routes search to diff, markdown, editor, then terminal in priority order", () => {

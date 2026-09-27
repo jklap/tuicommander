@@ -12,6 +12,10 @@
 
 # To Test
 
+## Mobile repository files (story 1063-3fe1) — real phone
+
+- [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, open a `.md` file in rendered View, switch to Edit, change its source and save, then confirm the updated rendered View and saved content from the desktop. Check another text file stays plain text and that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior.
+
 ## Editor links and external Markdown tabs (2026-09-27)
 
 - [x] MCP file tabs remain visible after selecting a terminal in a repository with no active workspace; distinct MCP ids coexist and a repeated id updates its native file tab. A terminal link to an existing external Markdown path under `~/Gits/.tmp/` opens in the Markdown viewer. _(verified: targeted TabBar, useAppInit, and terminal file opening Vitest tests.)_

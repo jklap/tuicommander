@@ -126,6 +126,7 @@ notification opens that session.
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input
+- **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
 - **Notification sounds** — Audio alerts for questions, errors, completions, and rate limits
