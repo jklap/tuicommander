@@ -12,6 +12,10 @@
 
 # To Test
 
+## Queued agent command diagnostics — Rust restart required
+
+- [ ] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it.
+
 ## Consumed MCP agent inbox mail (story 1105-966b) — Rust restart required
 
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, fill a throwaway peer inbox, read it, and send one more message. Confirm the new send succeeds and the next inbox call returns it without `missed_count`. The current live backend still has the old Rust code; targeted unit tests cover pagination, capacity, and delivery leases.
