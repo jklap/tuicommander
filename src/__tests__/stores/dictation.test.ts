@@ -870,9 +870,9 @@ describe("dictationStore", () => {
 	describe("saveConfig() payload", () => {
 		/** Field names declared by `DictationConfig` in the Rust source. */
 		function rustConfigFields(): string[] {
-			const source = readFileSync(join(process.cwd(), "src-tauri/src/dictation/commands.rs"), "utf8");
-			const struct = source.match(/pub struct DictationConfig \{([\s\S]*?)\n\}/);
-			if (!struct) throw new Error("DictationConfig not found in commands.rs");
+			const source = readFileSync(join(process.cwd(), "src-tauri/src/config.rs"), "utf8");
+			const struct = source.match(/pub struct DictationConfig \{([\s\S]*?)\n    \}/);
+			if (!struct) throw new Error("DictationConfig not found in config.rs");
 			const fields = [...struct[1].matchAll(/^\s*pub ([a-z0-9_]+):/gm)].map((match) => match[1]);
 			if (fields.length === 0) throw new Error("DictationConfig parsed to zero fields");
 			return fields;
