@@ -436,6 +436,48 @@
 }
 
 /* ── Tool call cards ───────────────────────────────────── */
+.toolActivity {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
+  overflow: hidden;
+}
+
+.toolActivitySummary,
+.toolActivityCallSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.toolActivitySummary:hover,
+.toolActivityCallSummary:hover {
+  background: var(--bg-highlight);
+}
+
+.toolActivityTitles {
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.toolActivityCalls {
+  border-top: 1px solid var(--border);
+}
+
+.toolActivityCall + .toolActivityCall {
+  border-top: 1px solid var(--border);
+}
+
+.toolActivityCallSummary {
+  padding-left: 18px;
+}
+
 .toolCallCard {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
