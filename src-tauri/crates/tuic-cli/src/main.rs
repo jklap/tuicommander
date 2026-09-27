@@ -11,6 +11,7 @@ mod ipc;
 mod mcp;
 
 use clap::{Parser, Subcommand};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -30,6 +31,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Call a server-owned MCP tool with JSON arguments
+    Mcp {
+        /// MCP tool name (for example agent or session)
+        tool: String,
+        /// JSON object, or - to read it from stdin (defaults to {})
+        arguments: Option<String>,
+    },
     /// Open a file or directory in TUICommander
     Open {
         /// Path to open (file or directory)
@@ -359,6 +367,7 @@ fn main() {
 fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
+        Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
         Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()).map(|_| ()),
@@ -394,6 +403,33 @@ fn dispatch(cmd: Command) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+fn cmd_mcp(tool: &str, arguments: Option<&str>) -> Result<(), String> {
+    let mut stdin_text = String::new();
+    let text = if arguments == Some("-") {
+        std::io::stdin()
+            .read_to_string(&mut stdin_text)
+            .unwrap_or_else(|e| {
+                mcp_usage_error(&format!("Cannot read MCP arguments from stdin: {e}"))
+            });
+        stdin_text.as_str()
+    } else {
+        arguments.unwrap_or("{}")
+    };
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .unwrap_or_else(|e| mcp_usage_error(&format!("MCP arguments must be a JSON object: {e}")));
+    if !parsed.is_object() {
+        mcp_usage_error("MCP arguments must be a JSON object");
+    }
+    let result = mcp::McpClient::connect_for_orchestration()?.call_text(tool, parsed)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn mcp_usage_error(message: &str) -> ! {
+    eprintln!("tuic: {message}");
+    std::process::exit(2)
+}
 
 fn cmd_story(action: &str, project: Option<&str>, session_id: Option<&str>) -> Result<(), String> {
     let action: serde_json::Value = serde_json::from_str(action)

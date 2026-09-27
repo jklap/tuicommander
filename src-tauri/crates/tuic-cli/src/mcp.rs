@@ -78,7 +78,7 @@ fn mcp_headers<'a>(
 /// Unwrap a JSON-RPC envelope, then the MCP `content[0].text` payload the
 /// tools return. Both layers can carry an error and both are reported verbatim:
 /// a caller must never see a success for a message the registry refused.
-fn unwrap_tool_result(resp: &ipc::Response) -> Result<Value, String> {
+fn unwrap_tool_text(resp: &ipc::Response) -> Result<String, String> {
     if !resp.is_success() {
         return Err(format!("HTTP {}: {}", resp.status, resp.body));
     }
@@ -96,12 +96,23 @@ fn unwrap_tool_result(resp: &ipc::Response) -> Result<Value, String> {
         .pointer("/result/content/0/text")
         .and_then(Value::as_str)
         .ok_or("MCP response carried no tool payload")?;
-    let payload: Value =
-        serde_json::from_str(text).map_err(|e| format!("Malformed tool payload: {e}"))?;
-    if let Some(err) = payload.get("error").and_then(Value::as_str) {
+    let payload = serde_json::from_str::<Value>(text).ok();
+    if envelope.pointer("/result/isError").and_then(Value::as_bool) == Some(true) {
+        return Err(payload
+            .as_ref()
+            .and_then(|value| value.get("error").or_else(|| value.get("message")))
+            .and_then(Value::as_str)
+            .unwrap_or(text)
+            .to_string());
+    }
+    if let Some(err) = payload
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(Value::as_str)
+    {
         return Err(err.to_string());
     }
-    Ok(payload)
+    Ok(text.to_string())
 }
 
 /// Open an MCP session and bind it to this PTY's peer identity.
@@ -158,6 +169,12 @@ impl McpClient {
 
     /// Call one server-owned MCP tool and return its unmodified payload.
     pub fn call(&self, tool: &str, arguments: Value) -> Result<Value, String> {
+        let text = self.call_text(tool, arguments)?;
+        serde_json::from_str(&text).map_err(|e| format!("Malformed tool payload: {e}"))
+    }
+
+    /// Call one MCP tool and retain its exact text payload for shell consumers.
+    pub fn call_text(&self, tool: &str, arguments: Value) -> Result<String, String> {
         let call = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -170,7 +187,7 @@ impl McpClient {
             self.tuic_session.as_deref(),
             wait_read_timeout(tool, &arguments),
         )?;
-        unwrap_tool_result(&response)
+        unwrap_tool_text(&response)
     }
 }
 
@@ -274,9 +291,11 @@ mod tests {
                "text":"{\"accepted\":true,\"delivery_path\":\"sse_channel_and_inbox\"}"}]}}"#,
             &[],
         );
-        let payload = unwrap_tool_result(&resp).expect("payload");
-        assert_eq!(payload["accepted"], serde_json::json!(true));
-        assert_eq!(payload["delivery_path"], "sse_channel_and_inbox");
+        let payload = unwrap_tool_text(&resp).expect("payload");
+        assert_eq!(
+            payload,
+            r#"{"accepted":true,"delivery_path":"sse_channel_and_inbox"}"#
+        );
     }
 
     /// The whole point of the story: a refusal must not read as a success.
@@ -288,10 +307,7 @@ mod tests {
                "text":"{\"error\":\"Recipient not found\"}"}]}}"#,
             &[],
         );
-        assert_eq!(
-            unwrap_tool_result(&resp).unwrap_err(),
-            "Recipient not found"
-        );
+        assert_eq!(unwrap_tool_text(&resp).unwrap_err(), "Recipient not found");
     }
 
     #[test]
@@ -303,7 +319,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            unwrap_tool_result(&resp).unwrap_err(),
+            unwrap_tool_text(&resp).unwrap_err(),
             "TUICommander IPC request failed"
         );
     }
@@ -360,10 +376,6 @@ mod tests {
     #[test]
     fn a_non_2xx_response_is_never_a_success() {
         let resp = response(503, "unavailable", &[]);
-        assert!(
-            unwrap_tool_result(&resp)
-                .unwrap_err()
-                .starts_with("HTTP 503")
-        );
+        assert!(unwrap_tool_text(&resp).unwrap_err().starts_with("HTTP 503"));
     }
 }

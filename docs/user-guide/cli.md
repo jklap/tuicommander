@@ -116,6 +116,26 @@ Key names: `Enter`, `Space`, `Tab`, `Escape`, `BSpace`, `Up`, `Down`, `Left`, `R
 
 ## Agent Orchestration
 
+### Generic MCP calls
+
+Use `tuic mcp <tool> [<json>|-]` to call a native MCP tool over the local
+socket. Omit the JSON argument for `{}`, or pass `-` to read a JSON object from
+stdin. The tool's text payload is printed unchanged with a trailing newline,
+so it can be piped to `jq`:
+
+```bash
+tuic mcp session '{"action":"list"}' | jq length
+tuic mcp agent '{"action":"wait","timeout_ms":8000}'
+cat <<'JSON' | tuic mcp agent -
+{"action":"send","to":"peer-id","message":"it's ready"}
+JSON
+```
+
+Tool and protocol errors go to stderr with exit code 1. Invalid JSON or CLI
+arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
+peer binding; callers outside TUICommander register an external identity for
+that invocation.
+
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)
 tuic agent spawn claude "review the failing tests"
