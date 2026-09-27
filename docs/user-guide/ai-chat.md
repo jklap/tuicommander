@@ -18,6 +18,8 @@ no tool loop and no sandbox of its own.
 button and the command palette. The detach control moves it into its own window,
 and the main window shows the *Bring back* placeholder. Drag the left edge to
 resize — the width applies for the session and is not persisted.
+The conversation view loads when you first open it; terminal input is available
+while it loads.
 
 ## What it is bound to
 
