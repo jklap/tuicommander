@@ -509,13 +509,17 @@ const App: Component = () => {
 	};
 
 	/** Open a file path from terminal output — .md/.mdx in MD viewer, others in internal editor */
-	const handleOpenFilePath = (absolutePath: string, _line?: number, _col?: number) => {
+	const handleOpenFilePath = (absolutePath: string, line?: number, _col?: number) => {
 		// Scoped to the repo that owns the PATH. It used to relativize against the
 		// active worktree, so a path printed by an agent working in another repo
 		// opened as a tab filed under whichever repo the user happened to be on.
-		openTerminalFilePath(absolutePath, (tabId) => {
-			terminalLifecycle.handleTerminalSelect(tabId);
-		});
+		openTerminalFilePath(
+			absolutePath,
+			(tabId) => {
+				terminalLifecycle.handleTerminalSelect(tabId);
+			},
+			line,
+		);
 	};
 
 	useFileOpenBridge();

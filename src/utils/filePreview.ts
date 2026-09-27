@@ -85,7 +85,7 @@ export function openFileAction(
 }
 
 /** Open a resolved absolute file path clicked in terminal output. */
-export function openTerminalFilePath(absolutePath: string, onEditorTab?: (tabId: string) => void): void {
+export function openTerminalFilePath(absolutePath: string, onEditorTab?: (tabId: string) => void, line?: number): void {
 	const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
-	openFileAction(filePath, repoPath, fsRoot, undefined, onEditorTab);
+	openFileAction(filePath, repoPath, fsRoot, line, onEditorTab);
 }

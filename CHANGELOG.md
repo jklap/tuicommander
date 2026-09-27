@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Terminal file line links** — Clicking a file path with `:line` now opens the built-in editor at that line, including for Markdown files.
+
 - **External Markdown review saves** — Inline tweak comments on Markdown files outside the active repository now write to the external file. A failed write shows an error and keeps the draft open for retry.
 
 - **MCP file tab identity and visibility** — Native `tuic://open` and `tuic://edit` tabs use the MCP id: distinct ids coexist and repeating an id updates its tab. Tabs stay visible after selecting a terminal in a repository without an active workspace. Clicking an existing path outside registered repositories in terminal output opens it in the native viewer or editor.
