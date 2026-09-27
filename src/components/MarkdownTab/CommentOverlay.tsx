@@ -68,6 +68,22 @@ function blockInGutter(blocks: ArrayLike<HTMLElement>, clientX: number, clientY:
 	return null;
 }
 
+/** Find the deepest list item under the pointer; ancestor items may overlap it. */
+function listItemInGutter(items: HTMLElement[], clientX: number, clientY: number): HTMLElement | null {
+	let low = 0;
+	let high = items.length;
+	while (low < high) {
+		const mid = (low + high) >> 1;
+		if (items[mid].getBoundingClientRect().top <= clientY) low = mid + 1;
+		else high = mid;
+	}
+	for (let item: HTMLElement | null = items[low - 1] ?? null; item; item = item.parentElement?.closest("li") ?? null) {
+		const rect = item.getBoundingClientRect();
+		if (clientY <= rect.bottom && clientX >= rect.left - 36 && clientX <= rect.left + 8) return item;
+	}
+	return null;
+}
+
 export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	const [btnPos, setBtnPos] = createSignal<{ x: number; y: number } | null>(null);
 	const [blockBtn, setBlockBtn] = createSignal<{
@@ -164,6 +180,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		if (target.closest("a, button, input, select, textarea, label")) return;
 		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
+		if (span.tagName === "LI" && target.closest("li") !== span) return;
 		// The click that ends a drag-select must leave the selection to the inline comment button.
 		if (window.getSelection()?.isCollapsed === false) return;
 
@@ -193,6 +210,10 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const target = e.target as HTMLElement;
 		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
+		if (span.tagName === "LI" && target.closest("li") !== span) {
+			setTooltip(null);
+			return;
+		}
 		const comment = span.dataset["tweakComment"];
 		if (!comment) return;
 		const rect = span.getBoundingClientRect();
@@ -214,12 +235,22 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 	const handleBlockGutterMove = (e: MouseEvent) => {
 		if (popover() || btnPos()) return;
-		const block = blockInGutter(
-			props.contentRef.querySelectorAll<HTMLElement>("[data-comment-source-start][data-comment-source-end]"),
+		const targets = props.contentRef.querySelectorAll<HTMLElement>(
+			"[data-comment-source-start][data-comment-source-end]",
+		);
+		const listItems = Array.from(targets).filter((target) => target.tagName === "LI");
+		let block = blockInGutter(
+			listItems.length ? Array.from(targets).filter((target) => target.tagName !== "LI") : targets,
 			e.clientX,
 			e.clientY,
 		);
-		if (!block || block.classList.contains("tweak-block-highlight") || block.querySelector(".tweak-highlight")) {
+		block = listItemInGutter(listItems, e.clientX, e.clientY) ?? block;
+		const inlineCommentInBlock =
+			block &&
+			Array.from(block.querySelectorAll(".tweak-highlight")).some(
+				(span) => block!.tagName !== "LI" || span.closest("li") === block,
+			);
+		if (!block || block.classList.contains("tweak-block-highlight") || inlineCommentInBlock) {
 			clearBlockTarget();
 			return;
 		}

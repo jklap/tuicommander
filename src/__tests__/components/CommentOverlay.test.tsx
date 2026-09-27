@@ -7,6 +7,63 @@ import { CommentOverlay } from "../../components/MarkdownTab/CommentOverlay";
 afterEach(() => cleanup());
 
 describe("CommentOverlay block gutter", () => {
+	// Catches: a parent's saved comment swallowing clicks on an independently commentable child.
+	it("does not open a parent item comment when its nested item is clicked", () => {
+		const content = document.createElement("div");
+		const parent = document.createElement("li");
+		parent.className = "tweak-block-highlight";
+		parent.dataset.tweakId = "c_parent";
+		parent.dataset.tweakComment = "Parent note";
+		parent.dataset.tweakAt = "2026-09-27T12:00:00.000Z";
+		const child = document.createElement("li");
+		child.textContent = "child";
+		parent.append(child);
+		content.append(parent);
+		document.body.append(content);
+		render(() => <CommentOverlay contentRef={content} onSave={vi.fn()} onDelete={vi.fn()} />);
+		fireEvent.click(child);
+		expect(document.body.querySelector("textarea")).toBeNull();
+	});
+	// Catches: an overlapping parent <li> stealing the nested item's gutter hover.
+	it("saves a nested bullet rather than its parent when hovering the nested gutter", () => {
+		const scrollHost = document.createElement("div");
+		const content = document.createElement("div");
+		const list = document.createElement("ul");
+		const parent = document.createElement("li");
+		parent.textContent = "parent";
+		parent.dataset.commentSourceStart = "0";
+		parent.dataset.commentSourceEnd = "8";
+		const nested = document.createElement("ul");
+		const child = document.createElement("li");
+		child.textContent = "child";
+		child.dataset.commentSourceStart = "11";
+		child.dataset.commentSourceEnd = "20";
+		nested.append(child);
+		parent.append(nested);
+		list.append(parent);
+		content.append(list);
+		scrollHost.append(content);
+		document.body.append(scrollHost);
+		parent.getBoundingClientRect = () =>
+			({ left: 100, right: 500, top: 20, bottom: 100, width: 400, height: 80, x: 100, y: 20, toJSON() {} }) as DOMRect;
+		child.getBoundingClientRect = () =>
+			({ left: 120, right: 500, top: 60, bottom: 80, width: 380, height: 20, x: 120, y: 60, toJSON() {} }) as DOMRect;
+		const onSaveBlock = vi.fn();
+		render(() => (
+			<CommentOverlay
+				contentRef={content}
+				onSave={vi.fn()}
+				onSaveBlock={onSaveBlock}
+				blockSource={() => "  - child"}
+				onDelete={vi.fn()}
+			/>
+		));
+		fireEvent.mouseMove(scrollHost, { clientX: 96, clientY: 65 });
+		fireEvent.mouseDown(document.body.querySelector('[aria-label="Comment on this block"]')!);
+		fireEvent.input(document.body.querySelector("textarea")!, { target: { value: "Fix child" } });
+		fireEvent.click(Array.from(document.body.querySelectorAll("button")).find((el) => el.textContent === "Save")!);
+		expect(onSaveBlock).toHaveBeenCalledWith(expect.objectContaining({ comment: "Fix child" }), { start: 11, end: 20 });
+	});
 	it("does not open the block comment when an interactive checkbox inside it is clicked", () => {
 		const scrollHost = document.createElement("div");
 		const content = document.createElement("div");
