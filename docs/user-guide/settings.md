@@ -16,15 +16,19 @@ The **AI Chat** page is shown only while **Experimental Features** is on (see
 
 ## Search
 
-A search box sits at the top of the page list. Typing filters every setting across
+A search box sits at the top of the page list. Typing filters settings across
 every page at once, so you do not have to know which page owns the one you want.
 Each result shows the setting name and the `Page › Section` trail it lives under;
 selecting one opens that page and scrolls to the field.
 
-Two limits are deliberate:
+Three limits are deliberate:
 
 - **Repository pages are not searched.** A repository page belongs to one specific
   repository, and a global box has no way to know which one you mean.
+- **Per-agent controls in expandable cards are not searched.** Search cannot
+  select a specific agent card or scroll to a control inside it. For managed
+  workspace trust, open **Settings → Agents**, expand **Claude** or **Codex**,
+  then use **Accept workspace trust for managed spawns** in Expert Mode.
 - **Settings the current build does not render are not listed.** The same rule
   hides the AI Chat page while Experimental Features is off, so a search does
   not open a page that is not in the navigation.
@@ -209,6 +213,7 @@ Each supported agent has an expandable row showing detection status, version, an
 | **MCP Integration** | Install/remove TUICommander as MCP server for supported agents. Shows install status with a dot indicator. |
 | **Native status signals** | Claude and Codex only. Enabled by default; injects process-scoped status configuration at launch without changing global agent files. The **Signals: at launch** badge identifies this mode. |
 | **Prevent alternate screen** | Enabled by default for every agent. TUIC applies a verified native-scrollback control when the installed CLI supports one. Turning it off leaves new launches without TUIC's screen control. Existing shells need to be reopened to receive the changed policy. |
+| **Accept workspace trust for managed spawns** | Claude and Codex only. In Expert Mode, expand the agent's card to change whether agent-to-agent spawns skip that agent's workspace trust question in a new folder. |
 | **Install hooks globally** | Gemini, Grok, and OpenCode only. Explicitly installs/removes sentinel-owned lifecycle hooks in the agent's global configuration. Off by default. |
 | **Show agent intent as tab title** | When agents declare their current work phase, update the tab name with a short title |
 | **Show suggested follow-up actions** | Display actionable suggestions from agents after completing a task |
