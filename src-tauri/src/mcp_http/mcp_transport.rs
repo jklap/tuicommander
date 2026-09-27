@@ -8159,7 +8159,7 @@ mod tests {
         .await;
 
         assert_eq!(ancestor["ok"], true, "{ancestor}");
-        assert_eq!(ancestor["proof"], "integration_ancestry", "{ancestor}");
+        assert_eq!(ancestor["proof"], "ancestry", "{ancestor}");
         assert_eq!(squash["ok"], true, "{squash}");
         assert_eq!(squash["proof"], "patch_equivalence", "{squash}");
         for branch in ["stale-upstream", "squashed"] {
