@@ -2647,6 +2647,286 @@ fn protocol_stale_recovery_requires_a_ready_screen_for_the_full_timeout() {
     assert!(silence.protocol_busy_is_stale());
 }
 
+/// A mail wake can submit into Claude's detailed transcript view, where the
+/// composer is hidden and the screen adapter returns Unknown. No later hook
+/// busy or output means the submitted turn never started.
+#[cfg(unix)]
+#[test]
+fn stale_busy_mail_wake_in_claude_transcript_returns_to_idle() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-transcript";
+    let written = insert_recording_session(&state, sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    assert_eq!(
+        deliver_notice_to_pty(&state, sid, PEER_MAIL_WAKE),
+        PtyDelivery::Typed
+    );
+    assert!(
+        written
+            .lock()
+            .unwrap()
+            .windows(PEER_MAIL_WAKE.len())
+            .any(|part| part == PEER_MAIL_WAKE.as_bytes())
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert_eq!(
+        detect_claude_screen_activity(&["Showing detailed transcript · ctrl+o to toggle".into()]),
+        AgentScreenActivity::Unknown
+    );
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    state.session_maps.last_output_ms.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU64::new(
+            now_epoch_ms() - PROTOCOL_STALE_TIMEOUT.as_millis() as u64,
+        ),
+    );
+    let epoch = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .turn_epoch;
+    assert!(
+        try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(epoch)
+        )
+        .transitioned
+    );
+    let visible = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(visible.shell_state.as_deref(), Some("idle"));
+    assert_eq!(visible.agent_state.as_deref(), Some("idle"));
+}
+
+#[test]
+fn stale_busy_fresh_mail_wake_in_transcript_remains_working() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-fresh";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_recent_output_keeps_claude_working_without_a_visible_composer() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-output";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    silence.lock().evidence.busy.as_mut().unwrap().at =
+        std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_new_hook_busy_in_transcript_keeps_working() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-hook";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    transition_explicit_shell_state(&state, sid, SHELL_BUSY, "busy", true);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    state.session_maps.last_output_ms.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU64::new(
+            now_epoch_ms() - PROTOCOL_STALE_TIMEOUT.as_millis() as u64,
+        ),
+    );
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_uncertain_mail_write_does_not_hide_possible_work() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-uncertain";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.injection_delivery_uncertain = true;
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_prior_hook_busy_cannot_be_treated_as_prior_idle() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-prior-hook";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_BUSY, "busy", true);
+    note_submitted_input(&state, sid);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_injection_claim_and_rollback_each_leave_one_transition_trace() {
+    #[derive(Clone)]
+    struct LogSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-trace";
+    agent_session(&state, sid, SHELL_IDLE);
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(LogSink(log.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        let claim = claim_idle_for_injection(&state, sid).unwrap();
+        assert!(rollback_injection_claim(&state, sid, claim));
+    });
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    assert_eq!(log.matches("Shell state → busy").count(), 1, "{log}");
+    assert_eq!(log.matches("Shell state → idle").count(), 1, "{log}");
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .shell_state
+            .as_deref(),
+        Some("idle")
+    );
+}
+
 #[test]
 fn protocol_busy_parks_suggest_without_downgrading_working_screen() {
     let state = crate::state::tests_support::make_test_app_state();
