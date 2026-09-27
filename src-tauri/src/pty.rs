@@ -1551,7 +1551,15 @@ pub(crate) struct SilenceState {
 impl SilenceState {
     fn close_open_intent(&mut self) -> Option<ParsedEvent> {
         let open = self.open_intent.take()?;
-        self.accept_intent(open.text, None)
+        let mut text = open.text;
+        if incomplete_intent_title(&text)
+            && let Some(open_paren) = text.rfind('(')
+            && !text[..open_paren].trim().is_empty()
+        {
+            text.truncate(open_paren);
+            text = text.trim_end().to_string();
+        }
+        self.accept_intent(text, None)
     }
 
     fn accept_intent(&mut self, text: String, title: Option<String>) -> Option<ParsedEvent> {
@@ -5945,15 +5953,18 @@ impl ChunkProcessor {
             //
             // `retain` in place: the filter used to rebuild the whole Vec even
             // when the cutoff dropped nothing.
-            if let Some(screen) = screen_ref
+            let chrome_cutoff = if let Some(screen) = screen_ref
                 && !changed.is_empty()
             {
                 let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
                 // Fails OPEN by contract: no anchor found is `None`, and `None`
                 // must mean "parse everything", never "parse nothing".
-                if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
-                    changed.retain(|r| r.row_index < cutoff);
-                }
+                crate::chrome::find_chrome_cutoff(&refs)
+            } else {
+                None
+            };
+            if let Some(cutoff) = chrome_cutoff {
+                changed.retain(|r| r.row_index < cutoff);
             }
             let changed = changed;
 
@@ -6014,6 +6025,9 @@ impl ChunkProcessor {
                                 INTENT_CANDIDATE_GRID_READS
                                     .with(|reads| reads.set(reads.get() + 1));
                                 let mut line = vt.logical_line_at_row(anchor_row)?;
+                                if chrome_cutoff.is_some_and(|cutoff| line.end_row >= cutoff) {
+                                    return None;
+                                }
                                 if crate::output_parser::structured_token_anchor(&line.text)
                                     != Some(crate::output_parser::StructuredTokenAnchor::Intent)
                                 {
@@ -6044,6 +6058,9 @@ impl ChunkProcessor {
                                 // production-path test captures a task panel under an intent.
                                 for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
                                     if crate::output_parser::intent_row_is_complete(&block) {
+                                        break;
+                                    }
+                                    if chrome_cutoff.is_some_and(|cutoff| next >= cutoff) {
                                         break;
                                     }
                                     #[cfg(test)]
@@ -6480,11 +6497,18 @@ impl ChunkProcessor {
                             .as_ref()
                             .is_some_and(|open| !text.starts_with(&open.text)))
                 {
+                    let start_row = if same_anchor_repaint {
+                        sl.open_intent
+                            .as_ref()
+                            .map_or(intent_origin + line.start_row, |open| open.start_row)
+                    } else {
+                        intent_origin + line.start_row
+                    };
                     sl.open_intent = Some(OpenIntent {
                         text,
                         anchor_text,
-                        start_row: intent_origin + line.start_row,
-                        end_row: intent_origin + line.end_row,
+                        start_row,
+                        end_row: start_row + line.end_row.saturating_sub(line.start_row),
                     });
                 }
             }
@@ -6502,11 +6526,12 @@ impl ChunkProcessor {
                     && !candidate_grew
                     && !same_anchor_repaint
                     && cursor_row.is_some_and(|row| row > end_row);
-                let replaced = changed_rows.iter().any(|row| {
-                    intent_origin + row.row_index == open.start_row
-                        && crate::output_parser::structured_token_anchor(&row.text)
-                            != Some(crate::output_parser::StructuredTokenAnchor::Intent)
-                });
+                let replaced = !same_anchor_repaint
+                    && changed_rows.iter().any(|row| {
+                        intent_origin + row.row_index == open.start_row
+                            && crate::output_parser::structured_token_anchor(&row.text)
+                                != Some(crate::output_parser::StructuredTokenAnchor::Intent)
+                    });
                 (prose_below || broken_line || replaced) && !incomplete_intent_title(&open.text)
                     || explicit_idle_in_chunk
             });

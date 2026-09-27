@@ -47,7 +47,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - **Double-click** a tab to rename it (inline editing)
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
-- Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
+- Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
 
