@@ -13365,6 +13365,82 @@ mod tests {
     }
 
     #[test]
+    fn messaging_inbox_pages_oldest_unread_before_advancing_cursor() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..3 {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": format!("mail-{index}")}),
+                Some("mcp-sender"),
+            );
+            assert!(sent.get("error").is_none(), "{sent}");
+        }
+
+        let first = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 2}),
+            Some("mcp-recipient"),
+        );
+        let second = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 2}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(first["messages"][0]["content"], "mail-0", "{first}");
+        assert_eq!(first["messages"][1]["content"], "mail-1", "{first}");
+        assert_eq!(second["messages"][0]["content"], "mail-2", "{second}");
+        assert!(second["next_since"].as_u64() > first["next_since"].as_u64());
+    }
+
+    #[test]
+    fn messaging_inbox_reuses_consumed_peer_mail_capacity_without_losing_unread_mail() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": format!("mail-{index}")}),
+                Some("mcp-sender"),
+            );
+            assert!(sent.get("error").is_none(), "{sent}");
+        }
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 100}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["count"], 100);
+        assert_eq!(read["messages"][0]["content"], "mail-0");
+        assert_eq!(read["messages"][99]["content"], "mail-99");
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "fresh"}),
+            Some("mcp-sender"),
+        );
+        assert!(
+            sent.get("error").is_none(),
+            "consumed mail should free capacity: {sent}"
+        );
+        let fresh = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(fresh["count"], 1, "{fresh}");
+        assert_eq!(fresh["messages"][0]["content"], "fresh");
+        assert!(fresh["next_since"].as_u64() > read["next_since"].as_u64());
+        assert!(
+            fresh.get("missed_count").is_none(),
+            "read mail was not missed: {fresh}"
+        );
+        assert_eq!(state.agent_inbox.get(TEST_UUID_B).unwrap().len(), 100);
+    }
+
+    #[test]
     fn messaging_inbox_missed_count_on_eviction() {
         let state = test_state();
         register_peer(
