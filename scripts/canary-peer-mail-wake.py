@@ -5,7 +5,6 @@ import json
 import os
 import sys
 import time
-import urllib.error
 import urllib.request
 
 
@@ -57,29 +56,45 @@ def initialize(extra_headers=None):
     return headers["Mcp-Session-Id"]
 
 
+def output_text(output):
+    return "\n".join(
+        "".join(span["text"] for span in row["spans"])
+        for row in output.get("lines", []) + output.get("screen", [])
+    )
+
+
 session_id = None
+mcp_sid = None
+reader_sid = None
 try:
     mcp_sid = initialize()
     mcp_call(mcp_sid, "register", name="peer-mail-canary")
-    spawned, _ = request(
-        "/sessions/agent",
-        {"agent_type": AGENT, "cwd": os.getcwd(),
-         "prompt": "Reply CANARY_READY once, then wait for a new message."},
+    spawned = mcp_call(
+        mcp_sid, "spawn", agent_type=AGENT, name="peer-mail-canary-recipient",
+        cwd=os.getcwd(),
+        prompt="Reply CANARY_READY once. Do not call tools; wait for a new message.",
     )
     session_id = spawned["session_id"]
+    peers = mcp_call(mcp_sid, "list_peers")["peers"]
+    if not any(peer.get("session_id") == session_id for peer in peers):
+        raise RuntimeError(f"{AGENT} spawn did not register a terminal peer")
 
     ready_by = time.monotonic() + 120
     while time.monotonic() < ready_by:
         sessions, _ = request("/sessions")
         recipient = next((item for item in sessions if item["session_id"] == session_id), None)
         state = recipient.get("state", {}) if recipient else {}
-        if (recipient and recipient.get("tuic_session")
-                and state.get("shell_state") == "idle"
+        if (recipient and state.get("shell_state") == "idle"
                 and state.get("agent_state") in {"idle", "completed"}):
             break
         time.sleep(1)
     else:
-        raise RuntimeError(f"{AGENT} did not reach a bound idle composer in 120 s")
+        output, _ = request(f"/sessions/{session_id}/output?format=log")
+        observed = output_text(output)
+        raise RuntimeError(
+            f"{AGENT} did not reach an idle composer in 120 s; "
+            f"last state={state}; output tail={observed[-1000:]!r}"
+        )
 
     sent = mcp_call(mcp_sid, "send", to=session_id, message="canary mail")
     if sent.get("delivery_path") != "wake_notification_and_inbox":
@@ -88,7 +103,7 @@ try:
     wake_by = time.monotonic() + 20
     while time.monotonic() < wake_by:
         output, _ = request(f"/sessions/{session_id}/output?format=log")
-        observed = "\n".join(output.get("lines", []) + output.get("screen", []))
+        observed = output_text(output)
         if "[TUIC] message available" in observed and "agent action=inbox" in observed:
             print(f"PASS {AGENT}: peer mail wake appeared in PTY within 20 s")
             break
@@ -99,7 +114,7 @@ try:
     if CAPACITY:
         # The reader is a second MCP connection bound to this disposable PTY.
         # It observes the same inbox without relying on the agent's reply time.
-        reader_sid = initialize({"X-Tuic-Session": recipient["tuic_session"]})
+        reader_sid = initialize({"X-Tuic-Session": session_id})
         baseline = mcp_call(reader_sid, "inbox", since=0, limit=100)
         deadline = time.monotonic() + 90
         for index in range(100):
@@ -115,8 +130,17 @@ try:
             raise RuntimeError(f"101st message is not readable: {unread}")
         print("PASS: inbox accepted and returned mail after 100 read messages")
 finally:
+    cleanup_errors = []
     if session_id:
         try:
             request(f"/sessions/{session_id}", method="DELETE")
-        except (OSError, urllib.error.HTTPError):
-            print(f"cleanup needed: session {session_id}", file=sys.stderr)
+        except OSError as error:
+            cleanup_errors.append(f"session {session_id}: {error}")
+    for sid in (reader_sid, mcp_sid):
+        if sid:
+            try:
+                request("/mcp", headers={"Mcp-Session-Id": sid}, method="DELETE")
+            except OSError as error:
+                cleanup_errors.append(f"MCP session {sid}: {error}")
+    if cleanup_errors:
+        raise RuntimeError("cleanup needed: " + "; ".join(cleanup_errors))

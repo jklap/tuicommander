@@ -3983,6 +3983,11 @@ or credential is touched.
 
 ## Peer mail wake after Rust restart
 
+- [ ] After restarting `make dev`, spawn one disposable agent through MCP
+      `agent action=spawn` and one through `POST /sessions/agent`. Confirm each
+      `GET /sessions` row reports `tuic_session` equal to its `session_id` before
+      the agent calls MCP, then close both sessions. The current backend cannot
+      load this Rust binding change until restart.
 - [ ] Restart the isolated `make dev` test instance and run
       `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude`.
       Confirm the disposable Claude PTY shows `PEER_MAIL_WAKE` within 20 seconds.

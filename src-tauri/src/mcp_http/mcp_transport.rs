@@ -3892,10 +3892,8 @@ fn handle_agent_with_parent_cwd(
 
             let empty_env = std::collections::HashMap::new();
             let screen_env = resolved.as_ref().map(|rc| &rc.env).unwrap_or(&empty_env);
-            crate::pty::apply_agent_screen_env(&mut cmd, screen_env);
 
             // Inject peer env vars so spawned agents know their identity and parent.
-            cmd.env("TUIC_SESSION", &session_id);
             if let Some(ref parent) = caller_tuic {
                 cmd.env("TUIC_PARENT", parent);
             }
@@ -3906,6 +3904,8 @@ fn handle_agent_with_parent_cwd(
                     cmd.env(k, v);
                 }
             }
+            crate::pty::bind_pty_identity(state, &mut cmd, &session_id, None);
+            crate::pty::apply_agent_screen_env(&mut cmd, screen_env);
 
             // Initial prompt withheld from argv for prefill-only TUIs (codex):
             // queued into pending_injections after session registration below.
@@ -4088,17 +4088,22 @@ fn handle_agent_with_parent_cwd(
                 || cmd.clone(),
             ) {
                 Ok(pair_and_child) => pair_and_child,
-                Err(e) => return serde_json::json!({"error": e}),
+                Err(e) => {
+                    state.unbind_live_pty(&session_id);
+                    return serde_json::json!({"error": e});
+                }
             };
             let writer = match pair.master.take_writer() {
                 Ok(w) => w,
                 Err(e) => {
+                    state.unbind_live_pty(&session_id);
                     return serde_json::json!({"error": format!("Failed to get PTY writer: {}", e)});
                 }
             };
             let reader = match pair.master.try_clone_reader() {
                 Ok(r) => r,
                 Err(e) => {
+                    state.unbind_live_pty(&session_id);
                     return serde_json::json!({"error": format!("Failed to get PTY reader: {}", e)});
                 }
             };
@@ -19211,6 +19216,11 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
+        let row = super::super::session::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == sid)
+            .unwrap();
+        assert_eq!(row.tuic_session.as_deref(), Some(sid));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

@@ -293,6 +293,8 @@ Spawns an AI agent in a PTY session. The request is flat; browser transport merg
 the desktop `pty_config` and `agent_config` objects. The optional `env` map is
 applied to the agent process. By default, supported interactive CLIs use native
 scrollback according to the agent's `prevent_alt_screen` setting.
+The child receives its own `TUIC_SESSION`, equal to the returned `session_id`,
+and `GET /sessions` exposes that identity as `tuic_session` immediately.
 
 ### Write to Session
 
