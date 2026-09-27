@@ -1295,13 +1295,18 @@ impl ConnectionActor {
                     usage: response.usage,
                 }
             }
-            // A turn that failed on the transport has no stop reason to report:
+            // A turn that failed has no stop reason to report:
             // the agent never gave one, and inventing `Cancelled` here would
             // tell a host the turn ended in a way it did not.
-            Err(_) => {
+            Err(error) => {
                 attachment.active_turn = None;
+                // ego's dedicated pause code means the hold reached its
+                // boundary. The message is explanatory, not a state signal.
+                if error.agent_code == Some(-32011) {
+                    attachment.state = AcpAttachmentState::Paused;
+                }
                 AcpClientEvent::AttachmentState {
-                    state: AcpAttachmentState::Idle,
+                    state: attachment.state,
                 }
             }
         };
@@ -1429,7 +1434,10 @@ impl ConnectionActor {
                         error.to_string(),
                     );
                 }
-                AcpClientError::agent_error(connection_id, operation, error.to_string())
+                let mut client_error =
+                    AcpClientError::agent_error(connection_id, operation, error.to_string());
+                client_error.agent_code = Some(i32::from(error.code));
+                client_error
             })
         })
     }

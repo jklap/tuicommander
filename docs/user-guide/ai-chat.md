@@ -51,7 +51,8 @@ its own terminals and repositories rather than the default install's.
 - **Stop** cancels the turn. **Pause** and **Resume** hold it where ego supports
   them; **Compact** shortens the conversation. Each button is drawn only when ego
   advertised that extension, so a build without it shows no button rather than a
-  button that fails.
+  button that fails. Resume remains available when a paused turn ends at its
+  boundary; select it to continue the conversation.
 - **Model, reasoning effort and mode** come from the options the session
   publishes. There is no list of models in TUICommander: the session is asked,
   and the answer is what the control bar draws. This changes one conversation.
