@@ -141,17 +141,27 @@ that invocation.
 Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
 once while the command runs in a separate process group. The command's stdout
 and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
-When it finishes, TUICommander sends one `BG DONE exit=<code> log=<log> cmd=…`
-wake to the originating session. If that session is busy, the wake is queued
-until it becomes idle. The command works on macOS, Linux, and Windows.
+When it finishes, `tuic` requests one `BG DONE exit=<code> log=<log> cmd=…`
+wake for the originating session. If that session is busy, the wake is queued
+until it becomes idle. `<log>.wake` records the request outcome as JSON:
+`{"status":"queued"}`, `{"status":"mailed","queue_error":"…"}`, or
+`{"status":"failed","error":"…"}`. A queue lookup or request failure falls
+back to MCP agent mail addressed to the same `TUIC_SESSION`; that mail includes
+the `BG DONE` text and the queue error. `queued` means the queue took the
+request, not that the agent later submitted it. `mailed` means the mail was
+surfaced to the caller; inbox-only mail remains a failure. The command works
+on macOS, Linux, and Windows.
 
 ```bash
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
-command. A wake delivery failure is appended to the log after the exit file
-is written.
+command. The launcher prints the wake-status path and removes stale `.exit`
+and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`
+for command completion and `.wake` for both queue and mail failures. Both
+errors are also appended to the log. Neither status file can start a new agent
+turn while TUICommander is unavailable.
 
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)
