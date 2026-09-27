@@ -123,6 +123,9 @@ main thread. Each frontend pushes its whole watcher set through
 8, least recently synced evicted). A stale `seq` answers `applied: false` and changes
 nothing — including for a client whose current set is empty, whose record is *parked*
 rather than removed so that a delayed older sync cannot resurrect a disposed set.
+Tauri IPC registrations also carry their WebView label. A document navigation or
+window destruction removes that WebView's sets before a replacement document
+registers; browser clients remain independent and use the bounded eviction path.
 
 **The frontend re-syncs every 30 s while it holds any watcher.** Rust is the only source
 of lines, so a client the backend does not know about is blind with no local symptom, and
@@ -213,6 +216,9 @@ than flag:
   dead instance's calls against the new gate: without the epoch its late ack
   credits frames the new terminal never received, and its late unsubscribe
   deletes the live channel and leaves a mounted terminal blank.
+  When the main WebView starts a new document, its old channels and gates are
+  removed together. The frame ticker then sees no desktop subscriber for an
+  unmounted terminal; a newly mounted terminal installs a fresh channel and gate.
 - **Browser/WS.** The `watch` channel keeps only the newest value, so a slow
   client silently skips frames. Frames carry a Rust-internal `seq`
   (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid
