@@ -631,6 +631,13 @@ fn preserve_submodule_refs(
             .ok_or_else(|| format!("Cannot parse submodule ref in {submodule_path}: {line}"))?;
         tips.push((name.to_string(), oid.to_string()));
     }
+    let reflog = git_cmd(&source)
+        .args(["reflog", "show", "--all", "--format=%H"])
+        .run()
+        .map_err(|e| format!("Cannot inspect submodule reflog in {submodule_path}: {e}"))?;
+    for oid in reflog.stdout.lines() {
+        tips.push((format!("reflog/{oid}"), oid.to_string()));
+    }
     let namespace = format!(
         "refs/tuic/preserved/{}/{}/{}/",
         hex::encode(worktree.to_string_lossy().as_bytes()),
@@ -1213,6 +1220,19 @@ fn preserve_missing_worktree_modules(
                 ])
                 .run()
                 .map_err(|e| format!("Cannot inspect missing submodule HEAD {relative}: {e}"))?;
+            let reflog = git_cmd(base_repo)
+                .args([
+                    "--git-dir",
+                    &path.to_string_lossy(),
+                    "--work-tree",
+                    &base_repo.to_string_lossy(),
+                    "reflog",
+                    "show",
+                    "--all",
+                    "--format=%H",
+                ])
+                .run()
+                .map_err(|e| format!("Cannot inspect missing submodule reflog {relative}: {e}"))?;
             // A deleted checkout leaves core.worktree pointing at a path that no
             // longer exists. Bundle from its gitdir with an explicit live worktree
             // so upload-pack never tries to chdir into the vanished checkout.
@@ -1232,6 +1252,7 @@ fn preserve_missing_worktree_modules(
                     &bundle.path().to_string_lossy(),
                     "HEAD",
                     "--all",
+                    "--reflog",
                 ])
                 .run()
                 .map_err(|e| format!("Cannot bundle missing submodule {relative}: {e}"))?;
@@ -1262,6 +1283,13 @@ fn preserve_missing_worktree_modules(
                     "{oid}:{}{}",
                     namespace,
                     hex::encode(name.as_bytes())
+                ));
+            }
+            for oid in reflog.stdout.lines() {
+                args.push(format!(
+                    "{oid}:{}{}",
+                    namespace,
+                    hex::encode(format!("reflog/{oid}").as_bytes())
                 ));
             }
             git_cmd(&destination)
@@ -5947,6 +5975,82 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn removal_preserves_submodule_stash_history_and_reflog_only_commit() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "module-reflog-history");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        for index in 1..=2 {
+            fs::write(module.join("module.txt"), format!("stash {index}\n")).unwrap();
+            git_cmd(&module)
+                .args(["stash", "push", "-m", &format!("stash {index}")])
+                .run()
+                .unwrap();
+        }
+        let stashes = git_cmd(&module)
+            .args(["stash", "list", "--format=%H"])
+            .run()
+            .unwrap()
+            .stdout
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(stashes.len(), 2);
+        commit_file(&module, "reflog-only.txt", "detached local commit\n");
+        let reflog_only = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&module)
+            .args(["reset", "--hard", "HEAD~1"])
+            .run()
+            .unwrap();
+        assert_ne!(rev_at(&module, "HEAD").unwrap(), reflog_only);
+
+        let worktree = WorktreeInfo {
+            name: "module-reflog-history".into(),
+            path: path.clone(),
+            branch: Some("module-reflog-history".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, false).unwrap();
+        assert!(!path.exists());
+        let destination = repo.join("modules/local");
+        for oid in stashes.iter().chain(std::iter::once(&reflog_only)) {
+            git_cmd(&destination)
+                .args(["cat-file", "-e", oid])
+                .run()
+                .expect("removed module commit remains available");
+            let refs = git_cmd(&destination)
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(!refs.stdout.trim().is_empty(), "{oid} has no durable ref");
+        }
+    }
+
+    #[test]
     fn preservation_refuses_uninitialized_main_module_without_writing_superproject_refs() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
@@ -6070,6 +6174,28 @@ branch refs/heads/feat
             .unwrap();
         commit_file(&module, "local-only.txt", "local commit\n");
         let local_oid = rev_at(&module, "HEAD").unwrap();
+        for index in 1..=2 {
+            fs::write(module.join("local-only.txt"), format!("stash {index}\n")).unwrap();
+            git_cmd(&module)
+                .args(["stash", "push", "-m", &format!("stash {index}")])
+                .run()
+                .unwrap();
+        }
+        let stashes = git_cmd(&module)
+            .args(["stash", "list", "--format=%H"])
+            .run()
+            .unwrap()
+            .stdout
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(stashes.len(), 2);
+        commit_file(&module, "reflog-only.txt", "later commit\n");
+        let reflog_only = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&module)
+            .args(["reset", "--hard", "HEAD~1"])
+            .run()
+            .unwrap();
         assert!(
             git_cmd(&repo.join("modules/local"))
                 .args(["cat-file", "-e", &local_oid])
@@ -6116,6 +6242,23 @@ branch refs/heads/feat
             !refs.stdout.trim().is_empty(),
             "local commit needs a durable ref"
         );
+        for oid in stashes.iter().chain(std::iter::once(&reflog_only)) {
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", oid])
+                .run()
+                .expect("missing worktree's reflog object remains available");
+            let refs = git_cmd(&repo.join("modules/local"))
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(!refs.stdout.trim().is_empty(), "{oid} has no durable ref");
+        }
     }
 
     #[test]
