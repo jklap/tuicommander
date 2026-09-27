@@ -66,7 +66,7 @@ function createEditorTabsStore() {
 		): string {
 			const fsRoot = opts?.fsRoot ?? repoPath;
 			const existing = Object.values(base.state.tabs).find(
-				(tab) => tab.repoPath === repoPath && tab.fsRoot === fsRoot && tab.filePath === filePath,
+				(tab) => !tab.mcpUiId && tab.repoPath === repoPath && tab.fsRoot === fsRoot && tab.filePath === filePath,
 			);
 			if (existing) {
 				if (!opts?.background) base.setActive(existing.id);
@@ -87,6 +87,44 @@ function createEditorTabsStore() {
 				initialLine,
 				externalEditable: opts?.externalEditable,
 			});
+		},
+
+		/** Open a native editor tab using the MCP id, independent of its file path. */
+		addMcpFile(
+			mcpUiId: string,
+			repoPath: string,
+			filePath: string,
+			initialLine: number | undefined,
+			pinned: boolean,
+			opts: { background: boolean; externalEditable: boolean },
+		): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.mcpUiId === mcpUiId);
+			const id = existing?.id ?? base._nextId("edit");
+			const tab: EditorTabData = {
+				id,
+				mcpUiId,
+				repoPath,
+				fsRoot: repoPath,
+				filePath,
+				fileName: pathBasename(filePath) || filePath,
+				isDirty: false,
+				branchKey: branchKeyFor(repoPath),
+				initialLine,
+				externalEditable: opts.externalEditable,
+				pinned,
+				pinAcrossRepos: true,
+			};
+			if (existing) {
+				base._setState("tabs", id, tab);
+				if (!opts.background) base.setActive(id);
+				return id;
+			}
+			return opts.background ? base._addTabBackground(tab) : base._addTab(tab);
+		},
+
+		closeMcpFile(mcpUiId: string): void {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.mcpUiId === mcpUiId);
+			if (existing) base.remove(existing.id);
 		},
 
 		/** Mark a tab as dirty or clean */

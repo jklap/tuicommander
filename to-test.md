@@ -14,6 +14,7 @@
 
 ## Editor links and external Markdown tabs (2026-09-27)
 
+- [x] MCP file tabs remain visible after selecting a terminal in a repository with no active workspace; distinct MCP ids coexist and a repeated id updates its native file tab. A terminal link to an existing external Markdown path under `~/Gits/.tmp/` opens in the Markdown viewer. _(verified: targeted TabBar, useAppInit, and terminal file opening Vitest tests.)_
 - [x] Unpinned MCP native file and HTML/URL tabs hide in another repository and return when their opening repository is selected again; pinned MCP tabs stay visible across repositories. _(verified: targeted `useAppInit`, `mdTabs`, `tabManager`, and `TabBar` Vitest cases exercise scope, visibility, pinning, and retention.)_
 - [x] Cmd/Ctrl+click opens editor web links in the system browser, local paths in the matching TUICommander view, and missing paths with a toast. MCP `tuic://open` opens external Markdown in a Markdown tab. _(verified: targeted editor and MCP tab Vitest cases exercise these routes; browser and native window appearance require a visual check after integration.)_
 

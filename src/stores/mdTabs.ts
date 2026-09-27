@@ -162,6 +162,7 @@ function findFileTab(
 	return Object.values(tabs).find(
 		(tab): tab is FileTab =>
 			tab.type === "file" &&
+			!tab.mcpUiId &&
 			tab.repoPath === repoPath &&
 			(tab as FileTab).fsRoot === effectiveRoot &&
 			tab.filePath === filePath,
@@ -272,6 +273,35 @@ function createMdTabsStore() {
 			};
 			base._addTabBackground(tab);
 			return id;
+		},
+
+		/** Open a native Markdown tab using the MCP id, independent of its file path. */
+		addMcpFile(mcpUiId: string, repoPath: string, filePath: string, pinned: boolean, background: boolean): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			const id = existing?.id ?? base._nextId("md");
+			const tab: FileTab = {
+				type: "file",
+				id,
+				mcpUiId,
+				repoPath,
+				filePath,
+				fileName: pathBasename(filePath) || filePath,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: repoPath,
+				pinned,
+				pinAcrossRepos: true,
+			};
+			if (existing) {
+				base._setState("tabs", id, tab);
+				if (!background) base.setActive(id);
+				return id;
+			}
+			return background ? base._addTabBackground(tab) : base._addTab(tab);
+		},
+
+		closeMcpFile(mcpUiId: string): void {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			if (existing) base.remove(existing.id);
 		},
 
 		/** Add a virtual markdown tab (or return existing if same contentUri already open) */

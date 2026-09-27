@@ -96,7 +96,7 @@ import { prNotificationsStore } from "./stores/prNotifications";
 import { promptLibraryStore } from "./stores/promptLibrary";
 import { repoDefaultsStore } from "./stores/repoDefaults";
 import { repoSettingsStore } from "./stores/repoSettings";
-import { locateFile, repositoriesStore } from "./stores/repositories";
+import { repositoriesStore } from "./stores/repositories";
 import { settingsStore } from "./stores/settings";
 import { tasksStore } from "./stores/tasks";
 import { terminalsStore } from "./stores/terminals";
@@ -106,7 +106,7 @@ import { updaterStore } from "./stores/updater";
 import { userActivityStore } from "./stores/userActivity";
 import { worktreeManagerStore } from "./stores/worktreeManager";
 import { isTauri } from "./transport";
-import { openFileAction } from "./utils/filePreview";
+import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
@@ -513,10 +513,7 @@ const App: Component = () => {
 		// Scoped to the repo that owns the PATH. It used to relativize against the
 		// active worktree, so a path printed by an agent working in another repo
 		// opened as a tab filed under whichever repo the user happened to be on.
-		const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
-		if (!repoPath) return;
-
-		openFileAction(filePath, repoPath, fsRoot, undefined, (tabId) => {
+		openTerminalFilePath(absolutePath, (tabId) => {
 			terminalLifecycle.handleTerminalSelect(tabId);
 		});
 	};
