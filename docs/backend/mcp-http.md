@@ -1512,13 +1512,16 @@ its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
 it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
-Inbox overflow evicts only the oldest safe `tuic-auto-*` lifecycle notice.
-Lifecycle state observations are replaceable; peer mail (including mail returned
-from a waiter or terminal) is never evicted while lifecycle notices remain. It
-never evicts `TerminalPending` or waiter-owned mail, because either may still
-need a terminal-failure requeue. If the inbox contains peer mail only, or every
-lifecycle notice is in flight, `agent action=send` rejects the new message with
-an error asking the sender to retry; it does not silently discard any mail.
+The inbox retains up to 100 messages. A read returns the oldest messages after
+`since` first, so `limit` pagination cannot advance past unread mail. On overflow,
+the oldest mail at or behind the recipient's read cursor is reclaimed first. This
+includes peer mail the recipient has already consumed and does not increase
+`missed_count`. If there is no consumed mail, the oldest safe `tuic-auto-*`
+lifecycle notice may be evicted; that does increase `missed_count` because the
+recipient never received it. `TerminalPending` and waiter-owned mail are never
+evicted, even when an explicit cursor has moved past them, because delivery may
+still need a failure requeue. If no safe candidate remains, `agent action=send`
+rejects the new message and asks the sender to retry.
 System-generated lifecycle mail uses the same bound: when it is rejected because no
 safe eviction candidate remains, the recipient's next inbox read reports it through
 `missed_count`.

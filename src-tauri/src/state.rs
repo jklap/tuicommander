@@ -2310,17 +2310,12 @@ impl AppState {
         }
     }
 
-    /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
-    /// FIFO eviction. An overflow may evict only lifecycle notices whose owner
-    /// has already observed or dispatched them; peer mail stays recoverable.
-    ///
-    /// On overflow we evict the oldest safe `tuic-auto-*` lifecycle notice first.
-    /// Peer mail is never evicted, including after terminal delivery has returned
-    /// it to the inbox: peer results and task output cannot be reconstructed from
-    /// a later lifecycle state change. Every genuine eviction bumps
-    /// `agent_inbox_evictions`, surfaced as `missed_count` on the next `inbox`
-    /// read. When the inbox contains peer mail only, or every lifecycle notice is
-    /// in flight, reject the new message so its sender can retry.
+    /// Buffer a message into `recipient`'s inbox with bounded FIFO eviction.
+    /// Already-read mail is reclaimed first; it was delivered and does not count
+    /// as missed. Otherwise only a replaceable lifecycle notice can be evicted,
+    /// and that increments `missed_count`. Mail assigned to a waiter or pending
+    /// terminal delivery remains protected even if its timestamp is behind the
+    /// read cursor. Reject when no safe candidate exists so the sender can retry.
     pub(crate) fn try_push_agent_inbox(
         &self,
         recipient: &str,
@@ -2331,7 +2326,11 @@ impl AppState {
             .entry(recipient.to_string())
             .or_default();
         let mut gate = gate_entry.lock();
-        let (evicted_id, stored_timestamp) = {
+        let read_cursor = self
+            .agent_read_cursor
+            .get(recipient)
+            .map(|entry| *entry.value());
+        let (evicted, stored_timestamp) = {
             let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
             if let Some(last_timestamp) = inbox.back().map(|message| message.timestamp)
                 && msg.timestamp <= last_timestamp
@@ -2342,18 +2341,29 @@ impl AppState {
                 msg.timestamp = last_timestamp.saturating_add(1);
             }
             let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
-                let evict_idx = inbox
-                    .iter()
-                    .position(|message| {
-                        message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
-                            && matches!(
-                                gate.owners.get(&message.id),
-                                None | Some(AgentDeliveryOwner::WaiterObserved)
-                                    | Some(AgentDeliveryOwner::TerminalDispatched)
-                            )
+                let consumed_idx = inbox.iter().position(|message| {
+                    read_cursor.is_some_and(|cursor| message.timestamp <= cursor)
+                        && matches!(
+                            gate.owners.get(&message.id),
+                            None | Some(AgentDeliveryOwner::WaiterObserved)
+                                | Some(AgentDeliveryOwner::TerminalDispatched)
+                        )
+                });
+                let evict_idx = consumed_idx
+                    .or_else(|| {
+                        inbox.iter().position(|message| {
+                            message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
+                                && matches!(
+                                    gate.owners.get(&message.id),
+                                    None | Some(AgentDeliveryOwner::WaiterObserved)
+                                        | Some(AgentDeliveryOwner::TerminalDispatched)
+                                )
+                        })
                     })
                     .ok_or(AgentInboxFull)?;
-                inbox.remove(evict_idx).map(|message| message.id)
+                inbox
+                    .remove(evict_idx)
+                    .map(|message| (message.id, consumed_idx.is_none()))
             } else {
                 None
             };
@@ -2361,11 +2371,13 @@ impl AppState {
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
-        if let Some(evicted_id) = evicted_id {
-            *self
-                .agent_inbox_evictions
-                .entry(recipient.to_string())
-                .or_insert(0) += 1;
+        if let Some((evicted_id, missed)) = evicted {
+            if missed {
+                *self
+                    .agent_inbox_evictions
+                    .entry(recipient.to_string())
+                    .or_insert(0) += 1;
+            }
             gate.owners.remove(&evicted_id);
         }
         gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
@@ -2751,25 +2763,32 @@ impl AppState {
             .entry(tuic_session.to_string())
             .or_default();
         let mut gate = gate_entry.lock();
-        let mut messages: Vec<_> = self
+        let messages: Vec<_> = self
             .agent_inbox
             .get(tuic_session)
             .map(|inbox| {
                 inbox
                     .iter()
-                    .rev()
                     .filter(|message| message.timestamp > since)
                     .take(limit)
                     .cloned()
                     .collect()
             })
             .unwrap_or_default();
-        messages.reverse();
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
             .max()
             .unwrap_or(since);
+        // Publish the read position while holding the delivery gate. A sender
+        // cannot see a full inbox between this observation and cursor advancement.
+        let mut cursor = self
+            .agent_read_cursor
+            .entry(tuic_session.to_string())
+            .or_insert(0);
+        if read_through > *cursor {
+            *cursor = read_through;
+        }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
         if read_through == 0
             || gate
@@ -5083,6 +5102,51 @@ mod tests {
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
         assert!(inbox.iter().all(|message| message.id != "overflow"));
+    }
+
+    #[test]
+    fn push_agent_inbox_reclaims_read_mail_without_touching_delivery_leases() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        state.push_agent_inbox("other-peer", make_msg("other-mail"));
+
+        state.push_agent_inbox(recipient, make_msg("terminal-pending"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "terminal-pending", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("waiter-owned"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "waiter-owned", true),
+            AgentDeliveryAssignment::Waiter
+        );
+        state.push_agent_inbox(recipient, make_msg("consumed"));
+        let observed = state.observe_agent_inbox(recipient, 0, 3);
+        assert_eq!(observed.len(), 3);
+        assert_eq!(observed[2].id, "consumed");
+
+        for index in 0..(AGENT_INBOX_CAPACITY - 3) {
+            state.push_agent_inbox(recipient, make_msg(&format!("unread-{index}")));
+        }
+        state
+            .try_push_agent_inbox(recipient, make_msg("new-mail"))
+            .expect("consumed peer mail frees one slot");
+
+        let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
+        assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
+        assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
+        assert!(inbox.iter().any(|message| message.id == "waiter-owned"));
+        assert!(inbox.iter().any(|message| message.id == "unread-0"));
+        assert!(inbox.iter().any(|message| message.id == "new-mail"));
+        assert!(!inbox.iter().any(|message| message.id == "consumed"));
+        assert!(!state.agent_inbox_evictions.contains_key(recipient));
+        assert_eq!(
+            state.agent_inbox.get("other-peer").unwrap()[0].id,
+            "other-mail"
+        );
+        drop(inbox);
+        state.finish_agent_wait(recipient, lease, 0, false);
     }
 
     #[test]
