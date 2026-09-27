@@ -5203,7 +5203,12 @@ branch refs/heads/feat
 
         const BODY: &[u8] = b"#!/bin/sh\ntouch .hook-ran\n";
 
-        let dir = Path::new(env!("OUT_DIR")).join("test-hooks");
+        // with-test-tmp.sh removes each run's temp root. Keep the executable
+        // in its stable parent so later runs reuse the scanned inode.
+        let dir = tuic_test_support::test_temp_root()
+            .parent()
+            .expect("test temp root has a parent")
+            .join("tuic-git/test-hooks");
         fs::create_dir_all(&dir).expect("create shared hook dir");
         let hook = dir.join("post-checkout");
 

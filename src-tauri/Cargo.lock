@@ -9554,12 +9554,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "strip-ansi-escapes",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "tuic-core",
  "tuic-test-support",
+ "url",
  "uuid",
 ]
 
