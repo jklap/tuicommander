@@ -89,6 +89,7 @@ export interface TerminalData {
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
 	lastDataAt: number | null; // Timestamp of last PTY output
+	lastActivityAt: number | null; // Backend timestamp of last semantic session activity
 	idleSince: number | null; // Timestamp when shellState transitioned to idle
 	lastPrompt: string | null; // Last relevant user prompt (>= 10 words), set by Rust
 	ptyDescription: string | null; // Orchestrator-supplied description of assigned PTY work
@@ -131,6 +132,7 @@ type TerminalCreateData = Omit<
 	| "pendingInitCommand"
 	| "usageLimit"
 	| "lastDataAt"
+	| "lastActivityAt"
 	| "idleSince"
 	| "lastPrompt"
 	| "ptyDescription"
@@ -441,6 +443,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				lastActivityAt: null,
 				idleSince: null,
 				lastPrompt: null,
 				ptyDescription: null,
@@ -493,6 +496,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				lastActivityAt: null,
 				idleSince: null,
 				lastPrompt: null,
 				ptyDescription: null,

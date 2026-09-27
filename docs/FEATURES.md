@@ -284,7 +284,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - **Disabled by default.** Enable it via **Settings → Appearance → Tabs → Nested Terminal Tabs** (`tab_tree_enabled`). The change applies immediately; no restart is required.
 - While disabled, the sidebar keeps the normal branch rows and does not render the activity card or nested agent/session rows. Missing nested agents therefore usually means this opt-in setting is still off.
 - When enabled, every branch with at least one open terminal session gets an expandable activity card. Enabling the setting does not create sessions: an agent appears only after it is running in a terminal assigned to that branch.
-- Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact activity age, and the same effective status used by the Activity Dashboard. Plain shells remain visible as terminal rows.
+- Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact age since the backend's last semantic session activity, and the same effective status used by the Activity Dashboard. Terminal redraws do not reset this age. Plain shells remain visible as terminal rows.
 - Clicking a row switches to that session.
 - Every branch shows its list by default (`tabsCollapsed` absent); collapsing is remembered per workspace. The branch icon toggles the list: it swaps to a chevron on hover or keyboard focus (Enter/Space), inside the icon's own box, so branch rows have no chevron column and badges keep one right edge. Clicking the row only opens the branch — it never expands or collapses the list.
 - Single-session branches can expand too.

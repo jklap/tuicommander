@@ -38,6 +38,7 @@ interface TerminalData {
   pendingInitCommand: string | null;   // Setup/run script to auto-execute on first shell idle
   usageLimit: { percentage: number; limitType: string } | null;
   lastDataAt: number | null;        // Timestamp of last PTY output
+  lastActivityAt: number | null;    // Backend timestamp of last semantic session activity
   lastPrompt: string | null;        // Last relevant user prompt (>= 10 words), set by Rust
   agentIntent: string | null;       // LLM-declared intent via intent: token
   currentTask: string | null;       // Current agent task from status-line parsing

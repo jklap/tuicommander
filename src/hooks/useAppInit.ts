@@ -116,6 +116,7 @@ export interface AppInitDeps {
 					agent_intent?: string | null;
 					last_prompt?: string | null;
 					background_work?: boolean;
+					last_activity_ms?: number;
 				} | null;
 			}>
 		>;
@@ -904,6 +905,7 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 				awaitingInputConfident: session.state?.question_confident === true,
 				backgroundWork: session.state?.background_work ?? false,
+				lastActivityAt: session.state?.last_activity_ms ?? null,
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
