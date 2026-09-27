@@ -18,15 +18,15 @@ export interface CommentOverlayProps {
 	/** Called with the new or updated comment when the user saves. `occurrenceIndex`
 	 *  is the 0-based ordinal of the selected text among identical rendered
 	 *  occurrences, used to anchor the correct instance in the source. */
-	onSave: (comment: TweakComment, occurrenceIndex: number) => void;
+	onSave: (comment: TweakComment, occurrenceIndex: number) => Promise<boolean> | boolean | undefined;
 	/** Save a whole rendered Markdown block using its exact raw-source range.
 	 *  `comment.highlighted` is the raw source `blockSource` returned when the
 	 *  popover opened, so the caller can refuse a range the file moved under. */
-	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => void;
+	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => Promise<boolean> | boolean | undefined;
 	/** Raw source of a block range in the document currently rendered. */
 	blockSource?: (range: { start: number; end: number }) => string;
 	/** Called with the comment id when the user deletes a comment. */
-	onDelete: (id: string) => void;
+	onDelete: (id: string) => Promise<boolean> | boolean | undefined;
 }
 
 interface PopoverState {
@@ -309,14 +309,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		});
 	};
 
-	const handleSave = () => {
+	const handleSave = async () => {
 		const state = popover();
 		if (!state) return;
 
 		if (state.mode === "new") {
 			if (state.sourceStart !== undefined && state.sourceEnd !== undefined) {
 				if (!draft().trim()) return;
-				props.onSaveBlock?.(
+				const saved = await props.onSaveBlock?.(
 					{
 						id: generateTweakCommentId(),
 						highlighted: state.sourceSnapshot ?? "",
@@ -326,12 +326,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 					},
 					{ start: state.sourceStart, end: state.sourceEnd },
 				);
-				closePopover();
+				if (saved !== false) closePopover();
 				return;
 			}
 			const highlighted = pendingSelection;
 			if (!highlighted || !draft().trim()) return;
-			props.onSave(
+			const saved = await props.onSave(
 				{
 					id: generateTweakCommentId(),
 					highlighted,
@@ -340,11 +340,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 				},
 				pendingOccurrence,
 			);
+			if (saved !== false) closePopover();
 		} else {
 			// Edit existing — preserve original createdAt, update only the comment text.
 			// Occurrence ordinal is irrelevant for edits (matched by id).
 			if (!state.existingId || !state.existingHighlighted) return;
-			props.onSave(
+			const saved = await props.onSave(
 				{
 					id: state.existingId,
 					highlighted: state.existingHighlighted,
@@ -353,15 +354,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 				},
 				0,
 			);
+			if (saved !== false) closePopover();
 		}
-		closePopover();
 	};
 
-	const handleDelete = () => {
+	const handleDelete = async () => {
 		const state = popover();
 		if (!state?.existingId) return;
-		props.onDelete(state.existingId);
-		closePopover();
+		if ((await props.onDelete(state.existingId)) !== false) closePopover();
 	};
 
 	const closePopover = () => {
