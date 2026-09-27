@@ -1699,6 +1699,13 @@ impl Default for McpState {
     }
 }
 
+#[cfg(feature = "desktop")]
+pub(crate) struct DesktopGridChannel {
+    pub(crate) channel: tauri::ipc::Channel<tauri::ipc::Response>,
+    pub(crate) webview_label: String,
+    pub(crate) epoch: u64,
+}
+
 /// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
 /// the raw-byte flight recorder beside it, and the channels and gates that
 /// deliver frames to a frontend.
@@ -1718,7 +1725,7 @@ pub(crate) struct GridState {
     /// Binary on purpose: `Channel<Vec<u8>>` serialises to a JSON number array,
     /// `Channel<Response>` keeps the raw bytes. See `send_grid_frame`.
     #[cfg(feature = "desktop")]
-    pub(crate) channels: DashMap<String, tauri::ipc::Channel<tauri::ipc::Response>>,
+    pub(crate) channels: DashMap<String, DesktopGridChannel>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
     /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
     pub(crate) watch: DashMap<String, crate::grid_watch::GridWatchTx>,
