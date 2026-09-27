@@ -1861,6 +1861,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
+- From a session header, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
+- Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
 - Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
 - Switch from View to Edit for source changes, then save through the existing file commands and return to View
 - Refuse files over 1 MB before reading and show a clear message for binary or non-text files
@@ -1882,6 +1884,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes
 - Back navigation to session list
+- Header Files button opens the session repository without going through the repository picker
 
 ### 18.4 Question Banner
 - Persistent overlay when any session has `awaiting_input` state
