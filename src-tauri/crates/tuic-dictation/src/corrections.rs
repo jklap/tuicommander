@@ -104,7 +104,7 @@ impl TextCorrector {
 
     /// Default config file path: <config_dir>/dictation-corrections.json
     pub fn default_path() -> PathBuf {
-        crate::config::config_dir().join("dictation-corrections.json")
+        tuic_core::config_dir::config_dir().join("dictation-corrections.json")
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self, String> {

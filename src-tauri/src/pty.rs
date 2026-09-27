@@ -9178,39 +9178,8 @@ fn append_and_flush(
     (id, !still_parked, queued_command_count(state, session_id))
 }
 
-/// What became of a hands-free turn written to an agent's composer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VoiceWrite {
-    /// Typed and submitted. Also returned when the write was cut short after
-    /// its first byte: typing it again could submit it twice.
-    Written,
-    /// Nothing typed. The hands-free side keeps the turn and retries.
-    Held(VoiceHold),
-}
-
-/// Why a hands-free turn was not typed yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VoiceHold {
-    /// A confident question or permission dialog owns the composer.
-    Question,
-    /// The user has a draft in the composer.
-    Draft,
-    /// Another write holds the composer, or an earlier one is uncertain.
-    InFlight,
-    /// The PTY refused the first byte.
-    WriteNotStarted,
-}
-
-impl VoiceHold {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Question => "confident question on screen",
-            Self::Draft => "partial user input in the composer",
-            Self::InFlight => "another write holds the composer",
-            Self::WriteNotStarted => "the write did not start",
-        }
-    }
-}
+#[cfg(feature = "desktop")]
+pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 
 /// Type one hands-free turn into an agent's composer now — busy or idle.
 ///
@@ -9224,6 +9193,7 @@ impl VoiceHold {
 /// confident question (speech must never answer a permission dialog) and a
 /// draft in the composer. A held turn stays with the caller. The write itself
 /// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
+#[cfg(feature = "desktop")]
 pub(crate) fn write_voice_turn(
     state: &AppState,
     session_id: &str,
@@ -9274,6 +9244,7 @@ pub(crate) fn write_voice_turn(
 /// so an unsupported target is refused where the user can see it rather than
 /// after the first utterance. Deliberately not a "can we reach it somehow"
 /// check: an ACP target has no PTY composer, and there is no fallback for it.
+#[cfg(feature = "desktop")]
 pub(crate) fn session_accepts_voice(state: &AppState, session_id: &str) -> bool {
     state.session_maps.sessions.contains_key(session_id) && session_is_agent(state, session_id)
 }

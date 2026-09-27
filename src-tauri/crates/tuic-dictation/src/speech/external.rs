@@ -499,7 +499,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{
+    use tuic_test_support::{
         chain, copy_file_script, fail_with_stderr_script, host_shell, sleep_script, touch_script,
     };
 
