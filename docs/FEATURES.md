@@ -1850,7 +1850,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
-- Open UTF-8 text files read-only, then explicitly enter edit mode to save changes through the existing file commands
+- Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
+- Switch from View to Edit for source changes, then save through the existing file commands and return to View
 - Refuse files over 1 MB before reading and show a clear message for binary or non-text files
 
 ### 18.3 Session Detail Screen

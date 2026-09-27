@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
@@ -6,6 +8,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
 
 const files = new Map([
 	["src/hello.txt", "hello\n"],
+	["src/guide.md", "# Guide\n\n**Important** note.\n"],
 	["src/null.dat", "abc\0def"],
 ]);
 const calls: string[] = [];
@@ -19,6 +22,7 @@ vi.mock("../../transport", () => ({
 			if (args?.subdir === "src")
 				return [
 					{ name: "hello.txt", path: "src/hello.txt", is_dir: false, size: 6 },
+					{ name: "guide.md", path: "src/guide.md", is_dir: false, size: 29 },
 					{ name: "huge.txt", path: "src/huge.txt", is_dir: false, size: 1_048_577 },
 					{ name: "image.bin", path: "src/image.bin", is_dir: false, size: 32 },
 					{ name: "null.dat", path: "src/null.dat", is_dir: false, size: 7 },
@@ -46,6 +50,7 @@ const openRepo = async (getByRole: ReturnType<typeof render>["getByRole"]) => {
 afterEach(() => {
 	cleanup();
 	files.set("src/hello.txt", "hello\n");
+	files.set("src/guide.md", "# Guide\n\n**Important** note.\n");
 	calls.length = 0;
 	failSave = false;
 });
@@ -66,11 +71,30 @@ describe("FilesScreen", () => {
 		await openRepo(view.getByRole);
 		await fireEvent.click(view.getByRole("button", { name: /hello.txt/ }));
 		await waitFor(() => expect(view.getByText("hello")).toBeTruthy());
+		expect(view.container.querySelector("pre")?.textContent).toBe("hello\n");
+		expect(view.container.querySelector("#markdown-content")).toBeNull();
 		expect(view.queryByRole("textbox")).toBeNull();
 		await fireEvent.click(view.getByRole("button", { name: "Edit" }));
 		await fireEvent.input(view.getByRole("textbox"), { target: { value: "changed\n" } });
 		await fireEvent.click(view.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(files.get("src/hello.txt")).toBe("changed\n"));
+		expect(view.queryByRole("textbox")).toBeNull();
+	});
+
+	it("renders a Markdown file in View, edits source, and returns to rendered View after Save", async () => {
+		const view = render(() => <FilesScreen />);
+		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+		await openRepo(view.getByRole);
+		await fireEvent.click(view.getByRole("button", { name: /guide.md/ }));
+		await waitFor(() => expect(view.container.querySelector("#markdown-content h1")?.textContent).toBe("Guide"));
+		expect(view.container.querySelector("#markdown-content strong")?.textContent).toBe("Important");
+		expect(view.queryByRole("textbox")).toBeNull();
+		await fireEvent.click(view.getByRole("button", { name: "Edit" }));
+		expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("# Guide\n\n**Important** note.\n");
+		await fireEvent.input(view.getByRole("textbox"), { target: { value: "## Revised\n\nSaved from mobile.\n" } });
+		await fireEvent.click(view.getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(view.container.querySelector("#markdown-content h2")?.textContent).toBe("Revised"));
+		expect(files.get("src/guide.md")).toBe("## Revised\n\nSaved from mobile.\n");
 		expect(view.queryByRole("textbox")).toBeNull();
 	});
 

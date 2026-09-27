@@ -84,3 +84,11 @@
 .editor { resize: vertical; outline: none; }
 .viewer { -webkit-user-select: text; user-select: text; }
 .editor { -webkit-user-select: text; user-select: text; }
+
+.markdownView,
+.markdownView * {
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.markdownView { min-height: 50vh; }
