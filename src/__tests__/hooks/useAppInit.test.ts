@@ -126,6 +126,7 @@ describe("initApp", () => {
 						pinned: boolean;
 						url: string;
 						focus: boolean;
+						origin_repo_path: string;
 					};
 			  }) => void)
 			| null = null;
@@ -153,6 +154,7 @@ describe("initApp", () => {
 				pinned: false,
 				url: `tuic://open/${targetRepo}/reports/comparison.md`,
 				focus: true,
+				origin_repo_path: sourceRepo,
 			},
 		});
 
@@ -239,6 +241,48 @@ describe("initApp", () => {
 		expect(tab).toMatchObject({ type: "file", filePath: "/Users/boss/Gits/.tmp/boss/ego-ux-eval.md" });
 		expect(mdTabsStore.getVisibleIds(null)).toContain(tab!.id);
 		expect(editorTabsStore.getActive()).toBeUndefined();
+	});
+
+	it.each([true, false])("binds an external MCP file to its caller repo with focus=%s", async (focus) => {
+		let uiTabCallback:
+			| ((event: {
+					payload: {
+						id: string;
+						title: string;
+						html: string;
+						pinned: boolean;
+						url: string;
+						focus: boolean;
+						origin_repo_path: string;
+					};
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		for (const repo of ["/repos/orchestrator", "/repos/boss"]) {
+			repositoriesStore.add({ path: repo, displayName: repo });
+			repositoriesStore.setWorkspace(repo, "main", { worktreePath: repo });
+			repositoriesStore.setActiveWorkspace(repo, "main");
+		}
+		repositoriesStore.setActive("/repos/boss");
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: "boss-open-questions",
+				title: "Questions",
+				html: "",
+				pinned: false,
+				url: "tuic://open//Users/boss/Gits/.tmp/boss/open-questions.md",
+				focus,
+				origin_repo_path: "/repos/orchestrator",
+			},
+		});
+		const tab = Object.values(mdTabsStore.state.tabs).find((item) => item.mcpUiId === "boss-open-questions");
+		expect(tab?.repoPath).toBe("/repos/orchestrator");
+		expect(repositoriesStore.state.activeRepoPath).toBe(focus ? "/repos/orchestrator" : "/repos/boss");
+		expect(mdTabsStore.getVisibleIds("/repos/orchestrator|main")).toContain(tab!.id);
 	});
 
 	it("uses MCP ids for native Markdown tab identity", async () => {

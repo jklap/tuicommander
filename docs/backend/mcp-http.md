@@ -1378,9 +1378,11 @@ the registered repository that owns an absolute target path before activating
 the native file tab. This keeps repo-scoped tabs visible in the tab bar instead
 of rendering their content under an unrelated active repository. Background
 requests (`focus=false`) do not change repository context.
-Absolute files outside a registered repository use the active repository as
-their tab scope. HTML and URL tabs use the repository active when opened as
-well, falling back to the MCP caller's registered repository if none is active.
+Absolute files outside a registered repository and HTML/URL tabs use the MCP
+caller's registered repository as their tab scope, even when another repository
+is visible. A focused request switches to that repository; `focus=false`
+preserves the visible repository. If the caller has no registered repository,
+these tabs fall back to the currently active repository.
 These tabs remain in the existing tab stores while another repository is
 selected. Unpinned tabs reappear when the opening repository is selected again;
 pinned MCP tabs remain visible across repositories. Unpinning restores the

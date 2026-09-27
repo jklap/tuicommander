@@ -381,8 +381,8 @@ function createMdTabsStore() {
 		 * Open or update a UI tab (MCP-driven). Deduplicates on pluginId alone.
 		 * focus=true (default): switch to this tab. focus=false: update content silently.
 		 *
-		 * Scope to the repo visible when opened. If none is active, use the
-		 * caller's registered repo as a fallback.
+		 * Scope to the caller's registered repo when known, falling back to the
+		 * visible repo only for callers without repository metadata.
 		 */
 		openUiTab(
 			pluginId: string,
@@ -393,6 +393,7 @@ function createMdTabsStore() {
 			focus = true,
 			originRepoPath?: string,
 		): string {
+			const repoPath = resolveRepoForCwd(originRepoPath) ?? repositoriesStore.state.activeRepoPath;
 			const existing = Object.values(base.state.tabs).find(
 				(tab) => tab.type === "plugin-panel" && (tab as PluginPanelTab).pluginId === pluginId,
 			) as PluginPanelTab | undefined;
@@ -408,6 +409,17 @@ function createMdTabsStore() {
 					base._setState("tabs", existing.id, "url" as keyof MdTabData, url as MdTabData[keyof MdTabData]);
 				});
 				base.setPinned(existing.id, pinned, true);
+				if (repoPath) {
+					base._setState("tabs", existing.id, "repoPath" as keyof MdTabData, repoPath as MdTabData[keyof MdTabData]);
+					base._setState(
+						"tabs",
+						existing.id,
+						"branchKey" as keyof MdTabData,
+						branchKeyFor(repoPath) as MdTabData[keyof MdTabData],
+					);
+				}
+				if (focus && repoPath && repoPath !== repositoriesStore.state.activeRepoPath)
+					repositoriesStore.setActive(repoPath);
 				if (focus) base.setActive(existing.id);
 				return existing.id;
 			}
@@ -426,13 +438,13 @@ function createMdTabsStore() {
 				pinAcrossRepos: true,
 				selfStyled: true,
 			};
-			const repoPath = repositoriesStore.state.activeRepoPath ?? resolveRepoForCwd(originRepoPath);
 			if (repoPath) {
 				tab.repoPath = repoPath;
 				tab.branchKey = branchKeyFor(repoPath);
 			}
 			if (url) tab.url = url;
 			if (focus) {
+				if (repoPath && repoPath !== repositoriesStore.state.activeRepoPath) repositoriesStore.setActive(repoPath);
 				return base._addTab(tab);
 			}
 			base._addTabBackground(tab);
