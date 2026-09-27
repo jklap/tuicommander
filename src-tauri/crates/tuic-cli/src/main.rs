@@ -273,7 +273,7 @@ enum AgentAction {
     /// List registered peers
     ListPeers {
         #[arg(long)]
-        project: Option<String>,
+        path: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -333,7 +333,7 @@ enum RepoAction {
     },
     WorktreeRemove {
         path: String,
-        workspace_id: String,
+        branch: String,
         #[arg(long)]
         force: bool,
         #[arg(long)]
@@ -878,19 +878,19 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 json,
             );
         }
-        AgentAction::ListPeers { project, json } => {
+        AgentAction::ListPeers { path, json } => {
             let payload = optional_fields(
                 serde_json::json!({"action": "list_peers"}),
-                [("project", project.map(serde_json::Value::from))],
+                [("path", path.map(serde_json::Value::from))],
             );
             print_mcp_payload(&mcp::McpClient::connect()?.call("agent", payload)?, json);
         }
         AgentAction::Stats { json } => {
-            print_mcp_payload(
-                &mcp::McpClient::connect()?
-                    .call("agent", serde_json::json!({"action": "stats"}))?,
-                json,
-            );
+            let response = ipc::get("/stats").map_err(|e| e.to_string())?;
+            if !response.is_success() {
+                return Err(format!("Server error: {}", response.status));
+            }
+            print_mcp_payload(&response.json().map_err(|e| e.to_string())?, json);
         }
     }
 
@@ -1073,11 +1073,11 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
         ),
         RepoAction::WorktreeRemove {
             path,
-            workspace_id,
+            branch,
             force,
             json,
         } => (
-            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "workspace_id": workspace_id, "force": force}),
+            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "branch": branch, "force": force}),
             json,
         ),
     };
@@ -1754,6 +1754,12 @@ mod tests {
             Some(Command::Story { action, project: Some(project), session_id: None })
                 if action == "{\"action\":\"list_plans\"}" && project == "/repo"
         ));
+    }
+
+    #[test]
+    fn agent_peer_filter_uses_path_name() {
+        let parsed = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"]);
+        assert!(parsed.is_ok(), "{}", parsed.err().unwrap());
     }
 
     fn tokens(args: &[&str]) -> Vec<String> {

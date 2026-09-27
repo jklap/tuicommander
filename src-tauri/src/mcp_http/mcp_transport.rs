@@ -1093,16 +1093,31 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, process_stats, wait";
-const AGENT_ACTIONS: &str =
-    "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list";
+const SESSION_ACTIONS: &str =
+    "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, wait";
+const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
+const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 const VOICE_ACTIONS: &str = "speak, stop, status";
 const REMOTE_ACTIONS: &str = "preview, update";
+
+fn removed_native_action_replacement(tool: &str, action: &str) -> Option<&'static str> {
+    match (tool, action) {
+        ("agent", "detect") => Some("GET /agents"),
+        ("agent", "stats") => Some("GET /stats"),
+        ("agent", "metrics") => Some("GET /metrics"),
+        ("session", "process_stats") => Some("GET /process/stats"),
+        ("repo", "prs") => Some("GET /repo/prs"),
+        ("repo", "issues") => Some("GET /repo/issues"),
+        ("repo", "close_issue") => Some("POST /repo/issues/close"),
+        ("repo", "reopen_issue") => Some("POST /repo/issues/reopen"),
+        ("repo", "ci_logs") => Some("GET /repo/ci-failure-logs"),
+        _ => None,
+    }
+}
 
 async fn handle_remote_update(
     state: &Arc<AppState>,
@@ -1149,9 +1164,9 @@ fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts three forms of the same address: the PTY id, the tuic_session, or the alias (e.g. tu-1).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume" },
                 "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
@@ -1172,9 +1187,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
+                "action": { "type": "string", "description": "One of: spawn, wait, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
                 "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
@@ -1190,10 +1205,11 @@ fn native_tool_definitions() -> serde_json::Value {
                 "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
                 "replaces": { "type": "string", "description": "Prior tuic_session this registration supersedes (action=register). Required to inherit the old identity's inbox when reconnecting under a new UUID — there is no implicit link across protocol sessions, and identity is never guessed. Ignored when that identity still owns a live PTY; the response then reports mail_stranded." },
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
-                "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
+                "path": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
                 "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
+                "limit": { "type": "integer", "minimum": 0, "description": "Maximum inbox entries to return (action=inbox; default 50)" },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
         },
@@ -1217,18 +1233,15 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- ci_logs: Fetch bounded, terminal-safe failed CI logs for a branch. Requires path and branch.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and workspace_id.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete)" },
-                "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
+                "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
-                "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
-                "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
-                "branch": { "type": "string", "description": "Local branch name (required for action=branch_delete; optional for worktree_create)" },
+                "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove and branch_delete; optional for worktree_create)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
                 "input": { "type": "object", "description": "Typed action payload for progress_list. Unknown fields are rejected." }
@@ -1865,14 +1878,11 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(
-        action,
-        "create" | "input" | "kill" | "close" | "process_stats"
-    )
+    matches!(action, "create" | "input" | "kill" | "close")
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "spawn" | "detect" | "send")
+    matches!(action, "spawn" | "send")
 }
 
 async fn handle_mcp_tool_call_with_context(
@@ -1894,6 +1904,22 @@ async fn handle_mcp_tool_call_with_context(
     {
         return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
+    if let Some(action) = args["action"].as_str()
+        && let Some(replacement) = removed_native_action_replacement(name, action)
+    {
+        return serde_json::json!({
+            "error": format!("{name} action={action} was removed; use {replacement}")
+        });
+    }
+    if name == "repo"
+        && matches!(
+            args["action"].as_str(),
+            Some("worktree_lifecycle" | "worktree_remove")
+        )
+        && args.get("workspace_id").is_some()
+    {
+        return serde_json::json!({"error": "repo parameter workspace_id was renamed to branch"});
+    }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
         .and_then(|sid| state.mcp.sessions.get(sid))
@@ -1906,7 +1932,8 @@ async fn handle_mcp_tool_call_with_context(
             // composer command, while `input` writes raw bytes to a PTY's stdin
             // (arbitrary command execution on a shell session, unfiltered context
             // injection on an agent session). `create`/`kill`/`close` spawn or
-            // destroy sessions, and `pause`/`resume` halt/resume output buffering
+            // destroy sessions, `resize`/`rename` change their presentation, and
+            // `pause`/`resume` halt/resume output buffering
             // (a remote `pause` on any session is a DoS). A non-loopback MCP client
             // (authenticated remote, or admitted via lan_auth_bypass) must not reach
             // them — remote terminal control is served separately by the auth-gated
@@ -1925,7 +1952,7 @@ async fn handle_mcp_tool_call_with_context(
                 handle_session_submit(state, args, false).await
             } else if matches!(
                 action,
-                "create" | "input" | "kill" | "close" | "pause" | "resume"
+                "create" | "input" | "kill" | "close" | "pause" | "resume" | "resize" | "rename"
             ) && !addr.ip().is_loopback()
             {
                 serde_json::json!({
@@ -1942,7 +1969,11 @@ async fn handle_mcp_tool_call_with_context(
         }
         "agent" => {
             let action = args["action"].as_str().unwrap_or("");
-            if action == "wait" {
+            if action == "wait" && !addr.ip().is_loopback() {
+                serde_json::json!({
+                    "error": "Inter-agent messaging is restricted to localhost connections"
+                })
+            } else if action == "wait" {
                 handle_agent_wait(state, args, mcp_session_id).await
             } else if agent_action_requires_blocking_pool(action) {
                 let state = state.clone();
@@ -2008,7 +2039,7 @@ async fn handle_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, repo, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }
@@ -3297,10 +3328,6 @@ fn handle_session(
                 None => serde_json::json!({"error": format!("Session '{}' not found", session_id)}),
             }
         }
-        "process_stats" => {
-            let stats = crate::pty::collect_process_stats(state);
-            serde_json::json!({ "processes": stats })
-        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'session'. Available: {}", other, SESSION_ACTIONS
         )}),
@@ -3313,44 +3340,6 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
         Err(e) => return e,
     };
     match action {
-        "ci_logs" => {
-            let path = match require_path(args, action) {
-                Ok(path) => path,
-                Err(error) => return error,
-            };
-            if let Err(error) = validate_mcp_repo_path(&path) {
-                return error;
-            }
-            let branch = match args.get("branch").and_then(serde_json::Value::as_str) {
-                Some(branch) => branch.to_string(),
-                None => return serde_json::json!({"error":"Action 'ci_logs' requires 'branch'"}),
-            };
-            to_json_or_error(
-                crate::github::fetch_ci_failure_logs_with_state(
-                    path,
-                    branch,
-                    None,
-                    None,
-                    state.clone(),
-                )
-                .await,
-            )
-        }
-        "prs" => {
-            let path = match require_path(args, "prs") {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            if let Err(e) = validate_mcp_repo_path(&path) {
-                return e;
-            }
-            let statuses = if let Some(cached) = state.git_cache.github_status.get(&path) {
-                Ok((*cached).clone())
-            } else {
-                crate::github::get_repo_pr_statuses_impl(&path, false, state).await
-            };
-            to_json_or_error(statuses)
-        }
         "status" => {
             // Cross-repo aggregate: for each workspace repo, return branch/ahead/behind/open PRs
             // Reads from poller cache to avoid fan-out API calls
@@ -3389,66 +3378,6 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 }));
             }
             serde_json::json!(results)
-        }
-        "issues" => {
-            let path = match require_path(args, "issues") {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            if let Err(e) = validate_mcp_repo_path(&path) {
-                return e;
-            }
-            let filter = args
-                .get("filter")
-                .and_then(|v| v.as_str())
-                .unwrap_or("assigned");
-            let result =
-                crate::github::get_all_issues_impl(std::slice::from_ref(&path), filter, state)
-                    .await;
-            match result {
-                Ok(mut map) => serde_json::json!(map.remove(&path).unwrap_or_default()),
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "close_issue" => {
-            let path = match require_path(args, "close_issue") {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            if let Err(e) = validate_mcp_repo_path(&path) {
-                return e;
-            }
-            let issue_number = args
-                .get("issue_number")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            if issue_number == 0 {
-                return serde_json::json!({"error": "Missing required parameter: issue_number"});
-            }
-            match crate::github::close_issue_impl(&path, issue_number, state).await {
-                Ok(()) => serde_json::json!({"ok": true}),
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "reopen_issue" => {
-            let path = match require_path(args, "reopen_issue") {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            if let Err(e) = validate_mcp_repo_path(&path) {
-                return e;
-            }
-            let issue_number = args
-                .get("issue_number")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            if issue_number == 0 {
-                return serde_json::json!({"error": "Missing required parameter: issue_number"});
-            }
-            match crate::github::reopen_issue_impl(&path, issue_number, state).await {
-                Ok(()) => serde_json::json!({"ok": true}),
-                Err(e) => serde_json::json!({"error": e}),
-            }
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
@@ -3524,10 +3453,10 @@ async fn handle_worktree(
             if let Err(error) = validate_mcp_repo_path(&path) {
                 return error;
             }
-            let workspace_id = match args["workspace_id"].as_str() {
+            let workspace_id = match args["branch"].as_str() {
                 Some(id) => id,
                 None => {
-                    return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'workspace_id' parameter"});
+                    return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'branch' parameter"});
                 }
             };
             to_json_or_error(crate::worktree::inspect_workspace_lifecycle(
@@ -3626,10 +3555,10 @@ async fn handle_worktree(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let workspace_id = match args["workspace_id"].as_str() {
+            let workspace_id = match args["branch"].as_str() {
                 Some(b) => b.to_string(),
                 None => {
-                    return serde_json::json!({"error": "Action 'worktree_remove' requires 'workspace_id' parameter"});
+                    return serde_json::json!({"error": "Action 'worktree_remove' requires 'branch' parameter"});
                 }
             };
             let force = args["force"].as_bool().unwrap_or(false);
@@ -3851,21 +3780,6 @@ fn handle_agent_with_parent_cwd(
         Err(e) => return e,
     };
     match action {
-        "detect" => {
-            // Every agent TUIC can launch, not a hand-written subset — a new
-            // agent must not be invisible to an orchestrator. Undetected ones
-            // are dropped: `detect` answers "what can I spawn here", and a row
-            // of nulls is noise an orchestrator cannot act on.
-            let results: Vec<serde_json::Value> = crate::agent::KNOWN_AGENT_BINARIES
-                .iter()
-                .filter_map(|name| {
-                    let det = crate::agent::detect_agent_binary_sync(name.to_string());
-                    det.path
-                        .map(|path| serde_json::json!({"name": name, "path": path, "version": det.version}))
-                })
-                .collect();
-            serde_json::json!(results)
-        }
         "spawn" => {
             // Agent spawning is restricted to localhost — matches the HTTP route guard in agent_routes.rs
             if !addr.ip().is_loopback() {
@@ -4354,14 +4268,6 @@ fn handle_agent_with_parent_cwd(
                 prompt_deferred,
             )
         }
-        "stats" => {
-            let stats = state.orchestrator_stats();
-            to_json_or_error(stats)
-        }
-        "metrics" => {
-            let metrics = state.session_metrics_json();
-            to_json_or_error(metrics)
-        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
         )}),
@@ -4532,6 +4438,9 @@ fn handle_messaging(
         Ok(a) => a,
         Err(e) => return e,
     };
+    if matches!(action, "register" | "list_peers") && args.get("project").is_some() {
+        return serde_json::json!({"error": "agent parameter project was renamed to path"});
+    }
     match action {
         "register" => {
             let mcp_sid = match mcp_session_id {
@@ -4570,7 +4479,7 @@ fn handle_messaging(
                 .map(str::to_string)
                 .or_else(|| existing.as_ref().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "agent".to_string());
-            let project = args["project"]
+            let project = args["path"]
                 .as_str()
                 .map(str::to_string)
                 .or_else(|| existing.and_then(|(_, project)| project));
@@ -4711,7 +4620,7 @@ fn handle_messaging(
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
                     "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
-                    "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
+                    "list_peers": "agent action=list_peers path=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
                 }
@@ -4740,7 +4649,7 @@ fn handle_messaging(
             response
         }
         "list_peers" => {
-            let project_filter = args["project"].as_str();
+            let project_filter = args["path"].as_str();
             let peers: Vec<serde_json::Value> = state
                 .peer_agents
                 .iter()
@@ -4785,7 +4694,7 @@ fn handle_messaging(
                     );
                     insert_optional_value(
                         object,
-                        "project",
+                        "path",
                         p.project.clone().map(serde_json::Value::String),
                     );
                     peer
@@ -5391,7 +5300,7 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
     }
 }
 
-fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
+fn handle_repo_listing(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -6010,7 +5919,7 @@ fn resolve_toast_sound(
     }
 }
 
-fn handle_notify(
+fn handle_ui_toast(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
@@ -6894,10 +6803,8 @@ async fn handle_repo(
         Err(e) => return e,
     };
     match action {
-        "list" | "active" => handle_workspace(state, args),
-        "prs" | "status" | "ci_logs" | "issues" | "close_issue" | "reopen_issue" => {
-            handle_github(state, args).await
-        }
+        "list" | "active" => handle_repo_listing(state, args),
+        "status" => handle_github(state, args).await,
         "worktree_list" | "worktree_lifecycle" | "worktree_create" | "worktree_remove"
         | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
         "progress_list" => {
@@ -6950,7 +6857,7 @@ fn handle_agent_unified_with_parent_cwd(
         Err(e) => return e,
     };
     match action {
-        "spawn" | "detect" | "stats" | "metrics" => {
+        "spawn" => {
             handle_agent_with_parent_cwd(state, addr, args, mcp_session_id, managed_parent_cwd)
         }
         "register" | "list_peers" | "send" | "inbox" => {
@@ -6986,7 +6893,7 @@ async fn handle_ui_unified(
     };
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
-        "toast" => handle_notify(state, args, mcp_session_id),
+        "toast" => handle_ui_toast(state, args, mcp_session_id),
         // Waits for the human, but only on a oneshot — no blocking-pool worker is
         // held, so a confirmation left unanswered costs a pending task and nothing
         // else.
@@ -7825,20 +7732,13 @@ mod tests {
         ] {
             assert!(!session_action_requires_blocking_pool(action), "{action}");
         }
-        for action in ["create", "input", "kill", "close", "process_stats"] {
+        for action in ["create", "input", "kill", "close"] {
             assert!(session_action_requires_blocking_pool(action), "{action}");
         }
-        for action in [
-            "register",
-            "list_peers",
-            "inbox",
-            "stats",
-            "metrics",
-            "unknown",
-        ] {
+        for action in ["register", "list_peers", "inbox", "unknown"] {
             assert!(!agent_action_requires_blocking_pool(action), "{action}");
         }
-        for action in ["spawn", "detect", "send"] {
+        for action in ["spawn", "send"] {
             assert!(agent_action_requires_blocking_pool(action), "{action}");
         }
     }
@@ -8227,7 +8127,12 @@ mod tests {
         branch_delete_commit(&repo, "squash.txt", "same final patch\n");
         // Distinct messages guarantee different SHAs even when Git records both
         // commits in the same second with identical parents and trees.
-        git(&["commit", "--amend", "-m", "integration copy of squash patch"]);
+        git(&[
+            "commit",
+            "--amend",
+            "-m",
+            "integration copy of squash patch",
+        ]);
         assert!(
             crate::git_cli::git_cmd(&repo)
                 .args(["merge-base", "--is-ancestor", "squashed", "integration"])
@@ -8368,7 +8273,7 @@ mod tests {
 
         let refused = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature"}),
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "feature"}),
             false,
         )
         .await;
@@ -8394,7 +8299,7 @@ mod tests {
             .unwrap();
         let missing_confirmation = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature", "force": true, "delete_branch": true}),
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "feature", "force": true, "delete_branch": true}),
             false,
         )
         .await;
@@ -8407,7 +8312,7 @@ mod tests {
         assert!(worktree.exists());
         let lifecycle = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "workspace_id": "feature"}),
+            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "branch": "feature"}),
             false,
         )
         .await;
@@ -8417,7 +8322,7 @@ mod tests {
         assert!(lifecycle["submodule_unpushed_commits"].is_array());
         let removed = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature", "force": true, "delete_branch": true, "expected_fingerprint": fingerprint}),
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "feature", "force": true, "delete_branch": true, "expected_fingerprint": fingerprint}),
             false,
         )
         .await;
@@ -8450,14 +8355,14 @@ mod tests {
         std::fs::write(second.join("untracked.txt"), "discardable\n").unwrap();
         let second_lifecycle = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "workspace_id": "force-default"}),
+            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "branch": "force-default"}),
             false,
         )
         .await;
         let second_fingerprint = second_lifecycle["dirty_fingerprint"].as_str().unwrap();
         let force_without_delete = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "force-default", "force": true, "expected_fingerprint": second_fingerprint}),
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "force-default", "force": true, "expected_fingerprint": second_fingerprint}),
             false,
         )
         .await;
@@ -8502,62 +8407,10 @@ mod tests {
         let unknown = handle_github(&state, &serde_json::json!({"action": "explode"})).await;
         let error = unknown["error"].as_str().unwrap();
         assert!(error.contains("Unknown action 'explode'"));
-        for action in ["prs", "status", "issues", "close_issue", "reopen_issue"] {
-            assert!(
-                error.contains(action),
-                "available actions omitted {action}: {error}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn github_dispatch_validates_required_paths_before_io() {
-        let state = test_state();
-
-        for action in ["prs", "issues", "close_issue", "reopen_issue"] {
-            let response = handle_github(&state, &serde_json::json!({"action": action})).await;
-            assert!(
-                response["error"].as_str().unwrap().contains("path"),
-                "{action} must reject a missing path: {response}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn github_issue_mutations_require_a_nonzero_issue_number() {
-        let state = test_state();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_string_lossy();
-
-        for action in ["close_issue", "reopen_issue"] {
-            let response =
-                handle_github(&state, &serde_json::json!({"action": action, "path": path})).await;
-            assert_eq!(
-                response["error"], "Missing required parameter: issue_number",
-                "{action} must validate issue_number before network access"
-            );
-        }
-    }
-
-    /// The GitHub issue actions are only reachable through the merged `repo`
-    /// tool — nothing else dispatches to `handle_github`. A missing arm here is
-    /// invisible from `handle_github`'s own tests, which call it directly.
-    #[tokio::test]
-    async fn repo_dispatch_reaches_the_github_issue_actions() {
-        let state = test_state();
-
-        for action in ["issues", "close_issue", "reopen_issue"] {
-            let response = handle_repo(&state, &serde_json::json!({"action": action}), false).await;
-            let error = response["error"].as_str().unwrap();
-            assert!(
-                !error.contains("Unknown action"),
-                "repo must dispatch '{action}' to the github handler: {error}"
-            );
-            assert!(
-                error.contains("path"),
-                "{action} must reach the path check in handle_github: {error}"
-            );
-        }
+        assert!(
+            error.contains("status"),
+            "available actions omitted status: {error}"
+        );
     }
 
     /// `repo` still routes the worktree actions after the LEGACY action remap
@@ -9364,6 +9217,153 @@ mod tests {
                 .is_some_and(|error| error.contains("restricted to localhost"))
         );
         assert!(state.session_maps.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_mcp_caller_cannot_rename_resize_or_wait_for_peer_mail() {
+        let state = test_state();
+        for action in ["resize", "rename"] {
+            let response = handle_mcp_tool_call(
+                &state,
+                non_loopback_addr(),
+                "session",
+                &serde_json::json!({"action": action, "session_id": "remote-target", "name": "changed", "rows": 40, "cols": 100}),
+                None,
+            )
+            .await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("restricted to localhost")),
+                "{action}: {response}"
+            );
+        }
+        let response = handle_mcp_tool_call(
+            &state,
+            non_loopback_addr(),
+            "agent",
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            None,
+        )
+        .await;
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("restricted to localhost")),
+            "agent wait: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn removed_native_actions_name_a_single_call_replacement() {
+        let state = test_state();
+        let cases = [
+            ("agent", "detect", "GET /agents"),
+            ("agent", "stats", "GET /stats"),
+            ("agent", "metrics", "GET /metrics"),
+            ("session", "process_stats", "GET /process/stats"),
+            ("repo", "prs", "GET /repo/prs"),
+            ("repo", "issues", "GET /repo/issues"),
+            ("repo", "close_issue", "POST /repo/issues/close"),
+            ("repo", "reopen_issue", "POST /repo/issues/reopen"),
+            ("repo", "ci_logs", "GET /repo/ci-failure-logs"),
+        ];
+        for (tool, action, replacement) in cases {
+            let response = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                tool,
+                &serde_json::json!({"action": action}),
+                None,
+            )
+            .await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains(replacement)),
+                "{tool} {action}: {response}"
+            );
+            let definitions = native_tool_definitions();
+            let schema = definitions
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == tool)
+                .unwrap();
+            let actions = schema["inputSchema"]["properties"]["action"]["description"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("One of: ");
+            assert!(
+                !actions.split(", ").any(|listed| listed == action),
+                "{tool} still advertises {action}: {actions}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases() {
+        let state = test_state();
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": TEST_UUID_A, "path": "/repo/a"}),
+            Some("mcp-path"),
+        );
+        assert!(registered.get("error").is_none(), "{registered}");
+        let listed = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers", "path": "/repo/a"}),
+            Some("mcp-path"),
+        );
+        assert_eq!(listed["peers"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["peers"][0]["path"], "/repo/a");
+        assert!(listed["peers"][0].get("project").is_none());
+
+        let old_project = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "project": "/repo/b"}),
+            Some("mcp-path"),
+        );
+        assert!(
+            old_project["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("path"))
+        );
+        let old_workspace = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "repo",
+            &serde_json::json!({"action": "worktree_remove", "workspace_id": "feature"}),
+            None,
+        )
+        .await;
+        assert!(
+            old_workspace["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("branch"))
+        );
+
+        let definitions = native_tool_definitions();
+        let agent = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "agent")
+            .unwrap();
+        let repo = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "repo")
+            .unwrap();
+        assert!(agent["inputSchema"]["properties"]["path"].is_object());
+        assert!(agent["inputSchema"]["properties"].get("project").is_none());
+        assert!(repo["inputSchema"]["properties"]["branch"].is_object());
+        assert!(
+            repo["inputSchema"]["properties"]
+                .get("workspace_id")
+                .is_none()
+        );
     }
 
     #[test]
@@ -10539,7 +10539,7 @@ mod tests {
 
         let second = handle_messaging(
             &state,
-            &serde_json::json!({"action": "register", "project": "/repo"}),
+            &serde_json::json!({"action": "register", "path": "/repo"}),
             Some("mcp-external"),
         );
         assert_eq!(second["tuic_session"], generated);
@@ -12006,7 +12006,7 @@ mod tests {
         let r1 = handle_messaging(
             &state,
             &serde_json::json!({
-                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "worker-1", "project": "/repo/a"
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "worker-1", "path": "/repo/a"
             }),
             Some("mcp-1"),
         );
@@ -12016,7 +12016,7 @@ mod tests {
         let r2 = handle_messaging(
             &state,
             &serde_json::json!({
-                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a02", "name": "worker-2", "project": "/repo/a"
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a02", "name": "worker-2", "path": "/repo/a"
             }),
             Some("mcp-2"),
         );
@@ -12030,11 +12030,11 @@ mod tests {
         );
         assert_eq!(list["peers"].as_array().map(Vec::len), Some(2));
 
-        // Filter by project
+        // Filter by repository path
         let filtered = handle_messaging(
             &state,
             &serde_json::json!({
-                "action": "list_peers", "project": "/repo/b"
+                "action": "list_peers", "path": "/repo/b"
             }),
             Some("mcp-1"),
         );
@@ -12264,8 +12264,8 @@ mod tests {
             Some("mcp-1"),
         );
         assert!(
-            peers["peers"][0].get("project").is_none(),
-            "absent optional peer project must not serialize as null"
+            peers["peers"][0].get("path").is_none(),
+            "absent optional peer path must not serialize as null"
         );
     }
 
@@ -14139,6 +14139,10 @@ mod tests {
                 .contains("prevent_alt_screen"),
             "spawn schema must name the per-agent screen setting"
         );
+        assert!(
+            agent["inputSchema"]["properties"]["limit"].is_object(),
+            "inbox accepts limit, so the MCP schema must advertise it"
+        );
     }
 
     #[test]
@@ -14199,7 +14203,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_tool_includes_workspace_github_worktree_actions() {
+    fn repo_tool_lists_retained_worktree_actions_and_branch_parameter() {
         let defs = native_tool_definitions();
         let repo = defs
             .as_array()
@@ -14213,11 +14217,7 @@ mod tests {
         for action in &[
             "list",
             "active",
-            "prs",
             "status",
-            "issues",
-            "close_issue",
-            "reopen_issue",
             "worktree_list",
             "worktree_create",
             "worktree_remove",
@@ -14228,20 +14228,14 @@ mod tests {
             );
         }
         let params = &repo["inputSchema"]["properties"];
+        assert!(params.get("issue_number").is_none());
+        assert!(params.get("filter").is_none());
         assert!(
-            params["issue_number"].is_object(),
-            "the issue mutations need an issue_number parameter: {params}"
-        );
-        assert!(
-            params["filter"].is_object(),
-            "action=issues needs its filter parameter: {params}"
-        );
-        assert!(
-            params["workspace_id"]["description"]
+            params["branch"]["description"]
                 .as_str()
                 .unwrap()
                 .contains("worktree_remove"),
-            "workspace_id's description must name worktree_remove as a consumer: {params}"
+            "branch's description must name worktree_remove as a consumer: {params}"
         );
     }
 
@@ -15011,11 +15005,11 @@ mod tests {
     #[tokio::test]
     async fn call_tool_rejects_disabled_native_tool() {
         let state = test_state();
-        state.config.write().disabled_native_tools = vec!["workspace".to_string()];
+        state.config.write().disabled_native_tools = vec!["repo".to_string()];
         let r = handle_call_tool(
             &state,
             loopback_addr(),
-            &serde_json::json!({ "tool_name": "workspace", "arguments": { "action": "active" } }),
+            &serde_json::json!({ "tool_name": "repo", "arguments": { "action": "active" } }),
             None,
             None,
         )
@@ -15888,7 +15882,7 @@ mod tests {
         ));
         assert_eq!(
             properties["action"]["description"],
-            "One of: list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats"
+            "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume"
         );
         assert_eq!(
             properties["input"]["description"],

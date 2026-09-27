@@ -12,6 +12,10 @@
 
 # To Test
 
+## Native MCP action cleanup (story 1091-1d5d) — rebuild Rust server and CLI
+
+- [ ] After rebuilding, use an isolated test instance to confirm `agent register/list_peers` accepts `path`, `repo worktree_lifecycle/worktree_remove` accepts `branch`, and removed actions return errors naming their HTTP routes. Reinstall the CLI before checking `tuic agent list-peers --path` and `tuic agent stats --json`. Restart a live `make dev` session only when ready to end its current PTYs.
+
 ## Detached CLI commands (story 1100-96bd) — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg <log> -- <cmd>` from an isolated managed session. Confirm the launcher returns before the command, `<log>.exit` records its code, and a busy caller receives the completion wake only after becoming idle. The installed CLI cannot load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. Windows behavior is covered by CI-only tests and remains unverified on this Mac.

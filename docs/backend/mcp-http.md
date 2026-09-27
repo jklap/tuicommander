@@ -667,11 +667,11 @@ say what was measured, not what the list costs today.
 
 | Tool | Actions | Default |
 |------|---------|---------|
-| `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats | Enabled |
-| `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
+| `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
-| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, branch_delete, progress_list | Enabled |
+| `repo` | list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -680,6 +680,10 @@ say what was measured, not what the list costs today.
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
+
+Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
 
 #### `voice` is always listed and usually unavailable
 
@@ -1078,7 +1082,7 @@ was removed but the branch was kept.
 ref; it does not remove a worktree or touch a remote ref. The branch must be
 absent from every checkout and must not be the current integration or default
 branch. The same ancestry and merged-PR checks as worktree removal apply; if
-those fail, patch equivalence against the current integration branch can prove
+those fail, patch equivalence against the default branch can prove
 a squash-merged branch safe. Merge commits without ancestry or PR proof are
 refused because patch comparison cannot cover their resolution. The final
 delete compares the ref against the proved tip and refuses a moved ref.
@@ -1420,7 +1424,7 @@ requests (`focus=false`) do not change repository context.
    `superseded_identity` plus `mail_migrated`, and — when the superseded identity still owns a live
    PTY — `mail_stranded` and an `identity_warning`. That last case deliberately moves nothing: an
    identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
-2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
+2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by path).
 3. **Send**: `agent action=send to=<address> message="..."` buffers to the recipient's inbox.
    `to` takes any of the three address forms — the peer's `tuic_session`, the id of the
    PTY it runs in, or that terminal's alias. `delivered` is the verdict and
@@ -1476,7 +1480,7 @@ requests (`focus=false`) do not change repository context.
    3. **Subscribe, then re-read state**, so a transition landing between step 1 and the subscription
       is still seen and no wake is lost.
 
-Low-risk response compaction also omits an absent peer `project` from `list_peers` and an absent
+Low-risk response compaction also omits an absent peer `path` from `list_peers` and an absent
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
