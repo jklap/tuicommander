@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
+import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
 
 // Mock rpc before importing appLogger
 const mockRpc = vi.fn().mockResolvedValue(undefined);
@@ -74,6 +75,46 @@ describe("appLogger", () => {
 			const levels = appLogger.getEntries().map((e) => e.level);
 			expect(levels).toEqual(["error", "warn", "info", "debug"]);
 		});
+	});
+
+	// ---- Browser console mirror ----
+
+	// Catches: debug telemetry reaches Web Inspector while the runtime diagnostic gate is off.
+	it("does not send debug data to the console when perfDebug is off", () => {
+		const previous = isPerfDebug();
+		try {
+			setPerfDebug(false);
+			const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => {});
+			appLogger.debug("terminal", "frame rendered", { frame: [1, 2, 3] });
+			expect(consoleDebug).not.toHaveBeenCalled();
+			expect(appLogger.getEntries()[0].message).toBe("frame rendered");
+		} finally {
+			setPerfDebug(previous);
+		}
+	});
+
+	// Catches: the diagnostic toggle silences useful debug messages as well as the idle flood.
+	it("sends a debug message without its data object when perfDebug is on", () => {
+		const previous = isPerfDebug();
+		try {
+			setPerfDebug(true);
+			const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => {});
+			appLogger.debug("terminal", "frame rendered", { frame: [1, 2, 3] });
+			expect(consoleDebug).toHaveBeenCalledExactlyOnceWith("[terminal]", "frame rendered");
+		} finally {
+			setPerfDebug(previous);
+		}
+	});
+
+	// Catches: one non-debug level still passes large data objects to Web Inspector.
+	it.each([
+		["info", "info"],
+		["warn", "warn"],
+		["error", "error"],
+	] as const)("sends %s message without its data object to console.%s", (level, method) => {
+		const consoleCall = vi.spyOn(console, method).mockImplementation(() => {});
+		appLogger[level]("network", `${level} message`, { payload: [1, 2, 3] });
+		expect(consoleCall).toHaveBeenCalledExactlyOnceWith("[network]", `${level} message`);
 	});
 
 	// ---- Data field ----
