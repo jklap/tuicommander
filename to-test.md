@@ -16,6 +16,10 @@
 
 - [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge.
 
+## Child lifecycle inbox coalescing — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart.
+
 ## Agent inbox FIFO and paging — Rust restart required
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send 101 messages to a throwaway recipient without reading. Confirm every send succeeds, the inbox reports `missed_count=1`, and the oldest message is absent. Read with `limit=2` and repeat while `has_more=true`; each page must start after the prior `next_since`. The live Rust backend cannot load this change until restart.

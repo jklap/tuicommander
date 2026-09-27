@@ -8518,16 +8518,17 @@ fn lifecycle_inbox_message(
 }
 
 const SUMMARY_CHILD: &str = "8c261794-91e5-44a4-bf63-ec8afafd2adc";
+const SUMMARY_CHILD_B: &str = "9d3728a5-91e5-44a4-bf63-ec8afafd2adc";
 
-fn idle_payload() -> serde_json::Value {
-    serde_json::json!({"type": "state_change", "state": "idle", "session_id": SUMMARY_CHILD})
+fn idle_payload(child: &str) -> serde_json::Value {
+    serde_json::json!({"type": "state_change", "state": "idle", "session_id": child})
 }
 
-fn exited_payload() -> serde_json::Value {
+fn exited_payload(child: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "state_change",
         "state": "exited",
-        "session_id": SUMMARY_CHILD,
+        "session_id": child,
         "exit_code": 0,
     })
 }
@@ -8538,11 +8539,21 @@ fn lifecycle_summary_carries_every_event_in_the_window() {
     let parent = "parent-summary";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-idle",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-exit", SUMMARY_CHILD, 20, exited_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-exit",
+            SUMMARY_CHILD_B,
+            20,
+            exited_payload(SUMMARY_CHILD_B),
+        ),
     );
 
     let summary = summarize_lifecycle_group(
@@ -8560,7 +8571,7 @@ fn lifecycle_summary_carries_every_event_in_the_window() {
         "{summary}"
     );
     assert!(
-        summary.contains("child agent 8c261794 exited (exit 0)"),
+        summary.contains("child agent 9d3728a5 exited (exit 0)"),
         "{summary}"
     );
     assert!(
@@ -8576,7 +8587,12 @@ fn peer_payload_in_the_window_forces_the_generic_wake() {
     let parent = "parent-mixed";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-idle",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
@@ -8610,11 +8626,21 @@ fn lifecycle_summary_ignores_messages_outside_the_reserved_window() {
     let parent = "parent-window";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-old", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-old",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-covered", SUMMARY_CHILD, 20, exited_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-covered",
+            SUMMARY_CHILD,
+            20,
+            exited_payload(SUMMARY_CHILD),
+        ),
     );
     // Arrived after the reservation: neither described nor disqualifying.
     state.push_agent_inbox(
@@ -8652,13 +8678,14 @@ fn oversize_lifecycle_summary_falls_back_to_the_generic_wake() {
     let state = crate::state::tests_support::make_test_app_state();
     let parent = "parent-oversize";
     for index in 0..12u64 {
+        let child = format!("8c2617{index:02}-91e5-44a4-bf63-ec8afafd2adc");
         state.push_agent_inbox(
             parent,
             lifecycle_inbox_message(
                 &format!("tuic-auto-{index}"),
-                SUMMARY_CHILD,
+                &child,
                 index + 1,
-                idle_payload(),
+                idle_payload(&child),
             ),
         );
     }
