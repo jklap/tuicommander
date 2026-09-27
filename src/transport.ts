@@ -191,7 +191,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				: "/dictation/speech/status",
 		}),
 	},
-	start_dictation: { map: () => ({ method: "POST", path: "/dictation/start" }) },
+	start_dictation: { map: (args) => ({ method: "POST", path: "/dictation/start", body: { source: args.source } }) },
 	stop_dictation_and_transcribe: { map: () => ({ method: "POST", path: "/dictation/stop" }) },
 	get_correction_map: { map: () => ({ method: "GET", path: "/dictation/corrections" }) },
 	set_correction_map: {

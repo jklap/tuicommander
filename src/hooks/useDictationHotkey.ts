@@ -3,6 +3,7 @@ import { listen } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { dictationStore } from "../stores/dictation";
 import { isTauri } from "../transport";
+import { parseHotkey } from "../utils";
 import { createLongPressHandlerFromHotkey } from "./useLongPressHotkey";
 
 interface DictationHotkeyOptions {
@@ -23,6 +24,14 @@ export function useDictationHotkey(options: DictationHotkeyOptions): void {
 			onStop: options.onStop,
 		});
 		if (!handler) return;
+		const primaryKey = parseHotkey(hotkey)?.key;
+		const onBlur = () => {
+			if (primaryKey) handler.handleEvent({ eventType: "KeyRelease", key: primaryKey });
+			for (const key of ["MetaLeft", "ShiftLeft", "AltLeft", "ControlLeft"]) {
+				handler.handleEvent({ eventType: "KeyRelease", key });
+			}
+		};
+		window.addEventListener("blur", onBlur);
 
 		let cleanupListeners: () => void;
 		if (hotkey === "Fn") {
@@ -64,6 +73,7 @@ export function useDictationHotkey(options: DictationHotkeyOptions): void {
 		}
 
 		onCleanup(() => {
+			window.removeEventListener("blur", onBlur);
 			handler.cleanup();
 			cleanupListeners();
 		});

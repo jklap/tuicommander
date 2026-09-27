@@ -468,8 +468,8 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_dictation` | -- | `()` | Start recording |
-| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s}` |
+| `start_dictation` | `source?` (`"fn"`, `"hotkey"`, `"ui"`) | `()` | Start recording; Fn starts are refused after native key release |
+| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s, truncated_s}`; `truncated_s` counts captured audio lost before transcription |
 | `inject_text` | `text` | `String` | Apply corrections |
 | `get_dictation_status` | -- | `DictationStatus` | Model/recording status plus normalized `audio_level` (0–1) |
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |

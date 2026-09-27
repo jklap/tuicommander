@@ -523,9 +523,10 @@ describe("transport", () => {
 		});
 
 		it("maps previously browser-unsupported commands to HTTP", () => {
-			const dictation = mapCommandToHttp("start_dictation", {});
+			const dictation = mapCommandToHttp("start_dictation", { source: "fn" });
 			expect(dictation.method).toBe("POST");
 			expect(dictation.path).toBe("/dictation/start");
+			expect(dictation.body).toEqual({ source: "fn" });
 
 			const openInApp = mapCommandToHttp("open_in_app", { path: "/tmp/x", app: "vscode" });
 			expect(openInApp.method).toBe("POST");
