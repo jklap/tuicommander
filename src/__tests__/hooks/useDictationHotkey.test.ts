@@ -1,5 +1,5 @@
 import { createRoot } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const { state, listeners } = vi.hoisted(() => ({
 	state: { enabled: true, hotkey: "F8", capturingHotkey: false, longPressMs: 0 },
@@ -20,8 +20,8 @@ import { useDictationHotkey } from "../../hooks/useDictationHotkey";
 
 describe("push-to-talk release recovery", () => {
 	let dispose: () => void;
-	let onStart: ReturnType<typeof vi.fn>;
-	let onStop: ReturnType<typeof vi.fn>;
+	let onStart: Mock<() => void>;
+	let onStop: Mock<() => void>;
 
 	beforeEach(() => {
 		state.hotkey = "F8";
