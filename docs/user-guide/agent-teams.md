@@ -96,7 +96,7 @@ There is no separate `swarm` action: callers compose the `agent` and `session` p
 
 Every PTY session gets a stable `TUIC_SESSION` UUID injected as an environment variable. Agents use this as their identity to register, discover peers, and exchange messages through TUICommander's MCP `agent` tool.
 
-When a channel-enabled Claude Code worker is connected via SSE and already working, messages are **pushed in real-time** into that turn as MCP channel notifications (`notifications/claude/channel`). Idle or completed ordinary managed agents use terminal submission to start a real next turn; managed non-Claude workers do the same even when their MCP bridge has an SSE stream. Every message also lands in a buffered inbox.
+Managed workers receive a payload-free terminal notice that tells them to read their inbox. If a worker is busy, TUICommander waits for a safe idle composer before submitting the notice. This includes Claude Code workers with an SSE stream: a channel notification during one turn cannot start a later turn for unread mail. External Claude Code clients without a managed terminal can receive MCP channel notifications (`notifications/claude/channel`). Every message also lands in a buffered inbox.
 
 A peer explicitly registered as an orchestrator keeps peer results and lifecycle payloads in its inbox. An idle/completed orchestrator receives only one coalesced notice that a message is available and should be read with `agent action=inbox` (`[TUIC] message available …`). The same safe notice may start a turn while background work keeps the task state `working`, but only when the shell is idle, the composer is confirmed ready and empty, and no question is active. A genuinely busy or non-quiescent orchestrator is never injected or steered. When that notice would cover nothing but child lifecycle events, it prints them instead (`[TUIC] child agent 8c261794 is now idle; child agent 8c261794 exited (exit 0)`) and no inbox read is needed — a peer message anywhere in the batch sends you back to the generic notice. An active `agent wait` receives the mail directly and suppresses that notice.
 
@@ -110,7 +110,7 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 |---|---|---|
 | `TUIC_SESSION` | Stable UUID per tab | Agent identity for messaging |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | `1` | Unlocks TeamCreate/TaskCreate/SendMessage |
-| `--dangerously-load-development-channels server:tuicommander` | *(CLI flag, agent spawn only)* | Enables real-time channel push from TUICommander |
+| `--dangerously-load-development-channels server:tuicommander` | *(CLI flag, agent spawn only)* | Enables Claude's channel capability; managed peer mail still uses the PTY wake |
 
 ### Messaging Flow
 
@@ -177,7 +177,8 @@ not send that report.
 
 | Delivery | When | Latency | Requires |
 |----------|------|---------|----------|
-| **Channel push** | Ordinary Claude worker has an active turn and SSE stream | Real-time | `--dangerously-load-development-channels server:tuicommander` on the recipient's CC process |
+| **Channel push** | External Claude client has an SSE stream and no managed PTY | Real-time | `--dangerously-load-development-channels server:tuicommander` on the recipient's CC process |
+| **Managed wake** | Ordinary managed peer has a safe idle composer | Immediate or next idle transition | Managed PTY |
 | **Orchestrator wake** | Registered parent is idle/completed and not waiting | Real-time, coalesced | Managed PTY + authoritative lifecycle |
 | **Inbox buffer** | Always | Poll-based | Registration only |
 
@@ -221,7 +222,7 @@ If you run Claude Code outside TUICommander but still want to use TUIC messaging
 | Feature | TUIC Messaging | CC Native SendMessage |
 |---------|---------------|----------------------|
 | **Transport** | MCP tool call → server-side routing | File append + polling (`~/.claude/teams/`) |
-| **Real-time push** | Yes (MCP channel notifications) | No (polling only) |
+| **Real-time push** | Managed terminal wake or external MCP channel notification | No (polling only) |
 | **Cross-app** | Any MCP client can participate | Claude Code processes only |
 | **Discovery** | `list_peers` with path filter | Team config file |
 | **Persistence** | In-memory ring buffer (lost on TUIC restart) | Files on disk (survives restart) |
