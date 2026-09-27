@@ -842,8 +842,9 @@ one configured ego binary and speaks ACP to it, per
   main window meanwhile
 - The conversation view loads on first opening, including in a detached window;
   the desktop terminal is ready before this optional view loads
-- **Streamed answers**, reasoning folded into a disclosure, one card per tool
-  call updated in place, and the agent's plan replaced whole each time it changes
+- **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
+  activity line per turn with calls and outputs expandable, and the agent's plan
+  replaced whole each time it changes
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn

@@ -52,8 +52,11 @@ in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
-- **Tool calls** appear as one card per call, updated in place — not one card per
-  status change.
+- **Tool activity** appears as one collapsed line per turn, with a count,
+  observed duration, status and the first two call titles. Expand it to see
+  each call's title, kind and status; expand a call to see its output. The
+  duration measures only time observed while this panel is open. A replayed
+  conversation has no recorded timing data.
 - **The plan** ego publishes is shown as a list and replaced whole each time it
   changes.
 - **Stop** cancels the turn. **Pause** and **Resume** hold it where ego supports
