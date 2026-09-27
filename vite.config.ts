@@ -15,7 +15,7 @@ const host = process.env.TAURI_DEV_HOST;
 // checkout may contain any filename, including index.html. Ignore `.tmp/` at
 // every depth so tooling output cannot reload the live WebView.
 const ignoreNonFrontendFile = (path: string): boolean => {
-  const file = relative(process.cwd(), path).split(sep).join("/");
+  const file = relative(import.meta.dirname, path).split(sep).join("/");
   if (file === "") return false; // Keep the root itself watchable.
   if (file === ".." || file.startsWith("../") || isAbsolute(file)) return true;
   if (file.split("/").includes(".tmp")) return true;
@@ -25,7 +25,7 @@ const ignoreNonFrontendFile = (path: string): boolean => {
   return !["vite.config.ts", "tsconfig.json", "package.json", "pnpm-lock.yaml"].includes(file);
 };
 // Read app version from tauri.conf.json
-const tauriConf = JSON.parse(readFileSync("./src-tauri/tauri.conf.json", "utf-8"));
+const tauriConf = JSON.parse(readFileSync(join(import.meta.dirname, "src-tauri/tauri.conf.json"), "utf-8"));
 
 // Git hash for PWA version checks
 const gitHash = (() => {
