@@ -8133,6 +8133,8 @@ mod tests {
             "-m",
             "integration copy of squash patch",
         ]);
+        // Deletion proof is against the default branch, not the checkout.
+        git(&["branch", "-f", "main", "integration"]);
         assert!(
             crate::git_cli::git_cmd(&repo)
                 .args(["merge-base", "--is-ancestor", "squashed", "integration"])
