@@ -122,9 +122,9 @@ fn detect_claude_code_from_headers(headers: &HeaderMap) -> bool {
 /// already active turn. Every MCP client may own an SSE stream, but the channel
 /// notification is a Claude Code extension and transport receipt does not
 /// submit a new prompt. Managed sessions therefore use the channel only while
-/// canonical Claude lifecycle state is working; an idle or completed composer
-/// must take the PTY submission path. External peers have no PTY fallback and
-/// retain the owner capability as their authority.
+/// Claude has an active turn. A confirmed-ready composer held `working` only
+/// by background work must take the PTY submission path. External peers have
+/// no PTY fallback and retain the owner capability as their authority.
 fn recipient_supports_active_claude_channel(
     state: &AppState,
     recipient: &str,
@@ -147,6 +147,7 @@ fn recipient_supports_active_claude_channel(
         .is_some_and(|session| {
             session.agent_type.as_deref() == Some("claude")
                 && session.agent_state.as_deref() == Some("working")
+                && !crate::pty::managed_mail_wake_allowed(state, recipient)
         })
 }
 
@@ -12544,6 +12545,201 @@ mod tests {
         assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         assert!(snapshot.suggested_actions.is_none());
         assert_eq!(snapshot.turn_epoch, 1);
+    }
+
+    /// A background command can keep the derived state working after Claude's
+    /// prompt is ready. SSE receipt then strands mail until another turn starts.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_send_wakes_ready_claude_with_background_work_instead_of_sse() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .background_work = true;
+
+        let before = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(before.shell_state.as_deref(), Some("idle"));
+        assert_eq!(before.agent_state.as_deref(), Some("working"));
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "new assignment"}),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(sent["delivery_path"], "wake_notification_and_inbox");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            output.contains(&format!("SUBMITTED:{}", crate::pty::PEER_MAIL_WAKE)),
+            "{output:?}"
+        );
+        assert!(!output.contains("new assignment"), "{output:?}");
+    }
+
+    /// Canonical idle also needs a submitted turn when an SSE stream exists.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_send_wakes_idle_claude_instead_of_sse() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .suggested_actions = None;
+        state
+            .session_maps
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .reset_suggest_memory();
+        assert_eq!(
+            state
+                .session_state_with_shell(TEST_UUID_B)
+                .unwrap()
+                .agent_state
+                .as_deref(),
+            Some("idle")
+        );
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "idle mail"}),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(sent["delivery_path"], "wake_notification_and_inbox");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            output.contains(&format!("SUBMITTED:{}", crate::pty::PEER_MAIL_WAKE)),
+            "{output:?}"
+        );
+    }
+
+    /// A draft in Claude's composer must keep peer mail out of the PTY even
+    /// when the shell is idle and a descendant is still running.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_send_does_not_type_into_partial_claude_composer_with_background_work() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let _submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .background_work = true;
+        let mut composer = crate::input_line_buffer::InputLineBuffer::new();
+        composer.feed("Boss draft");
+        state
+            .session_maps
+            .input_buffers
+            .insert(TEST_UUID_B.to_string(), Mutex::new(composer));
+        assert_eq!(
+            state
+                .session_state_with_shell(TEST_UUID_B)
+                .unwrap()
+                .agent_state
+                .as_deref(),
+            Some("working")
+        );
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "do not splice"}),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(sent["delivery_path"], "sse_channel_and_inbox");
+        assert!(receiver.try_recv().is_ok());
+        assert_eq!(
+            state
+                .session_state_with_shell(TEST_UUID_B)
+                .unwrap()
+                .turn_epoch,
+            0
+        );
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_none_or(|pending| pending.is_empty())
+        );
     }
 
     /// The regression, as captured live on 2026-09-15: peer mail sent to an
