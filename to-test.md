@@ -12,6 +12,10 @@
 
 # To Test
 
+## MCP agent spawn environment and model — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set an Agents run config model and environment value, then spawn a throwaway MCP child with overriding `model` and `env` values. Confirm the child sees the caller environment, the override model reaches its argv, and `TUIC_SESSION` and `TUIC_PARENT` still identify the peer. The running backend cannot load this Rust change without a restart.
+
 ## Push-to-talk native release — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.

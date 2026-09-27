@@ -809,13 +809,14 @@ Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent val
 
 **Type:** `AgentsConfig`
 
-Per-agent run configurations (custom commands, arguments, environment variables).
+Per-agent run configurations (custom commands, arguments, model, environment variables).
 
 ```rust
 struct AgentRunConfig {
     name: String,
     command: String,
     args: Vec<String>,
+    model: Option<String>, // MCP spawn default; the spawn parameter overrides it
     env: HashMap<String, String>,
     is_default: bool,
 }
@@ -832,6 +833,12 @@ struct AgentsConfig {
 ```
 
 **Commands:** `load_agents_config()`, `save_agents_config(config)`
+
+The optional `model` field adds `--model <value>` when MCP `agent spawn`
+selects the run config. A model passed on the spawn call overrides it. Existing
+`--model` entries in `args` remain unchanged; they still conflict with an
+explicit spawn model. Set the model in Settings > Agents when a run config needs
+an overrideable default.
 
 **This file belongs to a machine, not to the app.** Every backend reads its own copy, and
 the frontend keeps one per machine: a tab opened on a repository registered against a
