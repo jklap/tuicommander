@@ -5743,10 +5743,15 @@ fn handle_voice(
 /// unknown tool, so a model reads one consistent reason on both builds.
 #[cfg(not(feature = "desktop"))]
 fn handle_voice(
-    _state: &Arc<AppState>,
+    state: &Arc<AppState>,
     _args: &serde_json::Value,
-    _mcp_session_id: Option<&str>,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if resolve_mcp_origin_pty(state, mcp_session_id).is_none() {
+        return serde_json::json!({"error":
+            "This connection is not bound to a terminal, so there is no conversation to speak into"
+        });
+    }
     serde_json::json!({
         "available": false,
         "unavailable_reason": "This TUICommander build has no audio support",
@@ -8078,6 +8083,24 @@ mod tests {
             "both paths reach the same handler with the same identity"
         );
 
+        state
+            .mcp
+            .to_session
+            .insert("mcp-voice-stale".to_string(), "tuic-gone".to_string());
+        let stale = tool_call_text(
+            &post_test_tool_call(
+                Arc::clone(&state),
+                "mcp-voice-stale",
+                "voice",
+                serde_json::json!({"action": "speak", "text": "private reply"}),
+            )
+            .await,
+        );
+        assert!(
+            stale.contains("not bound to a terminal"),
+            "a stale binding must not allow speech: {stale}"
+        );
+
         // Bind the same MCP connection to a terminal. Both paths must now get
         // past the identity gate and fail on something else entirely. The
         // terminal needs a live PTY: the gate names the caller by it, and a
@@ -8114,6 +8137,11 @@ mod tests {
             assert!(
                 !bound_direct.contains("not bound to a terminal"),
                 "a bound caller must pass the identity gate: {bound_direct}"
+            );
+            #[cfg(not(feature = "desktop"))]
+            assert!(
+                bound_direct.contains("This TUICommander build has no audio support"),
+                "a bound headless caller must receive the no-audio status: {bound_direct}"
             );
             assert_eq!(bound_direct, bound_collapsed);
         }
@@ -14636,6 +14664,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn story_tool_lists_plans_for_a_bound_caller() {
+        #[cfg(not(feature = "desktop"))]
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test Tokio runtime");
+        #[cfg(not(feature = "desktop"))]
+        let _runtime_guard = runtime.enter();
         let config = tempfile::tempdir().expect("config directory");
         let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir().expect("project directory");
