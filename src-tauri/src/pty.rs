@@ -8604,6 +8604,79 @@ fn run_claimed_injection(
 pub(crate) const PEER_MAIL_WAKE: &str =
     "[TUIC] message available — read it with: agent action=inbox";
 
+/// Submit an inbox pointer into a busy Claude Code or Codex composer. Their
+/// 2026-09-27 live probes show that Enter queues the line for the next tool
+/// boundary; Ctrl+Enter and Escape interrupt active work and are not used.
+/// The peer's message body never enters this writer or the pending PTY queue.
+pub(crate) fn deliver_urgent_mail_notice(
+    state: &AppState,
+    session_id: &str,
+    sender_identity: &str,
+) -> Result<(), &'static str> {
+    if !state.session_maps.sessions.contains_key(session_id) {
+        return Err("recipient_exited");
+    }
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    if !matches!(agent_type.as_deref(), Some("claude" | "codex")) {
+        return Err("unknown_agent_type");
+    }
+    if blocked_on_confident_question(state, session_id) {
+        return Err("dialog_open");
+    }
+    if has_partial_user_input(state, session_id) {
+        return Err("composer_has_user_text");
+    }
+    let shell_busy = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .is_some_and(|shell| shell.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
+    if shell_busy {
+        if state
+            .session_state_with_shell(session_id)
+            .is_none_or(|session| session.agent_state.as_deref() != Some("working"))
+        {
+            return Err("recipient_not_ready");
+        }
+    } else if !should_inject_now(state, session_id) {
+        return Err("recipient_not_ready");
+    }
+    // Display names are peer-controlled prompt text. Use only a validated
+    // identity in the notice; the inbox keeps the human-facing sender name.
+    let sender_id = uuid::Uuid::parse_str(sender_identity)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| "unknown-peer".to_string());
+    let notice = format!(
+        "URGENT mail from {sender_id}: read agent inbox before your next step (agent action=inbox)"
+    );
+    let Some(claim) = claim_composer_for_voice(state, session_id) else {
+        return Err(if has_partial_user_input(state, session_id) {
+            "composer_has_user_text"
+        } else {
+            "composer_in_flight"
+        });
+    };
+    if blocked_on_confident_question(state, session_id) {
+        rollback_injection_claim(state, session_id, claim);
+        return Err("dialog_open");
+    }
+    match run_claimed_injection(
+        state,
+        session_id,
+        &notice,
+        claim,
+        ClaimedInjectionKind::Message,
+    ) {
+        InjectionOutcome::Submitted => Ok(()),
+        InjectionOutcome::NotStarted(_) => Err("write_not_started"),
+        InjectionOutcome::Uncertain(_) => Err("write_uncertain"),
+    }
+}
+
 /// Longest self-acknowledging summary we are willing to type into a composer.
 /// Past this the notice stops being a cheap one-liner, so we fall back to the
 /// generic wake — which is always correct, just one `inbox` call more expensive.

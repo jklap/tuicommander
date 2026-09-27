@@ -12,6 +12,10 @@
 
 # To Test
 
+## Urgent agent mail — Rust restart required
+
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start throwaway Claude Code and Codex sessions and send `agent action=send urgency=urgent` while each is busy. Check that the notice appears after the current tool call and before the agent's next planned step, the peer body remains in the inbox, and the sender receives `urgent_delivered=true`. Repeat with a draft and a confident dialog; each must return `urgent_delivered=false` with a fallback reason and must preserve the composer. Boss's current backend cannot load this Rust change without a manual restart.
+
 ## Push-to-talk native release — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.
