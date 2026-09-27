@@ -47,6 +47,20 @@ describe("progressStore", () => {
 		vi.resetModules();
 	});
 
+	it("shows the complete journal when the backend returns multiple pages", async () => {
+		invokeMock
+			.mockResolvedValueOnce({ ...list([entry(3, 300), entry(2, 200)]), ptyIds: ["pty-a"], total: 3, nextCursor: 2 })
+			.mockResolvedValueOnce({ ...list([entry(1, 100)]), ptyIds: ["pty-a"], total: 3, nextCursor: null });
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open("/repo", null);
+		await vi.waitFor(() => expect(store.state.projects["/repo"]?.loading).toBe(false));
+		expect(store.state.projects["/repo"].entries.map((item) => item.id)).toEqual([3, 2, 1]);
+		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
+			project: "/repo", input: { blockedOnly: false, limit: 100, cursor: 2 },
+		});
+	});
+
 	it("opens the active PTY and can switch to another PTY in the same repository", async () => {
 		invokeMock.mockResolvedValue({ ...list([]), ptyIds: ["pty-a", "pty-b"] });
 		const { createProgressStore } = await import("../../stores/progress");
@@ -55,14 +69,14 @@ describe("progressStore", () => {
 		await vi.waitFor(() =>
 			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 				project: "/repo",
-				input: { blockedOnly: false, ptyId: "pty-a" },
+				input: { blockedOnly: false, ptyId: "pty-a", limit: 100 },
 			}),
 		);
 		store.selectPty("pty-b");
 		await vi.waitFor(() =>
 			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 				project: "/repo",
-				input: { blockedOnly: false, ptyId: "pty-b" },
+				input: { blockedOnly: false, ptyId: "pty-b", limit: 100 },
 			}),
 		);
 		expect(store.selectedPtyId()).toBe("pty-b");
@@ -153,7 +167,7 @@ describe("progressStore", () => {
 		expect(invokeMock).toHaveBeenCalledTimes(1);
 		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 			project: "/repo",
-			input: { blockedOnly: false, ptyId: "pty-a" },
+			input: { blockedOnly: false, ptyId: "pty-a", limit: 100 },
 		});
 	});
 
@@ -169,7 +183,7 @@ describe("progressStore", () => {
 		await vi.waitFor(() =>
 			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 				project: "/repo",
-				input: { blockedOnly: true, ptyId: "pty-a" },
+				input: { blockedOnly: true, ptyId: "pty-a", limit: 100 },
 			}),
 		);
 	});

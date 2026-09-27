@@ -12,6 +12,10 @@
 
 # To Test
 
+## Progress journal paging — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, call `repo action=progress_list` on a journal with more than 10 entries. The first page returns 10 entries, `total`, and `nextCursor`; follow the cursor to the end without duplicates. Open Progress and confirm the dialog still shows the complete journal. The current live backend cannot load this Rust change until restart.
+
 ## Push-to-talk native release — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.
