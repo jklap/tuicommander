@@ -8653,14 +8653,14 @@ fn summarize_lifecycle_group(
     (summary.chars().count() <= ORCHESTRATOR_SUMMARY_MAX_CHARS).then_some(summary)
 }
 
-/// Whether the orchestrator may safely receive a new, payload-free turn.
+/// Whether a managed agent may safely receive a new, payload-free mail turn.
 ///
 /// Canonical idle/completed lifecycle remains sufficient. A derived `working`
 /// state can also be safe when it comes only from background work: in that
 /// case the stricter composer gate proves the shell is idle, readiness is
 /// confirmed, and neither a question nor partial input owns the composer.
 /// Other lifecycle states fail closed.
-fn orchestrator_mail_wake_allowed(state: &AppState, session_id: &str) -> bool {
+pub(crate) fn managed_mail_wake_allowed(state: &AppState, session_id: &str) -> bool {
     let Some(session) = state.session_state_with_shell(session_id) else {
         return false;
     };
@@ -8689,7 +8689,7 @@ fn submit_orchestrator_mail_wake(
 ) -> crate::state::OrchestratorWakeAttemptOutcome {
     use crate::state::OrchestratorWakeAttemptOutcome;
 
-    if !orchestrator_mail_wake_allowed(state, session_id) {
+    if !managed_mail_wake_allowed(state, session_id) {
         return OrchestratorWakeAttemptOutcome::NotStarted;
     }
     #[cfg(unix)]
@@ -8739,7 +8739,7 @@ pub(crate) fn route_registered_orchestrator_mail(
     let pty_session = state.live_pty_for_peer(recipient);
     let wake_allowed = pty_session
         .as_deref()
-        .is_some_and(|session_id| orchestrator_mail_wake_allowed(state, session_id));
+        .is_some_and(|session_id| managed_mail_wake_allowed(state, session_id));
     let assignment = state.assign_orchestrator_delivery_with_wake_outcome(
         recipient,
         message_id,

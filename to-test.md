@@ -3980,3 +3980,11 @@ or credential is touched.
 ## PTY build environment — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart.
+
+## Peer mail wake after Rust restart
+
+- [ ] Restart the isolated `make dev` test instance and run
+      `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude`.
+      Confirm the disposable Claude PTY shows `PEER_MAIL_WAKE` within 20 seconds.
+      See `docs/guides/development-setup.md` for the instance setup; the Rust
+      change does not hot reload into the current process.

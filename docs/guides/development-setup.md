@@ -56,6 +56,23 @@ Produces platform-specific installers:
 
 ## Testing
 
+### Live peer-mail wake canary
+
+After a Rust rebuild, run this against the isolated test instance, not the
+orchestrator instance. The script starts a disposable real Claude session,
+waits for its idle composer, sends mail from a separate MCP identity, checks
+that `PEER_MAIL_WAKE` appears in the PTY within 20 seconds, and closes the
+session. It exits with an error if readiness or delivery times out.
+
+```bash
+TUIC_APP_INSTANCE=peer-mail-canary make dev  # in a separate terminal; use its reported HTTP port
+TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude
+```
+
+Use `codex` as the last argument for the optional Codex check. The agent CLI
+must already be installed and authenticated. Run the script only after the
+test instance is listening on the URL you supply.
+
 ```bash
 pnpm test              # Run all tests
 pnpm test:coverage     # Coverage report
