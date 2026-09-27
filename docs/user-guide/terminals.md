@@ -86,6 +86,9 @@ the backend even if a browser or event-stream client temporarily falls behind.
 Current Claude and Codex status lines are also recognized when their interface
 keeps an empty composer visible or freezes during a long tool. Completed timing
 summaries are not treated as work, so the indicator can still return to idle.
+If a mail wake reaches Claude while its detailed transcript hides the composer
+and Claude produces no response, the indicator returns to idle after five minutes
+without output, provided the last lifecycle hook reported idle.
 Grok keeps its composer visible while responding, so TUICommander waits for the
 animated status row to disappear before treating that composer as ready.
 
