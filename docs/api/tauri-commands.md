@@ -255,8 +255,8 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
 | `save_keybindings` | `config` | `()` | Save keybinding overrides |
-| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs and `prevent_alt_screen` overrides |
-| `save_agents_config` | `config` | `()` | Save per-agent run configs and `prevent_alt_screen` overrides |
+| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
+| `save_agents_config` | `config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
 | `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |

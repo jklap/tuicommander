@@ -672,6 +672,7 @@ Some frontend-only stores persist to localStorage:
 
 ### Agent Configuration (Done)
 - [x] Settings > Agents tab with per-agent run configurations
+- [x] MCP spawn accepts caller environment overrides and an overrideable run-config model while preserving legacy model arguments
 - [x] MCP bridge install/remove for every MCP-capable agent in the canonical registry
 - [x] Terminal context menu > Agents submenu with run configs
 - [x] Agent binary detection and version display

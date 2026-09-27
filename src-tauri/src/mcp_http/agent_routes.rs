@@ -602,6 +602,56 @@ mod tests {
         super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
+    #[tokio::test]
+    async fn http_agent_spawn_accepts_model_and_env_with_ipc_field_names() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-agent-model-env",
+            "printf 'ARGS=%s\nSPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$*\" \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
+            "echo ARGS=%* & echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "prompt": "task",
+            "agent_type": "claude",
+            "binary_path": script.to_string_lossy(),
+            "model": "sonnet",
+            "env": {"SPAWN_VALUE": "caller"},
+        }))
+        .unwrap();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
+                    let text = buffer.lock().screen_rows().join("\n");
+                    if text.contains("SPAWN_VALUE=") {
+                        break text;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake agent output");
+        assert!(output.contains("ARGS=--model sonnet task"), "{output}");
+        assert!(output.contains("SPAWN_VALUE=caller"), "{output}");
+        assert!(
+            output.contains(&format!("TUIC_SESSION={session_id}")),
+            "{output}"
+        );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
     async fn response_json(response: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
