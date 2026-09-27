@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted values stay intact, and menu overrides cannot replace TUIC peer identity variables.
+- **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted and Unicode values stay intact, and menu overrides cannot replace TUIC peer identity variables, including differently cased names on Windows.
 
 - **Headless MCP voice binding** — `tuic-remote` refuses voice calls from connections without a live terminal before reporting that audio is unavailable.
 
