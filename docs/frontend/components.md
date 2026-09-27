@@ -103,6 +103,13 @@ composes them and owns the top-level layout. Git operations retain the
 Each coordinator owns its timers, queues, generations, or locks. These are
 behavioral boundaries rather than generic service wrappers.
 
+## Mobile Screens (`src/mobile/`)
+
+`MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
+`FilesScreen` at the session's worktree or containing registered repository.
+The session's output stream and command draft stay alive while Files is shown;
+the regular Files bottom tab still starts at the repository picker.
+
 ## Core Components
 
 ### PluginPanel (`PluginPanel/`)

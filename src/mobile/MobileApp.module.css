@@ -25,6 +25,16 @@
   -webkit-overflow-scrolling: touch;
 }
 
+.sessionPane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sessionPaneHidden {
+  display: none;
+}
+
 .updateBanner {
   display: flex;
   align-items: center;

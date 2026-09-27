@@ -93,6 +93,7 @@ export default function MobileApp() {
 		});
 	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
+	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
 	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
@@ -125,6 +126,7 @@ export default function MobileApp() {
 	}
 
 	function handleBack() {
+		setSessionFilesOpen(false);
 		setSelectedSessionId(null);
 		setLastKnownSession(null);
 	}
@@ -190,7 +192,25 @@ export default function MobileApp() {
 					</>
 				}
 			>
-				<SessionDetailScreen session={lastKnownSession()!} sessionExists={sessionExists()} onBack={handleBack} />
+				<div class={styles.sessionPane} classList={{ [styles.sessionPaneHidden]: sessionFilesOpen() }}>
+					<SessionDetailScreen
+						session={lastKnownSession()!}
+						sessionExists={sessionExists()}
+						onBack={handleBack}
+						onOpenFiles={() => setSessionFilesOpen(true)}
+					/>
+				</div>
+				<Show when={sessionFilesOpen()}>
+					<main class={styles.content}>
+						<FilesScreen
+							initialRepo={{
+								worktreePath: lastKnownSession()!.worktree_path,
+								cwd: lastKnownSession()!.cwd,
+							}}
+							onExit={() => setSessionFilesOpen(false)}
+						/>
+					</main>
+				</Show>
 			</Show>
 			<MobileToastContainer />
 			<McpConfirmHost />
