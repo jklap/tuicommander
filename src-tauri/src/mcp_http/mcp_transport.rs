@@ -1212,7 +1212,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
@@ -1223,7 +1223,12 @@ fn native_tool_definitions() -> serde_json::Value {
                 "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove and branch_delete; optional for worktree_create)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
-                "input": { "type": "object", "description": "Typed action payload for progress_list. Unknown fields are rejected." }
+                "input": { "type": "object", "description": "Typed action payload for progress_list. Defaults to 10 entries; follow nextCursor until null. Unknown fields are rejected.", "properties": {
+                    "blockedOnly": { "type": "boolean", "description": "Only blocked entries, applied before paging." },
+                    "ptyId": { "type": "string", "description": "Only this terminal's entries, applied before paging." },
+                    "limit": { "type": "integer", "minimum": 0, "description": "Entries per page, default 10; clamped to 1..100." },
+                    "cursor": { "type": "integer", "description": "The previous page's nextCursor; omit for the newest page." }
+                }, "additionalProperties": false }
             }, "required": ["action"] }
         },
         {
@@ -15220,6 +15225,31 @@ mod tests {
                 .unwrap()
                 .contains("worktree_remove"),
             "branch's description must name worktree_remove as a consumer: {params}"
+        );
+    }
+
+    #[test]
+    fn repo_progress_schema_advertises_paging_and_filters() {
+        let defs = native_tool_definitions();
+        let repo = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "repo")
+            .unwrap();
+        let input = &repo["inputSchema"]["properties"]["input"];
+        assert_eq!(input["additionalProperties"], false);
+        for field in ["blockedOnly", "ptyId", "limit", "cursor"] {
+            assert!(
+                input["properties"][field].is_object(),
+                "missing {field} in repo progress input"
+            );
+        }
+        assert!(
+            input["description"]
+                .as_str()
+                .unwrap()
+                .contains("10 entries")
         );
     }
 
