@@ -13097,8 +13097,31 @@ fn run_progress_intent_case_grid(
     if alt_screen {
         processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
     }
-    for chunk in chunks {
+    let mut capped_intent_start = None;
+    for (index, chunk) in chunks.iter().enumerate() {
         processor.process_chunk(chunk, &silence, sid, &state);
+        if !alt_screen && history_capacity == 20 && index == 1 {
+            capped_intent_start = Some(
+                silence
+                    .lock()
+                    .open_intent
+                    .as_ref()
+                    .expect("the capped-scroll fixture opened an intent")
+                    .start_row,
+            );
+        }
+        if !alt_screen && history_capacity == 20 && index == 2 {
+            assert_eq!(
+                silence
+                    .lock()
+                    .open_intent
+                    .as_ref()
+                    .expect("scroll must retain the open intent")
+                    .start_row,
+                capped_intent_start.expect("captured the anchor before scrolling"),
+                "the capped history origin must not move the open intent anchor"
+            );
+        }
     }
     if !alt_screen && history_capacity == 20 {
         let vt = state.grid.vt_log_buffers.get(sid).expect("terminal grid");
@@ -13560,6 +13583,33 @@ async fn wide_soft_wrapped_intent_keeps_complete_title_and_journal() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
+async fn twelve_row_soft_wrapped_intent_keeps_progress_and_title() {
+    let text = "review ".repeat(68).trim_end().to_string();
+    let chunk = format!("\x1b[2;1H\x1b[2K• intent: {text} (Twelve rows)");
+    let (events, entries) = run_progress_intent_case(&[&chunk], 40, true, false);
+    assert_eq!(events, [(text.clone(), Some("Twelve rows".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert!(text.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn intent_continuation_does_not_read_below_chrome_cutoff() {
+    let chunk = "\x1b[4;1H\x1b[2K• intent: Inspect the module\x1b[5;1H\x1b[2K────────────────────────────────────────\x1b[6;1H\x1b[2K❯ ";
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let (events, _) = run_progress_intent_case(&[chunk], 40, true, true);
+    assert_eq!(events, [("Inspect the module".into(), None)]);
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert_eq!(
+            reads.get(),
+            0,
+            "chrome rows must not be read as continuations"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
 async fn unclosed_title_does_not_silently_discard_prior_intent() {
     let (events, entries) = run_progress_intent_case(
         &[
@@ -13573,11 +13623,11 @@ async fn unclosed_title_does_not_silently_discard_prior_intent() {
     assert_eq!(
         events,
         [
-            ("Inspect auth (".into(), None),
+            ("Inspect auth".into(), None),
             ("Review routing".into(), Some("Routing".into()))
         ]
     );
-    assert_eq!(entries, ["Review routing", "Inspect auth ("]);
+    assert_eq!(entries, ["Review routing", "Inspect auth"]);
 }
 
 #[cfg(unix)]

@@ -1049,7 +1049,9 @@ impl TerminalGrid {
     /// Reconstruct the complete soft-wrapped logical line containing `row`.
     /// This remains valid after an agent returns the cursor to its composer.
     pub fn logical_line_at_row(&self, row: usize) -> Option<LogicalPrefix> {
-        const MAX_WRAP_TRANSITIONS: usize = 8;
+        // A one-cell-wide terminal can spend one row per candidate character.
+        // Bound by the parser's character budget, not a fixed number of rows.
+        const MAX_WRAP_TRANSITIONS: usize = crate::output_parser::MAX_INTENT_CANDIDATE_CHARS;
         // The parser accepts 2048 Unicode scalars; UTF-8 can use four bytes
         // per scalar, including cells in soft-wrapped rows before trimming.
         const MAX_BYTES: usize = crate::output_parser::MAX_INTENT_CANDIDATE_CHARS * 4;
