@@ -1,21 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CircleCiJob {
-    pub(crate) vcs: String,
-    pub(crate) org: String,
-    pub(crate) repo: String,
-    pub(crate) build_num: u64,
-}
-
-/// Where the active CircleCI token was found. The token itself never crosses a
-/// transport boundary.
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum TokenSource {
-    Vault,
-    Env,
-    CliConfig,
-    None,
-}
+pub(crate) use tuic_git::circleci::{CircleCiJob, TokenSource, parse_check_url};
 
 const MAX_FAILED_ACTIONS: usize = 5;
 const MAX_LOG_BODY_BYTES: usize = 64 * 1024;
@@ -38,58 +21,6 @@ fn allowed_log_url(value: &str, api_base: &str) -> bool {
 const CIRCLECI_API_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Bounds the complete CircleCI API request so callers cannot leave healing active indefinitely.
 const CIRCLECI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-fn is_safe_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn vcs_slug(segment: &str) -> Option<&'static str> {
-    match segment {
-        "gh" | "github" => Some("gh"),
-        "bb" | "bitbucket" => Some("bb"),
-        _ => None,
-    }
-}
-
-pub(crate) fn parse_check_url(value: &str) -> Option<CircleCiJob> {
-    let url = url::Url::parse(value).ok()?;
-    let host = url.host_str()?.to_ascii_lowercase();
-    let segments: Vec<_> = url.path_segments()?.collect();
-
-    let (vcs, org, repo, build_num) = match (host.as_str(), segments.as_slice()) {
-        ("circleci.com", [vcs, org, repo, build_num]) => (*vcs, *org, *repo, *build_num),
-        (
-            "app.circleci.com",
-            [
-                "pipelines",
-                vcs,
-                org,
-                repo,
-                _,
-                "workflows",
-                _,
-                "jobs",
-                build_num,
-            ],
-        ) => (*vcs, *org, *repo, *build_num),
-        _ => return None,
-    };
-
-    if !is_safe_segment(org) || !is_safe_segment(repo) {
-        return None;
-    }
-    Some(CircleCiJob {
-        vcs: vcs_slug(vcs)?.to_string(),
-        org: org.to_string(),
-        repo: repo.to_string(),
-        build_num: build_num.parse().ok()?,
-    })
-}
 
 fn token_from_cli_config(config: &str) -> Option<String> {
     let config: serde_yaml::Value = serde_yaml::from_str(config).ok()?;

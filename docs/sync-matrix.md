@@ -457,6 +457,7 @@ When modifying git operations, worktree logic, or GitHub API:
 |------|----------------|
 | `docs/backend/git.md` | Git command lifecycle, diff parsing, **GitReads port (gix vs CLI op split)**, moka cache |
 | `src-tauri/crates/tuic-git/src/git_reads.rs` | **GitReads port**: flipping an op to gix requires a green byte-parity shootout test first |
+| `src-tauri/crates/tuic-git/src/{github,github_account,github_auth,github_poller,circleci,pr_review,changelog,github_debug}.rs` | Pure GitHub models, parsing, and decisions; keep network, credentials, scheduling, events, and commands in the root adapters |
 | `docs/backend/github.md` | PR fetching, CI checks, GraphQL |
 | `docs/user-guide/worktrees.md` | Worktree workflow, configuration |
 | `docs/user-guide/github-integration.md` | PR monitoring, CI rings |
