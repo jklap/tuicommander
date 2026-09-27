@@ -254,17 +254,19 @@ export function createProgressStore() {
 		const entry = payload.payload.entry;
 		const project = payload.repo_path;
 		const showing = dialogVisible() && requestedProject() === project;
+		let onScreen = true;
 		if (showing && (selectedPtyId() === null || selectedPtyId() === entry.ptyId)) {
 			refreshVisible(project);
 		} else if (showing && drawnInFlow(project, entry)) {
 			void refreshFlow(project);
 		} else {
-			setArrivedSinceOpen((count) => count + 1);
+			onScreen = false;
 		}
 		// An `intent:` is what the agent set out to do, and a hand-off is one
 		// agent talking to another — neither is an outcome. They belong in the
-		// journal and not in the user's face.
+		// journal and not in the user's face: no toast, and no bell count.
 		if (entry.type !== "done" && entry.type !== "blocked") return;
+		if (!onScreen) setArrivedSinceOpen((count) => count + 1);
 		const projectName =
 			repositoriesStore.get(payload.repo_path)?.displayName ??
 			payload.repo_path.split(/[\\/]/).pop() ??

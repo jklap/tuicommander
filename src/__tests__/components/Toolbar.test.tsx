@@ -362,7 +362,7 @@ describe("Toolbar", () => {
 			progressStore.presentLive({
 				repo_path: "/repo",
 				payload: {
-					entry: { id: 1, project: "/repo", createdAtMs: 1, type: "intent", text: "Starting" },
+					entry: { id: 1, project: "/repo", createdAtMs: 1, type: "done", text: "Starting" },
 				},
 			});
 			const { container } = render(() => <Toolbar />);
@@ -372,7 +372,7 @@ describe("Toolbar", () => {
 			progressStore.presentLive({
 				repo_path: "/repo",
 				payload: {
-					entry: { id: 2, project: "/repo", createdAtMs: 2, type: "intent", text: "Continuing" },
+					entry: { id: 2, project: "/repo", createdAtMs: 2, type: "done", text: "Continuing" },
 				},
 			});
 			expect(container.querySelector(".notifCount")?.textContent).toBe("2");

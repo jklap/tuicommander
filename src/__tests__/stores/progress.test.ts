@@ -265,13 +265,17 @@ describe("progressStore", () => {
 		expect(invokeMock.mock.calls.some(([command]) => command === "progress_flow")).toBe(false);
 	});
 
-	it("counts what arrived while the dialog was closed and clears it on open", async () => {
+	it("counts outcomes that arrived while the dialog was closed and clears it on open", async () => {
 		invokeMock.mockResolvedValue(list([]));
 		const { createProgressStore } = await import("../../stores/progress");
 		const store = createProgressStore();
 
 		store.presentLive({ repo_path: "/repo", payload: { entry: entry(1, 100) } });
-		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 200, "intent") } });
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 150, "blocked") } });
+		// Intents and agent-to-agent messages are journal lines, not outcomes: ten busy
+		// agents emit hundreds a day, which made the bell read 156.
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(3, 200, "intent") } });
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(4, 250, "message") } });
 		expect(store.unreadCount).toBe(2);
 
 		store.open("/repo");
