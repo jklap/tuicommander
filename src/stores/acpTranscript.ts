@@ -37,11 +37,13 @@ export type AcpTranscriptEntry =
 
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
+	titles: Record<AcpSessionId, string>;
+	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
 
-const [state, setState] = createStore<TranscriptState>({ sessions: {}, nextId: 1 });
+const [state, setState] = createStore<TranscriptState>({ sessions: {}, titles: {}, usage: {}, nextId: 1 });
 
 /**
  * The text inside a content block, or "" for a block that carries none.
@@ -116,9 +118,41 @@ function stripUndefined(fields: Partial<AcpToolCall>): Partial<AcpToolCall> {
 	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
-function reduceUpdate(draft: TranscriptState, entries: AcpTranscriptEntry[], update: AcpSessionUpdate): void {
+function reduceUpdate(
+	draft: TranscriptState,
+	sessionId: AcpSessionId,
+	entries: AcpTranscriptEntry[],
+	update: AcpSessionUpdate,
+): void {
 	const record = update as unknown as Record<string, unknown>;
 	switch (update.sessionUpdate) {
+		case "session_info_update":
+			if (typeof record.title === "string" && record.title.trim()) draft.titles[sessionId] = record.title;
+			break;
+		case "usage_update": {
+			if (
+				typeof record.used !== "number" ||
+				!Number.isFinite(record.used) ||
+				record.used < 0 ||
+				typeof record.size !== "number" ||
+				!Number.isFinite(record.size) ||
+				record.size <= 0
+			)
+				break;
+			const cost = record.cost;
+			draft.usage[sessionId] = {
+				used: record.used,
+				size: record.size,
+				...(cost &&
+				typeof cost === "object" &&
+				typeof (cost as { amount?: unknown }).amount === "number" &&
+				Number.isFinite((cost as { amount: number }).amount) &&
+				typeof (cost as { currency?: unknown }).currency === "string"
+					? { cost: cost as { amount: number; currency: string } }
+					: {}),
+			};
+			break;
+		}
 		case "user_message_chunk":
 			appendChunk(draft, entries, "user", textOf(record.content));
 			break;
@@ -146,10 +180,8 @@ function reduceUpdate(draft: TranscriptState, entries: AcpTranscriptEntry[], upd
 			break;
 		}
 		default:
-			// `config_option_update`, `usage_update` and anything a later protocol
-			// version adds are not conversation. They reach the panel through the
-			// connection snapshot, which is refetched, so dropping them here loses
-			// nothing.
+			// `config_option_update` and anything a later protocol
+			// version adds are not rendered by the transcript projection.
 			break;
 	}
 }
@@ -159,7 +191,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, nextId: 1 });
 	},
 
 	/**
@@ -215,7 +247,7 @@ export const acpTranscript = {
 			produce((s: TranscriptState) => {
 				const entries = (s.sessions[sessionId] ??= []);
 				if (event.kind === "sessionUpdate") {
-					reduceUpdate(s, entries, event.update);
+					reduceUpdate(s, sessionId, entries, event.update);
 					return;
 				}
 				if (event.kind === "turnSettled" && event.stopReason !== "end_turn") {
@@ -268,5 +300,13 @@ export const acpTranscript = {
 
 	entries(sessionId: AcpSessionId): AcpTranscriptEntry[] {
 		return state.sessions[sessionId] ?? [];
+	},
+
+	title(sessionId: AcpSessionId): string | null {
+		return state.titles[sessionId] ?? null;
+	},
+
+	usage(sessionId: AcpSessionId): { used: number; size: number; cost?: { amount: number; currency: string } } | null {
+		return state.usage[sessionId] ?? null;
 	},
 };

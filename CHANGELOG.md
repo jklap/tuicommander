@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat session details** — Live ACP titles update the header and conversation picker. A footer shows context-window use and reported cost.
+
 - **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted values stay intact, and menu overrides cannot replace TUIC peer identity variables.
 
 - **AI Chat image paste** — Pasting a supported image stages a removable preview and sends its bytes as an ACP image block when the agent advertises image prompts. Oversized or unsupported images show a refusal before upload.
