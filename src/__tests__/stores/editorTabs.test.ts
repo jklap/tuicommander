@@ -7,6 +7,28 @@ describe("editorTabsStore", () => {
 		editorTabsStore.clearAll();
 	});
 
+	it("zooms only the active editor and resets it to the configured default", () => {
+		testInScope(() => {
+			const first = editorTabsStore.add("/repo", "first.ts");
+			const second = editorTabsStore.add("/repo", "second.ts");
+			editorTabsStore.zoomIn(13);
+			expect(editorTabsStore.get(second)?.fontSize).toBe(15);
+			expect(editorTabsStore.get(first)?.fontSize).toBeUndefined();
+			editorTabsStore.zoomReset(13);
+			expect(editorTabsStore.get(second)?.fontSize).toBe(13);
+		});
+	});
+
+	it("keeps editor zoom inside the terminal bounds", () => {
+		testInScope(() => {
+			const id = editorTabsStore.add("/repo", "first.ts");
+			for (let i = 0; i < 20; i++) editorTabsStore.zoomOut(13);
+			expect(editorTabsStore.get(id)?.fontSize).toBe(8);
+			for (let i = 0; i < 20; i++) editorTabsStore.zoomIn(13);
+			expect(editorTabsStore.get(id)?.fontSize).toBe(32);
+		});
+	});
+
 	describe("add()", () => {
 		it("adds a new tab and returns its id", () => {
 			testInScope(() => {

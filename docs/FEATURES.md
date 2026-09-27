@@ -384,6 +384,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Save: `Cmd+S` (when editor tab is focused)
 - Read-only toggle: padlock icon in editor header
 - Line wrapping: header toggle or `Alt+Z`; text-like and Markdown files start wrapped, code files start unwrapped; each kind remembers its choice
+- Per-tab font zoom: `Cmd+=` / `Cmd+-` changes the active editor by 2px (8–32px); `Cmd+0` resets it to the configured default
 - Unsaved changes: dot indicator in tab bar and header
 - Disk conflict detection: banner with "Reload" (discard local) or "Keep mine" options
 - Auto-reloads silently when file changes on disk and editor is clean
@@ -1651,6 +1652,7 @@ All data persisted to platform config directory via Rust:
 ### Code Editor (when focused)
 | Shortcut | Action |
 |----------|--------|
+| `Cmd+=` / `Cmd+-` / `Cmd+0` | Zoom editor text in, out, or reset |
 | `Cmd+F` | Find |
 | `Cmd+G` | Find next |
 | `Cmd+Shift+G` | Find previous |
