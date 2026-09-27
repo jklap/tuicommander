@@ -3988,3 +3988,6 @@ or credential is touched.
       Confirm the disposable Claude PTY shows `PEER_MAIL_WAKE` within 20 seconds.
       See `docs/guides/development-setup.md` for the instance setup; the Rust
       change does not hot reload into the current process.
+- [ ] On that rebuilt isolated instance, run
+      `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude --capacity`.
+      Confirm mail 101 is accepted and returned after the first 100 were read.
