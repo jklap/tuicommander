@@ -1848,6 +1848,11 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Empty state with instructional hint
 - Tap card to open session detail
 
+### 18.2.1 Files Screen
+- Select a configured repository and browse its directories one level at a time
+- Open UTF-8 text files read-only, then explicitly enter edit mode to save changes through the existing file commands
+- Refuse files over 1 MB before reading and show a clear message for binary or non-text files
+
 ### 18.3 Session Detail Screen
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout

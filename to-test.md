@@ -12,6 +12,10 @@
 
 # To Test
 
+## Mobile repository files (story 1063-3fe1) — real phone
+
+- [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, read a text file, edit and save it, then confirm the saved content from the desktop. Check that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior.
+
 ## Mobile notification tags (story 1042-f5ca) — updated service worker
 
 - [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.
