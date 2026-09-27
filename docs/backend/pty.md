@@ -216,9 +216,11 @@ than flag:
   dead instance's calls against the new gate: without the epoch its late ack
   credits frames the new terminal never received, and its late unsubscribe
   deletes the live channel and leaves a mounted terminal blank.
-  When the main WebView starts a new document, its old channels and gates are
-  removed together. The frame ticker then sees no desktop subscriber for an
-  unmounted terminal; a newly mounted terminal installs a fresh channel and gate.
+  Each channel records the subscribing WebView label and epoch. On navigation or
+  window destruction, only that WebView's channels and matching gates are
+  removed. A main-window reload therefore leaves a floating terminal's channel
+  live. The frame ticker sees no desktop subscriber for an unmounted terminal;
+  a newly mounted terminal installs a fresh channel and gate.
 - **Browser/WS.** The `watch` channel keeps only the newest value, so a slow
   client silently skips frames. Frames carry a Rust-internal `seq`
   (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid

@@ -17801,12 +17801,16 @@ mod grid_delivery_tests {
         let sink = received.clone();
         state.grid.channels.insert(
             session_id.to_string(),
-            tauri::ipc::Channel::new(move |body| {
-                if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
-                    sink.lock().push(bytes);
-                }
-                Ok(())
-            }),
+            crate::state::DesktopGridChannel {
+                channel: tauri::ipc::Channel::new(move |body| {
+                    if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                        sink.lock().push(bytes);
+                    }
+                    Ok(())
+                }),
+                webview_label: "main".to_string(),
+                epoch: gate.epoch(),
+            },
         );
         (gate, received)
     }

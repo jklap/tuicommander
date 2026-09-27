@@ -1372,9 +1372,20 @@ fn is_app_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
 
 #[cfg(feature = "desktop")]
 fn release_webview_document_resources(state: &AppState, webview_label: &str) {
-    if webview_label == "main" {
-        state.grid.channels.clear();
-        state.grid.gates.clear();
+    let mut removed = Vec::new();
+    state.grid.channels.retain(|session_id, subscription| {
+        if subscription.webview_label == webview_label {
+            removed.push((session_id.clone(), subscription.epoch));
+            false
+        } else {
+            true
+        }
+    });
+    for (session_id, epoch) in removed {
+        state
+            .grid
+            .gates
+            .remove_if(&session_id, |_, gate| gate.epoch() == epoch);
     }
     state
         .plugin_output_watchers
@@ -2922,14 +2933,18 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "desktop")]
-    fn register_document_grid(state: &AppState, session_id: &str) -> u64 {
+    fn register_document_grid(state: &AppState, session_id: &str, webview_label: &str) -> u64 {
         let gate = Arc::new(crate::grid_gate::GridGate::new());
         let epoch = gate.epoch();
         state.grid.gates.insert(session_id.to_string(), gate);
-        state
-            .grid
-            .channels
-            .insert(session_id.to_string(), tauri::ipc::Channel::new(|_| Ok(())));
+        state.grid.channels.insert(
+            session_id.to_string(),
+            crate::state::DesktopGridChannel {
+                channel: tauri::ipc::Channel::new(|_| Ok(())),
+                webview_label: webview_label.to_string(),
+                epoch,
+            },
+        );
         epoch
     }
 
@@ -2946,8 +2961,8 @@ mod tests {
     #[test]
     fn reload_releases_every_old_grid_channel_and_watcher() {
         let state = crate::state::tests_support::make_test_app_state();
-        register_document_grid(&state, "one");
-        register_document_grid(&state, "two");
+        register_document_grid(&state, "one", "main");
+        register_document_grid(&state, "two", "main");
         state.plugin_output_watchers.write().sync_for_webview(
             "main",
             "old-document",
@@ -2974,7 +2989,7 @@ mod tests {
     #[test]
     fn closing_a_panel_releases_only_its_watcher_set() {
         let state = crate::state::tests_support::make_test_app_state();
-        register_document_grid(&state, "main-terminal");
+        register_document_grid(&state, "main-terminal", "main");
         state.plugin_output_watchers.write().sync_for_webview(
             "main",
             "main-client",
@@ -2998,6 +3013,44 @@ mod tests {
 
     #[cfg(feature = "desktop")]
     #[test]
+    fn main_reload_preserves_a_floating_terminals_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "main-terminal", "main");
+        let floating_epoch = register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "main");
+
+        assert!(!crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert!(crate::pty::grid_has_subscriber(&state, "floating-terminal"));
+        assert_eq!(
+            state.grid.gates.get("floating-terminal").unwrap().epoch(),
+            floating_epoch
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn destroying_a_floating_window_releases_only_its_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let main_epoch = register_document_grid(&state, "main-terminal", "main");
+        register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "floating-tab-1");
+
+        assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert_eq!(
+            state.grid.gates.get("main-terminal").unwrap().epoch(),
+            main_epoch
+        );
+        assert!(!crate::pty::grid_has_subscriber(
+            &state,
+            "floating-terminal"
+        ));
+        assert!(!state.grid.gates.contains_key("floating-terminal"));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
     fn reload_keeps_browser_watchers_and_accepts_fresh_document() {
         let state = crate::state::tests_support::make_test_app_state();
         state
@@ -3012,7 +3065,7 @@ mod tests {
         );
         release_webview_document_resources(&state, "main");
 
-        let new_epoch = register_document_grid(&state, "one");
+        let new_epoch = register_document_grid(&state, "one", "main");
         state.plugin_output_watchers.write().sync_for_webview(
             "main",
             "new-document",
