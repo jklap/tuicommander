@@ -24,7 +24,7 @@ const {
 }));
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("../../platform", () => ({ getModifierSymbol: () => "⌘" }));
+vi.mock("../../platform", () => ({ getModifierSymbol: () => "⌘", isWindows: vi.fn(() => false) }));
 // Two machines: `REMOTE_REPO` is held by another box and answers with its own
 // run configs. Which connection a path maps to is resolved by the registry and
 // asserted in remoteRepoRouting.test.ts against the URL that leaves the process;
@@ -42,7 +42,9 @@ const REMOTE_REPO = "/srv/work/api";
 vi.mock("../../stores/contextMenuActionsStore", () => ({ contextMenuActionsStore: mockContextActions }));
 vi.mock("../../stores/paneLayout", () => ({ paneLayoutStore: mockPaneLayout }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: { state: { activeRepoPath: "/repo" } } }));
-vi.mock("../../stores/settings", () => ({ settingsStore: { isAgentEnabled: vi.fn(() => true) } }));
+vi.mock("../../stores/settings", () => ({
+	settingsStore: { state: { shell: null as string | null }, isAgentEnabled: vi.fn(() => true) },
+}));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminals }));
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/hotkey", () => ({ keyFor: (action: string) => action }));
@@ -53,7 +55,9 @@ vi.mock("../../utils/sendCommand", () => ({
 vi.mock("../../transport", () => ({ rpc: mockRpc }));
 
 import { useTerminalContextMenus } from "../../hooks/useTerminalContextMenus";
-import { sendCommand } from "../../utils/sendCommand";
+import { isWindows } from "../../platform";
+import { settingsStore } from "../../stores/settings";
+import { getShellFamily, sendCommand } from "../../utils/sendCommand";
 
 function createOptions(available: Array<{ type: string }> = []) {
 	return {
@@ -81,6 +85,9 @@ describe("useTerminalContextMenus", () => {
 		mockPaneLayout.canSplit.mockReset().mockReturnValue(true);
 		mockWriteClipboard.mockClear();
 		mockRpc.mockReset().mockImplementation(async (_command: string, args: { args?: string[] }) => args?.args ?? []);
+		vi.mocked(getShellFamily).mockResolvedValue("posix");
+		vi.mocked(isWindows).mockReturnValue(false);
+		settingsStore.state.shell = null;
 	});
 
 	it("builds core terminal actions and disables splitting without an active terminal", () => {
@@ -201,6 +208,180 @@ describe("useTerminalContextMenus", () => {
 		expect(mockTerminals.update).toHaveBeenCalledWith(
 			"new-term",
 			expect.objectContaining({ agentLaunchCommand: "c2" }),
+		);
+	});
+
+	// Catches: the active menu drops env or splits a quoted value into shell tokens.
+	it("scopes a quoted run-config value to the active POSIX agent command", async () => {
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{
+				name: "private",
+				command: "claude",
+				args: [],
+				env: { CLAUDE_CONFIG_DIR: "/my 'private' config" },
+				is_default: true,
+			},
+		]);
+
+		const menu = useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.getContextMenuItems()
+			.find((item) => item.label === "Agents");
+		await menu?.children?.[0]?.action();
+
+		expect(sendCommand).toHaveBeenCalledWith(
+			expect.any(Function),
+			"env CLAUDE_CONFIG_DIR='/my '\\''private'\\'' config' claude",
+			null,
+			"posix",
+		);
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"term-1",
+			expect.objectContaining({ agentLaunchCommand: "claude" }),
+		);
+	});
+
+	// Catches: sidebar launch reads this desktop's config or exports into the new shell.
+	it("uses the selected remote run-config environment only for the sidebar agent", async () => {
+		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
+		mockRemoteAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "remote", command: "claude", args: [], env: { PROFILE: "a b" }, is_default: true },
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.buildSidebarAgentMenuItems(REMOTE_REPO, "feature")[0]
+			.action();
+
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"new-term",
+			expect.objectContaining({ pendingInitCommand: "env PROFILE='a b' claude", agentLaunchCommand: "claude" }),
+		);
+	});
+
+	// Catches: a menu config spoofs TUIC identity or treats an empty value as absent.
+	it.each(["active", "sidebar"])(
+		"protects peer identity while retaining an empty value in %s launch overrides",
+		async (path) => {
+			const config = {
+				name: "private",
+				command: "claude",
+				args: [],
+				env: { TUIC_SESSION: "spoof", TUIC_PARENT: "spoof", EMPTY: "" },
+				is_default: true,
+			};
+			mockAgentConfigs.getRunConfigs.mockReturnValue([config]);
+			mockTerminals.state.activeId = "term-1";
+			mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1", agentType: null, commandBlocks: [] });
+			mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+			const menus = useTerminalContextMenus(createOptions([{ type: "claude" }]) as never);
+			if (path === "active") {
+				await menus
+					.getContextMenuItems()
+					.find((item) => item.label === "Agents")
+					?.children?.[0]?.action();
+				expect(sendCommand).toHaveBeenCalledWith(expect.any(Function), "env EMPTY='' claude", null, "posix");
+			} else {
+				await menus.buildSidebarAgentMenuItems("/repo", "feature")[0].action();
+				expect(mockTerminals.update).toHaveBeenCalledWith(
+					"new-term",
+					expect.objectContaining({ pendingInitCommand: "env EMPTY='' claude" }),
+				);
+			}
+		},
+	);
+
+	// Catches: submenu actions reuse the first run config's environment.
+	it("uses the selected active submenu's env instead of another run config's env", async () => {
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "first", command: "claude", args: [], env: { PROFILE: "first" }, is_default: true },
+			{ name: "second", command: "claude", args: [], env: { PROFILE: "second" }, is_default: false },
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.getContextMenuItems()
+			.find((item) => item.label === "Agents")
+			?.children?.[0]?.children?.[1]?.action();
+
+		expect(sendCommand).toHaveBeenCalledWith(expect.any(Function), "env PROFILE='second' claude", null, "posix");
+	});
+
+	// Catches: cmd or PowerShell parses an unquoted value before the agent starts.
+	it("launches the active Windows agent with scoped environment without exposing a quoted value in the shell line", async () => {
+		vi.mocked(isWindows).mockReturnValue(true);
+		vi.mocked(getShellFamily).mockResolvedValue("windows-native");
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{
+				name: "private",
+				command: "claude",
+				args: [],
+				env: { PROFILE: "a 'quote' & space", TUIC_PARENT: "spoof" },
+				is_default: true,
+			},
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.getContextMenuItems()
+			.find((item) => item.label === "Agents")
+			?.children?.[0]?.action();
+
+		const line = vi.mocked(sendCommand).mock.calls.at(-1)?.[1] ?? "";
+		expect(line).toMatch(/^powershell\.exe -NoProfile -EncodedCommand [A-Za-z0-9+/=]+$/);
+		expect(line).not.toContain("a 'quote' & space");
+		const script = Buffer.from(line.split(" ").at(-1) ?? "", "base64").toString("utf16le");
+		expect(script).toContain("PROFILE");
+		expect(script).toContain("a ''quote'' & space");
+		expect(script).toContain("claude");
+		expect(script).not.toContain("TUIC_PARENT");
+	});
+
+	// Catches: the sidebar assumes POSIX syntax on native Windows shells.
+	it.each(["cmd.exe", "powershell.exe"])("launches a sidebar agent with scoped env in %s", async (shell) => {
+		vi.mocked(isWindows).mockReturnValue(true);
+		settingsStore.state.shell = shell;
+		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "private", command: "claude", args: ["--model", "opus"], env: { PROFILE: "a b" }, is_default: true },
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.buildSidebarAgentMenuItems("/repo", "feature")[0]
+			.action();
+
+		const update = mockTerminals.update.mock.calls.at(-1)?.[1];
+		const line = update?.pendingInitCommand ?? "";
+		expect(line).toMatch(/^powershell\.exe -NoProfile -EncodedCommand [A-Za-z0-9+/=]+$/);
+		expect(line).not.toContain("a b");
+		const script = Buffer.from(line.split(" ").at(-1) ?? "", "base64").toString("utf16le");
+		expect(script).toContain("PROFILE");
+		expect(script).toContain("a b");
+		expect(script).toContain("claude --model opus");
+		expect(update?.agentLaunchCommand).toBe("claude --model opus");
+	});
+
+	// Catches: host Windows detection selects PowerShell syntax for Git Bash.
+	it("uses POSIX quoting for a Windows Git Bash sidebar terminal", async () => {
+		vi.mocked(isWindows).mockReturnValue(true);
+		settingsStore.state.shell = "C:\\Program Files\\Git\\bin\\bash.exe";
+		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "bash", command: "claude", args: [], env: { PROFILE: "a b" }, is_default: true },
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.buildSidebarAgentMenuItems("/repo", "feature")[0]
+			.action();
+
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"new-term",
+			expect.objectContaining({ pendingInitCommand: "env PROFILE='a b' claude" }),
 		);
 	});
 
