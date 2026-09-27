@@ -1351,7 +1351,7 @@ impl TurnEvidence {
 /// The verdict `decide()` reaches for the busy/idle shell-state axis.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Transition {
-    ToBusy(Evidence),
+    ToBusy,
     ToIdle(Evidence),
 }
 
@@ -1370,7 +1370,7 @@ fn decide(
     if shell_is_busy {
         evidence.idle.map(Transition::ToIdle)
     } else {
-        evidence.busy.map(Transition::ToBusy)
+        evidence.busy.map(|_| Transition::ToBusy)
     }
 }
 
@@ -1535,6 +1535,8 @@ pub(crate) struct SilenceState {
     /// is session-lifetime latch metadata, not per-turn evidence — it never
     /// resets, so it does not belong in `TurnEvidence`.
     hook_state_seen: bool,
+    /// The latest agent hook, retained across a submitted-input evidence reset.
+    last_hook_state: Option<u8>,
     /// Last screen classification and when it was computed, shared between the
     /// reader chunk path (which computes it fresh on every chunk) and the
     /// silence timer (which reuses this instead of re-classifying, so
@@ -1619,6 +1621,7 @@ impl SilenceState {
             completion_turn_epoch: 0,
             evidence: TurnEvidence::default(),
             hook_state_seen: false,
+            last_hook_state: None,
             cached_screen_activity: AgentScreenActivity::Unknown,
             interrupt_requested_at: None,
             screen_ready_pending_since: None,
@@ -1824,6 +1827,9 @@ impl SilenceState {
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
         self.invalidate_injection_claim();
         self.hook_state_seen |= hook_state;
+        if hook_state {
+            self.last_hook_state = Some(state);
+        }
         self.screen_ready_pending_since = None;
         match state {
             SHELL_BUSY => {
@@ -1980,6 +1986,16 @@ impl SilenceState {
                     .screen_ready_pending_since
                     .is_some_and(|ready| ready.elapsed() >= PROTOCOL_STALE_TIMEOUT)
         })
+    }
+
+    fn unacknowledged_submission_is_stale(&self) -> bool {
+        self.last_hook_state == Some(SHELL_IDLE)
+            && !self.injection_delivery_uncertain
+            && self.evidence.busy.is_some_and(|busy| {
+                busy.source == "user-submit"
+                    && busy.at.elapsed() >= PROTOCOL_STALE_TIMEOUT
+                    && self.last_output_at.elapsed() >= PROTOCOL_STALE_TIMEOUT
+            })
     }
 
     #[cfg(test)]
@@ -2557,6 +2573,20 @@ fn try_shell_transition_locked<F: FnOnce()>(
             .entry(session_id.to_string())
             .and_modify(|a| a.store(now_ms, std::sync::atomic::Ordering::Relaxed))
             .or_insert_with(|| std::sync::atomic::AtomicU64::new(now_ms));
+        let evidence = silence_state.as_ref().and_then(|silence| {
+            if new == SHELL_BUSY {
+                silence.evidence.busy
+            } else {
+                silence.evidence.idle
+            }
+        });
+        tracing::debug!(
+            session_id,
+            activity_source = evidence.map(|item| item.source).unwrap_or("transition"),
+            rank = ?evidence.map(|item| item.rank),
+            "Shell state → {}",
+            shell_state_wire(new).unwrap_or("unknown")
+        );
         // Notify orchestrator when an agent goes idle (BUSY→IDLE only).
         // Plain shell sessions are excluded — only registered agent sessions qualify.
         if notify_parent && expected == SHELL_BUSY && new == SHELL_IDLE {
@@ -3982,19 +4012,13 @@ fn apply_working_evidence(
         .get(session_id)
         .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
     if let Some(prev) = prev
-        && let Some(Transition::ToBusy(evidence)) = decide(
+        && let Some(Transition::ToBusy) = decide(
             &evidence_snapshot,
             prev == SHELL_BUSY,
             std::time::Instant::now(),
         )
         && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
     {
-        tracing::debug!(
-            session_id,
-            activity_source = evidence.source,
-            rank = ?evidence.rank,
-            "Shell state → busy"
-        );
         emit_shell_state(state, session_id, "busy");
     }
     let mut silence = silence.lock();
@@ -4035,7 +4059,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         .entry(session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
         .clone();
-    let transitioned_busy = {
+    {
         // Lock order for submitted turns is SilenceState → SessionState → shell
         // atomics. Completion drains and Suggest parsing use the same order.
         let mut silence = silence.lock();
@@ -4081,16 +4105,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         if transitioned {
             emit_shell_state(state, session_id, "busy");
         }
-        transitioned
     };
-    if transitioned_busy {
-        tracing::debug!(
-            session_id,
-            activity_source = "user-submit",
-            rank = ?EvidenceRank::Protocol,
-            "Shell state → busy"
-        );
-    }
 }
 
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
@@ -4167,7 +4182,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         .silence_states
         .get(session_id)
         .map(|entry| Arc::clone(entry.value()));
-    let (transitioned, evidence, parent_dispatch) = {
+    let (transitioned, parent_dispatch) = {
         let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
         if target == SHELL_IDLE
             && evidence_turn_epoch.is_some_and(|observed| {
@@ -4189,17 +4204,6 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         if target == SHELL_BUSY {
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
-        let evidence = match decide(
-            silence_guard
-                .as_deref()
-                .map(|s| &s.evidence)
-                .unwrap_or(&TurnEvidence::default()),
-            target == SHELL_IDLE,
-            std::time::Instant::now(),
-        ) {
-            Some(Transition::ToBusy(evidence) | Transition::ToIdle(evidence)) => Some(evidence),
-            None => None,
-        };
         let prev = match state.session_maps.shell_states.get(session_id) {
             Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
             None => return,
@@ -4225,20 +4229,12 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
             silence_guard.as_deref_mut(),
             || {},
         );
-        (transitioned, evidence, parent_dispatch)
+        (transitioned, parent_dispatch)
     };
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
     if transitioned {
-        if let Some(evidence) = evidence {
-            tracing::debug!(
-                session_id,
-                activity_source = evidence.source,
-                rank = ?evidence.rank,
-                "Shell state → {label}"
-            );
-        }
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
         // this order leaves the backend BUSY while the frontend's last event is
@@ -4480,6 +4476,9 @@ fn try_timer_idle_transition(
         }
 
         let idle_was_confirmed = silence.idle_confirmed();
+        let submission_stale = screen_activity == AgentScreenActivity::Unknown
+            && agent_type == Some("claude")
+            && silence.unacknowledged_submission_is_stale();
         let protocol_stale =
             screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
@@ -4532,17 +4531,18 @@ fn try_timer_idle_transition(
         } else {
             ForegroundProbe::Open
         };
-        let decision = if screen_confirms_idle && probe != ForegroundProbe::Pending {
-            IdleDecision::yes(evidence_turn_epoch)
-        } else if screen_confirms_idle
-            || (silence.explicit_busy() && !nested_prompt)
-            || hold_for_ready_confirmation
-            || silence.is_api_retry_active()
-        {
-            IdleDecision::NO
-        } else {
-            should_transition_idle(state, session_id)
-        };
+        let decision =
+            if submission_stale || (screen_confirms_idle && probe != ForegroundProbe::Pending) {
+                IdleDecision::yes(evidence_turn_epoch)
+            } else if screen_confirms_idle
+                || (silence.explicit_busy() && !nested_prompt)
+                || hold_for_ready_confirmation
+                || silence.is_api_retry_active()
+            {
+                IdleDecision::NO
+            } else {
+                should_transition_idle(state, session_id)
+            };
         if !decision.should_transition {
             return TimerIdleTransition {
                 transitioned: false,
@@ -4566,7 +4566,11 @@ fn try_timer_idle_transition(
                 .evidence
                 .force_idle(EvidenceRank::Process, "process");
         }
-        if !screen_confirms_idle {
+        if submission_stale {
+            silence
+                .evidence
+                .force_idle(EvidenceRank::Process, "submission-stale");
+        } else if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
             // `else if` chain above (mirroring the old checks exactly, incl.
             // `nested_prompt`) already decided this is allowed, so the generic
@@ -4783,13 +4787,6 @@ fn spawn_silence_timer(
                     if let Some(vt) = state.grid.vt_log_buffers.get(&session_id) {
                         vt.lock().process(b"\x1b[?25h");
                     }
-                    tracing::debug!(
-                        session_id,
-                        activity_source = transition.evidence.map(|e| e.source).unwrap_or("unknown"),
-                        rank = ?transition.evidence.map(|e| e.rank),
-                        idle_confirmed = silence.lock().idle_confirmed(),
-                        "Shell state → idle"
-                    );
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
@@ -7225,19 +7222,13 @@ impl ChunkProcessor {
             None
         };
         if let Some(prev) = prev
-            && let Some(Transition::ToBusy(evidence)) = decide(
+            && let Some(Transition::ToBusy) = decide(
                 &evidence_snapshot,
                 prev == SHELL_BUSY,
                 std::time::Instant::now(),
             )
             && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
         {
-            tracing::debug!(
-                session_id,
-                activity_source = evidence.source,
-                rank = ?evidence.rank,
-                "Shell state → busy"
-            );
             emit_shell_state(state, session_id, "busy");
         }
         if working_applied || real_activity {
