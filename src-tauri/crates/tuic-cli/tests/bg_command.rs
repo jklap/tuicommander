@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 static NEXT_JOB: AtomicU64 = AtomicU64::new(0);
 
 fn test_path(name: &str) -> std::path::PathBuf {
-    let root =
-        std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Gits/.tmp/tuic-tests");
+    let root = std::path::PathBuf::from(std::env::var("TUIC_TEST_TMP_ROOT").unwrap());
     std::fs::create_dir_all(&root).unwrap();
     root.join(format!(
         "bg-{name}-{}-{}",
@@ -68,6 +67,8 @@ fn wait_for(path: &std::path::Path) {
 fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
     let log = test_path("wake.log");
     std::fs::write(&log, "previous\n").unwrap();
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    std::fs::write(&wake_file, r#"{"status":"failed","error":"stale"}"#).unwrap();
     let socket = test_path("wake.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
@@ -119,8 +120,13 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         !exit_file.exists(),
         "launcher wrote the exit before the command ended"
     );
+    assert!(!wake_file.exists(), "launcher left a stale wake failure");
     wait_for(&exit_file);
+    wait_for(&wake_file);
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "7");
+    let wake_status: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake_status["status"], "accepted");
     let log_text = std::fs::read_to_string(&log).unwrap();
     assert!(
         log_text.contains("previous\n")
@@ -141,8 +147,118 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         "{wake}"
     );
     std::fs::remove_file(exit_file).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn bg_records_wake_failure_when_caller_is_missing() {
+    let log = test_path("unbound.log");
+    let socket = test_path("unbound.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        reply(&mut stream, "[]");
+        request
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    wait_for(&wake_file);
+    assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "0");
+    let wake_status: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake_status["status"], "failed");
+    assert!(wake_status["error"].as_str().unwrap().contains("found 0"));
+    assert_eq!(server.join().unwrap().0, "GET /sessions HTTP/1.1");
+    std::fs::remove_file(exit_file).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn bg_keeps_command_exit_separate_from_rejected_wake() {
+    let log = test_path("rejected.log");
+    let socket = test_path("rejected.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let first = read_request(&mut stream);
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let second = read_request(&mut stream);
+        let body = r#"{"error":"Session is not running an agent"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        (first, second)
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 7"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    wait_for(&wake_file);
+    assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "7");
+    let wake_status: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake_status["status"], "failed");
+    assert!(wake_status["error"].as_str().unwrap().contains("HTTP 400"));
+    let (first, second) = server.join().unwrap();
+    assert_eq!(first.0, "GET /sessions HTTP/1.1");
+    assert_eq!(second.0, "POST /sessions/pty-1/queue HTTP/1.1");
+    std::fs::remove_file(exit_file).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn bg_records_wake_failure_when_tuic_is_unavailable() {
+    let log = test_path("tuic-down.log");
+    let missing_socket = test_path("tuic-down.sock");
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 9"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &missing_socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    wait_for(&wake_file);
+    assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "9");
+    let wake_status: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake_status["status"], "failed");
+    assert!(
+        wake_status["error"]
+            .as_str()
+            .unwrap()
+            .contains("Cannot connect")
+    );
+    std::fs::remove_file(exit_file).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(log).unwrap();
 }
 
 #[test]

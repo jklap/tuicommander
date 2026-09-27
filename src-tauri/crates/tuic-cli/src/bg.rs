@@ -41,6 +41,12 @@ pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
     {
         return Err(format!("Cannot remove stale exit file {exit_file}: {e}"));
     }
+    let wake_file = format!("{log}.wake");
+    if let Err(e) = fs::remove_file(&wake_file)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("Cannot remove stale wake file {wake_file}: {e}"));
+    }
 
     let mut runner = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
     runner
@@ -67,7 +73,7 @@ pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
     let child = runner
         .spawn()
         .map_err(|e| format!("Cannot start background runner: {e}"))?;
-    println!("tuic bg: pid={} log={log}", child.id());
+    println!("tuic bg: pid={} log={log} wake={wake_file}", child.id());
     Ok(())
 }
 
@@ -95,9 +101,22 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
     fs::write(&exit_file, format!("{code}\n"))
         .map_err(|e| format!("Cannot write exit file {exit_file}: {e}"))?;
     let wake = format!("BG DONE exit={code} log={log} cmd={}", command.join(" "));
-    if let Err(e) = queue_wake(caller, &wake) {
-        let _ = writeln!(output, "tuic bg: wake failed: {e}");
-    }
+    let wake_status = match queue_wake(caller, &wake) {
+        Ok(()) => serde_json::json!({"status": "accepted"}),
+        Err(e) => {
+            let _ = writeln!(output, "tuic bg: wake failed: {e}");
+            serde_json::json!({"status": "failed", "error": e})
+        }
+    };
+    let wake_file = format!("{log}.wake");
+    let wake_temp = format!("{wake_file}.tmp");
+    fs::write(&wake_temp, format!("{wake_status}\n"))
+        .and_then(|()| fs::rename(&wake_temp, &wake_file))
+        .map_err(|e| {
+            let message = format!("Cannot write wake status file {wake_file}: {e}");
+            let _ = writeln!(output, "tuic bg: {message}");
+            message
+        })?;
     Ok(())
 }
 
