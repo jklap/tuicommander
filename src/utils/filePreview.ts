@@ -62,6 +62,7 @@ export function openFileAction(
 	fsRoot?: string,
 	line?: number,
 	onEditorTab?: (tabId: string) => void,
+	col?: number,
 ): void {
 	if (line === undefined) {
 		const handler = filePreviewRegistry.getHandler(filePath);
@@ -79,13 +80,18 @@ export function openFileAction(
 	} else if (target === "preview" && line === undefined) {
 		mdTabsStore.addHtmlPreview(repoPath, filePath, fsRoot);
 	} else {
-		const tabId = editorTabsStore.add(repoPath, filePath, line, { fsRoot: fsRoot || repoPath });
+		const tabId = editorTabsStore.add(repoPath, filePath, line, { fsRoot: fsRoot || repoPath, initialCol: col });
 		onEditorTab?.(tabId);
 	}
 }
 
 /** Open a resolved absolute file path clicked in terminal output. */
-export function openTerminalFilePath(absolutePath: string, onEditorTab?: (tabId: string) => void, line?: number): void {
+export function openTerminalFilePath(
+	absolutePath: string,
+	onEditorTab?: (tabId: string) => void,
+	line?: number,
+	col?: number,
+): void {
 	const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
-	openFileAction(filePath, repoPath, fsRoot, line, onEditorTab);
+	openFileAction(filePath, repoPath, fsRoot, line, onEditorTab, col);
 }

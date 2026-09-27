@@ -50,4 +50,16 @@ describe("terminal file opening", () => {
 			expect(editorTabsStore.getActive()).toMatchObject({ filePath: "docs/notes.md", initialLine: 7 });
 		});
 	});
+
+	it("passes a terminal :line:col target to a new editor tab", () => {
+		testInScope(() => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			openTerminalFilePath("/repo/src/main.rs", undefined, 12, 6);
+			expect(editorTabsStore.getActive()).toMatchObject({
+				filePath: "src/main.rs",
+				initialLine: 12,
+				initialCol: 6,
+			});
+		});
+	});
 });
