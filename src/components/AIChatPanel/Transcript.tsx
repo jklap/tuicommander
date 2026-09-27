@@ -7,7 +7,7 @@
  * only the shape each kind takes on screen.
  */
 
-import { type Component, For, type JSX, Match, Show, Switch } from "solid-js";
+import { type Component, createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
@@ -46,22 +46,74 @@ function contentLine(content: AcpToolCallContent): string {
 	return content.content.type === "text" ? content.content.text : "";
 }
 
-const ToolCallCard: Component<{ call: AcpToolCall }> = (props) => {
-	const detail = () => toolCallDetail(props.call);
+const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
+	const startedAt = performance.now();
+	let finishedAt: number | undefined;
+	let observedCount = 0;
+	const status = () => {
+		const calls = props.calls();
+		if (calls.some((call) => call.status === "failed")) return "Failed";
+		if (calls.some((call) => call.status === "pending" || call.status === "in_progress" || !call.status)) return "Running";
+		return "Completed";
+	};
+	const duration = () => {
+		const calls = props.calls();
+		if (calls.length !== observedCount) {
+			observedCount = calls.length;
+			finishedAt = undefined;
+		}
+		if (calls.every((call) => call.status === "completed" || call.status === "failed")) finishedAt ??= performance.now();
+		const seconds = ((finishedAt ?? performance.now()) - startedAt) / 1000;
+		return `${seconds.toFixed(1)}s`;
+	};
 	return (
-		<div class={s.toolCallCard}>
-			<div class={s.toolCallHeader}>
-				<span class={cx(s.toolCallStatusDot, STATUS_CLASS[props.call.status ?? "pending"])} />
-				<span class={s.toolCallName}>{props.call.title}</span>
+		<details class={s.toolActivity}>
+			<summary class={s.toolActivitySummary}>
+				<span class={cx(s.toolCallStatusDot, status() === "Failed" ? s.toolCallFailure : status() === "Running" ? s.toolCallPending : s.toolCallSuccess)} />
+				<span>{props.calls().length} tool {props.calls().length === 1 ? "call" : "calls"}</span>
+				<span class={s.toolActivityTitles}>{props.calls().slice(0, 2).map((call) => call.title).join(" · ")}{props.calls().length > 2 ? " · …" : ""}</span>
+				<span class={s.toolCallDuration}>{duration()} observed · {status()}</span>
+			</summary>
+			<div class={s.toolActivityCalls}>
+				<For each={props.calls()}>
+					{(call) => (
+						<details class={s.toolActivityCall}>
+							<summary class={s.toolActivityCallSummary}>
+								<span class={cx(s.toolCallStatusDot, STATUS_CLASS[call.status ?? "pending"])} />
+								<span class={s.toolCallName}>{call.title}</span>
+								<span class={s.toolCallDuration}>{call.kind ?? "other"} · {call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}</span>
+							</summary>
+							<Show when={toolCallDetail(call)}>
+								<div class={s.toolCallBody}>{toolCallDetail(call)}</div>
+							</Show>
+						</details>
+					)}
+				</For>
 			</div>
-			<Show when={detail()}>
-				<div class={s.toolCallBody}>
-					<div class={s.toolCallOutput}>{detail()}</div>
-				</div>
-			</Show>
-		</div>
+		</details>
 	);
 };
+
+/** Keep the first call as the stable row anchor; later calls belong to it. */
+function activityRows(entries: AcpTranscriptEntry[]): { visible: AcpTranscriptEntry[]; calls: Map<string, AcpToolCall[]> } {
+	const visible: AcpTranscriptEntry[] = [];
+	const calls = new Map<string, AcpToolCall[]>();
+	let current: AcpToolCall[] | undefined;
+	for (const entry of entries) {
+		if (entry.kind === "user" || entry.kind === "settled") current = undefined;
+		if (entry.kind === "tool") {
+			if (!current) {
+				current = [];
+				calls.set(entry.id, current);
+				visible.push(entry);
+			}
+			current.push(entry.call);
+		} else {
+			visible.push(entry);
+		}
+	}
+	return { visible, calls };
+}
 
 export interface TranscriptProps {
 	entries: () => AcpTranscriptEntry[];
@@ -73,10 +125,11 @@ export interface TranscriptProps {
 }
 
 export const Transcript: Component<TranscriptProps> = (props) => {
+	const activity = createMemo(() => activityRows(props.entries()));
 	return (
 		<div class={s.messageList}>
 			<Show when={props.entries().length > 0} fallback={<div class={s.emptyState}>{props.emptyMessage}</div>}>
-				<For each={props.entries()}>
+				<For each={activity().visible}>
 					{(entry) => (
 						<Switch>
 							<Match when={entry.kind === "user" && entry}>
@@ -100,7 +153,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 									</details>
 								)}
 							</Match>
-							<Match when={entry.kind === "tool" && entry}>{(tool) => <ToolCallCard call={tool().call} />}</Match>
+							<Match when={entry.kind === "tool" && entry}>{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}</Match>
 							<Match when={entry.kind === "plan" && entry}>
 								{(plan) => (
 									<div class={s.toolCallCard}>
