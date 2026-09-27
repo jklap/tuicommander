@@ -7676,7 +7676,7 @@ fn enqueue_state_change_to_parent(
     // this one needs the resolution of `parent_id` and the push to share that guard
     // too. Left out of that story's scope deliberately — it needs its own repro,
     // since the parent id here comes from session_parent rather than a caller.
-    let message_timestamp = state.push_agent_inbox(&parent_id, msg)?;
+    let message_timestamp = state.push_agent_inbox(&parent_id, msg);
     let framed = format!(
         "[TUIC] {}",
         describe_lifecycle_payload(session_id, &payload)
@@ -7792,7 +7792,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
         "prompt": prompt,
     });
     let message_id = format!("tuic-auto-prompt-{session_id}-{now_ms}");
-    let Some(message_timestamp) = state.push_agent_inbox(
+    let message_timestamp = state.push_agent_inbox(
         &parent_id,
         crate::state::AgentMessage {
             id: message_id.clone(),
@@ -7802,9 +7802,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
             timestamp: now_ms,
             delivered_via_channel: false,
         },
-    ) else {
-        return false;
-    };
+    );
     if route_registered_orchestrator_mail(state, &parent_id, &message_id, message_timestamp)
         .is_some()
     {

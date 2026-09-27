@@ -370,14 +370,13 @@ fn link_pending_children_to_parent(
     if let Some((_, messages)) = state.agent_inbox.remove(&pending_parent) {
         for message in messages {
             let message_id = message.id.clone();
-            if let Some(message_timestamp) = state.push_agent_inbox(parent_tuic_session, message) {
-                crate::pty::route_registered_orchestrator_mail(
-                    state,
-                    parent_tuic_session,
-                    &message_id,
-                    message_timestamp,
-                );
-            }
+            let message_timestamp = state.push_agent_inbox(parent_tuic_session, message);
+            crate::pty::route_registered_orchestrator_mail(
+                state,
+                parent_tuic_session,
+                &message_id,
+                message_timestamp,
+            );
         }
     }
     if let Some((_, missed)) = state.agent_inbox_evictions.remove(&pending_parent) {
@@ -607,11 +606,10 @@ fn retire_repaired_phantom_identity(
         let carried = match state.agent_inbox.remove(phantom) {
             Some((_, pending)) => pending
                 .into_iter()
-                .filter_map(|message| {
+                .map(|message| {
                     let message_id = message.id.clone();
-                    state
-                        .push_agent_inbox(repaired, message)
-                        .map(|message_timestamp| (message_id, message_timestamp))
+                    let message_timestamp = state.push_agent_inbox(repaired, message);
+                    (message_id, message_timestamp)
                 })
                 .collect(),
             None => Vec::new(),
@@ -1165,7 +1163,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice write, coalesced notice, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice write, coalesced notice, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -1188,7 +1186,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "urgency": { "type": "string", "enum": ["normal", "urgent"], "description": "action=send: normal (default), or urgent when the recipient must change course before its next step. Urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer; it never interrupts a running tool." },
-                "limit": { "type": "integer", "minimum": 0, "description": "Maximum inbox entries to return (action=inbox; default 50)" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": crate::state::AGENT_INBOX_CAPACITY, "description": "Maximum inbox entries to return (action=inbox; default 100, maximum 100). Read again while has_more is true." },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
         },
@@ -4762,14 +4760,7 @@ fn handle_messaging(
                         "Recipient '{requested_to}' is not registered — it matched no tuic_session, PTY id or terminal alias. Use list_peers to find valid targets."
                     )});
                 }
-                match state.try_push_agent_inbox(to, msg) {
-                    Ok(timestamp) => timestamp,
-                    Err(crate::state::AgentInboxFull) => {
-                        return serde_json::json!({"error": format!(
-                            "Recipient '{requested_to}' inbox is full of in-flight messages; retry send after delivery completes."
-                        )});
-                    }
-                }
+                state.push_agent_inbox(to, msg)
             };
             // DEFERRED (2026-09-23) — a recipient with no terminal (an external
             // MCP client) has no Progress Flow column, so its mail is not
@@ -5168,9 +5159,14 @@ fn handle_messaging(
                     return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
                 }
             };
-            let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+            let limit = args["limit"]
+                .as_u64()
+                .unwrap_or(crate::state::AGENT_INBOX_CAPACITY as u64)
+                .clamp(1, crate::state::AGENT_INBOX_CAPACITY as u64)
+                as usize;
             let since = resolve_agent_since(state, &tuic_session, args);
-            let messages = state.observe_agent_inbox(&tuic_session, since, limit);
+            let (messages, has_more, missed_count) =
+                state.observe_agent_inbox(&tuic_session, since, limit);
             // Same contract as wait: always hand back a usable cursor, falling back
             // to the position we read from when the batch is empty.
             let next_since = messages
@@ -5179,16 +5175,11 @@ fn handle_messaging(
                 .max()
                 .unwrap_or(since);
             advance_agent_cursor(state, &tuic_session, next_since);
-            // Consume and reset eviction counter (so caller knows since last read)
-            let missed_count = state
-                .agent_inbox_evictions
-                .remove(&tuic_session)
-                .map(|(_, n)| n)
-                .unwrap_or(0);
             let mut resp = serde_json::json!({
                 "messages": messages,
                 "count": messages.len(),
                 "next_since": next_since,
+                "has_more": has_more,
             });
             if missed_count > 0 {
                 resp["missed_count"] = serde_json::json!(missed_count);
@@ -13993,7 +13984,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_send_reports_back_pressure_when_recipient_inbox_is_all_in_flight() {
+    fn agent_send_accepts_when_recipient_inbox_is_all_in_flight() {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -14021,17 +14012,19 @@ mod tests {
             &serde_json::json!({
                 "action": "send",
                 "to": TEST_UUID_B,
-                "message": "cannot be buffered",
+                "message": "newest mail",
             }),
             Some("mcp-sender"),
         );
 
         assert!(
-            sent["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("full of in-flight messages")),
-            "sender must receive retryable back-pressure: {sent}"
+            sent.get("error").is_none(),
+            "new mail must enter the FIFO: {sent}"
         );
+        let inbox = state.agent_inbox.get(TEST_UUID_B).unwrap();
+        assert_eq!(inbox.len(), crate::state::AGENT_INBOX_CAPACITY);
+        assert_eq!(inbox.front().unwrap().id, "pending-1");
+        assert_eq!(inbox.back().unwrap().content, "newest mail");
     }
 
     #[test]
@@ -14161,8 +14154,8 @@ mod tests {
             "mcp-2",
         );
 
-        // Send 3 messages
-        for i in 0..3 {
+        // Five messages require three pages at a limit of two.
+        for i in 0..5 {
             handle_messaging(
                 &state,
                 &serde_json::json!({
@@ -14180,23 +14173,28 @@ mod tests {
             }),
             Some("mcp-2"),
         );
-        assert_eq!(inbox["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(inbox["messages"][0]["content"], "msg-0");
+        assert_eq!(inbox["messages"][1]["content"], "msg-1");
+        assert_eq!(inbox["has_more"], true);
+        assert_eq!(inbox["next_since"], inbox["messages"][1]["timestamp"]);
 
-        // Since filter — get timestamp of first message
-        let first_ts = inbox["messages"][0]["timestamp"].as_u64().unwrap();
-        let since_inbox = handle_messaging(
+        let second = handle_messaging(
             &state,
-            &serde_json::json!({
-                "action": "inbox", "since": first_ts
-            }),
+            &serde_json::json!({"action": "inbox", "limit": 2}),
             Some("mcp-2"),
         );
-        // Should return messages after that timestamp (at least the remaining ones)
-        let msgs = since_inbox["messages"].as_array().unwrap();
-        assert!(
-            msgs.iter()
-                .all(|m| m["timestamp"].as_u64().unwrap() > first_ts)
+        assert_eq!(second["messages"][0]["content"], "msg-2");
+        assert_eq!(second["messages"][1]["content"], "msg-3");
+        assert_eq!(second["has_more"], true);
+        let third = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 2}),
+            Some("mcp-2"),
         );
+        assert_eq!(third["messages"][0]["content"], "msg-4");
+        assert_eq!(third["count"], 1);
+        assert_eq!(third["has_more"], false);
+        assert_eq!(third["next_since"], third["messages"][0]["timestamp"]);
     }
 
     #[test]
@@ -14247,7 +14245,7 @@ mod tests {
             assert!(sent.get("error").is_none(), "message {i} must fit: {sent}");
         }
 
-        let rejected = handle_messaging(
+        let sent = handle_messaging(
             &state,
             &serde_json::json!({
                 "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "msg-overflow"
@@ -14255,10 +14253,8 @@ mod tests {
             Some("mcp-1"),
         );
         assert!(
-            rejected["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("inbox is full")),
-            "sender must receive retryable back-pressure: {rejected}"
+            sent.get("error").is_none(),
+            "FIFO send must succeed: {sent}"
         );
 
         let inbox = handle_messaging(
@@ -14268,8 +14264,66 @@ mod tests {
         );
         let msgs = inbox["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), crate::state::AGENT_INBOX_CAPACITY);
-        assert_eq!(msgs[0]["content"], "msg-0");
-        assert_eq!(msgs.last().unwrap()["content"], "msg-99");
+        assert_eq!(msgs[0]["content"], "msg-1");
+        assert_eq!(msgs.last().unwrap()["content"], "msg-overflow");
+        assert_eq!(inbox["missed_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn agent_wait_after_eviction_resumes_from_the_stored_page_cursor() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(
+                TEST_UUID_B,
+                crate::state::AgentMessage {
+                    id: format!("mail-{index}"),
+                    from_tuic_session: TEST_UUID_A.into(),
+                    from_name: "sender".into(),
+                    content: format!("mail-{index}"),
+                    timestamp: index as u64 + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        let page = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 2}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(page["messages"][0]["content"], "mail-0");
+        assert_eq!(page["messages"][1]["content"], "mail-1");
+        for index in 100..103 {
+            state.push_agent_inbox(
+                TEST_UUID_B,
+                crate::state::AgentMessage {
+                    id: format!("mail-{index}"),
+                    from_tuic_session: TEST_UUID_A.into(),
+                    from_name: "sender".into(),
+                    content: format!("mail-{index}"),
+                    timestamp: index as u64 + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        let waited = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-recipient"),
+        )
+        .await;
+        assert_eq!(waited["new_messages"], 100, "{waited}");
+        assert_eq!(waited["messages"][0]["content"], "mail-3");
+        assert_eq!(waited["messages"][99]["content"], "mail-102");
+        assert_eq!(waited["next_since"], waited["messages"][99]["timestamp"]);
+        let after = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(after["count"], 0);
+        assert_eq!(after["missed_count"], 1);
     }
 
     #[test]
@@ -14300,6 +14354,75 @@ mod tests {
         assert_eq!(first["messages"][1]["content"], "mail-1", "{first}");
         assert_eq!(second["messages"][0]["content"], "mail-2", "{second}");
         assert!(second["next_since"].as_u64() > first["next_since"].as_u64());
+    }
+
+    #[test]
+    fn messaging_inbox_without_limit_returns_every_retained_fresh_message() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": format!("mail-{index}")}),
+                Some("mcp-sender"),
+            );
+            assert!(sent.get("error").is_none(), "{sent}");
+        }
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["count"], 100, "{read}");
+        assert_eq!(read["messages"][0]["content"], "mail-0");
+        assert_eq!(read["messages"][99]["content"], "mail-99");
+        assert_eq!(read["has_more"], false);
+    }
+
+    #[test]
+    fn messaging_inbox_limit_cannot_exceed_retention_bound() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        for index in 0..3 {
+            state.push_agent_inbox(
+                TEST_UUID_B,
+                crate::state::AgentMessage {
+                    id: format!("mail-{index}"),
+                    from_tuic_session: TEST_UUID_A.into(),
+                    from_name: "sender".into(),
+                    content: format!("mail-{index}"),
+                    timestamp: index + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        let schema = native_tool_definitions();
+        let agent = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "agent")
+            .unwrap();
+        assert_eq!(agent["inputSchema"]["properties"]["limit"]["maximum"], 100);
+        assert_eq!(agent["inputSchema"]["properties"]["limit"]["minimum"], 1);
+        let first = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 0}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["messages"][0]["content"], "mail-0");
+        assert_eq!(first["has_more"], true);
+        let read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": u64::MAX}),
+            Some("mcp-recipient"),
+        );
+        assert_eq!(read["count"], 2);
+        assert_eq!(read["messages"][0]["content"], "mail-1");
+        assert_eq!(read["messages"][1]["content"], "mail-2");
+        assert_eq!(read["has_more"], false);
     }
 
     #[test]
@@ -14423,7 +14546,7 @@ mod tests {
     }
 
     #[test]
-    fn messaging_inbox_counts_rejected_lifecycle_notice_as_missed() {
+    fn messaging_inbox_counts_peer_evicted_by_lifecycle_notice_as_missed() {
         let state = test_state();
         register_peer(
             &state,
@@ -14452,20 +14575,16 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            state.push_agent_inbox(
-                "550e8400-e29b-41d4-a716-446655440a02",
-                crate::state::AgentMessage {
-                    id: "tuic-auto-state-overflow".into(),
-                    from_tuic_session: "child".into(),
-                    from_name: "tuic".into(),
-                    content: "state update".into(),
-                    timestamp: u64::MAX,
-                    delivered_via_channel: false,
-                },
-            ),
-            None,
-            "a peer-only inbox rejects the lifecycle notice"
+        state.push_agent_inbox(
+            "550e8400-e29b-41d4-a716-446655440a02",
+            crate::state::AgentMessage {
+                id: "tuic-auto-state-overflow".into(),
+                from_tuic_session: "child".into(),
+                from_name: "tuic".into(),
+                content: "state update".into(),
+                timestamp: u64::MAX,
+                delivered_via_channel: false,
+            },
         );
 
         let inbox = handle_messaging(
@@ -14476,8 +14595,10 @@ mod tests {
         assert_eq!(
             inbox["missed_count"].as_u64(),
             Some(1),
-            "the recipient must learn that a lifecycle state change was lost"
+            "the recipient must learn that the oldest peer message was lost"
         );
+        assert_eq!(inbox["messages"][0]["content"], "peer-1");
+        assert_eq!(inbox["messages"][99]["content"], "state update");
     }
 
     #[test]

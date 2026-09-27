@@ -1492,7 +1492,7 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    to the stored position when the batch is empty. Previously it was omitted whenever there were no
    messages, which left a timed-out waiter with `since=0` as its only recoverable value and made it
    reload the whole history on the next call. Wait never consumes the
-   authoritative inbox; lifecycle evictions and rejected lifecycle notices are reported by `missed_count` on inbox reads.
+   authoritative inbox; unread FIFO evictions are reported by `missed_count` on inbox reads.
    Both wait actions sleep on inbox or per-session lifecycle events; they do not run an internal
    polling loop. `session action=wait` resolves in three steps, in this order:
 
@@ -1528,21 +1528,19 @@ its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
 it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
-The inbox retains up to 100 messages. A read returns the oldest messages after
-`since` first, so `limit` pagination cannot advance past unread mail. On overflow,
-the oldest mail at or behind the recipient's read cursor is reclaimed first. This
-includes peer mail the recipient has already consumed and does not increase
-`missed_count`. Reading a queued terminal message settles its delivery claim;
-when no pending terminal-owned mail remains, the queued generic wake is removed.
-If there is no consumed mail, the oldest safe `tuic-auto-*` lifecycle notice
-may be evicted; that does increase `missed_count` because the
-recipient never received it. Unread `TerminalPending` and waiter-owned mail are
-never evicted, even when an explicit cursor has moved past them without returning
-them, because delivery may still need a failure requeue. If no safe candidate
-remains, `agent action=send` rejects the new message and asks the sender to retry.
-System-generated lifecycle mail uses the same bound: when it is rejected because no
-safe eviction candidate remains, the recipient's next inbox read reports it through
-`missed_count`.
+The inbox retains up to 100 messages per recipient. Every send succeeds once the
+recipient is valid; at capacity, the oldest retained message is evicted, whether
+peer mail or a lifecycle notice. `missed_count` on the next inbox read reports
+evictions of unread mail; reclaiming mail already read does not increase it.
+An inbox read returns the oldest messages after `since` first. With no `limit`,
+it returns all retained fresh mail (up to 100). With `limit`, the server clamps
+the page size to 1–100 and returns `has_more=true` while newer unread mail
+remains. `next_since` advances only through the returned page; omit `since` on
+the next call to continue from the stored cursor, or pass `next_since` explicitly.
+Reading a queued terminal message settles its delivery claim; when no pending
+terminal-owned mail remains, the queued generic wake is removed. An evicted
+message also releases its delivery claim and any urgent notice reservation that
+no longer covers retained mail.
 
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake
@@ -1577,7 +1575,7 @@ This requires the client to be launched with `--dangerously-load-development-cha
 ### Limits
 
 - Max message size: 64 KB
-- Inbox capacity: 100 messages per agent (lifecycle-first eviction; peer mail back-pressure)
+- Inbox capacity: 100 messages per agent (FIFO eviction; sends remain accepted)
 - Peer registrations cleaned up on MCP session delete and TTL reap, except where
   the identity is still addressable — see below
 
