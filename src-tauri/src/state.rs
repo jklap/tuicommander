@@ -3413,20 +3413,11 @@ impl AppState {
         }
     }
 
-    /// Compatibility helper for callers that cannot surface an ambiguity error.
-    pub(crate) fn resolve_session_ref(&self, reference: &str) -> Option<String> {
-        self.resolve_session_ref_checked(reference).ok().flatten()
-    }
-
     /// Resolve any address into the key a peer's mail is filed under.
     ///
-    /// [`resolve_session_ref`] travels towards the terminal; mail travels the other
+    /// [`resolve_session_ref_checked`] travels towards the terminal; mail travels the other
     /// way, because `peer_agents` is keyed by `tuic_session`. An alias or a PTY key
     /// therefore has to be walked back to the peer that owns that terminal.
-    pub(crate) fn resolve_peer_ref(&self, reference: &str) -> Option<String> {
-        self.resolve_peer_ref_checked(reference).ok().flatten()
-    }
-
     /// Resolve a peer address while retaining an ambiguity error from the
     /// terminal address resolver.
     pub(crate) fn resolve_peer_ref_checked(
@@ -6538,7 +6529,7 @@ mod tests {
     /// shown in the tab menu.
     #[cfg(unix)]
     #[test]
-    fn resolve_session_ref_accepts_pty_id_tuic_session_and_alias() {
+    fn resolve_session_ref_checked_accepts_pty_id_tuic_session_and_alias() {
         let state = tests_support::make_test_app_state();
         let session_id = "01234567-89ab-cdef-0123-456789abcdef";
         tests_support::insert_dummy_session(&state, session_id);
@@ -6560,13 +6551,13 @@ mod tests {
             "reviewer",
         ] {
             assert_eq!(
-                state.resolve_session_ref(reference),
+                state.resolve_session_ref_checked(reference).unwrap(),
                 Some(session_id.to_string()),
                 "'{reference}' must address the terminal behind it"
             );
         }
         assert_eq!(
-            state.resolve_session_ref("never-seen"),
+            state.resolve_session_ref_checked("never-seen").unwrap(),
             None,
             "an unknown reference resolves to nothing rather than to a guess"
         );
@@ -6626,7 +6617,7 @@ mod tests {
     /// has to travel back the other way before a message can be delivered.
     #[cfg(unix)]
     #[test]
-    fn resolve_peer_ref_maps_a_terminal_address_back_to_its_peer() {
+    fn resolve_peer_ref_checked_maps_a_terminal_address_back_to_its_peer() {
         let state = tests_support::make_test_app_state();
         tests_support::insert_dummy_session(&state, "pty-key");
         state.bind_live_pty("tuic-uuid", "pty-key");
@@ -6644,12 +6635,12 @@ mod tests {
 
         for reference in ["tuic-uuid", "pty-key", alias.as_str()] {
             assert_eq!(
-                state.resolve_peer_ref(reference),
+                state.resolve_peer_ref_checked(reference).unwrap(),
                 Some("tuic-uuid".to_string()),
                 "'{reference}' must resolve to the peer that owns that terminal"
             );
         }
-        assert_eq!(state.resolve_peer_ref("never-seen"), None);
+        assert_eq!(state.resolve_peer_ref_checked("never-seen").unwrap(), None);
     }
 
     #[test]

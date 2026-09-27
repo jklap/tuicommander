@@ -75,15 +75,6 @@ impl StoryStore {
         Ok(story)
     }
 
-    pub fn transition(
-        &self,
-        story_id: &str,
-        expected_revision: i64,
-        command: StoryCommand,
-    ) -> Result<Story, String> {
-        self.transition_for_actor(story_id, expected_revision, command, None)
-    }
-
     pub fn transition_for_actor(
         &self,
         story_id: &str,

@@ -4007,3 +4007,7 @@ or credential is touched.
 ## Activity Dashboard window after Rust restart
 
 - [ ] After restarting an isolated `make dev` build, restore Activity Dashboard with saved geometry larger than 550×650. The detached OS window opens at 550×650 while retaining its saved position; a smaller saved size remains unchanged. The running Rust backend cannot load this fix until restart.
+
+## Rust dead-code warning cleanup after restart
+
+- [ ] On the next `make dev` Rust rebuild, confirm no dead-code warning names Design Mode `status`, `to_prompt`, or `on_script_parsed`, Progress `mark_viewed`, AppState `resolve_session_ref` or `resolve_peer_ref`, or StoryStore `transition`. The targeted test build has already compiled without these warnings; the current backend cannot hot reload the source change.
