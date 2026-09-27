@@ -10,16 +10,29 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
+fn unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
 /// Helper to reset recording flag on error paths.
 struct RecordingGuard<'a> {
     recording: &'a std::sync::atomic::AtomicBool,
+    native_release_pending: &'a std::sync::atomic::AtomicBool,
+    fn_capture: &'a std::sync::atomic::AtomicBool,
+    stop_request: &'a parking_lot::Mutex<Option<super::CaptureStopRequest>>,
     disarmed: bool,
 }
 
 impl<'a> RecordingGuard<'a> {
-    fn new(recording: &'a std::sync::atomic::AtomicBool) -> Self {
+    fn new(dictation: &'a DictationState) -> Self {
         Self {
-            recording,
+            recording: &dictation.recording,
+            native_release_pending: &dictation.native_release_pending,
+            fn_capture: &dictation.fn_capture,
+            stop_request: &dictation.stop_request,
             disarmed: false,
         }
     }
@@ -32,6 +45,9 @@ impl Drop for RecordingGuard<'_> {
     fn drop(&mut self) {
         if !self.disarmed {
             self.recording.store(false, Ordering::Release);
+            self.native_release_pending.store(false, Ordering::Release);
+            self.fn_capture.store(false, Ordering::Release);
+            self.stop_request.lock().take();
         }
     }
 }
@@ -1394,7 +1410,15 @@ fn ensure_transcriber(
 }
 
 #[tauri::command(async)]
-pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> Result<(), String> {
+pub fn start_dictation(
+    app: AppHandle,
+    dictation: State<'_, DictationState>,
+    source: Option<String>,
+) -> Result<(), String> {
+    let from_fn = source.as_deref() == Some("fn");
+    if from_fn && !dictation.fn_down.load(Ordering::Acquire) {
+        return Err("Fn was released before recording started".to_string());
+    }
     // Atomic test-and-set: prevents TOCTOU race from concurrent IPC calls
     if dictation
         .recording
@@ -1404,7 +1428,13 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
         return Err("Already recording".to_string());
     }
     // Guard resets recording=false if we return early on any error path
-    let mut recording_guard = RecordingGuard::new(&dictation.recording);
+    let mut recording_guard = RecordingGuard::new(&dictation);
+    dictation.fn_capture.store(from_fn, Ordering::Release);
+    if from_fn && !dictation.fn_down.load(Ordering::Acquire) {
+        dictation
+            .native_release_pending
+            .store(true, Ordering::Release);
+    }
 
     if dictation.processing.load(Ordering::Acquire) {
         return Err("Transcription in progress".to_string());
@@ -1428,7 +1458,7 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
 
     // Start audio capture using the configured device (or system default)
     let device_name = config.device.as_deref().filter(|s| !s.is_empty());
-    let capture = audio::AudioCapture::start_with_device(device_name).map_err(|e| {
+    let mut capture = audio::AudioCapture::start_with_device(device_name).map_err(|e| {
         app_logger::log_via_handle(
             &app,
             "error",
@@ -1449,7 +1479,18 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
 
     // Get audio buffer handle for streaming thread
     let audio_buffer = capture.buffer_handle();
-    *dictation.audio.lock() = Some(capture);
+    let mut audio_slot = dictation.audio.lock();
+    if dictation.native_release_pending.load(Ordering::Acquire)
+        || (from_fn && !dictation.fn_down.load(Ordering::Acquire))
+    {
+        capture.stop_stream();
+        tracing::info!(
+            source = "dictation",
+            "Capture stopped after release during microphone start"
+        );
+    }
+    *audio_slot = Some(capture);
+    drop(audio_slot);
 
     // Start streaming session
     let lang = if config.language == "auto" {
@@ -1469,7 +1510,12 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
     *dictation.streaming.lock() = Some(session);
 
     // recording is already true (set by compare_exchange above)
-    app_logger::log_via_handle(&app, "info", "dictation", "Streaming recording started");
+    tracing::info!(
+        source = "dictation",
+        origin = source.as_deref().unwrap_or("ui"),
+        unix_ms = unix_ms(),
+        "Streaming recording started"
+    );
 
     // Reset accumulated partials for this session
     dictation.accumulated_partials.lock().clear();
@@ -1513,6 +1559,17 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             return Err("Not recording".to_string());
         }
 
+        let request = dictation.stop_request.lock().take();
+        let (requested_at, trigger) = request
+            .map(|request| (request.at, request.source))
+            .unwrap_or_else(|| (std::time::Instant::now(), "ipc"));
+        tracing::info!(
+            source = "dictation",
+            trigger,
+            unix_ms = unix_ms(),
+            "Stop requested"
+        );
+
         // Set recording=false synchronously so the UI updates immediately
         dictation.recording.store(false, Ordering::Release);
         dictation.processing.store(true, Ordering::Release);
@@ -1522,6 +1579,21 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         if let Some(ref mut capture) = *capture_lock {
             capture.stop_stream();
         }
+        tracing::info!(
+            source = "dictation",
+            trigger,
+            latency_ms = requested_at.elapsed().as_millis(),
+            unix_ms = unix_ms(),
+            "Stop executed"
+        );
+        let capture_dropped = capture_lock
+            .as_ref()
+            .map(audio::AudioCapture::dropped_samples)
+            .unwrap_or(0);
+        dictation
+            .native_release_pending
+            .store(false, Ordering::Release);
+        dictation.fn_capture.store(false, Ordering::Release);
 
         // Take the streaming session (cheap — no join yet) and the audio buffer handle.
         // The actual thread join happens in spawn_blocking to avoid blocking the tokio worker.
@@ -1546,6 +1618,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         Some((
             session,
             audio_buffer,
+            capture_dropped,
             lang_owned,
             config.gates(),
             transcriber,
@@ -1558,6 +1631,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
     let (
         session,
         audio_buffer,
+        capture_dropped,
         lang_owned,
         gates,
         transcriber,
@@ -1574,7 +1648,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
 
         // Join the streaming thread (may block while last partial window finishes)
         let streamed = session.map(|s| s.stop()).unwrap_or_default();
-        let mut dropped_samples = streamed.dropped_samples;
+        let mut dropped_samples = streamed.dropped_samples + capture_dropped;
         let mut all_audio = streamed.audio;
 
         // Drain anything left in the audio capture buffer (arrived after last poll).
@@ -1589,11 +1663,22 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
 
         let truncated_s = dropped_samples as f64 / 16000.0;
         let total_duration_s = all_audio.len() as f64 / 16000.0;
+        let trace_empty_final = || {
+            tracing::info!(
+                source = "dictation",
+                full_chars = 0,
+                composed_chars = accumulated_partials.lock().chars().count(),
+                audio_s = total_duration_s,
+                dropped_s = truncated_s,
+                "Final transcription length"
+            );
+        };
 
         // A panicked streaming thread took the recording with it. Whatever
         // reached the capture buffer afterwards is not the recording, and
         // transcribing it would report a fragment as the whole answer.
         if streamed.interrupted {
+            trace_empty_final();
             app_logger::log_via_handle(
                 &app_clone,
                 "warn",
@@ -1608,18 +1693,11 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                 truncated_s,
             };
         }
-        app_logger::log_via_handle(
-            &app_clone,
-            "info",
-            "dictation",
-            &format!(
-                "Streaming stopped, {:.1}s total audio for final transcription",
-                total_duration_s
-            ),
-        );
+        tracing::info!(source = "dictation", audio_s = total_duration_s, dropped_s = truncated_s, "Streaming stopped for final transcription");
 
         // Short audio: no transcription needed
         if all_audio.len() < 8000 {
+            trace_empty_final();
             app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
             return TranscribeResponse {
                 text: String::new(),
@@ -1657,6 +1735,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                 }
             }
         } else {
+            trace_empty_final();
             app_logger::log_via_handle(
                 &app_clone,
                 "warn",
@@ -1672,6 +1751,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         }
 
         if final_text.is_empty() {
+            trace_empty_final();
             app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
             return TranscribeResponse {
                 text: String::new(),
@@ -1686,18 +1766,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         let full_chars = final_text.chars().count();
         let composed_chars = composed.chars().count();
         let ratio = transcription_ratio(&final_text, &composed);
-        app_logger::log_via_handle(
-            &app_clone,
-            "info",
-            "dictation",
-            &format!(
-                "[accuracy] full={} chars, composed={} chars, ratio={}, audio={:.1}s",
-                full_chars,
-                composed_chars,
-                ratio.map_or_else(|| "n/a".to_string(), |r| format!("{:.0}%", r * 100.0)),
-                total_duration_s
-            ),
-        );
+        tracing::info!(source = "dictation", full_chars, composed_chars, ratio = ?ratio, audio_s = total_duration_s, dropped_s = truncated_s, "Final transcription length");
         // The final pass is normally the LONGER of the two — streaming skips
         // VAD-silent windows. Coming back shorter means it lost text the
         // streaming windows already had, which is the shape of window tail loss.

@@ -1743,7 +1743,7 @@ POST /dictation/speech/speak     { "text": "...", "turn": 3 }
                                                     -> SpokenReply
 POST /dictation/speech/stop                         -> SpeechStatus
 GET  /dictation/speech/status?utterance=7           -> SpeechStatus
-POST /dictation/start                               -> null
+POST /dictation/start          { "source": "fn" | "hotkey" | "ui" } -> null
 POST /dictation/stop                                -> TranscribeResponse
 GET  /dictation/corrections                         -> { "<from>": "<to>", ... }
 PUT  /dictation/corrections      { "map": { ... } } -> null

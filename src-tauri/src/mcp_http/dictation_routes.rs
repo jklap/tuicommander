@@ -252,13 +252,25 @@ pub(super) async fn get_speech_status_http(
     .into_response()
 }
 
-pub(super) async fn start_dictation_http(State(state): State<Arc<AppState>>) -> Response {
+#[derive(serde::Deserialize)]
+pub(super) struct StartDictationBody {
+    source: Option<String>,
+}
+
+pub(super) async fn start_dictation_http(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<StartDictationBody>>,
+) -> Response {
     let app_handle = state.app_handle.read().clone();
     let Some(app) = app_handle else {
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
     let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::start_dictation(app.clone(), dictation))
+    json_result(dictation::commands::start_dictation(
+        app.clone(),
+        dictation,
+        body.and_then(|body| body.0.source),
+    ))
 }
 
 pub(super) async fn stop_dictation_http(State(state): State<Arc<AppState>>) -> Response {

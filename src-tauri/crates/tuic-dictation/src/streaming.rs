@@ -49,7 +49,7 @@ const MAX_BUFFER_S: f32 = 30.0;
 /// an unbounded allocation (16 kHz mono f32 = 64 KB/s) and an unbounded whisper
 /// pass. The cap keeps the most recent audio and sits far above anything a
 /// person dictates while holding a key.
-const MAX_RECORDING_S: f32 = 300.0;
+pub(crate) const MAX_RECORDING_S: f32 = 300.0;
 /// Hysteresis for the cap: trim only once this much audio is over the limit.
 ///
 /// Trimming is a memmove of the whole retained buffer, so trimming on every 50 ms

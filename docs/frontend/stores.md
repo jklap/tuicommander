@@ -427,6 +427,9 @@ Whisper dictation config, model management, recording state — plus the speech
 assets, the hands-free conversation and the spoken-reply status the Dictation
 settings panel renders.
 The backend crate split leaves its IPC and HTTP response shapes unchanged.
+`startRecording(source)` sends the same origin over IPC or HTTP. A native Fn
+release stops capture before the frontend's `stopRecording()` awaits the final
+transcription; blur releases a held hotkey if its key-up event was lost.
 
 - `speechAssets` / `speechDownloads` — the installable languages and ONNX
   runtime, and a percent per asset **keyed by asset id**, because the runtime

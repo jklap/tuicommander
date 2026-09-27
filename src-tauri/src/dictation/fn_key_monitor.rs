@@ -25,11 +25,9 @@ pub fn install(app_handle: tauri::AppHandle) {
     use block2::RcBlock;
     use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
     #[cfg(feature = "desktop")]
-    use tauri::Emitter;
-
-    let fn_was_down = AtomicBool::new(false);
+    use tauri::{Emitter, Manager};
 
     let block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: event is a valid NSEvent pointer provided by AppKit for the
@@ -37,13 +35,31 @@ pub fn install(app_handle: tauri::AppHandle) {
         let event_ref = unsafe { event.as_ref() };
         let flags = event_ref.modifierFlags();
         let fn_down = flags.contains(NSEventModifierFlags::Function);
-        let was_down = fn_was_down.swap(fn_down, Ordering::Relaxed);
+        let dictation = app_handle.state::<super::DictationState>();
+        let was_down = dictation.fn_down.swap(fn_down, Ordering::AcqRel);
 
         // Scope events to main window only — prevents plugin iframes from
         // observing dictation timing.
         if fn_down && !was_down {
+            tracing::info!(
+                source = "dictation",
+                key = "Fn",
+                edge = "down",
+                origin = "native-monitor",
+                unix_ms = unix_ms(),
+                "Push-to-talk key edge"
+            );
             let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-down", ());
         } else if !fn_down && was_down {
+            tracing::info!(
+                source = "dictation",
+                key = "Fn",
+                edge = "up",
+                origin = "native-monitor",
+                unix_ms = unix_ms(),
+                "Push-to-talk key edge"
+            );
+            dictation.request_native_stop("fn-key-up");
             let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
         }
 
@@ -65,6 +81,34 @@ pub fn install(app_handle: tauri::AppHandle) {
     } else {
         tracing::warn!(source = "dictation", "Failed to install Fn key monitor");
     }
+}
+
+#[cfg(target_os = "macos")]
+pub fn release_on_focus_loss(app_handle: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tauri::{Emitter, Manager};
+
+    let dictation = app_handle.state::<super::DictationState>();
+    if dictation.fn_down.swap(false, Ordering::AcqRel) {
+        tracing::info!(
+            source = "dictation",
+            key = "Fn",
+            edge = "up",
+            origin = "focus-loss",
+            unix_ms = unix_ms(),
+            "Push-to-talk key edge"
+        );
+        dictation.request_native_stop("focus-loss");
+        let _ = app_handle.emit_to(tauri::EventTarget::labeled("main"), "fn-key-up", ());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 /// No-op on non-macOS platforms.

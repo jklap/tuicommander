@@ -1688,11 +1688,17 @@ pub fn run() {
             // suppressed while the user is at their machine.
             if let Some(window) = app.get_webview_window("main") {
                 let push_flag = Arc::clone(app_state);
+                #[cfg(target_os = "macos")]
+                let focus_app = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(focused) = event {
                         push_flag
                             .desktop_window_focused
                             .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                        #[cfg(target_os = "macos")]
+                        if !focused {
+                            dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
+                        }
                     }
                 });
             }
