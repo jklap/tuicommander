@@ -614,6 +614,227 @@ fn agent_probe_command(path: &str) -> Command {
     Command::new(path)
 }
 
+#[derive(Debug)]
+enum ScreenProbeError {
+    TimedOut,
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ScreenProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => write!(f, "--help timed out"),
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+#[cfg(unix)]
+struct ScreenProbeTree;
+
+#[cfg(unix)]
+impl ScreenProbeTree {
+    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+        Ok(Self)
+    }
+
+    fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn terminate(self, pid: u32) {
+        // The probe owns this group: signal its grandchildren as well as the
+        // direct child. The child is reaped separately below.
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+    }
+}
+
+#[cfg(windows)]
+struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl ScreenProbeTree {
+    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+        // Rust's Child does not expose its primary thread on stable Windows.
+        // Suspend creation so no launcher can fork before job assignment.
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let job = Self(handle);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+        if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Self::resume_primary_thread(child.id())
+    }
+
+    fn resume_primary_thread(pid: u32) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+        };
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut found = None;
+        let mut has_entry = unsafe { Thread32First(snapshot, &mut entry) };
+        while has_entry != 0 {
+            if entry.th32OwnerProcessID == pid {
+                found = Some(entry.th32ThreadID);
+                break;
+            }
+            has_entry = unsafe { Thread32Next(snapshot, &mut entry) };
+        }
+        unsafe { CloseHandle(snapshot) };
+        let thread_id = found.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "probe primary thread not found",
+            )
+        })?;
+        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+        if thread.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let previous_count = unsafe { ResumeThread(thread) };
+        let error = if previous_count == u32::MAX {
+            Some(std::io::Error::last_os_error())
+        } else if previous_count != 1 {
+            Some(std::io::Error::other(format!(
+                "probe primary thread had suspend count {previous_count}"
+            )))
+        } else {
+            None
+        };
+        unsafe { CloseHandle(thread) };
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn terminate(self, _pid: u32) {
+        // Closing the last handle kills the whole job, including cmd.exe's
+        // node.exe child when a Windows npm shim hangs on --help.
+        drop(self);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ScreenProbeTree {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// A help probe owns and tears down its process tree, including descendants
+/// that inherited stdout or stderr. The shared git deadline helper deliberately
+/// has different child-only semantics, so screen probes keep this local.
+fn screen_probe_output(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, ScreenProbeError> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let tree = ScreenProbeTree::prepare(cmd).map_err(ScreenProbeError::Io)?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(ScreenProbeError::Io)?;
+    if let Err(error) = tree.assign(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ScreenProbeError::Io(error));
+    }
+    let mut stdout = child.stdout.take().expect("stdout piped above");
+    let mut stderr = child.stderr.take().expect("stderr piped above");
+    let out_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let mut poll = std::time::Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(
+                    poll.min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+                poll = (poll * 2).min(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                tree.terminate(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ScreenProbeError::TimedOut);
+            }
+            Err(error) => {
+                tree.terminate(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ScreenProbeError::Io(error));
+            }
+        }
+    };
+    tree.terminate(child.id());
+    Ok(std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    })
+}
+
 fn preferred_agent_path(output: &str) -> Option<&str> {
     let mut paths = output
         .lines()
@@ -667,9 +888,9 @@ fn resolve_probe_executable(path: &str) -> std::path::PathBuf {
     given.to_path_buf()
 }
 
-/// Probe the configured CLI with a bounded, single-flight help request. An
-/// inconclusive probe is retried after a short cooldown instead of pinning a
-/// false capability for the rest of this app process.
+/// Probe the configured CLI with a bounded, single-flight help request. A
+/// timeout is final for this binary version; quick inconclusive exits can be
+/// retried after a short cooldown.
 // DEFERRED (2026-09-25) — Codex `--no-alt-screen` and OpenCode `--mini`
 // capture fixtures (story 939-475b): recording them launches a TUIC binary,
 // which can rewrite the user's agent MCP configs until the mcp-config-guard
@@ -730,36 +951,43 @@ pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
         std::env::join_paths(dirs).unwrap_or_else(|_| std::ffi::OsString::from(enriched)),
     );
     crate::cli::apply_no_window(&mut cmd);
-    let result =
-        match crate::git_cli::output_with_deadline(&mut cmd, std::time::Duration::from_secs(2)) {
-            Ok(output) => {
-                let help = format!(
-                    "{}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                if help_advertises_flag(&help, flag) {
-                    Ok(true)
-                } else if output.status.success() && !help.trim().is_empty() {
-                    Ok(false)
-                } else {
-                    Err(format!(
-                        "--help exited {:?}: {}",
-                        output.status.code(),
-                        help.lines().next().unwrap_or("")
-                    ))
-                }
+    let mut timed_out = false;
+    let result = match screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)) {
+        Ok(output) => {
+            let help = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if help_advertises_flag(&help, flag) {
+                Ok(true)
+            } else if output.status.success() && !help.trim().is_empty() {
+                Ok(false)
+            } else {
+                Err(format!(
+                    "--help exited {:?}: {}",
+                    output.status.code(),
+                    help.lines().next().unwrap_or("")
+                ))
             }
-            Err(error) => Err(format!("{error:?}")),
-        };
+        }
+        Err(error) => {
+            timed_out = matches!(error, ScreenProbeError::TimedOut);
+            Err(error.to_string())
+        }
+    };
     match result {
         Ok(supported) => {
             state.known = Some(supported);
             supported
         }
         Err(error) => {
-            state.retry_after =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            if timed_out {
+                state.known = Some(false);
+            } else {
+                state.retry_after =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            }
             if !state.warned {
                 tracing::warn!(
                     source = "agent",
@@ -1285,6 +1513,52 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_screen_help_is_probed_once_per_binary_version() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-hang-version",
+            "printf x >> \"${0%/*}/screen-help-hang-version.count\"; sleep 8",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-hang-version.count");
+        let _ = std::fs::remove_file(&marker);
+        let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        assert!(!supports_no_alt_screen("codex", &path));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x");
+
+        let replacement = crate::test_support::fake_ssh_script(
+            "screen-help-hang-version",
+            "printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        assert_eq!(script, replacement);
+        assert!(supports_no_alt_screen("codex", &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_screen_help_stops_its_grandchild() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-hang-tree",
+            "(i=0; while [ \"$i\" -lt 35 ]; do printf x >> \"${0%/*}/screen-help-hang-tree.count\"; i=$((i + 1)); sleep 0.1; done) & wait",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-hang-tree.count");
+        let _ = std::fs::remove_file(&marker);
+        assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+        let at_timeout = std::fs::read(&marker).unwrap().len();
+        assert!(at_timeout > 0, "the grandchild must have run");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(
+            std::fs::read(&marker).unwrap().len(),
+            at_timeout,
+            "the timed-out probe must stop its grandchild"
+        );
     }
 
     #[cfg(unix)]
