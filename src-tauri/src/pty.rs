@@ -9042,28 +9042,77 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     {
         return;
     }
+    let queued_before = queued_command_count(state, session_id);
+    let snapshot = state.session_state_with_shell(session_id);
+    let agent_state = snapshot
+        .as_ref()
+        .and_then(|session| session.agent_state.as_deref())
+        .unwrap_or("unknown");
+    let shell_state = snapshot
+        .as_ref()
+        .and_then(|session| session.shell_state.as_deref())
+        .unwrap_or("unknown");
     let claim = match claim_idle_for_injection(state, session_id) {
         Some(claim) => claim,
-        None => return,
-    };
-    let pending = match state.pending_injections.get_mut(session_id) {
-        Some(mut q) => q.pop_front(),
-        None => return,
-    };
-    if let Some(injection) = pending
-        && matches!(
-            run_claimed_injection(
-                state,
+        None => {
+            tracing::info!(
                 session_id,
-                injection.text(),
-                claim,
-                ClaimedInjectionKind::Message
-            ),
-            InjectionOutcome::NotStarted(_)
-        )
-    {
+                agent_state,
+                shell_state,
+                queued_before,
+                queued_after = queued_before,
+                typed = "no",
+                submitted = false,
+                enter_separate = "not_sent",
+                "queue delivery attempt deferred"
+            );
+            return;
+        }
+    };
+    let pending = state
+        .pending_injections
+        .get_mut(session_id)
+        .and_then(|mut queue| queue.pop_front());
+    let Some(injection) = pending else {
+        tracing::info!(
+            session_id,
+            agent_state,
+            shell_state,
+            queued_before,
+            queued_after = queued_command_count(state, session_id),
+            typed = "no",
+            submitted = false,
+            enter_separate = "not_sent",
+            "queue delivery attempt lost to another flush"
+        );
+        return;
+    };
+    let outcome = run_claimed_injection(
+        state,
+        session_id,
+        injection.text(),
+        claim,
+        ClaimedInjectionKind::Message,
+    );
+    let (typed, submitted, enter_separate) = match outcome {
+        InjectionOutcome::Submitted => ("yes", true, "sent"),
+        InjectionOutcome::NotStarted(_) => ("no", false, "not_sent"),
+        InjectionOutcome::Uncertain(_) => ("uncertain", false, "uncertain"),
+    };
+    if matches!(outcome, InjectionOutcome::NotStarted(_)) {
         requeue_injection_front(state, session_id, injection);
     }
+    tracing::info!(
+        session_id,
+        agent_state,
+        shell_state,
+        queued_before,
+        queued_after = queued_command_count(state, session_id),
+        typed,
+        submitted,
+        enter_separate,
+        "queue delivery attempt"
+    );
 }
 
 /// Everything still parked for a session, of any kind.

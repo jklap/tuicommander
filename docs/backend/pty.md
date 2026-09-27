@@ -636,6 +636,12 @@ peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 
+Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
+the session id, agent and shell states at the attempt, queued counts before and
+after, whether text reached the composer, whether submission completed, and
+whether Enter was sent separately. An uncertain write reports uncertain fields
+rather than claiming a completed submission; command text is never logged.
+
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 
 **Status line dedup is per turn:** `ChunkProcessor.last_status_task` keys its dedup on `(turn_epoch, task_name)`, so a spinner rotation inside one turn stays suppressed while the first status line of a *new* turn always re-emits. The epoch must stay in the key because an agent may name every turn identically — Codex always reports `Working`. A session-lifetime dedup swallowed every turn after the first, and since the `status-line` event is the only thing that clears the previous turn's `suggested_actions` (which `session_state_with_shell` reads as a completion marker), the session reported a busy agent as `completed`/`idle` permanently.
