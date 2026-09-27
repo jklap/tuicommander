@@ -342,13 +342,78 @@ describe("useTerminalContextMenus", () => {
 		expect(script).not.toContain("TUIC_PARENT");
 	});
 
+	// Catches: Windows accepts a differently cased run-config key as a TUIC identity override.
+	it.each(["tuic_session", "TuIc_SeSsIoN", "tuic_parent"])(
+		"omits protected Windows identity override %s while retaining an ordinary variable",
+		async (protectedKey) => {
+			vi.mocked(isWindows).mockReturnValue(true);
+			vi.mocked(getShellFamily).mockResolvedValue("windows-native");
+			mockTerminals.state.activeId = "term-1";
+			mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+			mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+			mockAgentConfigs.getRunConfigs.mockReturnValue([
+				{
+					name: "private",
+					command: "claude",
+					args: [],
+					env: { [protectedKey]: "spoof", PROFILE: "safe" },
+					is_default: true,
+				},
+			]);
+
+			await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+				.getContextMenuItems()
+				.find((item) => item.label === "Agents")
+				?.children?.[0]?.action();
+
+			const line = vi.mocked(sendCommand).mock.calls.at(-1)?.[1] ?? "";
+			const script = Buffer.from(line.split(" ").at(-1) ?? "", "base64").toString("utf16le");
+			expect(script).toBe("$env:PROFILE = 'safe'; Invoke-Expression 'claude'");
+		},
+	);
+
+	// Catches: code-point iteration drops the low surrogate from non-BMP text.
+	it.each([
+		{
+			value: "prefix😀suffix",
+			command: "claude",
+			expected: "$env:PROFILE = 'prefix😀suffix'; Invoke-Expression 'claude'",
+		},
+		{ value: "😀", command: "claude", expected: "$env:PROFILE = '😀'; Invoke-Expression 'claude'" },
+		{ value: "plain", command: "claude 😀", expected: "$env:PROFILE = 'plain'; Invoke-Expression 'claude 😀'" },
+	])("preserves UTF-16LE astral text in Windows menu launch: $expected", async ({ value, command, expected }) => {
+		vi.mocked(isWindows).mockReturnValue(true);
+		vi.mocked(getShellFamily).mockResolvedValue("windows-native");
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({ id: "term-1", ref: {}, sessionId: "session-1", cwd: "/repo" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "private", command, args: [], env: { PROFILE: value }, is_default: true },
+		]);
+
+		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
+			.getContextMenuItems()
+			.find((item) => item.label === "Agents")
+			?.children?.[0]?.action();
+
+		const line = vi.mocked(sendCommand).mock.calls.at(-1)?.[1] ?? "";
+		const script = Buffer.from(line.split(" ").at(-1) ?? "", "base64").toString("utf16le");
+		expect(script).toBe(expected);
+	});
+
 	// Catches: the sidebar assumes POSIX syntax on native Windows shells.
 	it.each(["cmd.exe", "powershell.exe"])("launches a sidebar agent with scoped env in %s", async (shell) => {
 		vi.mocked(isWindows).mockReturnValue(true);
 		settingsStore.state.shell = shell;
 		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
 		mockAgentConfigs.getRunConfigs.mockReturnValue([
-			{ name: "private", command: "claude", args: ["--model", "opus"], env: { PROFILE: "a b" }, is_default: true },
+			{
+				name: "private",
+				command: "claude",
+				args: ["--model", "opus"],
+				env: { PROFILE: "a b", ICON: "😀", tuic_parent: "spoof" },
+				is_default: true,
+			},
 		]);
 
 		await useTerminalContextMenus(createOptions([{ type: "claude" }]) as never)
@@ -360,9 +425,7 @@ describe("useTerminalContextMenus", () => {
 		expect(line).toMatch(/^powershell\.exe -NoProfile -EncodedCommand [A-Za-z0-9+/=]+$/);
 		expect(line).not.toContain("a b");
 		const script = Buffer.from(line.split(" ").at(-1) ?? "", "base64").toString("utf16le");
-		expect(script).toContain("PROFILE");
-		expect(script).toContain("a b");
-		expect(script).toContain("claude --model opus");
+		expect(script).toBe("$env:PROFILE = 'a b'; $env:ICON = '😀'; Invoke-Expression 'claude --model opus'");
 		expect(update?.agentLaunchCommand).toBe("claude --model opus");
 	});
 
