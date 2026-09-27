@@ -430,7 +430,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Managed Agent Workspace Trust",
 		description:
-			"Agents spawned by another agent can start in a new folder without a trust question. Change this for Claude or direct Codex in Settings > AI > Agents.",
+			"Agents spawned by another agent can start in a new folder without a trust question. Change this for Claude or direct Codex in Settings > Agents.",
 		shortcut: null,
 	},
 	{
