@@ -21,7 +21,7 @@ import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
-import { displayTask, effectiveActivityState } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/activitySnapshot";
 import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
@@ -228,18 +228,12 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 					const dotClass = () => {
 						const t = term();
 						if (!t) return s.branchTabDot;
-						const state = effectiveActivityState(
-							t.shellState,
-							t.awaitingInput,
-							!!(t.sessionId && rateLimitStore.isRateLimited(t.sessionId)),
-							t.agentState,
-							t.backgroundWork,
-						);
-						if (state === "error") return cx(s.branchTabDot, s.branchTabDotError);
-						if (state === "awaiting_input") return cx(s.branchTabDot, s.branchTabDotQuestion);
-						if (state === "working" || state === "rate_limited") return cx(s.branchTabDot, s.branchTabDotBusy);
+						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
+						if (t.awaitingInput) return cx(s.branchTabDot, s.branchTabDotQuestion);
+						if ((t.sessionId && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id))
+							return cx(s.branchTabDot, s.branchTabDotBusy);
 						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
-						if (state === "idle" || state === "completed") return cx(s.branchTabDot, s.branchTabDotIdle);
+						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
 						return s.branchTabDot;
 					};
 
