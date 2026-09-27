@@ -599,6 +599,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Context menu submenus and "New Group..." via PromptDialog
 - [x] File Browser panel (`Cmd+E`) with content search (`Cmd+Shift+F`, case/regex/whole-word, streaming results)
 - [x] CodeMirror code editor
+- [x] Modified click on editor links and paths opens the matching browser or TUICommander view
 - [x] Editor line wrapping toggle with separate saved defaults for text and code
 - [x] Find in terminal (`Cmd+F`)
 - [x] Configurable keybindings system

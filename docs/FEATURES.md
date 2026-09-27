@@ -121,6 +121,7 @@ per cell and the configured history limit still apply.
 
 ### 1.7 Clickable File Paths
 - File paths in terminal output are auto-detected and become clickable links
+- Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
 - `.md`/`.mdx` → opens in Markdown panel; preview-capable files (HTML, PDF, images, video, audio, plain text/data) → open in the Preview tab (section 3.15); all other code files → open in the built-in code editor
 - `file://` URLs are recognized in addition to plain paths — the prefix is stripped and the path resolved like any other
@@ -347,6 +348,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Send to agent**: the Markdown topbar lists live agents belonging to the same repository. Sending queues one file-scoped instruction through the existing agent idle gate; an idle agent receives it immediately, while a busy agent receives it at its next idle window
   - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers. Inline comments wrap their source text with `tweak:begin` / `tweak:end`; block comments use a `tweak:block` marker immediately before the target block, preserving structural Markdown such as headings and lists. Both forms are invisible to standard Markdown renderers, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
+  - **Save failures**: Markdown files opened by absolute path use the external file writer. A failed comment save shows an error toast and keeps the comment popover and draft open for retry.
   - **LLM-friendly**: the first comment added to a file prepends a one-time convention header explaining the format, so an AI agent reading the file understands it without external context — the intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
@@ -375,6 +377,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.5 Code Editor (CodeMirror 6)
 - Opens in main tab area when clicking a file in file browser
+- Hold `Cmd` (macOS) or `Ctrl` (Windows/Linux) while hovering to underline a link, then click to open it. HTTP(S) URLs open in the system browser; Markdown links and file paths open in TUICommander. Paths may be absolute, `~/`-prefixed, relative to the edited file, or relative to its repository, with an optional `:line`. Directories open in the File Browser; missing paths show a toast. Other modified clicks keep go-to-definition behavior.
 - Syntax highlighting auto-detected from extension (disabled for files > 500 KB)
 - Line numbers, bracket matching, active line highlight, Tab-to-indent
 - Find/Replace: `Cmd+F` (find), `Cmd+G` / `Cmd+Shift+G` (next/prev), `Cmd+H` (replace), selection match highlighting
@@ -1773,8 +1776,10 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
 - `tuic://open-repo?path=/path` — Activate a repo already in the sidebar; a folder that is not in it yet is added after one confirmation (this is what `tuic <dir>` sends)
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
-- `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
+- `tuic://open/<path>` — Open a Markdown file in a native tab. MCP `ui action=tab` also accepts absolute Markdown paths outside registered repositories; the iframe SDK keeps its repository path validation.
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
+- MCP `ui action=tab` tabs, including external native files and HTML/URL previews, retain their opening repository. Unpinned tabs hide in other repositories and return when the opening repository is selected; pinned tabs remain visible across repositories.
+- Native MCP file tabs use the supplied `id` for identity: different ids remain separate even when they target the same path, and repeating an id updates that tab. Tabs remain visible when another terminal is selected in the same repository, including before a workspace is chosen.
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
   - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog

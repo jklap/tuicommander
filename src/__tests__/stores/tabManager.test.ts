@@ -217,6 +217,14 @@ describe("createTabManager", () => {
 			});
 		});
 
+		it("can check whether an active tab really belongs to the current repo", () => {
+			testInScope(() => {
+				mgr._addTab(makeTab("foreign", { repoPath: "/repo2", branchKey: "/repo2|main" }));
+				expect(mgr.getVisibleIds("/repo1|main", false)).not.toContain("foreign");
+				expect(mgr.getVisibleIds("/repo2|main", false)).toContain("foreign");
+			});
+		});
+
 		it("hides that same foreign tab again once it stops being active", () => {
 			testInScope(() => {
 				mgr._addTab(makeTab("in-repo1", { repoPath: "/repo1", branchKey: "/repo1|main" }));

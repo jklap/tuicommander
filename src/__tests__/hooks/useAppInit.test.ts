@@ -11,9 +11,10 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { appLogger } from "../../stores/appLogger";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
-import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
@@ -32,6 +33,9 @@ function resetStores() {
 	}
 	for (const id of mdTabsStore.getIds()) {
 		mdTabsStore.remove(id);
+	}
+	for (const id of editorTabsStore.getIds()) {
+		editorTabsStore.remove(id);
 	}
 	// Toasts dedup on title+message+level+repoPath, so one left behind by an
 	// earlier test silently suppresses the next test's identical toast.
@@ -196,6 +200,214 @@ describe("initApp", () => {
 		expect(tab).toBeDefined();
 		expect(tab!.repoPath).toBe(targetRepo);
 		expect(mdTabsStore.getActive()?.id).not.toBe(tab!.id);
+	});
+
+	it("opens an external Markdown MCP link as a visible Markdown tab", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: "external-report",
+				title: "Report",
+				html: "",
+				pinned: false,
+				url: "tuic://open//Users/boss/Gits/.tmp/boss/ego-ux-eval.md",
+				focus: true,
+			},
+		});
+		const tab = mdTabsStore.getActive();
+		expect(tab).toMatchObject({ type: "file", filePath: "/Users/boss/Gits/.tmp/boss/ego-ux-eval.md" });
+		expect(mdTabsStore.getVisibleIds(null)).toContain(tab!.id);
+		expect(editorTabsStore.getActive()).toBeUndefined();
+	});
+
+	it("uses MCP ids for native Markdown tab identity", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const open = (id: string, path: string) =>
+			uiTabCallback!({
+				payload: {
+					id,
+					title: id,
+					html: "",
+					pinned: false,
+					url: `tuic://open/${path}`,
+					focus: true,
+				},
+			});
+		const firstPath = "/Users/boss/Gits/.tmp/boss/ego-coordinator-proposal.md";
+		const secondPath = "/Users/boss/Gits/.tmp/boss/tuic-mobile-files.md";
+		open("proposal", firstPath);
+		const firstId = mdTabsStore.state.activeId!;
+		open("mobile", firstPath);
+		const secondId = mdTabsStore.state.activeId!;
+		expect(secondId).not.toBe(firstId);
+		expect(mdTabsStore.getVisibleIds("/repo|main")).toEqual(expect.arrayContaining([firstId, secondId]));
+		open("proposal", secondPath);
+		expect(mdTabsStore.state.activeId).toBe(firstId);
+		expect(mdTabsStore.get(firstId)).toMatchObject({ filePath: secondPath });
+		expect(mdTabsStore.get(secondId)).toMatchObject({ filePath: firstPath });
+		expect(mdTabsStore.add("/repo", firstPath)).not.toBe(secondId);
+	});
+
+	it("uses MCP ids for native editor tab identity", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const open = (id: string, path: string) =>
+			uiTabCallback!({
+				payload: {
+					id,
+					title: id,
+					html: "",
+					pinned: false,
+					url: `tuic://edit/${path}`,
+					focus: true,
+				},
+			});
+		open("first-editor", "/repo/src/main.ts");
+		const firstId = editorTabsStore.state.activeId!;
+		open("second-editor", "/repo/src/main.ts");
+		const secondId = editorTabsStore.state.activeId!;
+		expect(secondId).not.toBe(firstId);
+		open("first-editor", "/repo/src/other.ts");
+		expect(editorTabsStore.state.activeId).toBe(firstId);
+		expect(editorTabsStore.get(firstId)).toMatchObject({ filePath: "src/other.ts" });
+		expect(editorTabsStore.get(secondId)).toMatchObject({ filePath: "src/main.ts" });
+		expect(editorTabsStore.add("/repo", "src/main.ts")).not.toBe(secondId);
+	});
+
+	it("replaces an MCP tab when the same id changes between native and HTML routes", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const send = (url: string, html = "") =>
+			uiTabCallback!({
+				payload: {
+					id: "same-id",
+					title: "Preview",
+					html,
+					pinned: false,
+					url,
+					focus: true,
+				},
+			});
+		send("tuic://open//Users/boss/Gits/.tmp/report.md");
+		const markdownId = mdTabsStore.state.activeId!;
+		send("tuic://edit//Users/boss/Gits/.tmp/report.rs");
+		expect(mdTabsStore.get(markdownId)).toBeUndefined();
+		const editorId = editorTabsStore.state.activeId!;
+		send("", "<p>done</p>");
+		expect(editorTabsStore.get(editorId)).toBeUndefined();
+		expect(mdTabsStore.getActive()).toMatchObject({ type: "plugin-panel", pluginId: "same-id" });
+	});
+
+	it("keeps an external Markdown MCP tab in the background when focus is false", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: "background-report",
+				title: "Report",
+				html: "",
+				pinned: false,
+				url: "tuic://open//Users/boss/Gits/.tmp/boss/ego-ux-eval.md",
+				focus: false,
+			},
+		});
+		expect(mdTabsStore.getActive()).toBeUndefined();
+		expect(mdTabsStore.getVisibleIds(null).length).toBe(1);
+	});
+
+	it.each([
+		{ command: "open", pinned: false },
+		{ command: "edit", pinned: false },
+		{ command: "open", pinned: true },
+		{ command: "edit", pinned: true },
+	])("scopes an external tuic://$command tab with pinned=$pinned", async ({ command, pinned }) => {
+		let uiTabCallback:
+			| ((event: {
+					payload: { id: string; title: string; html: string; pinned: boolean; url: string; focus: boolean };
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		for (const path of ["/repos/alpha", "/repos/beta"]) {
+			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+			repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
+			repositoriesStore.setActiveWorkspace(path, "main");
+		}
+		repositoriesStore.setActive("/repos/alpha");
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: {
+				id: `external-${command}`,
+				title: "External",
+				html: "",
+				pinned,
+				url: `tuic://${command}//Users/boss/Gits/.tmp/boss/ego-ux-eval.${command === "open" ? "md" : "txt"}`,
+				focus: true,
+			},
+		});
+		const tabs = command === "open" ? mdTabsStore : editorTabsStore;
+		const tabId = tabs.state.activeId!;
+		expect(tabs.get(tabId)?.repoPath).toBe("/repos/alpha");
+		tabs.setActive(null);
+		repositoriesStore.setActive("/repos/beta");
+		if (pinned) expect(tabs.getVisibleIds("/repos/beta|main")).toContain(tabId);
+		else expect(tabs.getVisibleIds("/repos/beta|main")).not.toContain(tabId);
+		repositoriesStore.setActive("/repos/alpha");
+		expect(tabs.getVisibleIds("/repos/alpha|main")).toContain(tabId);
 	});
 
 	it("re-adopts surviving PTY sessions", async () => {

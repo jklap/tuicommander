@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Open Editor Links",
+		description: `Hold ${mod} and click a web link or file path in the code editor to open it.`,
+		shortcut: `${mod}+Click`,
+	},
+	{
 		feature: "Remote Machine Updates",
 		description:
 			"Remote Machines shows when a connected daemon is out of date. Update & restart confirms the live sessions that will close.",
