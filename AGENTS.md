@@ -403,8 +403,8 @@ TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
 | Signal | Source | Applies to |
 |---|---|---|
 | OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
-| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
-| `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
+| OSC 777 `notify` | agent's own desktop notification | unambiguous `needs your permission` / `approval required` wording only; Claude's generic `is waiting for your input` also follows an ordinary completed turn and never sets awaiting |
+| `Enter to select` footer | rendered screen | Ink dialogs, including hook-instrumented sessions through the full-screen presence recovery; the changed-row parser's heuristic copy is suppressed for hooked agents |
 
 Busy/idle evidence is ranked within one submitted-turn epoch. Lower-ranked
 evidence never closes a turn held busy by a protocol signal, and the same rule
@@ -449,11 +449,11 @@ that pastes a screen it just read marks *itself* awaiting, confidently, with
 nothing to retract it.
 
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan
-pickers, skill menus, anything with `Type something` / `Chat about this`) reports
-through OSC 777; an open Ink footer also supplies the presence-recovery backstop.
-Prefer protocol signals over screen scraping,
-and parse them off the **raw** stream — the VT parser consumes escape sequences,
-so they never reach the clean rows.
+pickers, skill menus, anything with `Type something` / `Chat about this`) uses
+the open Ink footer's full-screen presence recovery. The generic OSC 777
+notification is insufficient evidence: it also arrives after normal prose at
+the ready composer. Unambiguous permission notifications remain raw-stream
+signals because the VT parser consumes escape sequences before clean-row parsing.
 
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —

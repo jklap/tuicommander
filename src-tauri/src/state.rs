@@ -4282,6 +4282,15 @@ impl AppState {
                                 .and_then(|t| t.as_str())
                                 .map(|t| t.to_string());
                             s.question_confident = new_confident;
+                            tracing::debug!(
+                                session_id = %session_id,
+                                turn_epoch = s.turn_epoch,
+                                confident = new_confident,
+                                hook_instrumented = s.hook_instrumented,
+                                generic_claude_notify = s.question_text.as_deref()
+                                    == Some("Claude is waiting for your input"),
+                                "awaiting_input set from question"
+                            );
 
                             // Confidence is metadata, not a routing gate. A
                             // managed child has nobody at its keyboard, so every
