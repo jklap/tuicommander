@@ -310,6 +310,8 @@ pub(super) async fn spawn_agent_session(
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
     let spawn_env = body.env.clone();
+    let spawn_state = Arc::clone(&state);
+    let spawn_session_id = session_id.clone();
     let spawn_agent_type = body
         .agent_type
         .clone()
@@ -356,6 +358,8 @@ pub(super) async fn spawn_agent_session(
                 cmd.env(key, value);
             }
 
+            crate::pty::bind_pty_identity(&spawn_state, &mut cmd, &spawn_session_id, None);
+
             if let Some(ref cwd) = spawn_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
@@ -366,6 +370,7 @@ pub(super) async fn spawn_agent_session(
     {
         Ok(pair_and_child) => pair_and_child,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e})),
@@ -377,6 +382,7 @@ pub(super) async fn spawn_agent_session(
     let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to get PTY writer: {}", e)})),
@@ -388,6 +394,7 @@ pub(super) async fn spawn_agent_session(
     let reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to get PTY reader: {}", e)})),
@@ -544,8 +551,8 @@ mod tests {
     async fn http_agent_spawn_uses_per_agent_screen_setting() {
         let script = crate::test_support::fake_ssh_script(
             "http-agent-screen-choice",
-            "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\n' \"$*\"; fi",
-            "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%*)",
+            "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\nTUIC_SESSION=%s\\n' \"$*\" \"$TUIC_SESSION\"; read unused; fi",
+            "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%* & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=)",
         );
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
@@ -583,6 +590,16 @@ mod tests {
         .await
         .expect("fake agent output");
         assert!(output.contains("ARGS=--no-alt-screen resume"), "{output}");
+        assert!(
+            output.contains(&format!("TUIC_SESSION={session_id}")),
+            "the spawned process must know its terminal identity: {output}"
+        );
+        let row = super::super::session::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .unwrap();
+        assert_eq!(row.tuic_session.as_deref(), Some(session_id.as_str()));
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
     async fn response_json(response: Response) -> serde_json::Value {

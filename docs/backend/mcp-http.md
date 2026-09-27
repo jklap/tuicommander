@@ -1260,7 +1260,9 @@ agent-specific launch semantics. Later `session action=input` calls may update
 the same field without adding another command to the MCP surface.
 
 Every managed child is registered server-side and receives an inbox immediately,
-even when the caller has no bound peer identity. A registered parent additionally
+even when the caller has no bound peer identity. Spawn binds the child's PTY
+to its own `$TUIC_SESSION`, so session-list rows show the child identity before
+its first MCP connection or register call. A registered parent additionally
 creates the bidirectional relationship: the child prompt receives its parent ID
 and send instruction, while the spawn response returns `parent_session_id`. An
 unregistered caller gets no `parent_session_id` and a warning instead of a false
