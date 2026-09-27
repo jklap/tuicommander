@@ -664,16 +664,17 @@ export async function initApp(deps: AppInitDeps) {
 				if (!filePath && cmd !== "terminal") return;
 
 				const activeRepoPath = repositoriesStore.state.activeRepoPath;
-				// Resolve: absolute path → the repo that owns it, relative → active repo
-				// (a relative path typed into a tuic:// link means "here", so focus IS
-				// the right answer for that case and only that case).
+				const callerRepoPath = resolveRepoForCwd(origin_repo_path);
+				const fallbackRepoPath = callerRepoPath ?? activeRepoPath;
+				// Registered file ownership wins; otherwise keep the tab with the
+				// calling session's repo even when another one is visible.
 				let repoPath: string | null = null;
 				let relPath = filePath;
 				if (isAbsolutePath(filePath)) {
 					repoPath = resolveRepoPathFor(filePath);
 					if (repoPath) relPath = pathStripPrefix(filePath, repoPath)!;
 				} else {
-					repoPath = activeRepoPath ?? null;
+					repoPath = fallbackRepoPath ?? null;
 				}
 
 				// A focused native file tab must be visible in the tab bar. File tabs
@@ -681,8 +682,9 @@ export async function initApp(deps: AppInitDeps) {
 				// without switching context creates a ghost: its content is active but
 				// its tab is filtered out by the current repo. Keep background opens in
 				// their repo, but move focused opens to their owning repo first.
-				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
-					repositoriesStore.setActive(repoPath);
+				const tabRepoPath = repoPath ?? (isAbsolutePath(filePath) ? fallbackRepoPath : null);
+				if (focus !== false && tabRepoPath && tabRepoPath !== activeRepoPath) {
+					repositoriesStore.setActive(tabRepoPath);
 				}
 
 				// A background open must also stay in the background. Activating it
@@ -699,11 +701,11 @@ export async function initApp(deps: AppInitDeps) {
 					if (classifyFile(filePath) === "markdown") {
 						editorTabsStore.closeMcpFile(id);
 						mdTabsStore.closeUiTab(id);
-						mdTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, pinned, background);
+						mdTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, pinned, background);
 					} else {
 						mdTabsStore.closeMcpFile(id);
 						mdTabsStore.closeUiTab(id);
-						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, undefined, pinned, {
+						editorTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, undefined, pinned, {
 							externalEditable: false,
 							background,
 						});
@@ -720,7 +722,7 @@ export async function initApp(deps: AppInitDeps) {
 					} else if (isAbsolutePath(filePath)) {
 						mdTabsStore.closeMcpFile(id);
 						mdTabsStore.closeUiTab(id);
-						editorTabsStore.addMcpFile(id, activeRepoPath ?? "", filePath, line || undefined, pinned, {
+						editorTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, line || undefined, pinned, {
 							externalEditable: true,
 							background,
 						});

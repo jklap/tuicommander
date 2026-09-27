@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **MCP tab repository ownership** — External file and HTML/URL tabs opened by an MCP caller now belong to that caller's registered repository, even when another repository is visible. Focused opens switch to the caller's repository; background opens keep the current view.
+
 - **Terminal link positions** — File links with `:line:col` now place the editor cursor at the requested column. Clicking another position in an open file navigates the existing tab without discarding edits.
 
 - **Terminal file line links** — Clicking a file path with `:line` now opens the built-in editor at that line, including for Markdown files.

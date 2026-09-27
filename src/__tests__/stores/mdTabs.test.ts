@@ -654,7 +654,7 @@ describe("mdTabsStore", () => {
 				expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
 			});
 		});
-		it("scopes an MCP tab to the active repo when its caller belongs elsewhere", () => {
+		it("scopes an MCP tab to the caller repo when another repo is visible", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
@@ -662,11 +662,46 @@ describe("mdTabsStore", () => {
 
 				const id = store.openUiTab("wiz-panel", "MCF", "<p/>", false, undefined, true, "/Gits/alpha/src");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBe("/Gits/beta");
+				expect(tab?.repoPath).toBe("/Gits/alpha");
+				expect(repositoriesStore.state.activeRepoPath).toBe("/Gits/alpha");
 			});
 		});
 
-		it("scopes pinned MCP tabs to the active repo", () => {
+		it.each([undefined, "https://example.test/report"])(
+			"binds a focused MCP HTML/URL tab to its registered caller (url=%s)",
+			(url) => {
+				testInScope(() => {
+					for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+						repositoriesStore.add({ path, displayName: path });
+						repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+						repositoriesStore.setActiveWorkspace(path, "main");
+					}
+					repositoriesStore.setActive("/Gits/beta");
+					const id = store.openUiTab("caller-panel", "Report", "<p>report</p>", false, url, true, "/Gits/alpha/src");
+					expect(store.get(id)?.repoPath).toBe("/Gits/alpha");
+					expect(repositoriesStore.state.activeRepoPath).toBe("/Gits/alpha");
+					expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+				});
+			},
+		);
+
+		it("keeps the visible repo unchanged for a background caller-scoped HTML tab", () => {
+			testInScope(() => {
+				for (const path of ["/Gits/alpha", "/Gits/beta"]) {
+					repositoriesStore.add({ path, displayName: path });
+					repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+					repositoriesStore.setActiveWorkspace(path, "main");
+				}
+				repositoriesStore.setActive("/Gits/beta");
+				const id = store.openUiTab("background", "Report", "<p>report</p>", false, undefined, false, "/Gits/alpha");
+				expect(repositoriesStore.state.activeRepoPath).toBe("/Gits/beta");
+				expect(store.get(id)?.repoPath).toBe("/Gits/alpha");
+				expect(store.getVisibleIds("/Gits/beta|main")).not.toContain(id);
+				expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+			});
+		});
+
+		it("stores caller ownership for pinned MCP tabs too", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
@@ -674,7 +709,7 @@ describe("mdTabsStore", () => {
 
 				const id = store.openUiTab("wiz-pinned", "Pinned", "<p/>", true, undefined, true, "/Gits/alpha");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBe("/Gits/beta");
+				expect(tab?.repoPath).toBe("/Gits/alpha");
 			});
 		});
 
