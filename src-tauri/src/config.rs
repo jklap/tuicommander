@@ -780,6 +780,9 @@ pub(crate) struct AppConfig {
     /// connect is refused.
     #[serde(default)]
     pub(crate) ego_executable: String,
+    /// Last selected ego conversation for each repository root.
+    #[serde(default)]
+    pub(crate) ai_chat_sessions: HashMap<String, String>,
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
@@ -1038,6 +1041,7 @@ impl Default for AppConfig {
             mcp_config_installed: false,
             ide: String::new(),
             ego_executable: String::new(),
+            ai_chat_sessions: HashMap::new(),
             default_font_size: 13,
             services: ServicesConfig::default(),
             confirm_before_quit: true,
@@ -4265,6 +4269,10 @@ mod tests {
             mcp_config_installed: false,
             ide: "cursor".to_string(),
             ego_executable: "/opt/ego/bin/ego".to_string(),
+            ai_chat_sessions: HashMap::from([(
+                "/repo/project".to_string(),
+                "session-42".to_string(),
+            )]),
             default_font_size: 18,
             services: ServicesConfig {
                 server: ServerConfig {
@@ -4333,6 +4341,10 @@ mod tests {
         assert_eq!(loaded.font_size, 16);
         assert_eq!(loaded.ide, "cursor");
         assert_eq!(loaded.ego_executable, "/opt/ego/bin/ego");
+        assert_eq!(
+            loaded.ai_chat_sessions.get("/repo/project"),
+            Some(&"session-42".to_string())
+        );
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);

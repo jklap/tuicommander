@@ -78,10 +78,15 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 					class={s.modelPicker}
 					title="Conversation"
 					value={props.chat.sessionId() ?? ""}
-					onChange={(event) => props.chat.selectSession(event.currentTarget.value)}
+					onChange={(event) => {
+						const select = event.currentTarget;
+						void props.chat.selectSession(select.value).then(() => {
+							select.value = props.chat.sessionId() ?? "";
+						});
+					}}
 				>
 					<For each={sessions()}>
-						{(attachment, index) => <option value={attachment.sessionId}>{`Conversation ${index() + 1}`}</option>}
+						{(session) => <option value={session.sessionId}>{session.title || session.sessionId}</option>}
 					</For>
 				</select>
 			</Show>

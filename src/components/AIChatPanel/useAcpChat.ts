@@ -15,7 +15,8 @@
  */
 
 import { createEffect, createSignal } from "solid-js";
-import { acpClient } from "../../services/acpClient";
+import { invoke } from "../../invoke";
+import { type AcpListedSession, acpClient } from "../../services/acpClient";
 import { acpStore } from "../../stores/acp";
 import { type AcpTranscriptEntry, acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
@@ -32,6 +33,7 @@ import type {
 	AcpSessionConfigOptionValue,
 	AcpSessionId,
 } from "../../types/acp";
+import { updateAppConfig } from "../../utils/updateAppConfig";
 
 /** What a root is currently using. Module scope, so a panel that unmounts and
  *  comes back finds its connection rather than starting another one. */
@@ -56,6 +58,7 @@ export type AcpChatClient = Pick<
 	| "disconnect"
 	| "newSession"
 	| "loadSession"
+	| "listSessions"
 	| "prompt"
 	| "cancel"
 	| "answerPermission"
@@ -81,6 +84,26 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 	const [sessionId, setSessionId] = createSignal<AcpSessionId | null>(null);
 	const [connecting, setConnecting] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
+	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
+
+	async function remember(target: string, session: AcpSessionId): Promise<void> {
+		await updateAppConfig<{ ai_chat_sessions?: Record<string, string> }>((config) => {
+			config.ai_chat_sessions = { ...config.ai_chat_sessions, [target]: session };
+		});
+	}
+
+	async function refreshSessions(id: AcpConnectionId, target: string): Promise<void> {
+		const rows: AcpListedSession[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await client.listSessions(id, target, cursor);
+			rows.push(...page.sessions.filter((session) => session.cwd === target));
+			cursor = page.nextCursor || undefined;
+		} while (cursor);
+		if (root() === target) {
+			setListedSessions(rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")));
+		}
+	}
 
 	/** Run one action, holding what it refused rather than throwing at the panel. */
 	async function guard<T>(what: string, action: () => Promise<T>): Promise<T | null> {
@@ -109,10 +132,26 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			// session that finished opening behind them. The binding is recorded
 			// either way, so going back finds it.
 			if (root() === target) setConnectionId(snapshot.connectionId);
+			if (snapshot.capabilities?.list)
+				await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
+			const config = await guard("reading saved conversation", () =>
+				invoke<{ ai_chat_sessions?: Record<string, string> }>("load_config"),
+			);
+			if (!config) return;
+			const saved = config?.ai_chat_sessions?.[target];
+			if (saved && snapshot.capabilities?.load) {
+				binding.sessionId = saved;
+				if (root() === target) setSessionId(saved);
+				await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, saved, target));
+				return;
+			}
 			const session = await guard("opening a session", () => client.newSession(snapshot.connectionId, target));
 			if (!session) return;
 			binding.sessionId = session;
 			if (root() === target) setSessionId(session);
+			await guard("saving conversation", () => remember(target, session));
+			if (snapshot.capabilities?.list)
+				await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
 		} finally {
 			starting.delete(target);
 			setConnecting(false);
@@ -134,6 +173,7 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 		}
 		setConnectionId(null);
 		setSessionId(null);
+		setListedSessions([]);
 		void open(target);
 	});
 
@@ -211,11 +251,8 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			const id = connectionId();
 			return id ? acpStore.isStreaming(id) : false;
 		},
-		/** Every session this connection holds, newest last, for the picker. */
-		sessions: (): AcpAttachmentSnapshot[] => {
-			const id = connectionId();
-			return id ? acpStore.attachments(id) : [];
-		},
+		/** Durable sessions published by ego, newest first. */
+		sessions: listedSessions,
 
 		async send(text: string): Promise<void> {
 			const current = pair();
@@ -282,16 +319,22 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			if (!session) return;
 			bindings.set(target, { connectionId: id, sessionId: session });
 			setSessionId(session);
+			await guard("saving conversation", () => remember(target, session));
+			if (connection()?.capabilities?.list) await guard("listing conversations", () => refreshSessions(id, target));
 		},
 
-		/** Show a session this connection already holds. It is attached already,
-		 *  so there is nothing to replay and nothing to ask the agent for. */
-		selectSession(session: AcpSessionId): void {
+		/** Show a listed session. Only a session not already attached needs replay. */
+		async selectSession(session: AcpSessionId): Promise<void> {
 			const id = connectionId();
 			const target = root();
-			if (!id || !target) return;
+			if (!id || !target || session === sessionId()) return;
+			if (!acpStore.attachment(id, session)) {
+				const loaded = await guard("loading conversation", () => client.loadSession(id, session, target));
+				if (loaded === null && error()) return;
+			}
 			bindings.set(target, { connectionId: id, sessionId: session });
 			setSessionId(session);
+			await guard("saving conversation", () => remember(target, session));
 		},
 
 		/**
@@ -313,14 +356,29 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 				if (!snapshot) return;
 				setConnectionId(snapshot.connectionId);
 				bindings.set(target, { connectionId: snapshot.connectionId, sessionId: previous });
-				if (previous && snapshot.capabilities?.load) {
-					await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, previous, target));
+				if (snapshot.capabilities?.list)
+					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
+				let resumeId = previous;
+				if (!resumeId) {
+					const config = await guard("reading saved conversation", () =>
+						invoke<{ ai_chat_sessions?: Record<string, string> }>("load_config"),
+					);
+					if (!config) return;
+					resumeId = config.ai_chat_sessions?.[target] ?? null;
+				}
+				if (resumeId && snapshot.capabilities?.load) {
+					bindings.set(target, { connectionId: snapshot.connectionId, sessionId: resumeId });
+					setSessionId(resumeId);
+					await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, resumeId, target));
 					return;
 				}
 				const session = await guard("opening a session", () => client.newSession(snapshot.connectionId, target));
 				if (!session) return;
 				bindings.set(target, { connectionId: snapshot.connectionId, sessionId: session });
 				setSessionId(session);
+				await guard("saving conversation", () => remember(target, session));
+				if (snapshot.capabilities?.list)
+					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
 			} finally {
 				setConnecting(false);
 			}
