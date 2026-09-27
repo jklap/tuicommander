@@ -12,6 +12,10 @@
 
 # To Test
 
+## Headless MCP voice binding (story 1006-2729) — remote daemon rebuild required
+
+- [ ] After replacing a disposable `tuic-remote` daemon with this build, call MCP `voice action=status` from a connection without a live terminal and from one bound to a live terminal. The first must be refused as unbound; the second must report that this build has no audio support. The running daemon cannot load the Rust change until it restarts. Targeted headless and desktop tests cover both binding paths.
+
 ## Push-to-talk native release — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.

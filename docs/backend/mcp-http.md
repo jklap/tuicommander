@@ -694,6 +694,8 @@ be what makes the tool appear. Instead the tool is always there and answers
 `action=status` with `available: false` plus a reason. A headless
 `tuic-remote` build answers the same shape, so a model reads one contract on
 both builds rather than an unknown-tool error on one of them.
+The headless no-audio answer follows the terminal binding check: an unbound
+connection is refused before it can receive a voice status.
 
 Every action is bound to the **calling terminal**: `resolve_mcp_origin_session`
 maps `mcp-session-id` onto a TUIC session, and that session must be the one

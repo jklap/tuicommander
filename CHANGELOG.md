@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Headless MCP voice binding** — `tuic-remote` refuses voice calls from connections without a live terminal before reporting that audio is unavailable.
+
 - **Faster desktop startup** — AI Chat and its markdown renderer load when the conversation opens, keeping the initial desktop bundle within its gzip budget.
 
 - **Stable dev window** — Vite ignores tooling files in `.tmp/` at every directory depth, so temporary HTML cannot reload a live window.
