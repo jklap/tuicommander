@@ -1565,7 +1565,7 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 ### Channel Push Delivery
 
-An external Claude Code client with an active SSE stream (`GET /mcp`) receives `notifications/claude/channel` JSON-RPC notifications. A managed peer with a PTY uses the payload-free terminal wake, including when it is working. Registered orchestrators also keep peer payloads in the inbox:
+An external Claude Code client with an active SSE stream (`GET /mcp`) receives `notifications/claude/channel` JSON-RPC notifications. A managed peer with a PTY uses the payload-free terminal wake, including when it is working. Registered orchestrators also keep peer payloads in the inbox. For messages over 200 bytes, the SSE `params.content` is a pointer under 300 bytes: the same inbox wake line as a PTY peer, followed by the validated sender UUID, message ID, byte count, and up to 80 UTF-8 bytes from the first line with control characters removed. The full body remains in the inbox. Messages of 200 bytes or less may be sent inline. The peer-controlled display name is never used in SSE notice text:
 
 A channel notification is transport delivery, not proof that the recipient read the message. It stays unowned in the delivery lease, so the recipient's next `agent action=wait` still returns it. Managed peers instead reserve a terminal wake until the inbox read cursor passes the message; the notice never contains peer payload text.
 
@@ -1574,8 +1574,8 @@ A channel notification is transport delivery, not proof that the recipient read 
     "jsonrpc": "2.0",
     "method": "notifications/claude/channel",
     "params": {
-        "content": "Message from worker-1: done with auth module",
-        "meta": { "from_tuic_session": "abc-123", "from_name": "worker-1", "message_id": "msg-uuid" }
+        "content": "[TUIC] message available — read it with: agent action=inbox\nfrom 550e8400-e29b-41d4-a716-446655440a01 id 076546d8-80b0-4fa1-965f-1e31366e3506 10240 bytes: Large report",
+        "meta": { "from_tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "message_id": "076546d8-80b0-4fa1-965f-1e31366e3506" }
     }
 }
 ```
