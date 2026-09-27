@@ -1614,6 +1614,17 @@ pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 /// Message-id prefix marking auto-generated lifecycle/system notifications.
 pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
 
+fn lifecycle_notice_kind(message: &AgentMessage) -> Option<String> {
+    if !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) || message.from_name != "tuic" {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&message.content)
+        .ok()?
+        .get("type")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Max message body size in bytes (64 KB).
 pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 
@@ -2058,7 +2069,8 @@ pub struct AppState {
     /// Registered peer agents for inter-agent messaging (tuic_session → PeerAgent)
     pub peer_agents: DashMap<String, PeerAgent>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
-    /// Capped at AGENT_INBOX_CAPACITY messages per agent, old messages evicted FIFO.
+    /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
+    /// notices coalesce; other messages evict FIFO at capacity.
     pub agent_inbox: DashMap<String, VecDeque<AgentMessage>>,
     /// Unread eviction count per agent since last inbox read (tuic_session → count).
     /// Consumed and reset by the inbox action.
@@ -2306,8 +2318,8 @@ impl AppState {
             .subscribe()
     }
 
-    /// Buffer a message into `recipient`'s bounded FIFO inbox. A full inbox
-    /// always gives its oldest slot to the new message.
+    /// Buffer a message into `recipient`'s bounded inbox. Replace an older
+    /// notice for the same child and kind; otherwise evict FIFO at capacity.
     pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
@@ -2328,16 +2340,26 @@ impl AppState {
                 // the theoretical u64 ceiling.
                 msg.timestamp = last_timestamp.saturating_add(1);
             }
-            let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
+            let replaced = lifecycle_notice_kind(&msg).and_then(|kind| {
+                let index = inbox.iter().position(|message| {
+                    message.from_tuic_session == msg.from_tuic_session
+                        && lifecycle_notice_kind(message).as_deref() == Some(kind.as_str())
+                })?;
+                inbox
+                    .remove(index)
+                    .map(|message| (message.id, message.timestamp, false))
+            });
+            let evicted = replaced.or_else(|| {
+                if inbox.len() < AGENT_INBOX_CAPACITY {
+                    return None;
+                }
                 inbox.pop_front().map(|message| {
                     let observed = read_cursor.is_some_and(|cursor| message.timestamp <= cursor)
                         || gate.owners.get(&message.id)
                             == Some(&AgentDeliveryOwner::WaiterObserved);
                     (message.id, message.timestamp, !observed)
                 })
-            } else {
-                None
-            };
+            });
             let stored_timestamp = msg.timestamp;
             inbox.push_back(msg);
             (evicted, stored_timestamp)
@@ -4976,6 +4998,17 @@ mod tests {
         }
     }
 
+    fn lifecycle_msg(child: &str, kind: &str, state: &str, id: &str) -> AgentMessage {
+        AgentMessage {
+            id: format!("tuic-auto-{id}"),
+            from_tuic_session: child.to_string(),
+            from_name: "tuic".to_string(),
+            content: serde_json::json!({"type": kind, "state": state}).to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }
+    }
+
     // ── scrollback_reflow: the config toggle reaches the grids ──
 
     /// Fill a buffer's scrollback, then shrink it. With reflow the wrapped rows
@@ -5040,6 +5073,109 @@ mod tests {
     }
 
     // ── push_agent_inbox: one FIFO for peer and lifecycle mail ──
+
+    #[test]
+    fn lifecycle_churn_for_three_children_preserves_unread_peer_result() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("peer-result"));
+
+        for index in 0..150 {
+            let child = format!("child-{}", index % 3);
+            let notice = lifecycle_msg(&child, "state_change", "working", &index.to_string());
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].id, "peer-result");
+        for child in 0..3 {
+            assert!(messages.iter().any(|message| {
+                message.from_tuic_session == format!("child-{child}")
+                    && message.id == format!("tuic-auto-{}", 147 + child)
+            }));
+        }
+    }
+
+    #[test]
+    fn lifecycle_replacement_is_scoped_to_child_and_kind() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for notice in [
+            lifecycle_msg("child-a", "state_change", "working", "a-working"),
+            lifecycle_msg("child-b", "state_change", "idle", "b-idle"),
+            lifecycle_msg("child-a", "prompt_delivered", "done", "a-prompt"),
+            lifecycle_msg("child-a", "state_change", "idle", "a-idle"),
+        ] {
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, _, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert_eq!(missed_count, 0);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].id, "tuic-auto-b-idle");
+        assert_eq!(messages[1].id, "tuic-auto-a-prompt");
+        assert_eq!(messages[2].id, "tuic-auto-a-idle");
+    }
+
+    #[test]
+    fn peer_only_overflow_keeps_fifo_and_counts_unread_loss() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for index in 0..101 {
+            state.push_agent_inbox(recipient, make_msg(&format!("peer-{index}")));
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 1);
+        assert_eq!(messages.len(), 100);
+        assert_eq!(messages[0].id, "peer-1");
+        assert_eq!(messages[99].id, "peer-100");
+    }
+
+    #[test]
+    fn replaced_lifecycle_notice_releases_existing_delivery_owners() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        let first = lifecycle_msg("child-a", "state_change", "working", "first");
+        state.push_agent_inbox(recipient, first);
+        let lease = state.begin_agent_wait(recipient);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        assert_eq!(
+            state.finish_agent_wait(recipient, lease, 0, true).messages[0].id,
+            "tuic-auto-first"
+        );
+        state.push_agent_inbox(
+            recipient,
+            lifecycle_msg("child-a", "state_change", "idle", "second"),
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "tuic-auto-first"),
+            None
+        );
+
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "tuic-auto-second", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        state.mark_terminal_delivery_dispatched(recipient, "tuic-auto-second");
+        state.push_agent_inbox(
+            recipient,
+            lifecycle_msg("child-a", "state_change", "completed", "third"),
+        );
+
+        let (messages, _, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "tuic-auto-third");
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "tuic-auto-second"),
+            None
+        );
+    }
 
     #[test]
     fn push_agent_inbox_evicts_oldest_across_peer_and_lifecycle_mail() {
