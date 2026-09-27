@@ -86,6 +86,7 @@ struct CompiledWatcher {
 
 struct ClientWatchers {
     client_id: String,
+    webview_label: Option<String>,
     /// Registry-wide tick of this client's last sync. Eviction takes the
     /// smallest — the client that has been silent longest, which the frontend
     /// heartbeat makes a good proxy for "gone".
@@ -109,12 +110,26 @@ pub struct OutputWatcherRegistry {
     tick: u64,
 }
 
-/// Frontends that can hold a watcher set at once. Reloading a page leaves its
-/// old set behind (no disconnect signal reaches the PTY reader), so the list is
-/// bounded and evicts the oldest entry rather than growing forever.
+/// Frontends that can hold a watcher set at once. Browser tabs do not have a
+/// reliable disconnect signal, so the list is bounded and evicts the oldest.
 const MAX_CLIENTS: usize = 8;
 
 impl OutputWatcherRegistry {
+    pub fn sync_for_webview(
+        &mut self,
+        webview_label: &str,
+        client_id: &str,
+        seq: u64,
+        specs: &[WatcherSpec],
+    ) -> SyncOutcome {
+        self.sync_owned(Some(webview_label), client_id, seq, specs)
+    }
+
+    pub fn remove_webview(&mut self, webview_label: &str) {
+        self.clients
+            .retain(|client| client.webview_label.as_deref() != Some(webview_label));
+    }
+
     /// Install `specs` for `client_id`. Returns the ids that could not be
     /// compiled — those stay matched in the WebView.
     ///
@@ -122,6 +137,16 @@ impl OutputWatcherRegistry {
     /// can be in flight at once, and the older one must not install its set
     /// after the newer one.
     pub fn sync(&mut self, client_id: &str, seq: u64, specs: &[WatcherSpec]) -> SyncOutcome {
+        self.sync_owned(None, client_id, seq, specs)
+    }
+
+    fn sync_owned(
+        &mut self,
+        webview_label: Option<&str>,
+        client_id: &str,
+        seq: u64,
+        specs: &[WatcherSpec],
+    ) -> SyncOutcome {
         if let Some(existing) = self.clients.iter().find(|c| c.client_id == client_id)
             && seq <= existing.seq
         {
@@ -167,6 +192,7 @@ impl OutputWatcherRegistry {
         }
         self.clients.push(ClientWatchers {
             client_id: client_id.to_string(),
+            webview_label: webview_label.map(str::to_string),
             touched: self.tick,
             seq,
             watchers,

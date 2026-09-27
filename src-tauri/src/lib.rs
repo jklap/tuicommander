@@ -1371,6 +1371,29 @@ fn is_app_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
 }
 
 #[cfg(feature = "desktop")]
+fn release_webview_document_resources(state: &AppState, webview_label: &str) {
+    let mut removed = Vec::new();
+    state.grid.channels.retain(|session_id, subscription| {
+        if subscription.webview_label == webview_label {
+            removed.push((session_id.clone(), subscription.epoch));
+            false
+        } else {
+            true
+        }
+    });
+    for (session_id, epoch) in removed {
+        state
+            .grid
+            .gates
+            .remove_if(&session_id, |_, gate| gate.epoch() == epoch);
+    }
+    state
+        .plugin_output_watchers
+        .write()
+        .remove_webview(webview_label);
+}
+
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Must run before the first `config::config_dir()` read (below) — see
@@ -1581,6 +1604,11 @@ pub fn run() {
                     false
                 })
                 .on_page_load(|webview, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Started
+                        && let Some(state) = webview.try_state::<Arc<AppState>>()
+                    {
+                        release_webview_document_resources(state.inner(), webview.label());
+                    }
                     // A WebContent crash leaves the WebView on about:blank; the
                     // 2026-09-08 standby incident left it on about:srcdoc. Both
                     // are blank top documents with no URL behind them, so both
@@ -1624,6 +1652,13 @@ pub fn run() {
         )
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed)
+                && let Some(state) = window.try_state::<Arc<AppState>>()
+            {
+                release_webview_document_resources(state.inner(), window.label());
+            }
+        })
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
@@ -2896,6 +2931,175 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    fn register_document_grid(state: &AppState, session_id: &str, webview_label: &str) -> u64 {
+        let gate = Arc::new(crate::grid_gate::GridGate::new());
+        let epoch = gate.epoch();
+        state.grid.gates.insert(session_id.to_string(), gate);
+        state.grid.channels.insert(
+            session_id.to_string(),
+            crate::state::DesktopGridChannel {
+                channel: tauri::ipc::Channel::new(|_| Ok(())),
+                webview_label: webview_label.to_string(),
+                epoch,
+            },
+        );
+        epoch
+    }
+
+    #[cfg(feature = "desktop")]
+    fn watcher(id: &str, pattern: &str) -> output_watchers::WatcherSpec {
+        output_watchers::WatcherSpec {
+            id: id.to_string(),
+            pattern: pattern.to_string(),
+            flags: String::new(),
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn reload_releases_every_old_grid_channel_and_watcher() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "one", "main");
+        register_document_grid(&state, "two", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "old-document",
+            1,
+            &[watcher("w", "old document")],
+        );
+
+        release_webview_document_resources(&state, "main");
+
+        assert!(state.grid.channels.is_empty());
+        assert!(state.grid.gates.is_empty());
+        assert!(!crate::pty::grid_has_subscriber(&state, "one"));
+        assert!(!crate::pty::grid_has_subscriber(&state, "two"));
+        assert!(
+            state
+                .plugin_output_watchers
+                .read()
+                .matching_ids("old document")
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn closing_a_panel_releases_only_its_watcher_set() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "main-terminal", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "main-client",
+            1,
+            &[watcher("w", "main line")],
+        );
+        state.plugin_output_watchers.write().sync_for_webview(
+            "panel-activity",
+            "panel-client",
+            1,
+            &[watcher("w", "panel line")],
+        );
+
+        release_webview_document_resources(&state, "panel-activity");
+
+        assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        let watchers = state.plugin_output_watchers.read();
+        assert_eq!(watchers.matching_ids("main line"), vec!["main-client/w"]);
+        assert!(watchers.matching_ids("panel line").is_empty());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn main_reload_preserves_a_floating_terminals_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "main-terminal", "main");
+        let floating_epoch = register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "main");
+
+        assert!(!crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert!(crate::pty::grid_has_subscriber(&state, "floating-terminal"));
+        assert_eq!(
+            state.grid.gates.get("floating-terminal").unwrap().epoch(),
+            floating_epoch
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn destroying_a_floating_window_releases_only_its_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let main_epoch = register_document_grid(&state, "main-terminal", "main");
+        register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "floating-tab-1");
+
+        assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert_eq!(
+            state.grid.gates.get("main-terminal").unwrap().epoch(),
+            main_epoch
+        );
+        assert!(!crate::pty::grid_has_subscriber(
+            &state,
+            "floating-terminal"
+        ));
+        assert!(!state.grid.gates.contains_key("floating-terminal"));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn reload_keeps_browser_watchers_and_accepts_fresh_document() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .plugin_output_watchers
+            .write()
+            .sync("browser", 1, &[watcher("w", "browser line")]);
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "old-document",
+            1,
+            &[watcher("w", "old line")],
+        );
+        release_webview_document_resources(&state, "main");
+
+        let new_epoch = register_document_grid(&state, "one", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "new-document",
+            1,
+            &[watcher("w", "new line")],
+        );
+
+        assert_eq!(state.grid.gates.get("one").unwrap().epoch(), new_epoch);
+        let watchers = state.plugin_output_watchers.read();
+        assert_eq!(watchers.matching_ids("browser line"), vec!["browser/w"]);
+        assert_eq!(watchers.matching_ids("new line"), vec!["new-document/w"]);
+        assert!(watchers.matching_ids("old line").is_empty());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn repeated_reloads_leave_only_the_latest_document_watchers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        for i in 0..10 {
+            release_webview_document_resources(&state, "main");
+            let client = format!("document-{i}");
+            state.plugin_output_watchers.write().sync_for_webview(
+                "main",
+                &client,
+                1,
+                &[watcher("w", &format!("line-{i}"))],
+            );
+        }
+        let watchers = state.plugin_output_watchers.read();
+        for i in 0..9 {
+            assert!(watchers.matching_ids(&format!("line-{i}")).is_empty());
+        }
+        assert_eq!(watchers.matching_ids("line-9"), vec!["document-9/w"]);
+    }
 
     #[cfg(feature = "desktop")]
     #[test]
