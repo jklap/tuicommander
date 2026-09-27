@@ -396,7 +396,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const current = content();
 		// If the id already exists in the source, it's an edit; otherwise it's a new insert.
 		const isExisting =
-			current.includes(`<!--tweak:begin:${comment.id}-->`) || current.includes(`<!--tweak:block:${comment.id} `);
+			current.includes(`<!--tweak:begin:${comment.id}-->`) ||
+			current.includes(`<!--tweak:block:${comment.id} `) ||
+			current.includes(`<!--tweak:item:${comment.id} `);
 		try {
 			const updated = isExisting
 				? updateTweakComment(current, comment.id, comment.comment)
