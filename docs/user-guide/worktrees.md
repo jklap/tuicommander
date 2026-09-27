@@ -131,8 +131,9 @@ the branch stays and the result warns that the branch changed.
 The confirmation lists submodule commits absent from remote-tracking branches.
 A changed checkout status, HEAD, or submodule ref after force confirmation stops removal
 for a fresh review. The status check tracks which paths are dirty, not further
-edits to a path that was already dirty. Initialized submodule refs are preserved in the main
-checkout's module repository before removal. If the main checkout's copy of a
+edits to a path that was already dirty. Initialized submodule refs, stash entries,
+and reflog-only commits are preserved in the main checkout's module repository
+before removal. If the main checkout's copy of a
 submodule is uninitialized or points at the wrong Git repository, removal stops
 and leaves the worktree available for recovery. If the checkout directory is already missing, force confirmation is required to prune its Git registration; a lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
 

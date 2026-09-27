@@ -196,8 +196,11 @@ main checkout's module repository under a unique namespace. Before fetching,
 the destination must resolve as that initialized module's Git root inside the
 main checkout, with a Git directory distinct from the superproject's. An
 uninitialized module or a misplaced `.git` file stops removal without deleting
-the source checkout. The checkout is checked again after preservation,
-immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing registered checkout requires force confirmation before preserving module refs and pruning its registration; a lock still needs a separate override. The normal workspace list hides missing checkouts. An
+the source checkout. Every stash and
+reflog tip also gets a durable preserved ref, including older stash entries and
+commits that have fallen off a branch. A missing checkout's module bundle
+includes reflog objects before Git removes its registration. If preservation
+fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing registered checkout requires force confirmation before preserving module refs and pruning its registration; a lock still needs a separate override. The normal workspace list hides missing checkouts. An
 uninitialized submodule without Git state is safe to remove. Force confirmation
 can carry a fingerprint of checkout status per path, HEAD, and submodule refs, rechecked
 under the removal lock. The status portion records Git's per-path porcelain
