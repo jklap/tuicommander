@@ -924,6 +924,7 @@ if (window.tuic) {
 |--------|-------------|
 | `tuic.version` | SDK version string (e.g. `"1.0"`) |
 | `tuic.open(path, opts?)` | Open a markdown file in a new tab. `path` is absolute. `opts.pinned` pins the tab. |
+| `tuic.openUrl(url)` | Open an `http`, `https`, or `mailto` URL outside TUICommander. Other schemes are rejected by the host. |
 | `tuic.edit(path, opts?)` | Open a file in the code editor. `opts.line` (1-based) jumps to a line; omit for the top. |
 | `tuic.terminal(repoPath)` | Open a new terminal in the given repository. |
 
@@ -936,9 +937,14 @@ tuic.open("/Users/me/myrepo/docs/guide.md", { pinned: true });
 
 // Open a terminal in a repo
 tuic.terminal("/Users/me/myrepo");
+
+// Open a website in the system browser
+tuic.openUrl("https://example.com/docs");
 ```
 
 **Link interception:** Standard HTML links with `tuic://` scheme are intercepted automatically — no JavaScript required:
+
+Absolute `http`, `https`, and `mailto` links in inline plugin HTML also open through the host when clicked. Relative links remain blocked so an inline panel cannot navigate into the TUICommander app. A panel loading a cross-origin URL cannot have its clicks inspected by the host; use the tab menu's **Open in Browser** action if that page needs external links.
 
 ```html
 <!-- Opens a markdown file -->

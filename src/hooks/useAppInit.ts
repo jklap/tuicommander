@@ -510,6 +510,25 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register repo-changed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
+	// The native navigation guard cannot tell a real iframe click from a script.
+	// Give users a visible fallback while keeping the actual browser open behind
+	// the tab menu's explicit action. Browser mode has no Tauri navigation guard.
+	if (isTauri()) {
+		void listen<string>("navigation-blocked", () => {
+			toastsStore.add(
+				"External link blocked",
+				"This embedded page cannot open external links here. Use Open in Browser from its tab menu.",
+				"warn",
+				false,
+				undefined,
+				10000,
+				undefined,
+				undefined,
+				false,
+			);
+		}).catch((err) => appLogger.error("app", "Failed to register navigation guard listener", err));
+	}
+
 	replaceMcpToastListener((event) => {
 		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
