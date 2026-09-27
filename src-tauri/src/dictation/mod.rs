@@ -22,7 +22,13 @@ pub use tuic_dictation::vad;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+pub struct CaptureStopRequest {
+    pub at: Instant,
+    pub source: &'static str,
+}
 
 /// Shared dictation state accessible from Tauri commands.
 /// Tauri's `.manage()` wraps this in `Arc` internally, so we don't double-wrap.
@@ -32,6 +38,11 @@ pub struct DictationState {
     pub active_model: Mutex<Option<String>>,
     pub corrections: Arc<Mutex<corrections::TextCorrector>>,
     pub recording: AtomicBool,
+    /// Native Fn state survives a blocked or reloaded WebView.
+    pub fn_down: AtomicBool,
+    pub fn_capture: AtomicBool,
+    pub native_release_pending: AtomicBool,
+    pub stop_request: Mutex<Option<CaptureStopRequest>>,
     pub processing: Arc<AtomicBool>,
     /// Active streaming session (None when not streaming).
     pub streaming: Mutex<Option<streaming::StreamingSession>>,
@@ -106,12 +117,46 @@ pub struct DictationState {
 }
 
 impl DictationState {
+    /// Stop microphone capture at the native event edge, before WebView delivery.
+    /// The IPC stop later joins streaming and transcribes the retained audio.
+    pub fn request_native_stop(&self, source: &'static str) {
+        if !self.recording.load(Ordering::Acquire) || !self.fn_capture.load(Ordering::Acquire) {
+            return;
+        }
+        self.native_release_pending.store(true, Ordering::Release);
+        let requested = Instant::now();
+        *self.stop_request.lock() = Some(CaptureStopRequest {
+            at: requested,
+            source,
+        });
+        let mut audio = self.audio.lock();
+        if let Some(capture) = audio.as_mut() {
+            capture.stop_stream();
+            tracing::info!(
+                source = "dictation",
+                trigger = source,
+                latency_ms = requested.elapsed().as_millis(),
+                "Native capture stop executed"
+            );
+        } else {
+            tracing::info!(
+                source = "dictation",
+                trigger = source,
+                "Native capture stop pending microphone start"
+            );
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             audio: Mutex::new(None),
             active_model: Mutex::new(None),
             corrections: Arc::new(Mutex::new(corrections::TextCorrector::load_or_default())),
             recording: AtomicBool::new(false),
+            fn_down: AtomicBool::new(false),
+            fn_capture: AtomicBool::new(false),
+            native_release_pending: AtomicBool::new(false),
+            stop_request: Mutex::new(None),
             processing: Arc::new(AtomicBool::new(false)),
             streaming: Mutex::new(None),
             transcriber_arc: Mutex::new(None),

@@ -785,7 +785,7 @@ const App: Component = () => {
 		setHelpPanelVisible,
 	});
 	useDictationHotkey({
-		onStart: dictation.handleDictationStart,
+		onStart: () => void dictation.handleDictationStart(dictationStore.state.hotkey === "Fn" ? "fn" : "hotkey"),
 		onStop: dictation.handleDictationStop,
 	});
 

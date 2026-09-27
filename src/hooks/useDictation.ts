@@ -28,7 +28,7 @@ export interface DictationDeps {
 			handsFree: { armed: boolean } | null;
 		};
 		refreshStatus: () => Promise<void>;
-		startRecording: () => Promise<void>;
+		startRecording: (source?: string) => Promise<void>;
 		stopRecording: () => Promise<TranscribeResponse | null>;
 		refreshHandsFree: () => Promise<void>;
 		disarmHandsFree: () => Promise<void>;
@@ -49,7 +49,7 @@ export function useDictation(deps: DictationDeps) {
 	// so we snapshot it here to guarantee dictation targets the right element.
 	let focusTarget: Element | null = null;
 
-	const handleDictationStart = async () => {
+	const handleDictationStart = async (source = "hotkey") => {
 		if (!deps.dictation.state.enabled) return;
 
 		// The hotkey is the stop control for a conversation as well as the
@@ -96,7 +96,7 @@ export function useDictation(deps: DictationDeps) {
 			}
 
 			try {
-				await deps.dictation.startRecording();
+				await deps.dictation.startRecording(source);
 				deps.setStatusInfo("Dictation: recording…");
 				return true;
 			} catch (err) {
@@ -144,7 +144,7 @@ export function useDictation(deps: DictationDeps) {
 		// lands — otherwise a truncated transcription reads as a complete one.
 		const doneMessage =
 			response.truncated_s > 0
-				? `Dictation: recording too long — the first ${Math.round(response.truncated_s)}s were not transcribed`
+				? `Dictation: ${Math.round(response.truncated_s)}s of audio were lost before transcription`
 				: "Ready";
 
 		// Use the focus target captured at key-press time

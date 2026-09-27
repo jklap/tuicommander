@@ -12,6 +12,10 @@
 
 # To Test
 
+## Push-to-talk native release — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.
+
 ## Managed Claude mail wake — Rust restart required
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send mail to a throwaway managed Claude peer while its turn is busy and its MCP SSE stream is connected. Let it become idle without reading the inbox during the turn. Confirm one payload-free `[TUIC] message available` notice starts a new turn and `agent action=inbox` returns the mail. Repeat with an inbox read before idle and confirm no stale notice is submitted. The current live backend cannot load this Rust change until restart.
