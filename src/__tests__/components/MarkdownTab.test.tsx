@@ -31,7 +31,7 @@ describe("MarkdownTab agent review actions", () => {
 		mockInvoke.mockReset();
 		mockRpc.mockReset();
 		mockInvoke.mockImplementation((command: string) => {
-			if (command === "read_file") {
+			if (command === "read_file" || command === "read_external_file") {
 				return Promise.resolve(fileContent);
 			}
 			return Promise.resolve(undefined);
@@ -91,9 +91,11 @@ describe("MarkdownTab agent review actions", () => {
 		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
 	});
 
-	/** Render `docs/<name>`, open the block-comment popover on its first paragraph and type a comment. */
+	/** Open the block-comment popover on a Markdown file's first paragraph and type a comment. */
 	async function startBlockComment(name: string) {
-		const tabId = mdTabsStore.add("/repo", `docs/${name}`);
+		const tabId = name.startsWith("/")
+			? mdTabsStore.addMcpFile("boss-open-questions", "/repo", name, false, false)
+			: mdTabsStore.add("/repo", `docs/${name}`);
 		const tab = mdTabsStore.get(tabId) as FileTab;
 		const { container } = render(() => <MarkdownTab tab={tab} />);
 		const paragraph = await waitFor(() => {
@@ -121,6 +123,44 @@ describe("MarkdownTab agent review actions", () => {
 				content: expect.stringMatching(/# Heading\n\n<!--tweak:block:\S+ @\S+\nClarify-->\nOriginal paragraph\.\n$/),
 			}),
 		);
+	});
+
+	it("saves an MCP Markdown comment to an absolute file outside the active repository", async () => {
+		fileContent = "# Heading\n\nOriginal paragraph.\n";
+		const path = "/Users/stefano.straus/Gits/.tmp/boss/open-questions.md";
+		await startBlockComment(path);
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_external_file", {
+				path,
+				content: expect.stringContaining("Clarify"),
+			}),
+		);
+		expect(mockInvoke).not.toHaveBeenCalledWith("write_file", expect.anything());
+	});
+
+	it("shows a failed external comment save and retains its draft for retry", async () => {
+		fileContent = "# Heading\n\nOriginal paragraph.\n";
+		const path = "/Users/stefano.straus/Gits/.tmp/boss/open-questions.md";
+		let writeAttempts = 0;
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "read_external_file") return Promise.resolve(fileContent);
+			if (command === "write_external_file") {
+				writeAttempts++;
+				if (writeAttempts === 1) return Promise.reject(new Error("permission denied"));
+			}
+			return Promise.resolve(undefined);
+		});
+		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+		await startBlockComment(path);
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() => expect(addToast).toHaveBeenCalledWith("Couldn't save Markdown file", expect.stringContaining("permission denied"), "error"));
+		expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Clarify");
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(writeAttempts).toBe(2));
+		await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
 	});
 
 	// The block range comes from the render that was on screen when the popover
