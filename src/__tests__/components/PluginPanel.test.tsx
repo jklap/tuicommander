@@ -49,7 +49,7 @@ vi.mock("solid-js", async (importOriginal) => {
 	};
 });
 
-import { createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { injectThemeVars, PluginPanel } from "../../components/PluginPanel/PluginPanel";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -275,6 +275,43 @@ describe("PluginPanel", () => {
 			expect(second).not.toBe(first);
 			expect(second.getAttribute("src")).toBe(src);
 			expect(second.getAttribute("srcdoc")).toBe(srcdoc);
+		});
+
+		it("removes the iframe when the UI tab closes", () => {
+			mdTabsStore.clearAll();
+			mdTabsStore.openUiTab("closing-panel", "Dashboard", "", false, "about:blank");
+			const { container } = render(() => (
+				<For each={mdTabsStore.getIds()}>
+					{(id) => {
+						const tab = mdTabsStore.get(id) as PluginPanelTab;
+						return <PluginPanel tab={tab} />;
+					}}
+				</For>
+			));
+			expect(container.querySelectorAll("iframe")).toHaveLength(1);
+
+			mdTabsStore.closeUiTab("closing-panel");
+			expect(container.querySelectorAll("iframe")).toHaveLength(0);
+		});
+
+		it("unloads only the hidden iframe when two panels share the page", () => {
+			const [firstVisible, setFirstVisible] = createSignal(true);
+			const [secondVisible, setSecondVisible] = createSignal(true);
+			const { container } = render(() => (
+				<>
+					<PluginPanel tab={makeTab({ id: "first", url: "about:blank#first", html: "" })} visible={firstVisible} />
+					<PluginPanel tab={makeTab({ id: "second", url: "about:blank#second", html: "" })} visible={secondVisible} />
+				</>
+			));
+			expect(container.querySelectorAll("iframe")).toHaveLength(2);
+
+			setFirstVisible(false);
+			expect([...container.querySelectorAll("iframe")].map((frame) => frame.getAttribute("src"))).toEqual([
+				"about:blank#second",
+			]);
+
+			setSecondVisible(false);
+			expect(container.querySelectorAll("iframe")).toHaveLength(0);
 		});
 		/**
 		 * Mount a panel and start spying on what reaches its iframe. The stub goes
