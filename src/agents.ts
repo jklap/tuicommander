@@ -352,6 +352,7 @@ export interface AgentRunConfig {
 	name: string;
 	command: string;
 	args: string[];
+	model?: string;
 	env: Record<string, string>;
 	is_default: boolean;
 }

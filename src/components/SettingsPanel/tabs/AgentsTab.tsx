@@ -122,6 +122,7 @@ const AddConfigForm: Component<{
 	const [name, setName] = createSignal("");
 	const [command, setCommand] = createSignal(AGENTS[props.agentType].binary);
 	const [args, setArgs] = createSignal("");
+	const [model, setModel] = createSignal("");
 	const [envVars, setEnvVars] = createSignal<Array<{ key: string; value: string }>>([]);
 
 	// Cross-agent duplicate name detection (case-insensitive). AddConfigForm
@@ -152,6 +153,7 @@ const AddConfigForm: Component<{
 			name: n,
 			command: command().trim() || AGENTS[props.agentType].binary,
 			args: args().trim() ? args().trim().split(/\s+/) : [],
+			model: model().trim() || undefined,
 			env: buildEnvFromEntries(envVars()),
 			is_default: false,
 		};
@@ -193,6 +195,15 @@ const AddConfigForm: Component<{
 						if (e.key === "Enter") handleSave();
 						if (e.key === "Escape") props.onClose();
 					}}
+				/>
+			</div>
+			<div class={a.formRow}>
+				<input
+					class={`${a.formInput} ${a.mono}`}
+					aria-label="Model"
+					placeholder="Model (optional)"
+					value={model()}
+					onInput={(e) => setModel(e.currentTarget.value)}
 				/>
 			</div>
 			{/* Env vars section */}
@@ -252,6 +263,7 @@ const RunConfigRow: Component<{
 	const [editName, setEditName] = createSignal("");
 	const [editCommand, setEditCommand] = createSignal("");
 	const [editArgs, setEditArgs] = createSignal("");
+	const [editModel, setEditModel] = createSignal("");
 	let menuRef: HTMLDivElement | undefined;
 
 	const cmdPreview = () => {
@@ -271,6 +283,7 @@ const RunConfigRow: Component<{
 		setEditName(props.config.name);
 		setEditCommand(props.config.command);
 		setEditArgs(props.config.args.join(" "));
+		setEditModel(props.config.model ?? "");
 		setEditingConfig(true);
 		setMenuOpen(false);
 	};
@@ -294,6 +307,7 @@ const RunConfigRow: Component<{
 			name: n,
 			command: editCommand().trim() || props.config.command,
 			args: editArgs().trim() ? editArgs().trim().split(/\s+/) : [],
+			model: editModel().trim() || undefined,
 		};
 		await configStore.updateRunConfig(props.agentType, props.index, updated);
 		setEditingConfig(false);
@@ -403,6 +417,15 @@ const RunConfigRow: Component<{
 								if (e.key === "Enter") saveConfig();
 								if (e.key === "Escape") setEditingConfig(false);
 							}}
+						/>
+					</div>
+					<div class={a.formRow}>
+						<input
+							class={`${a.formInput} ${a.mono}`}
+							aria-label="Model"
+							placeholder="Model (optional)"
+							value={editModel()}
+							onInput={(e) => setEditModel(e.currentTarget.value)}
 						/>
 					</div>
 					<div class={a.formRow}>
