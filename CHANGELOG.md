@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Claude activity status** — An idle Claude session no longer stays marked Working indefinitely when a mail wake reaches its detailed transcript view without starting a turn. Shell state changes now have a consistent trace.
 
+- **Push-to-talk release and long audio** — Fn release stops microphone capture even while the WebView is busy, focus loss recovers missed key-up events, and slow streaming passes no longer discard the first 30 seconds of pending audio without a warning. File logs retain timing and length diagnostics without transcript text.
+
 - **Activity Dashboard window size** — An oversized saved detached window now reopens at the compact 550×650 default instead of filling most of the display.
 
 - **MCP tab repository ownership** — External file and HTML/URL tabs opened by an MCP caller now belong to that caller's registered repository, even when another repository is visible. Focused opens switch to the caller's repository; background opens keep the current view.

@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// Information about an available audio input device.
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +70,8 @@ pub struct AudioCapture {
     buffer: Arc<Mutex<VecDeque<f32>>>,
     /// Latest normalized microphone level. Atomic so the UI meter never blocks audio capture.
     level: Arc<AtomicU32>,
+    dropped_samples: Arc<AtomicUsize>,
+    active: Arc<AtomicBool>,
     stream: Option<cpal::Stream>,
 }
 
@@ -102,6 +104,10 @@ impl AudioCapture {
         let buffer_clone = buffer.clone();
         let level = Arc::new(AtomicU32::new(0));
         let level_clone = level.clone();
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let dropped_clone = dropped_samples.clone();
+        let active = Arc::new(AtomicBool::new(true));
+        let active_clone = active.clone();
 
         // Build a stream that collects f32 samples, converting to 16kHz mono.
         // Uses try_lock() to avoid blocking the real-time audio callback.
@@ -120,6 +126,8 @@ impl AudioCapture {
                                 channels,
                                 &buffer_clone,
                                 &level_clone,
+                                &dropped_clone,
+                                &active_clone,
                                 &mut mono_buf,
                                 &mut resample_buf,
                             );
@@ -146,6 +154,8 @@ impl AudioCapture {
                                 channels,
                                 &buffer_clone,
                                 &level_clone,
+                                &dropped_clone,
+                                &active_clone,
                                 &mut mono_buf,
                                 &mut resample_buf,
                             );
@@ -165,6 +175,8 @@ impl AudioCapture {
         Ok(Self {
             buffer,
             level,
+            dropped_samples,
+            active,
             stream: Some(stream),
         })
     }
@@ -173,13 +185,17 @@ impl AudioCapture {
     /// Consumes self (batch mode compatibility).
     #[allow(dead_code)] // genuinely unused: the only stop() caller (commands.rs) is StreamingSession::stop, not this batch-mode API
     pub fn stop(mut self) -> Vec<f32> {
-        self.stream.take();
+        self.stop_stream();
         self.buffer.lock().drain(..).collect()
     }
 
     /// Stop the cpal stream without consuming self.
     /// Audio already in the buffer remains available for `drain_all()`.
     pub fn stop_stream(&mut self) {
+        self.active.store(false, Ordering::Release);
+        // Wait for a callback that acquired the buffer before the release.
+        // Once this lock is acquired, no later callback can append audio.
+        drop(self.buffer.lock());
         self.stream.take();
     }
 
@@ -212,6 +228,10 @@ impl AudioCapture {
     pub fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
+
+    pub fn dropped_samples(&self) -> usize {
+        self.dropped_samples.load(Ordering::Relaxed)
+    }
 }
 
 /// Process an audio chunk: convert to mono and resample to 16kHz.
@@ -227,9 +247,14 @@ fn process_audio_chunk(
     channels: usize,
     buffer: &Arc<Mutex<VecDeque<f32>>>,
     level: &Arc<AtomicU32>,
+    dropped_samples: &Arc<AtomicUsize>,
+    active: &Arc<AtomicBool>,
     mono_buf: &mut Vec<f32>,
     resample_buf: &mut Vec<f32>,
 ) {
+    if !active.load(Ordering::Acquire) {
+        return;
+    }
     // `validate_channel_count` rejects a zero-channel device at start-up, so
     // this is unreachable in practice. It stays because the alternative here
     // is `chunks(0)` panicking on the real-time audio thread, where an unwind
@@ -283,13 +308,21 @@ fn process_audio_chunk(
 
     // try_lock: never block the audio callback
     if let Some(mut buf) = buffer.try_lock() {
-        buf.extend(output.iter());
-        // Cap at 30s (480k samples at 16kHz) to prevent unbounded growth
-        const MAX_SAMPLES: usize = 16_000 * 30;
-        let len = buf.len();
-        if len > MAX_SAMPLES {
-            buf.drain(..len - MAX_SAMPLES);
+        if !active.load(Ordering::Acquire) {
+            return;
         }
+        buf.extend(output.iter());
+        // The streaming thread can spend longer than 30s decoding one window.
+        // Keep the same bounded horizon as its final recording buffer.
+        let max_samples = (16_000.0 * crate::streaming::MAX_RECORDING_S) as usize;
+        let len = buf.len();
+        if len > max_samples {
+            let dropped = len - max_samples;
+            buf.drain(..dropped);
+            dropped_samples.fetch_add(dropped, Ordering::Relaxed);
+        }
+    } else {
+        dropped_samples.fetch_add(output.len(), Ordering::Relaxed);
     }
 }
 
@@ -302,6 +335,8 @@ mod tests {
     struct ChunkFixture {
         buffer: Arc<Mutex<VecDeque<f32>>>,
         level: Arc<AtomicU32>,
+        dropped_samples: Arc<AtomicUsize>,
+        active: Arc<AtomicBool>,
         mono: Vec<f32>,
         resample: Vec<f32>,
     }
@@ -311,6 +346,8 @@ mod tests {
             Self {
                 buffer: Arc::new(Mutex::new(VecDeque::new())),
                 level: Arc::new(AtomicU32::new(0)),
+                dropped_samples: Arc::new(AtomicUsize::new(0)),
+                active: Arc::new(AtomicBool::new(true)),
                 mono: Vec::new(),
                 resample: Vec::new(),
             }
@@ -324,6 +361,8 @@ mod tests {
                 channels,
                 &self.buffer,
                 &self.level,
+                &self.dropped_samples,
+                &self.active,
                 &mut self.mono,
                 &mut self.resample,
             );
@@ -374,6 +413,18 @@ mod tests {
     }
 
     #[test]
+    fn thirty_one_second_capture_preserves_its_first_sample() {
+        let mut fx = ChunkFixture::new();
+        fx.process(&[0.25], 16_000, 1);
+        fx.process(&vec![0.5; 31 * 16_000], 16_000, 1);
+
+        let captured = fx.captured();
+        assert_eq!(captured.len(), 31 * 16_000 + 1);
+        assert_eq!(captured[0], 0.25, "the beginning of the dictation was lost");
+        assert_eq!(captured.last(), Some(&0.5));
+    }
+
+    #[test]
     fn process_audio_chunk_averages_stereo_frames() {
         let mut fx = ChunkFixture::new();
         fx.process(&[0.0, 1.0, 0.5, 0.5], 16_000, 2);
@@ -400,6 +451,8 @@ mod tests {
     fn process_audio_chunk_survives_zero_sample_rate_device() {
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf = Vec::new();
         let mut resample_buf = Vec::new();
 
@@ -409,6 +462,8 @@ mod tests {
             1,
             &buffer,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -452,6 +507,8 @@ mod tests {
         let capture = AudioCapture {
             buffer: buf,
             level: Arc::new(AtomicU32::new(0)),
+            dropped_samples: Arc::new(AtomicUsize::new(0)),
+            active: Arc::new(AtomicBool::new(true)),
             stream: None,
         };
 
@@ -479,6 +536,8 @@ mod tests {
         let capture = AudioCapture {
             buffer: buf,
             level: Arc::new(AtomicU32::new(0)),
+            dropped_samples: Arc::new(AtomicUsize::new(0)),
+            active: Arc::new(AtomicBool::new(true)),
             stream: None,
         };
         let all = capture.drain_all();
@@ -496,6 +555,8 @@ mod tests {
         let mut capture = AudioCapture {
             buffer: buf,
             level: Arc::new(AtomicU32::new(0)),
+            dropped_samples: Arc::new(AtomicUsize::new(0)),
+            active: Arc::new(AtomicBool::new(true)),
             stream: None,
         };
         capture.stop_stream(); // no-op since stream is None
@@ -505,9 +566,49 @@ mod tests {
     }
 
     #[test]
+    fn stopped_capture_rejects_late_audio_callbacks() {
+        let mut capture = AudioCapture {
+            buffer: Arc::new(Mutex::new(VecDeque::new())),
+            level: Arc::new(AtomicU32::new(0)),
+            dropped_samples: Arc::new(AtomicUsize::new(0)),
+            active: Arc::new(AtomicBool::new(true)),
+            stream: None,
+        };
+        let mut mono = Vec::new();
+        let mut resample = Vec::new();
+        process_audio_chunk(
+            &[0.25],
+            16_000,
+            1,
+            &capture.buffer,
+            &capture.level,
+            &capture.dropped_samples,
+            &capture.active,
+            &mut mono,
+            &mut resample,
+        );
+        capture.stop_stream();
+        process_audio_chunk(
+            &[0.75],
+            16_000,
+            1,
+            &capture.buffer,
+            &capture.level,
+            &capture.dropped_samples,
+            &capture.active,
+            &mut mono,
+            &mut resample,
+        );
+
+        assert_eq!(capture.drain_all(), vec![0.25]);
+    }
+
+    #[test]
     fn test_process_audio_chunk_try_lock() {
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf = Vec::new();
         let mut resample_buf = Vec::new();
         let data = vec![0.5f32; 16]; // 16 mono samples at 16kHz
@@ -517,6 +618,8 @@ mod tests {
             1,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -531,16 +634,21 @@ mod tests {
             1,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
         assert_eq!(guard.len(), 16); // still 16, new samples dropped
+        assert_eq!(dropped_samples.load(Ordering::Relaxed), 16);
     }
 
     #[test]
     fn test_process_audio_chunk_stereo_to_mono() {
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf = Vec::new();
         let mut resample_buf = Vec::new();
 
@@ -555,6 +663,8 @@ mod tests {
             2,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -572,6 +682,8 @@ mod tests {
     fn test_process_audio_chunk_resample_48k_to_16k() {
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf = Vec::new();
         let mut resample_buf = Vec::new();
 
@@ -583,6 +695,8 @@ mod tests {
             1,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -602,6 +716,8 @@ mod tests {
     fn test_process_audio_chunk_stereo_48k() {
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf = Vec::new();
         let mut resample_buf = Vec::new();
 
@@ -613,6 +729,8 @@ mod tests {
             2,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -630,6 +748,8 @@ mod tests {
         // Verify that scratch buffers are reused across calls (capacity grows once)
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let level = Arc::new(AtomicU32::new(0));
+        let dropped_samples = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(true));
         let mut mono_buf: Vec<f32> = Vec::new();
         let mut resample_buf: Vec<f32> = Vec::new();
 
@@ -640,6 +760,8 @@ mod tests {
             1,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );
@@ -652,6 +774,8 @@ mod tests {
             1,
             &buf,
             &level,
+            &dropped_samples,
+            &active,
             &mut mono_buf,
             &mut resample_buf,
         );

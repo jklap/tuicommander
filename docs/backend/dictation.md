@@ -186,7 +186,9 @@ pub trait Transcriber: Send + Sync {
 
 ## Recording Guard (TOCTOU)
 
-`start_dictation()` uses `compare_exchange(false, true, AcqRel, Acquire)` on the `recording` flag to prevent TOCTOU races from concurrent IPC calls. If two calls arrive simultaneously, only the first succeeds; the second returns `"Already recording"`. A drop guard resets `recording = false` on any early error return.
+`start_dictation(source?)` uses `compare_exchange(false, true, AcqRel, Acquire)` on the `recording` flag to prevent TOCTOU races from concurrent IPC calls. If two calls arrive simultaneously, only the first succeeds; the second returns `"Already recording"`. A drop guard resets `recording = false` on any early error return. A native Fn start passes `source: "fn"`; if the key was released before the command arrived, recording is refused. Other callers use `"hotkey"` or `"ui"`.
+
+The macOS Fn monitor stops the CPAL capture directly on key-up, before the WebView processes the event. Losing window focus synthesizes the release in both Rust and the hotkey hook; other DOM hotkeys also release on blur. If key-up races microphone initialization, the native stop remains pending and closes the stream as soon as it opens. The later stop command joins streaming and transcribes the audio already captured. File logs record Fn edges, stop request and execution timestamps/latency, retained and lost audio seconds, and final/partial character counts without transcript text.
 
 ## Streaming Architecture
 
@@ -214,6 +216,9 @@ start_dictation()
     └── Set recording = true
     │
 User releases hotkey
+    │
+    ▼
+Native Fn release stops CPAL immediately (macOS); window blur recovers a missed release
     │
     ▼
 stop_dictation_and_transcribe()  [async]
@@ -646,11 +651,15 @@ memmove is rare), and once by `cap_finished_recording` in
 joined result. A slow final whisper window makes that tail long, so without the
 second pass the buffer handed to the final transcription can exceed the cap.
 
-The trim is reported, never silent: both passes count the dropped samples,
+The CPAL callback's pending queue also keeps up to 300 s, instead of silently
+discarding the first samples after 30 s while a streaming Whisper pass is busy.
+Its cap and any real-time lock-contention losses are counted with the streaming
+losses. The trim is reported, never silent: both passes count the dropped samples,
 `StreamingSession::stop()` returns the loop's count in `StreamingAudio`, and the
 command converts the sum to `truncated_s`. `useDictation` turns a non-zero value
-into a status message instead of "Ready", so a transcription missing its
-beginning cannot read as a complete one.
+into a status message instead of "Ready", so a transcription missing audio
+cannot read as a complete one. Losses from lock contention may be gaps within
+the recording rather than a prefix.
 
 `StreamingAudio.interrupted` marks a panicked streaming thread. Its audio is
 gone, so what remains in the capture buffer is a fragment; the command returns

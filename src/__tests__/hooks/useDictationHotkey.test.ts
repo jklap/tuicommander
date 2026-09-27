@@ -1,0 +1,79 @@
+import { createRoot } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { state, listeners } = vi.hoisted(() => ({
+	state: { enabled: true, hotkey: "F8", capturingHotkey: false, longPressMs: 0 },
+	listeners: new Map<string, () => void>(),
+}));
+
+vi.mock("../../stores/dictation", () => ({ dictationStore: { state } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn() } }));
+vi.mock("../../transport", () => ({ isTauri: () => true }));
+vi.mock("../../invoke", () => ({
+	listen: vi.fn((name: string, callback: () => void) => {
+		listeners.set(name, callback);
+		return Promise.resolve(() => listeners.delete(name));
+	}),
+}));
+
+import { useDictationHotkey } from "../../hooks/useDictationHotkey";
+
+describe("push-to-talk release recovery", () => {
+	let dispose: () => void;
+	let onStart: ReturnType<typeof vi.fn>;
+	let onStop: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		state.hotkey = "F8";
+		onStart = vi.fn();
+		onStop = vi.fn();
+	});
+
+	afterEach(() => {
+		dispose?.();
+		listeners.clear();
+	});
+
+	it("releases a held hotkey when focus leaves and accepts the next press", () => {
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			useDictationHotkey({ onStart, onStop });
+		});
+		window.dispatchEvent(new KeyboardEvent("keydown", { code: "F8" }));
+		window.dispatchEvent(new Event("blur"));
+		expect(onStart).toHaveBeenCalledOnce();
+		expect(onStop).toHaveBeenCalledOnce();
+
+		window.dispatchEvent(new KeyboardEvent("keydown", { code: "F8" }));
+		window.dispatchEvent(new KeyboardEvent("keyup", { code: "F8" }));
+		expect(onStart).toHaveBeenCalledTimes(2);
+		expect(onStop).toHaveBeenCalledTimes(2);
+	});
+
+	it("releases native Fn on focus loss even without a key-up event", async () => {
+		state.hotkey = "Fn";
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			useDictationHotkey({ onStart, onStop });
+		});
+		await Promise.resolve();
+		listeners.get("fn-key-down")?.();
+		window.dispatchEvent(new Event("blur"));
+		expect(onStart).toHaveBeenCalledOnce();
+		expect(onStop).toHaveBeenCalledOnce();
+	});
+
+	it("forgets held modifiers after focus loss", () => {
+		state.hotkey = "Cmd+F8";
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			useDictationHotkey({ onStart, onStop });
+		});
+		window.dispatchEvent(new KeyboardEvent("keydown", { code: "MetaLeft" }));
+		window.dispatchEvent(new KeyboardEvent("keydown", { code: "F8" }));
+		window.dispatchEvent(new Event("blur"));
+		window.dispatchEvent(new KeyboardEvent("keydown", { code: "F8" }));
+		expect(onStart).toHaveBeenCalledOnce();
+		expect(onStop).toHaveBeenCalledOnce();
+	});
+});

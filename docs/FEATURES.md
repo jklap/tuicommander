@@ -1126,6 +1126,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 ### 9.3 Push-to-Talk
 - Default hotkey: `F5` (configurable, registered globally)
 - Mic button in status bar: hold to record, release to transcribe
+- On macOS, releasing Fn stops microphone capture in Rust before the WebView handles the event. Losing window focus releases a held hotkey; a late Fn start is refused. The file log records release-to-stop latency without storing spoken text.
 - Transcribed text inserts into the focused input element (textarea, input, contenteditable); falls back to active terminal PTY when no text input has focus. Focus target captured at key-press time.
 
 ### 9.4 Streaming Transcription
