@@ -151,6 +151,13 @@ impl AcpClientManager {
         *self.mcp_host.lock() = Some(host);
     }
 
+    pub fn has_acp_inbox_subscriber(&self, peer_id: &str) -> bool {
+        self.mcp_host
+            .lock()
+            .as_ref()
+            .is_some_and(|host| host.has_inbox_subscriber(peer_id))
+    }
+
     /// Replace whatever a caller put in `mcp_servers` with what this process
     /// actually serves.
     ///
