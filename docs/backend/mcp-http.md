@@ -924,7 +924,7 @@ gets a freshly minted alias instead.
 
 `invoke_js` executes JavaScript in the WebView (localhost-only). Results are logged with `source='eval_js'` and read via `debug(action='logs', source='eval_js', limit=1)`.
 
-`POST /debug/reload_webview` is loopback-only. It logs the caller address before asking the native WebView to navigate to its last healthy URL; the navigation log names the `http_route` trigger, action, URL, and success state. The recovery thread and page-load hook use the same navigation path with their own trigger names.
+`POST /debug/reload_webview` is loopback-only. It logs the caller address before asking the native WebView to navigate to its last healthy URL; only the bundled app origin or configured development origin can replace that saved URL. The navigation log names the `http_route` trigger, action, URL, and success state. The recovery thread and page-load hook use the same navigation path with their own trigger names.
 
 **`window.__TUIC__` bridge** — runtime introspection API:
 
@@ -1556,12 +1556,14 @@ it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
 The inbox retains up to 100 messages per recipient. A new server-authored
-lifecycle notice replaces the older notice for the same child and `type`; the
-newest state stays at the end of the inbox, and replacement does not increase
-`missed_count`. Other messages keep FIFO order. Every send succeeds once the
-recipient is valid; at capacity without a matching notice, the oldest retained
-message is evicted. `missed_count` on the next inbox read reports evictions of
-unread mail; replacement and reclaiming mail already read do not increase it.
+lifecycle notice replaces the older notice for the same child and `type`, except
+an `awaiting_input` state change: each separate question stays available to the
+parent. The newest coalesced state stays at the end of the inbox, and replacement
+does not increase `missed_count`. Other messages keep FIFO order. Every send
+succeeds once the recipient is valid; at capacity without a matching notice,
+the oldest retained message is evicted. `missed_count` on the next inbox read
+reports evictions of unread mail; replacement and reclaiming mail already read
+do not increase it.
 An inbox read returns the oldest messages after `since` first. With no `limit`,
 it returns all retained fresh mail (up to 100). With `limit`, the server clamps
 the page size to 1–100 and returns `has_more=true` while newer unread mail

@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Managed child questions** — Separate questions remain in the parent's inbox after earlier answers and later state updates.
+
 - **Browser agent resume verification** — HTTP verification carries the agent PID and saved profile environment, so sessions under a non-default Claude, Codex or Gemini profile are checked in the correct store.
+
+- **Codex approval cancellation** — Esc clears a canceled approval's waiting badge when the composer returns, without clearing a later question.
 
 - **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted and Unicode values stay intact, and menu overrides cannot replace TUIC peer identity variables, including differently cased names on Windows.
 
@@ -21,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Managed Codex wrapper trust** — Codex run configs that forward launcher arguments receive the same launch-only workspace trust override as direct Codex spawns.
 
 - **Missing worktree cleanup** — A missing checkout's registered Git state can be confirmed and pruned from desktop or HTTP. Submodule refs are preserved first; lock override remains a separate confirmation.
+
+- **Safer Markdown and WebView links** — Markdown file links with `:line:column` open at the requested line, paths traversing into macOS protected home folders are not probed, and WebView recovery saves only app-origin URLs.
 
 - **Headless MCP voice binding** — `tuic-remote` refuses voice calls from connections without a live terminal before reporting that audio is unavailable.
 

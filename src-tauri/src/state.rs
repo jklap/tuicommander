@@ -1621,11 +1621,14 @@ fn lifecycle_notice_kind(message: &AgentMessage) -> Option<String> {
     if !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) || message.from_name != "tuic" {
         return None;
     }
-    serde_json::from_str::<serde_json::Value>(&message.content)
-        .ok()?
-        .get("type")?
-        .as_str()
-        .map(str::to_string)
+    let payload = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
+    let kind = payload.get("type")?.as_str()?;
+    // Each answered question can start a new wait. Keep those notices even if
+    // ordinary lifecycle updates from the same child are coalesced.
+    if kind == "state_change" && payload.get("state")?.as_str()? == "awaiting_input" {
+        return None;
+    }
+    Some(kind.to_string())
 }
 
 /// Max message body size in bytes (64 KB).
@@ -2322,7 +2325,8 @@ impl AppState {
     }
 
     /// Buffer a message into `recipient`'s bounded inbox. Replace an older
-    /// notice for the same child and kind; otherwise evict FIFO at capacity.
+    /// lifecycle notice for the same child and kind, except question waits;
+    /// otherwise evict FIFO at capacity.
     pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
@@ -4408,11 +4412,16 @@ impl AppState {
                         }
                     }
                     "protocol-question-cleared" if epoch_matches => {
-                        s.awaiting_input = false;
-                        s.question_text = None;
-                        s.question_confident = false;
-                        s.choice_prompt = None;
-                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        let expected = parsed
+                            .get("expected_question_text")
+                            .and_then(|value| value.as_str());
+                        if expected.is_none_or(|text| s.question_text.as_deref() == Some(text)) {
+                            s.awaiting_input = false;
+                            s.question_text = None;
+                            s.question_confident = false;
+                            s.choice_prompt = None;
+                            awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        }
                     }
                     "user-input" => {
                         // User responded — agent will start working
@@ -5121,6 +5130,45 @@ mod tests {
         assert_eq!(messages[0].id, "tuic-auto-b-idle");
         assert_eq!(messages[1].id, "tuic-auto-a-prompt");
         assert_eq!(messages[2].id, "tuic-auto-a-idle");
+    }
+
+    #[test]
+    fn separate_confident_questions_remain_visible_after_state_churn() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for notice in [
+            lifecycle_msg(
+                "child-a",
+                "state_change",
+                "awaiting_input",
+                "first-question",
+            ),
+            lifecycle_msg("child-a", "state_change", "working", "working"),
+            lifecycle_msg(
+                "child-a",
+                "state_change",
+                "awaiting_input",
+                "second-question",
+            ),
+        ] {
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "tuic-auto-first-question",
+                "tuic-auto-working",
+                "tuic-auto-second-question",
+            ],
+            "a later state change must not erase either question"
+        );
     }
 
     #[test]

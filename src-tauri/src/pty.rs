@@ -5531,6 +5531,11 @@ struct ChunkProcessor {
     /// (grok, Codex, …) drives this. True while the last title signalled
     /// awaiting-approval.
     title_awaiting: bool,
+    /// Question raised by Codex's approval title. A later cancellation may
+    /// clear only this question, even if another confident question arrived.
+    codex_approval_question: Option<String>,
+    /// A cancellation row painted since the current Codex approval began.
+    codex_approval_canceled: bool,
     /// Reusable screen snapshot handed to the post-lock consumers
     /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
     /// check and `rearm_awaiting_for_open_dialog`). Retained across chunks so
@@ -5572,6 +5577,8 @@ impl ChunkProcessor {
             last_session_conflict_mark: None,
             last_agent_block_line: None,
             title_awaiting: false,
+            codex_approval_question: None,
+            codex_approval_canceled: false,
             screen_buf: Vec::new(),
         }
     }
@@ -6198,7 +6205,7 @@ impl ChunkProcessor {
         }
 
         if unexpected_alt_screen {
-            let agent = agent_type.unwrap_or_else(|| "unknown".to_string());
+            let agent = agent_type.as_deref().unwrap_or("unknown").to_string();
             let session_id = session_id.to_string();
             std::thread::spawn(move || {
                 let version = crate::agent::detect_agent_binary_sync(agent.clone())
@@ -6266,8 +6273,13 @@ impl ChunkProcessor {
                         // grok's title in default (non-always-approve) mode before removing.
                         let title_awaiting = title.contains("Action Required");
                         if title_awaiting && !self.title_awaiting {
+                            let prompt_text = clean_action_required_title(&title);
+                            if agent_type.as_deref() == Some("codex") {
+                                self.codex_approval_question = Some(prompt_text.clone());
+                                self.codex_approval_canceled = false;
+                            }
                             tuic_events.push(ParsedEvent::Question {
-                                prompt_text: clean_action_required_title(&title),
+                                prompt_text,
                                 confident: true,
                             });
                         }
@@ -6944,6 +6956,69 @@ impl ChunkProcessor {
                     parsed: json.into(),
                 });
             }
+        }
+
+        // Codex can cancel an approval with Esc without emitting a typed line
+        // or protocol busy marker. The title has left Action Required and the
+        // recorded screen shows the cancellation above its ready composer.
+        // Carry the originating prompt so a later, different question cannot
+        // be cleared. Require a newly painted cancellation as well: old ones
+        // remain in the transcript when another approval opens.
+        if agent_type.as_deref() == Some("codex")
+            && self.codex_approval_question.is_some()
+            && changed_rows
+                .iter()
+                .any(|row| row.text.contains("You canceled the request"))
+        {
+            self.codex_approval_canceled = true;
+        }
+        let canceled_codex_approval = if agent_type.as_deref() == Some("codex")
+            && !self.title_awaiting
+            && self.codex_approval_canceled
+            && matches!(
+                screen_activity,
+                AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
+            )
+            && screen_cache.is_some_and(|screen| {
+                screen
+                    .iter()
+                    .any(|row| row.contains("You canceled the request"))
+            })
+            && !events.iter().any(|event| {
+                matches!(
+                    event,
+                    ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
+                )
+            }) {
+            self.codex_approval_question
+                .as_deref()
+                .and_then(|expected| {
+                    state
+                        .session_maps
+                        .session_states
+                        .get(session_id)
+                        .and_then(|session| {
+                            (session.awaiting_input
+                                && session.question_confident
+                                && session.question_text.as_deref() == Some(expected))
+                            .then(|| (expected.to_string(), session.turn_epoch))
+                        })
+                })
+        } else {
+            None
+        };
+        if let Some((expected_question_text, turn_epoch)) = canceled_codex_approval {
+            self.codex_approval_question = None;
+            self.codex_approval_canceled = false;
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: session_id.to_string(),
+                parsed: serde_json::json!({
+                    "type": "protocol-question-cleared",
+                    "expected_question_text": expected_question_text,
+                    "_turn_epoch": turn_epoch,
+                })
+                .into(),
+            });
         }
 
         // Update silence state for fallback question detection.
@@ -8191,23 +8266,28 @@ fn agent_submission_rejection(
     if !submission_ready(state, session_id, human_reply) {
         return Some(("agent_not_ready", "empty"));
     }
-    // The agent IS ready, so anything still parked can be typed right now.
-    // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
-    // already have passed, and nothing else would fire it. Draining here is the
-    // same write the transition would have made, one item per idle window.
-    if state
-        .pending_injections
-        .get(session_id)
-        .is_some_and(|queue| !queue.is_empty())
-    {
-        flush_pending_injections_blocking(state, session_id);
-    }
-    if state
-        .pending_injections
-        .get(session_id)
-        .is_some_and(|queue| !queue.is_empty())
-    {
-        return Some(("queued_commands_pending", "empty"));
+    // A confident question belongs to the human. Its parked automated entries
+    // cannot drain until the answer clears the question, and must not prevent
+    // that answer from reaching the composer.
+    if !(human_reply && blocked_on_confident_question(state, session_id)) {
+        // The agent IS ready, so anything still parked can be typed right now.
+        // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
+        // already have passed, and nothing else would fire it. Draining here is the
+        // same write the transition would have made, one item per idle window.
+        if state
+            .pending_injections
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            flush_pending_injections_blocking(state, session_id);
+        }
+        if state
+            .pending_injections
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            return Some(("queued_commands_pending", "empty"));
+        }
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.
