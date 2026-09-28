@@ -250,6 +250,7 @@ Non-Claude Code MCP clients receive the standard `{worktree_path, branch}` respo
 ## External Worktree Detection
 
 TUICommander monitors `.git/worktrees/` for changes. Worktrees created outside the app (via CLI or other tools) are detected and appear in the sidebar after the next refresh.
+If a session starts in a new sibling worktree before that refresh, TUICommander refreshes its registered repository and places the tab under the new worktree.
 
 ## Branch Switching
 

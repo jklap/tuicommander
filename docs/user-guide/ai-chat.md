@@ -31,6 +31,12 @@ activity and pending permission or form cards use the same ACP stream as desktop
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 
+When ego requests permission or a form response, a subscribed phone receives
+one push linking to that conversation in mobile Chat if the desktop is unfocused or idle. Answering
+on desktop before the notice is delivered suppresses the alert. Repeated
+requests in one conversation share a 30-second push limit. Activity updates
+do not alert the phone.
+
 ## What it is bound to
 
 **A repository and a session, never a terminal.** A turn ego runs outlives any
@@ -45,6 +51,19 @@ beside it lists previous conversations by title, newest first. Selecting one
 loads its history. The last selected conversation is restored after restarting
 TUICommander.
 
+The panel has chat tabs for parallel conversations on the same repository.
+Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
+focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
+browser keeps its own new-tab shortcut. Click a tab to switch, or close it to
+remove it from the panel. Closing a chat tab does not delete ego's conversation:
+the conversation picker can reopen it. Each tab keeps its own transcript and
+unsent composer draft. Open tabs and the selected tab return when the panel is
+hidden and shown or detached into its own window; the detached view replays
+their histories from ego.
+
+An untitled conversation appears with its first prompt or latest activity time;
+its session ID is available in the option tooltip.
+
 When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
 percentage and shows the cumulative cost when ego reports one.
@@ -58,6 +77,16 @@ its own terminals and repositories rather than the default install's.
 
 ## During a turn
 
+Select text in user messages, answers, code blocks, and tool output and use
+`Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
+keyboard focus. It copies the raw message text. Code blocks have their own
+Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
+system browser; file links and plain source paths are resolved by the backend
+and opened in TUICommander's file viewer or editor, as they are from a terminal.
+With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
+`Cmd/Ctrl+F` opens its search, and `Cmd/Ctrl+K` clears the visible history of
+the current tab. Clearing the view does not delete ego's saved conversation.
+
 Paste a PNG, JPEG, GIF or WebP image into the composer to preview it before
 sending. Remove a preview with its close button if you change your mind. An
 image can be sent without text. The composer refuses images when the connected
@@ -66,6 +95,16 @@ in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
+- **Turn markers.** AI Chat hides ego's TUICommander connection acknowledgement,
+  shows `intent:` as a labelled status, and turns a `suggest: [ A | B | C ]`
+  line or trailing token at the end of an answer into reply buttons. Choosing
+  one sends that text as the next prompt.
+  Mentions in ordinary prose and code examples remain in the answer.
+  Sent messages appear once, including when ego streams an echo after a reply
+  button is chosen.
+- **Failed or empty turn.** An ACP prompt error appears in the conversation with
+  the agent's diagnostic. A turn that finishes without an answer says so; the
+  composer becomes available for another prompt.
 - **Tool activity** appears as one collapsed line per turn, with a count,
   observed duration, status and the first two call titles. Expand it to see
   each call's title, kind and status; expand a call to see its output. The
@@ -84,9 +123,14 @@ in total. Text paste works as usual.
   in every connected view; either view can remove an item before ego receives
   it. Stop affects the running turn for every view. The conversation shows a
   queued message as sent only when it actually reaches ego.
-- **Model, reasoning effort and mode** come from the options the session
-  publishes. There is no list of models in TUICommander: the session is asked,
-  and the answer is what the control bar draws. This changes one conversation.
+- **Session settings** are published by the current conversation. The control bar
+  shows the model's short name and the current mode. Its summary shortens before
+  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  control has a tooltip and a name for assistive technology. The settings button opens a dialog with
+  labeled choices and descriptions for every select option ego offers, including
+  reasoning effort and sandbox when available. Changes apply to this conversation
+  and the displayed values follow ego's reply. A rejected change shows its error
+  in the dialog. TUICommander keeps no separate model list.
   The model every *new* run starts from is ego's own default, editable in
   Settings → **AI Chat** (see [Settings](settings.md#ai-chat)).
 
@@ -95,6 +139,8 @@ in total. Text paste works as usual.
 - **Permission.** The buttons are the options ego published, answered with one of
   its own option ids. TUICommander never invents an Allow/Deny pair of its own.
 - **A form.** An elicitation is drawn as a form built from the schema ego sent.
+  A single choice field with one to three values appears as direct answer
+  buttons plus **Cancel**; larger or more complex forms keep their fields.
   Only `form` mode is ever drawn; any other mode is declined before it reaches
   the panel.
 

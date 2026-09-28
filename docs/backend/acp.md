@@ -104,6 +104,9 @@ settles that turn and records the attachment as `paused`. The AI Chat control
 bar therefore keeps Resume available until `_ego/resume` reports `running`.
 Other prompt errors settle the attachment to `idle`, even if their message
 mentions a pause; the numeric error code is the state signal.
+Each prompt error also emits `turnFailed` with the agent's diagnostic and the
+resulting attachment state. The event carries the turn ID in its envelope so
+every subscribed view can show the failure in the conversation.
 
 ## Two transports, one set of judgements
 

@@ -3,20 +3,28 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockInvoke, mockRpc } = vi.hoisted(() => ({
+const { mockInvoke, mockRpc, mockEmitTo } = vi.hoisted(() => ({
 	mockInvoke: vi.fn(),
 	mockRpc: vi.fn(),
+	mockEmitTo: vi.fn().mockResolvedValue(undefined),
 }));
 
 let fileContent = "";
 
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
+vi.mock("@tauri-apps/api/event", () => ({
+	emitTo: mockEmitTo,
+	listen: vi.fn().mockResolvedValue(vi.fn()),
+	emit: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../hooks/initPanelWindow", () => ({ initPanelWindow: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../transport")>()),
 	rpc: mockRpc,
 }));
 
 import { MarkdownTab } from "../../components/MarkdownTab/MarkdownTab";
+import { renderPanelMode } from "../../panelRouter";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type FileTab, mdTabsStore } from "../../stores/mdTabs";
@@ -31,6 +39,7 @@ describe("MarkdownTab agent review actions", () => {
 		setToastBellMirrorResolver(() => false);
 		mockInvoke.mockReset();
 		mockRpc.mockReset();
+		mockEmitTo.mockClear();
 		mockInvoke.mockImplementation((command: string) => {
 			if (command === "read_file" || command === "read_external_file") {
 				return Promise.resolve(fileContent);
@@ -45,12 +54,70 @@ describe("MarkdownTab agent review actions", () => {
 	});
 
 	afterEach(() => {
+		window.history.replaceState({}, "", "/");
 		setToastBellMirrorResolver(() => true);
 		cleanup();
 		vi.restoreAllMocks();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		mdTabsStore.clearAll();
+	});
+
+	it("renders a detached Markdown document from its file path and refreshes changed disk content", async () => {
+		fileContent = "# First version";
+		window.history.replaceState(
+			{},
+			"",
+			"/?mode=panel&panel=markdown-tab-md-1&tabId=md-1&filePath=%2FUsers%2Fboss%2Freport.md&fileName=report.md",
+		);
+		const { container } = render(() => renderPanelMode());
+		await waitFor(() => expect(container.textContent).toContain("First version"));
+		fileContent = "# Revised version";
+		fireEvent.focus(window);
+		await waitFor(() => expect(container.textContent).toContain("Revised version"));
+	});
+
+	it("rejects a detached document URL whose tab id does not match its window", () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/?mode=panel&panel=markdown-tab-md-1&tabId=md-2&filePath=%2FUsers%2Fboss%2Freport.md&fileName=report.md",
+		);
+		const { container } = render(() => renderPanelMode());
+		expect(container.textContent).toContain("Invalid Markdown document");
+		expect(mockInvoke).not.toHaveBeenCalledWith("read_external_file", expect.anything());
+	});
+
+	it("opens a linked document from the detached window in the main window", async () => {
+		fileContent = "[next](./next.md)";
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "resolve_markdown_link"
+					? {
+							kind: "file",
+							absolute_path: "/repo/next.md",
+							open_path: "next.md",
+							is_directory: false,
+							same_document: false,
+						}
+					: fileContent,
+			),
+		);
+		window.history.replaceState(
+			{},
+			"",
+			"/?mode=panel&panel=markdown-tab-md-1&tabId=md-1&repoPath=%2Frepo&fsRoot=%2Frepo&filePath=review.md&fileName=review.md",
+		);
+		const { container } = render(() => renderPanelMode());
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		fireEvent.click(link);
+		await waitFor(() =>
+			expect(mockEmitTo).toHaveBeenCalledWith("main", "panel-action", expect.objectContaining({ action: "open-link" })),
+		);
 	});
 
 	function addAgent(name: string, sessionId: string, repoPath: string) {
@@ -317,7 +384,14 @@ describe("MarkdownTab agent review actions", () => {
 		mockInvoke.mockImplementation((command: string) =>
 			Promise.resolve(
 				command === "resolve_markdown_link"
-					? { kind: "file", absolute_path: absolute, open_path: relative, is_directory: false, same_document: false, line }
+					? {
+							kind: "file",
+							absolute_path: absolute,
+							open_path: relative,
+							is_directory: false,
+							same_document: false,
+							line,
+						}
 					: fileContent,
 			),
 		);
@@ -349,7 +423,13 @@ describe("MarkdownTab agent review actions", () => {
 				command === "resolve_markdown_link"
 					? args.href === "./gone.rs"
 						? { kind: "missing", path: "./gone.rs" }
-						: { kind: "file", absolute_path: "/repo/docs/subdir", open_path: "docs/subdir", is_directory: true, same_document: false }
+						: {
+								kind: "file",
+								absolute_path: "/repo/docs/subdir",
+								open_path: "docs/subdir",
+								is_directory: true,
+								same_document: false,
+							}
 					: fileContent,
 			),
 		);
@@ -377,7 +457,13 @@ describe("MarkdownTab agent review actions", () => {
 		mockInvoke.mockImplementation((command: string) =>
 			Promise.resolve(
 				command === "resolve_markdown_link"
-					? { kind: "file", absolute_path: "/secret.rs", open_path: "/secret.rs", is_directory: false, same_document: false }
+					? {
+							kind: "file",
+							absolute_path: "/secret.rs",
+							open_path: "/secret.rs",
+							is_directory: false,
+							same_document: false,
+						}
 					: fileContent,
 			),
 		);
@@ -398,7 +484,13 @@ describe("MarkdownTab agent review actions", () => {
 		mockInvoke.mockImplementation((command: string) =>
 			Promise.resolve(
 				command === "resolve_markdown_link"
-					? { kind: "file", absolute_path: "/secret.rs", open_path: "/secret.rs", is_directory: false, same_document: false }
+					? {
+							kind: "file",
+							absolute_path: "/secret.rs",
+							open_path: "/secret.rs",
+							is_directory: false,
+							same_document: false,
+						}
 					: fileContent,
 			),
 		);
@@ -411,15 +503,15 @@ describe("MarkdownTab agent review actions", () => {
 		});
 		const open = vi.spyOn(editorTabsStore, "add").mockReturnValue("opened");
 		fireEvent.click(link);
-		await waitFor(() =>
-			expect(open).toHaveBeenCalledWith("/repo", "/secret.rs", undefined, { fsRoot: "/repo" }),
-		);
+		await waitFor(() => expect(open).toHaveBeenCalledWith("/repo", "/secret.rs", undefined, { fsRoot: "/repo" }));
 	});
 
 	it("scrolls a same-document heading without probing the filesystem", async () => {
 		fileContent = "# Target Heading\n\n[go](#target-heading)";
 		mockInvoke.mockImplementation((command: string) =>
-			Promise.resolve(command === "resolve_markdown_link" ? { kind: "heading", anchor: "target-heading" } : fileContent),
+			Promise.resolve(
+				command === "resolve_markdown_link" ? { kind: "heading", anchor: "target-heading" } : fileContent,
+			),
 		);
 		const scroll = vi.fn();
 		const original = HTMLElement.prototype.scrollIntoView;
@@ -472,7 +564,13 @@ describe("MarkdownTab agent review actions", () => {
 		mockInvoke.mockImplementation((command: string) =>
 			Promise.resolve(
 				command === "resolve_markdown_link"
-					? { kind: "file", absolute_path: "/repo/docs/next.md", open_path: "docs/next.md", is_directory: false, same_document: false }
+					? {
+							kind: "file",
+							absolute_path: "/repo/docs/next.md",
+							open_path: "docs/next.md",
+							is_directory: false,
+							same_document: false,
+						}
 					: fileContent,
 			),
 		);
@@ -492,7 +590,14 @@ describe("MarkdownTab agent review actions", () => {
 		fileContent = "[next](./next.md#target-heading)";
 		mockInvoke.mockImplementation((command: string, args: { file?: string }) => {
 			if (command === "resolve_markdown_link")
-				return Promise.resolve({ kind: "file", absolute_path: "/repo/docs/next.md", open_path: "docs/next.md", is_directory: false, same_document: false, anchor: "target-heading" });
+				return Promise.resolve({
+					kind: "file",
+					absolute_path: "/repo/docs/next.md",
+					open_path: "docs/next.md",
+					is_directory: false,
+					same_document: false,
+					anchor: "target-heading",
+				});
 			return Promise.resolve(args.file === "docs/next.md" ? "# Target Heading" : fileContent);
 		});
 		const scroll = vi.fn();

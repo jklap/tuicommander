@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **New worktree tabs** — A session spawned before its worktree appears in the repository list moves under the registered repository after a refresh, without a misleading Register toast.
+
+- **AI Chat sent messages** — A sent prompt appears once when ego streams it back in chunks, including replies chosen from suggestion buttons.
+
+- **AI Chat controls** — Pause, Resume, Compact and New use accessible icon buttons in one row, with a shortened model name that yields space to the actions.
+
+- **MCP tool search** — `search_tools` again ranks `repo` first for GitHub PR and CI queries; its description names the PR/CI summary that `repo action=status` returns.
+
+- **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
+
+- **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.
+
+- **AI Chat session settings** — The control bar shows the current model and mode. A settings dialog labels every option ego offers and reports rejected changes.
+
+- **AI Chat parity** — Select or copy transcript text and code, open web and file links through the terminal's handlers, and keep parallel ACP conversations in chat tabs. Finished tool calls stop pulsing even when ego sends no final tool update.
+
+- **AI Chat permission alerts** — A pending ego permission or form request can alert a subscribed phone when the desktop is away. The notification opens the matching mobile conversation; answered requests and ordinary activity do not alert, and each conversation has a 30-second limit.
+
+- **AI Chat failed turns** — ACP prompt diagnostics and empty replies appear in the transcript; small choice requests use direct buttons, and untitled conversations have readable picker labels.
+
+- **Push-to-talk hallucination filter** — A bare “Grazie a tutti.” is discarded, while dictated instructions containing those words are retained.
+
 - **Managed child questions** — Separate questions remain in the parent's inbox after earlier answers and later state updates.
 
 - **Browser agent resume verification** — HTTP verification carries the agent PID and saved profile environment, so sessions under a non-default Claude, Codex or Gemini profile are checked in the correct store.

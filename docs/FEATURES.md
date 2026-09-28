@@ -157,6 +157,7 @@ per cell and the configured history limit still apply.
 - Terminals report their current working directory via OSC 7 escape sequences
 - Parsed in the Rust backend from PTY output and stored per-session as `session_cwd`
 - When a terminal's CWD falls inside a known worktree path, the session is automatically reassigned to the correct branch in the sidebar
+- Sessions spawned into a new sibling worktree refresh their registered repository before final tab placement
 - Enables accurate branch association even when the user `cd`s into a different worktree from a single terminal
 
 ### 1.12 Kitty Keyboard Protocol
@@ -334,6 +335,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.3 Markdown Panel (`Cmd+Shift+M`)
 - Renders `.md` and `.mdx` files with syntax-highlighted code blocks
+- A Markdown document tab, including one opened through `tuic://open`, can be detached from its tab context menu into a resizable window. Its tab remains in the main window; selecting it focuses the document window, and closing that window returns the document to the tab. The detached viewer rereads the file on focus and while open.
 - Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and `file:line` or `file:line:column` targets work without navigating the WebView; web and email links use the system handler
 - File list from repository's markdown files
 - Clickable file paths in terminal open `.md` files here
@@ -350,7 +352,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **View / edit / delete**: commented passages and blocks are highlighted; hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers. Inline comments wrap their source text with `tweak:begin` / `tweak:end`; block comments use a `tweak:block` marker immediately before the target block, while list-item comments use a `tweak:item` marker within that item. Both forms are invisible to standard Markdown renderers, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **Save failures**: Markdown files opened by absolute path use the external file writer. A failed comment save shows an error toast and keeps the comment popover and draft open for retry.
-  - **LLM-friendly**: the first comment added to a file prepends a one-time convention header explaining the format, so an AI agent reading the file understands it without external context — the intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
+  - **LLM-friendly**: the first comment added to a file prepends an invisible HTML-comment header explaining inline, block, and list-item markers, so an AI agent reading the raw file understands them without external context. Existing files with the older header remain readable and editable. The intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
@@ -569,6 +571,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Shared `PanelWindowControls` component provides consistent detach/reattach/close buttons across all panels
 - Closing a detached window automatically restores the panel to the main window
 - Tab bar "Detach to Window" context menu entry for per-tab detach (PTY session stays alive in Rust)
+- Markdown document tabs use the same panel-window commands with a window per document; their file path is passed to the detached viewer, which reads from disk and routes linked files back to the main window.
 - Generic lifecycle functions: `togglePanel()`, `detachPanel()`, `reattachPanel()` replace per-panel callsites
 - `uiStore.detachedPanels` map tracks all detached panels (replaces former `aiChatDetached` boolean)
 - Disk-backed panels hand over through their store, not through a live link: the detached window is opened with the params from `detachParams()` and reads its own state on mount, and the main window re-reads it in `onReattach()` when the detached copy closes or reattaches
@@ -843,22 +846,42 @@ one configured ego binary and speaks ACP to it, per
   main window meanwhile
 - The conversation view loads on first opening, including in a detached window;
   the desktop terminal is ready before this optional view loads
+- Multiple chat tabs keep separate ACP sessions, transcripts and composer drafts
+  within one panel. Open tabs and the selected tab survive hide/show and detach;
+  closing a tab leaves its durable ego conversation available in the picker.
+  The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
+  mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
+- Transcript text and tool output are selectable. User and assistant messages,
+  tool outputs and code blocks have copy actions using the terminal clipboard
+  adapter. Web links open externally and file paths use the terminal file opener
+  after backend resolution. Transcript focus gives `Cmd/Ctrl+A` (select this
+  transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
   replaced whole each time it changes
+- The connection acknowledgement is hidden; `intent:` is shown as turn status;
+  bracketed `suggest:` items on their own line or at the end of an answer become
+  buttons that send the selected reply. A sent reply appears once even when ego
+  echoes it in chunks. Message Copy appears on hover or keyboard focus
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
+- Untitled sessions show a readable prompt or activity-time label in the picker;
+  failed and empty turns show a message in the conversation
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
 - **Permission requests** are answered with one of the option ids ego published.
-  **Elicitations** are drawn as a form, and only in `form` mode — the client
+  Small single-choice **elicitations** use direct answer buttons; other elicitations
+  are drawn as a form, and only in `form` mode — the client
   declines every other mode before it reaches a person
 - While AI Chat is hidden, its status-bar toggle counts pending permissions and
   forms. Each new question produces one desktop notification, cleared when the
   question settles
-- **Model, reasoning effort and mode** come from the options the session
-  publishes through `set_config_option`. TUICommander holds no model list
+- **Session settings** come from the options the session publishes through
+  `set_config_option`. The one-row control bar summarizes the model's short name
+  and mode; Pause, Resume, Compact and New use named icon buttons. A dialog labels
+  every select option and shows its description and current choice. Errors from
+  rejected changes appear in the dialog. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each
   extension
 - **A stream gap is a state, not a skip**: the panel says it missed part of the
@@ -1941,11 +1964,13 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - `PushManager.subscribe()` flow with user gesture (click handler) for iOS/Firefox
 - Push subscriptions stored in `push_subscriptions.json`, survive restarts
 - API endpoints: `POST/DELETE /api/push/subscribe`, `GET /api/push/vapid-key`, `POST /api/push/test`
-- Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, and `PtyExit` (session completed). A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
+- Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, `PtyExit` (session completed), and a still-pending ACP permission or form elicitation. A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
 - Deep link: notification click navigates to `/mobile/session/<id>`, opening the specific session detail
+- ACP interaction pushes link to `/mobile?repo=…&session=…`, selecting the correct Chat conversation; answered requests and ordinary ACP activity do not push
 - Visible notifications use one tag per session, so a new question replaces only that session's earlier notification; generic alerts keep a separate shared tag
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
 - Question and completion pushes share one 30-second limit per session
+- ACP interaction pushes use the same 30-second limit for each conversation
 - A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed

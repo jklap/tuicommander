@@ -180,12 +180,13 @@ export interface AcpConnectionSnapshot {
 // ---------------------------------------------------------------------------
 
 export interface AcpSessionConfigSelectOption {
-	id: string;
+	value: string;
 	name: string;
 	description?: string;
 }
 
 export interface AcpSessionConfigSelectGroup {
+	group: string;
 	name: string;
 	options: AcpSessionConfigSelectOption[];
 }
@@ -299,6 +300,7 @@ export type AcpClientEvent =
 	| { kind: "promptQueueChanged"; queuedPrompts: AcpQueuedPrompt[] }
 	| { kind: "sessionUpdate"; update: AcpSessionUpdate }
 	| { kind: "turnSettled"; stopReason: string; usage: unknown | null }
+	| { kind: "turnFailed"; message: string; state: AcpAttachmentState }
 	| { kind: "permissionRequested"; requestId: AcpHostRequestId; request: AcpRequestPermissionRequest }
 	| { kind: "permissionSettled"; requestId: AcpHostRequestId; outcome: AcpRequestPermissionOutcome }
 	| { kind: "elicitationRequested"; requestId: AcpHostRequestId; request: AcpCreateElicitationRequest }

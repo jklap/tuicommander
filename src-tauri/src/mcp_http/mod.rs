@@ -2994,6 +2994,81 @@ mod tests {
         );
     }
 
+    // Catches: overlapping valid uploads both promote a binary or leave staging files behind.
+    #[tokio::test]
+    async fn concurrent_remote_updates_reject_the_second_upload_without_leaking_staging() {
+        use futures_util::StreamExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"old executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = build_remote_router(Arc::new(state));
+
+        let (first_chunk_sent, first_chunk_received) = tokio::sync::oneshot::channel();
+        let (release_first, first_released) = tokio::sync::oneshot::channel();
+        let first_body = futures_util::stream::once(async move {
+            let _ = first_chunk_sent.send(());
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"first "))
+        })
+        .chain(futures_util::stream::once(async move {
+            first_released.await.unwrap();
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
+        }));
+        let mut first = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "07c360a6be1a9a97d1dfd58d0066dda36be2c80f70a229446401b5c69273af2c",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from_stream(first_body))
+            .unwrap();
+        first
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let first_task = tokio::spawn(app.clone().oneshot(first));
+        first_chunk_received.await.unwrap();
+
+        let mut second = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "a21e1650d755eeec3aa7b80224c1513cd4b0bae02776a4b9931432b52b42d385",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from("second replacement"))
+            .unwrap();
+        second
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5556,
+            ))));
+        let response = app.oneshot(second).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(std::fs::read(&executable).unwrap(), b"old executable");
+
+        release_first.send(()).unwrap();
+        assert_eq!(
+            first_task.await.unwrap().unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(std::fs::read(&executable).unwrap(), b"first replacement");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
     #[tokio::test]
     async fn two_local_remote_routers_isolate_update_and_restart_signal() {
         let directory = tempfile::tempdir().unwrap();

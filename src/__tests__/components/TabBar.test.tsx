@@ -59,6 +59,7 @@ import { settingsStore, type TabOrderingMode } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
 
 describe("TabBar", () => {
@@ -87,6 +88,9 @@ describe("TabBar", () => {
 			editorTabsStore.remove(id);
 		}
 		tabOrderingStore.clear();
+		for (const panelId of Object.keys(uiStore.state.detachedPanels)) {
+			if (panelId.startsWith("markdown-tab-")) uiStore.clearDetached(panelId);
+		}
 		settingsStore.setTabOrderingMode("grouped-by-type");
 		// Deactivate global workspace
 		if (globalWorkspaceStore.isActive()) {
@@ -1464,6 +1468,48 @@ describe("TabBar", () => {
 	});
 
 	describe("context menu", () => {
+		it("focuses the detached Markdown window instead of selecting a second copy", () => {
+			const id = mdTabsStore.add("/repo", "notes.md");
+			uiStore.setDetached(`markdown-tab-${id}`, `panel-markdown-tab-${id}`);
+			const onSelect = vi.fn();
+			const onFocusDetached = vi.fn();
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={onSelect}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+					onFocusDetachedTab={onFocusDetached}
+				/>
+			));
+			fireEvent.click(container.querySelector(`[data-tab-id="${id}"]`)!);
+			expect(onFocusDetached).toHaveBeenCalledExactlyOnceWith(id);
+			expect(onSelect).not.toHaveBeenCalled();
+		});
+
+		it("offers Detach to Window for a tuic://open Markdown document outside registered repos", () => {
+			const id = mdTabsStore.addMcpFile("digest-1", "", "/Users/boss/Gits/.tmp/report.md", false, false);
+			const onDetachTab = vi.fn();
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+					onDetachTab={onDetachTab}
+				/>
+			));
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find(
+				(node) => node.querySelector(".label")?.textContent === "Detach to Window",
+			);
+			expect(item).toBeDefined();
+			fireEvent.click(item!);
+			expect(onDetachTab).toHaveBeenCalledExactlyOnceWith(id);
+		});
+
 		it("right-click opens context menu", () => {
 			addTerminal({ name: "Tab 1" });
 

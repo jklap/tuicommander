@@ -80,23 +80,65 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
     // explicit CLI flags or per-command environment.
     cmd.env_remove("NO_COLOR");
 
-    // `make dev` launches through Cargo/mbx, which passes TUICommander's own
-    // build context to the app. A PTY working in another repository must not
-    // compile into this repository's target or use its package/build paths.
+    // `make dev` launches through Cargo/mbx. These keys describe TUIC's build,
+    // not the PTY's next build: Cargo's executable/package metadata (CARGO,
+    // CARGO_BIN_NAME, CARGO_CRATE_NAME, CARGO_PRIMARY_PACKAGE, CARGO_MANIFEST_*,
+    // CARGO_PKG_*, CARGO_BIN_EXE_*, CARGO_FEATURE_*, CARGO_CFG_*), output and
+    // jobserver paths (CARGO_TARGET_DIR, CARGO_TARGET_TMPDIR, OUT_DIR,
+    // CARGO_MAKEFLAGS), compiler settings (CARGO_INCREMENTAL,
+    // CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS, RUSTC, RUSTC_LINKER, RUSTC_WRAPPER,
+    // RUSTC_WORKSPACE_WRAPPER, RUSTDOC),
+    // build-script metadata (HOST, TARGET, PROFILE, NUM_JOBS, OPT_LEVEL, DEBUG,
+    // HOST_CC, HOST_CXX, DEP_*), and mbx's MBX_* session state. Keep user
+    // preferences such as CARGO_HOME.
     for key in [
+        "CARGO",
         "CARGO_TARGET_DIR",
+        "CARGO_TARGET_TMPDIR",
         "CARGO_MANIFEST_DIR",
         "CARGO_MANIFEST_PATH",
+        "CARGO_MANIFEST_LINKS",
+        "CARGO_PRIMARY_PACKAGE",
+        "CARGO_BIN_NAME",
+        "CARGO_CRATE_NAME",
+        "CARGO_MAKEFLAGS",
+        "CARGO_INCREMENTAL",
+        "CARGO_ENCODED_RUSTFLAGS",
         "OUT_DIR",
+        "RUSTFLAGS",
+        "RUSTC",
+        "RUSTC_LINKER",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
         "RUSTDOC",
+        "HOST",
+        "TARGET",
+        "PROFILE",
+        "NUM_JOBS",
+        "OPT_LEVEL",
+        "DEBUG",
+        "HOST_CC",
+        "HOST_CXX",
     ] {
         cmd.env_remove(key);
     }
-    let package_keys: Vec<String> = cmd
+    let build_keys: Vec<String> = cmd
         .iter_full_env_as_str()
-        .filter_map(|(key, _)| key.starts_with("CARGO_PKG_").then(|| key.to_owned()))
+        .filter_map(|(key, _)| {
+            [
+                "CARGO_PKG_",
+                "CARGO_BIN_EXE_",
+                "CARGO_FEATURE_",
+                "CARGO_CFG_",
+                "DEP_",
+                "MBX_",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+            .then(|| key.to_owned())
+        })
         .collect();
-    for key in package_keys {
+    for key in build_keys {
         cmd.env_remove(key);
     }
 }

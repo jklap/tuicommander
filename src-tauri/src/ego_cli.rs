@@ -179,7 +179,7 @@ pub(crate) async fn run(program: &Path, args: &[String]) -> Result<String, EgoCl
         });
     }
 
-    Ok(clip(&output.stdout))
+    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
 /// The ego binary this host may launch, as configured right now.
@@ -626,6 +626,16 @@ mod tests {
         let (program, args) = shell("echo hello".to_string());
         let stdout = run(&program, &args).await.expect("the shell must succeed");
         assert_eq!(stdout, "hello");
+    }
+
+    // A successful answer is parsed, not displayed: `ego models --json` prints
+    // ~10 KB, and clipping it to the failure-report cap broke the JSON.
+    #[tokio::test]
+    async fn a_long_successful_answer_is_returned_whole() {
+        let long = "x".repeat(MAX_CAPTURED * 3);
+        let (program, args) = shell(format!("echo {long}"));
+        let stdout = run(&program, &args).await.expect("the shell must succeed");
+        assert_eq!(stdout, long);
     }
 
     // The criterion this module exists for: a failure is reported with what ego
