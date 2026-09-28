@@ -125,6 +125,14 @@ pub(crate) fn install(state: &Arc<AppState>) {
 }
 
 impl McpOverAcpHost for AcpMcpHost {
+    fn has_inbox_subscriber(&self, peer_id: &str) -> bool {
+        self.connections.lock().values().any(|link| {
+            link.peer_id.as_deref() == Some(peer_id)
+                && !link.forwarder.is_finished()
+                && link.subscriptions.lock().contains(INBOX_URI)
+        })
+    }
+
     fn connect(&self, peer_id: Option<&str>, notify: McpNotify) -> Result<String, McpOverAcpError> {
         let state = self.state()?;
         let id = uuid::Uuid::new_v4().to_string();
