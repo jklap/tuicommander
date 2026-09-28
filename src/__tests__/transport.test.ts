@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildHttpUrl,
@@ -21,40 +22,50 @@ function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
 }
 
-function extractBalancedObject(source: string, marker: string): string {
-	const markerIndex = source.indexOf(marker);
-	if (markerIndex < 0) {
-		throw new Error(`Marker not found: ${marker}`);
-	}
-	const start = source.indexOf("{", markerIndex);
-	if (start < 0) {
-		throw new Error(`Object start not found after marker: ${marker}`);
-	}
-
-	let depth = 0;
-	for (let index = start; index < source.length; index += 1) {
-		const char = source[index];
-		if (char === "{") depth += 1;
-		if (char === "}") {
-			depth -= 1;
-			if (depth === 0) return source.slice(start, index + 1);
-		}
-	}
-
-	throw new Error(`Object end not found after marker: ${marker}`);
+function findNodes<T extends ts.Node>(root: ts.Node, guard: (node: ts.Node) => node is T): T[] {
+	const found: T[] = [];
+	const visit = (node: ts.Node) => {
+		if (guard(node)) found.push(node);
+		ts.forEachChild(node, visit);
+	};
+	visit(root);
+	return found;
 }
 
-function extractCommandTableCommands(): Set<string> {
-	const transportSource = readRepoFile("src/transport.ts");
-	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
-	// Anchor on the single tab of a top-level key. `\s*` also matched nested
-	// `body: {` lines, which put a phantom "body" command in the set.
+function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
+	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
+	const declaration = sourceFile.statements
+		.filter(ts.isVariableStatement)
+		.flatMap((statement) => [...statement.declarationList.declarations])
+		.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === "COMMAND_TABLE");
+	let value = declaration?.initializer;
+	while (value && !ts.isObjectLiteralExpression(value)) {
+		if (ts.isParenthesizedExpression(value)) value = value.expression;
+		else if (ts.isConditionalExpression(value)) value = value.whenFalse;
+		else if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.CommaToken) value = value.right;
+		else throw new Error("COMMAND_TABLE initializer is not an object");
+	}
+	if (!value) throw new Error("COMMAND_TABLE initializer not found");
 	return new Set(
-		Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (match) => match[1]).filter(
-			(command) => command !== undefined,
-		),
+		value.properties
+			.filter(ts.isPropertyAssignment)
+			.map((property) => property.name)
+			.filter(ts.isIdentifier)
+			.map((name) => name.text),
 	);
 }
+
+describe("COMMAND_TABLE source scan", () => {
+	it("finds space-indented commands without treating a nested object key as a command", () => {
+		const source = `const COMMAND_TABLE = {
+  first_command: { map: () => ({ body: {
+    nested_key: {}
+  } }) },
+  second_command: { map: () => ({ method: "GET" }) },
+};`;
+		expect(extractCommandTableCommands(source)).toEqual(new Set(["first_command", "second_command"]));
+	});
+});
 
 function extractRegisteredTauriCommands(): Set<string> {
 	const libSource = readRepoFile("src-tauri/src/lib.rs");
@@ -114,23 +125,40 @@ function collectFrontendSources(): { path: string; source: string }[] {
  *   - `transport.onEvent("foo")`, which TauriTransport expands to
  *     `pty-foo-${sessionId}` (canvasTerminalTransport.ts)
  */
-function extractSubscribedPtyEvents(): Map<string, string[]> {
+function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<string, string[]> {
 	const subscribed = new Map<string, string[]>();
 	const add = (name: string, path: string) => {
 		const where = subscribed.get(name) ?? [];
 		where.push(path.replace(`${process.cwd()}/`, ""));
 		subscribed.set(name, where);
 	};
-	for (const { path, source } of collectFrontendSources()) {
-		for (const match of source.matchAll(/listen(?:<[^>]*>)?\(\s*`(pty-[a-z0-9-]+?)-\$\{/g)) {
-			add(match[1], path);
-		}
-		for (const match of source.matchAll(/\.onEvent\(\s*"([a-z0-9-]+)"/g)) {
-			add(`pty-${match[1]}`, path);
+	for (const { path, source } of sources) {
+		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+		for (const call of findNodes(file, ts.isCallExpression)) {
+			const argument = call.arguments[0];
+			if (argument && ts.isIdentifier(call.expression) && call.expression.text === "listen") {
+				for (const template of findNodes(argument, ts.isTemplateExpression)) {
+					const eventName = /^(pty-[a-z0-9-]+)-$/.exec(template.head.text)?.[1];
+					if (eventName) add(eventName, path);
+				}
+			}
+			if (argument && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "onEvent") {
+				for (const name of findNodes(argument, ts.isStringLiteral)) {
+					if (/^[a-z0-9-]+$/.test(name.text)) add(`pty-${name.text}`, path);
+				}
+			}
 		}
 	}
 	return subscribed;
 }
+
+describe("PTY event source scan", () => {
+	it("finds the activity listener when instrumentation wraps its template argument", () => {
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
+		const source = "listen(mutant ? `` : (coverage(), `pty-activity-${sessionId}`), () => {});";
+		expect(extractSubscribedPtyEvents([{ path: "src/transport.ts", source }]).has("pty-activity")).toBe(true);
+	});
+});
 
 describe("transport", () => {
 	/**
@@ -2811,29 +2839,71 @@ describe("transport", () => {
 	 * source instead — same rationale as `canvasTerminalMountGuards.test.ts`.
 	 */
 	describe("rpc() desktop short-circuit", () => {
-		const source = readRepoFile("src/transport.ts");
+		const source = ts.createSourceFile("transport.ts", readRepoFile("src/transport.ts"), ts.ScriptTarget.Latest, true);
+		const functionNamed = (name: string) =>
+			findNodes(source, ts.isFunctionDeclaration).find((node) => node.name?.text === name);
+		const callNamed = (node: ts.Node, name: string) =>
+			findNodes(node, ts.isCallExpression).some(
+				(call) => ts.isIdentifier(call.expression) && call.expression.text === name,
+			);
 
 		it("returns to rpcImpl before reaching isIdempotentRpc's HTTP-table lookup", () => {
-			const start = source.indexOf("export function rpc<T>(");
-			expect(start).toBeGreaterThan(-1);
-			const end = source.indexOf("/** Cached after the first resolution", start);
-			expect(end).toBeGreaterThan(start);
-			const body = source.slice(start, end);
-			const shortCircuit = body.indexOf("!connectionId && isTauri()");
-			const idempotentCheck = body.indexOf("isIdempotentRpc(command, args)");
-			expect(shortCircuit).toBeGreaterThan(-1);
-			expect(idempotentCheck).toBeGreaterThan(-1);
-			expect(shortCircuit).toBeLessThan(idempotentCheck);
+			const rpc = functionNamed("rpc");
+			expect(rpc?.body).toBeDefined();
+			const shortCircuit = findNodes(rpc!.body!, ts.isIfStatement).find(
+				(statement) =>
+					findNodes(statement.expression, ts.isBinaryExpression).some(
+						(expression) =>
+							expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+							findNodes(expression.left, ts.isPrefixUnaryExpression).some(
+								(prefix) =>
+									prefix.operator === ts.SyntaxKind.ExclamationToken &&
+									ts.isIdentifier(prefix.operand) &&
+									prefix.operand.text === "connectionId",
+							) &&
+							callNamed(expression.right, "isTauri"),
+					) &&
+					findNodes(statement.thenStatement, ts.isReturnStatement).some(
+						(statement) => statement.expression && callNamed(statement.expression, "rpcImpl"),
+					),
+			);
+			const idempotentCheck = findNodes(rpc!.body!, ts.isCallExpression).find(
+				(call) => ts.isIdentifier(call.expression) && call.expression.text === "isIdempotentRpc",
+			);
+			expect(shortCircuit).toBeDefined();
+			expect(idempotentCheck).toBeDefined();
+			expect(shortCircuit!.getEnd()).toBeLessThan(idempotentCheck!.getStart(source));
 		});
 
 		it("caches the @tauri-apps/api/core import instead of re-importing it on every call", () => {
-			const start = source.indexOf("async function rpcImpl<T>(");
-			expect(start).toBeGreaterThan(-1);
-			const end = source.indexOf("const mapping = mapCommandToHttp(command, args);", start);
-			expect(end).toBeGreaterThan(start);
-			const body = source.slice(start, end);
-			expect(body).toMatch(/if \(!cachedTauriInvoke\)/);
-			expect(body).toMatch(/cachedTauriInvoke<T>\(command, args\)/);
+			const rpcImpl = functionNamed("rpcImpl");
+			expect(rpcImpl?.body).toBeDefined();
+			const cacheGuard = findNodes(rpcImpl!.body!, ts.isIfStatement).find(
+				(statement) =>
+					findNodes(statement.expression, ts.isPrefixUnaryExpression).some(
+						(prefix) =>
+							prefix.operator === ts.SyntaxKind.ExclamationToken &&
+							ts.isIdentifier(prefix.operand) &&
+							prefix.operand.text === "cachedTauriInvoke",
+					) &&
+					findNodes(statement.thenStatement, ts.isCallExpression).some(
+						(call) =>
+							call.expression.kind === ts.SyntaxKind.ImportKeyword &&
+							call.arguments[0] &&
+							ts.isStringLiteral(call.arguments[0]) &&
+							call.arguments[0].text === "@tauri-apps/api/core",
+					),
+			);
+			const cachedInvoke = findNodes(rpcImpl!.body!, ts.isCallExpression).find(
+				(call) =>
+					ts.isIdentifier(call.expression) &&
+					call.expression.text === "cachedTauriInvoke" &&
+					call.typeArguments?.[0]?.getText(source) === "T" &&
+					call.arguments[0]?.getText(source) === "command" &&
+					call.arguments[1]?.getText(source) === "args",
+			);
+			expect(cacheGuard).toBeDefined();
+			expect(cachedInvoke).toBeDefined();
 		});
 
 		it("still resolves desktop RPCs via the cached invoke reference (regression)", async () => {
