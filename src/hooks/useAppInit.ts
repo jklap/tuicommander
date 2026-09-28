@@ -25,7 +25,7 @@ import type { RepoChangeKind, SavedTerminal } from "../types";
 import { classifyFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
-import { unregisteredRepoRootFor } from "../utils/repoOwnership";
+import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -202,6 +202,7 @@ function assignSessionToRepoBranch(
 	terminalId: string,
 	cwd: string | null,
 	registerRepo: AppInitDeps["registerRepo"],
+	refreshAllBranchStats: AppInitDeps["refreshAllBranchStats"],
 ): void {
 	const owner = resolveRepoOwner(cwd);
 
@@ -244,6 +245,17 @@ function assignSessionToRepoBranch(
 	// Which repo the user would have to register to fix this. Without it the
 	// warning named only the symptom.
 	const unregisteredRoot = unregisteredRepoRootFor(cwd);
+	const registeredRoot = unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
+	if (registeredRoot) {
+		// A just-created sibling worktree can arrive before the repo's worktree
+		// list does. Refresh the registered repo and move this parked tab home
+		// once the new workspace is known; registration cannot help here.
+		void Promise.resolve()
+			.then(() => refreshAllBranchStats(registeredRoot))
+			.then(() => reconcileTerminalOwnership(terminalId))
+			.catch((err) => appLogger.warn("app", `Failed to refresh worktrees for ${registeredRoot}`, err));
+		return;
+	}
 	appLogger.warn(
 		"app",
 		`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
@@ -592,7 +604,7 @@ export async function initApp(deps: AppInitDeps) {
 		});
 		remoteSessionTabs.set(session_id, id);
 
-		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
+		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo, deps.refreshAllBranchStats);
 
 		// Dock agent-spawned tabs so swarm workers show up in the tab strip.
 		// Only for agent_type (MCP agent spawn), not for manually created
@@ -909,7 +921,7 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo);
+			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}
