@@ -63,6 +63,7 @@ scripts/*
 !scripts/install-launch-shells.sh
 !scripts/test-shell-entrypoint.sh
 !scripts/test-with-test-tmp-prune.sh
+!scripts/test-with-test-tmp-worktree-target.sh
 !scripts/hooks/
 !scripts/speech-assets/
 !scripts/perf/
