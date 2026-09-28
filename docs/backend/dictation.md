@@ -618,8 +618,9 @@ is filtered, `"Grazie. Ora committa e pusha."` is not. Matching the trimmed
 string as one unit missed the repeated form: streaming windows are 1.5–3 s and
 produce one bare `"Grazie."`, but the final pass runs on the whole buffer, where
 Whisper loops into `"Grazie. Grazie."` — the form that actually reached the
-terminal. `HALLUCINATION_SUBSTRING` holds channel boilerplate nobody dictates,
-so one occurrence anywhere condemns the transcript.
+terminal. A bare `"Grazie a tutti."` is also filtered, while an instruction
+containing those words survives. `HALLUCINATION_SUBSTRING` holds channel
+boilerplate nobody dictates, so one occurrence anywhere condemns the transcript.
 
 ## Decode flags depend on audio length
 
