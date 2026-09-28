@@ -7850,4 +7850,37 @@ mod tests {
              outer layer, not the handler, would previously have cut the connection"
         );
     }
+
+    /// Catches: registering agent config only on the desktop router makes
+    /// remote hydration return 404 even when the daemon is authenticated.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn remote_agent_config_round_trip_is_available_to_an_authenticated_client() {
+        let dir = tempfile::tempdir().expect("isolated config directory");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = test_state();
+        *state.session_token.write() = "remote-agent-config-test".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        let body = serde_json::json!({
+            "agents": {
+                "claude": {"run_configs": [{"name": "remote", "command": "claude", "args": [], "env": {}, "is_default": true}]}
+            }
+        });
+        let url = "/config/agents?token=remote-agent-config-test";
+        let address = std::net::SocketAddr::from(([203, 0, 113, 5], 5555));
+
+        let put = app.clone().oneshot(put_from(url, &body, address)).await.unwrap();
+        assert_eq!(put.status(), StatusCode::OK);
+
+        let mut get = Request::get(url).body(Body::empty()).unwrap();
+        get.extensions_mut().insert(ConnectInfo(address));
+        let response = app.oneshot(get).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["agents"]["claude"]["run_configs"][0]["name"], "remote");
+    }
 }
