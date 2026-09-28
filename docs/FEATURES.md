@@ -1941,11 +1941,13 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - `PushManager.subscribe()` flow with user gesture (click handler) for iOS/Firefox
 - Push subscriptions stored in `push_subscriptions.json`, survive restarts
 - API endpoints: `POST/DELETE /api/push/subscribe`, `GET /api/push/vapid-key`, `POST /api/push/test`
-- Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, and `PtyExit` (session completed). A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
+- Triggers: an explicit managed-agent `progress type=blocked` report (with its question text), a parsed agent question when a real title is available, `PtyExit` (session completed), and a still-pending ACP permission or form elicitation. A bare AskUserQuestion hook can signal awaiting without text; it does not spend the push limit before the title arrives
 - Deep link: notification click navigates to `/mobile/session/<id>`, opening the specific session detail
+- ACP interaction pushes link to `/mobile?repo=…&session=…`, selecting the correct Chat conversation; answered requests and ordinary ACP activity do not push
 - Visible notifications use one tag per session, so a new question replaces only that session's earlier notification; generic alerts keep a separate shared tag
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
 - Question and completion pushes share one 30-second limit per session
+- ACP interaction pushes use the same 30-second limit for each conversation
 - A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
