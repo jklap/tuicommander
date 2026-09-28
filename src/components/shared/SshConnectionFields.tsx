@@ -8,7 +8,6 @@ import s from "../SettingsPanel/Settings.module.css";
 import layout from "../TunnelsPanel/TunnelEditorModal.module.css";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
-import d from "./dialog.module.css";
 
 interface AgentKey {
 	fingerprint: string;
@@ -160,15 +159,8 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 						<button
 							data-non-setting="Choose a key-file path for the SSH connection draft"
 							type="button"
-							class={d.cancelBtn}
-							style={{
-								flex: "none",
-								padding: "4px 10px",
-								"font-size": "var(--font-sm)",
-								border: "none",
-								"border-radius": "var(--radius-md)",
-								cursor: "pointer",
-							}}
+							class={s.testBtn}
+							style={{ flex: "none" }}
 							onClick={browseIdentityFile}
 							title="Browse for key file"
 						>

@@ -63,7 +63,7 @@ export const RemoteServersTab: Component = () => {
 					<Show when={!editorTarget()}>
 						<button
 							data-non-setting="Open, prefill, cancel or close the connection editor"
-							class={s.copyBtn}
+							class={s.testBtn}
 							onClick={openAdd}
 						>
 							Add Connection

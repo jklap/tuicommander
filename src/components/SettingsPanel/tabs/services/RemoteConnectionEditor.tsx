@@ -11,7 +11,6 @@ import { remoteConnectionsStore } from "../../../../stores/remoteConnections";
 import type { ForwardSpec, SshConnectionParams, TunnelProfile } from "../../../../stores/tunnels";
 import { tunnelsStore } from "../../../../stores/tunnels";
 import { randomUuid } from "../../../../utils/randomId";
-import d from "../../../shared/dialog.module.css";
 import { SshConnectionFields } from "../../../shared/SshConnectionFields";
 import { normalizeForwardForType, PortForwardsEditor } from "../../../TunnelsPanel/PortForwardsEditor";
 import { Input } from "../../../ui/Input";
@@ -357,6 +356,10 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				<label>Auth username (optional)</label>
 				<Input
 					data-setting-id="connections.connections.{id}.auth_username"
+					autocomplete="off"
+					autocorrect="off"
+					autocapitalize="off"
+					spellcheck={false}
 					value={authUsername()}
 					onInput={(e) => setAuthUsername(e.currentTarget.value)}
 				/>
@@ -375,15 +378,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<button
 						data-non-setting="Forget the stored vault password for this connection"
 						type="button"
-						class={d.cancelBtn}
-						style={{
-							"margin-top": "6px",
-							padding: "2px 8px",
-							"font-size": "var(--font-sm)",
-							border: "none",
-							"border-radius": "var(--radius-md)",
-							cursor: "pointer",
-						}}
+						class={s.testBtn}
+						style={{ "margin-top": "6px" }}
 						onClick={handleClearPassword}
 					>
 						Clear stored password
@@ -621,7 +617,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<button
 						data-non-setting="Probe the draft connection once without saving it"
 						type="button"
-						class={s.copyBtn}
+						class={s.testBtn}
 						onClick={handleTest}
 						disabled={testing()}
 					>
@@ -644,7 +640,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
 					<button
 						data-non-setting="Commit the complete connection draft through its owner"
-						class={s.copyBtn}
+						class={s.testBtn}
 						onClick={handleSave}
 						disabled={saving()}
 					>
@@ -652,7 +648,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</button>
 					<button
 						data-non-setting="Open, prefill, cancel or close the connection editor"
-						class={s.copyBtn}
+						class={s.testBtn}
 						onClick={props.onClose}
 					>
 						Cancel

@@ -1178,7 +1178,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-access", section: "Cloud Relay", label: "Session ID", labelKey: "services.label.relaySessionId" },
 	// remote-servers
 	{ tab: "remote-servers", section: "Remote Servers", sectionKey: "remoteServers.heading" },
-	{ tab: "remote-servers", section: "SSH Tunnels", sectionKey: "remoteServers.sshTunnels" },
+	{ tab: "remote-servers", section: "SSH Port-Forwarding Tunnels", sectionKey: "remoteServers.sshTunnels" },
 	{ tab: "remote-servers", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
 	{ tab: "remote-servers", section: "Your machines" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Auto-update remote daemons" },
