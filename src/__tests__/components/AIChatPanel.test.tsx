@@ -329,6 +329,91 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
+	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Question" });
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: "Answer" },
+				},
+			});
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "tool_call",
+					toolCallId: "one",
+					title: "Inspect",
+					status: "completed",
+				},
+			});
+			await settle();
+			for (const label of ["Copy user message", "Copy assistant message"]) {
+				const button = container.querySelector(`button[aria-label="${label}"]`)!;
+				expect(getComputedStyle(button).minHeight, label).toBe("18px");
+			}
+			const count = container.querySelector(".toolCallCount")!;
+			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
+		} finally {
+			style.remove();
+		}
+	});
+	it("follows new output at the bottom and keeps the reading position after scrolling up", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const transcript = container.querySelector('[aria-label="Chat transcript"]') as HTMLDivElement;
+		Object.defineProperties(transcript, {
+			clientHeight: { configurable: true, value: 200 },
+			scrollHeight: { configurable: true, value: 900 },
+		});
+		transcript.scrollTop = 700;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "First answer" },
+			},
+		});
+		await settle();
+		expect(transcript.scrollTop).toBe(900);
+		transcript.scrollTop = 300;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: " and more" },
+			},
+		});
+		await settle();
+		expect(transcript.scrollTop).toBe(300);
+	});
+
+	it("brings the typing indicator into view when a turn starts at the bottom", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const transcript = container.querySelector('[aria-label="Chat transcript"]') as HTMLDivElement;
+		Object.defineProperties(transcript, {
+			clientHeight: { configurable: true, value: 200 },
+			scrollHeight: { configurable: true, value: 900 },
+		});
+		transcript.scrollTop = 700;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({ kind: "turnStarted" }, SESSION, "turn-1");
+		await settle();
+		expect(container.querySelector(".thinkingPulse")).not.toBeNull();
+		expect(transcript.scrollTop).toBe(900);
+	});
 	// Catches: a permanently visible Copy label or a button removed from keyboard focus.
 	it("hides message Copy at rest while keeping it keyboard focusable", async () => {
 		const style = document.createElement("style");
@@ -889,6 +974,64 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("keeps a long paste compact in the composer but sends every original word", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const pasted = Array.from({ length: 201 }, (_, index) => `word${index}`).join(" ");
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { items: [], getData: () => pasted } });
+		textarea.dispatchEvent(event);
+		await settle();
+		expect(event.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("[Pasted text #1 +201 words]");
+		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, pasted, [], ROOT);
+	});
+
+	it("preserves ordinary paste at the 200-word boundary", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: { items: [], getData: () => Array(200).fill("word").join(" ") },
+		});
+		textarea.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	it("keeps typed text around a large paste in the sent prompt", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Before after";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(7, 7);
+		const pasted = Array(201).fill("detail").join(" ");
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { items: [], getData: () => pasted } });
+		textarea.dispatchEvent(event);
+		await settle();
+		expect(textarea.value).toBe("Before [Pasted text #1 +201 words]after");
+		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, `Before ${pasted}after`, [], ROOT);
+	});
+
+	it("grows the composer with input until its maximum height", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 108 });
+		textarea.value = "several lines\nmore lines";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(textarea.style.height).toBe("108px");
+		Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 600 });
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(textarea.style.height).toBe("150px");
+	});
 	it("hides the connection ack and presents intent as turn status", async () => {
 		const { container } = await renderPanel();
 		await settle();
@@ -939,6 +1082,16 @@ describe("AIChatPanel: a turn", () => {
 		(choices[1] as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta", [], ROOT);
+		feed({ kind: "promptSent", text: "Una decisione aperta" });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Una decisione aperta" } },
+		});
+		await settle();
+		// Catches: the suggestion click creates a bubble that doubles when ego echoes the prompt.
+		expect(
+			[...container.querySelectorAll(".userMsg")].map((message) => message.textContent?.replace("Copy", "")),
+		).toEqual(["Una decisione aperta"]);
 	});
 
 	// Catches: an inline token at the end of the answer remaining visible as raw text.
@@ -1386,7 +1539,9 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = [...container.querySelectorAll("button")].find((button) => button.textContent === "New");
+		const next = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Start another conversation on this repository"]',
+		);
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -1554,6 +1709,28 @@ describe("AIChatPanel: tool activity", () => {
 			},
 		});
 	}
+
+	it("keeps raw command text out of the collapsed row", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "tool_call",
+				toolCallId: "bash",
+				title: "bash -lc command -v tuic || true; ls tools/*",
+				kind: "execute",
+				status: "completed",
+				content: [{ type: "content", content: { type: "text", text: "command output" } }],
+			},
+		});
+		await settle();
+		const group = container.querySelector("details[class*=toolActivity]") as HTMLDetailsElement;
+		expect(group.querySelector(":scope > summary")?.textContent).toContain("1 tool call");
+		expect(group.querySelector(":scope > summary")?.textContent).not.toContain("command -v");
+		group.open = true;
+		expect(group.textContent).toContain("command -v");
+	});
 
 	it("collapses seven calls in one turn into one activity line with count and salient titles", async () => {
 		const { container } = await renderPanel();
@@ -2143,6 +2320,57 @@ describe("AIChatPanel: the session's own knobs", () => {
 });
 
 describe("AIChatPanel: pause, resume and compact", () => {
+	// Catches: text controls wrapping below a long model summary or icons losing accessible names.
+	it("keeps named icon controls on one row beside a short model summary", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [
+						attachment({
+							state: "prompting",
+							configOptions: [
+								{
+									...MODEL_OPTION,
+									currentValue: "openai-codex/gpt-6-sol",
+									options: [{ value: "openai-codex/gpt-6-sol", name: "openai-codex/gpt-6-sol" }],
+								},
+							],
+						}),
+					],
+				}),
+			);
+			await settle();
+			const bar = container.querySelector<HTMLElement>(".controlBar")!;
+			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
+			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
+			for (const label of [
+				"Pause the turn",
+				"Compact the conversation",
+				"Start another conversation on this repository",
+			]) {
+				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+				expect(button.title).toBe(label);
+				expect(button.querySelector("svg")).not.toBeNull();
+				expect(button.textContent?.trim()).toBe("");
+			}
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+			await settle();
+			const resume = bar.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]')!;
+			expect(resume.title).toBe("Resume the turn");
+			expect(resume.querySelector("svg")).not.toBeNull();
+		} finally {
+			style.remove();
+		}
+	});
+
 	it("pauses a running turn and resumes a held one", async () => {
 		const { container } = await renderPanel();
 		await settle();
@@ -2150,7 +2378,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
 		await settle();
 
-		const pause = [...container.querySelectorAll("button")].find((button) => button.textContent === "Pause");
+		const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause the turn"]');
 		pause?.click();
 		await settle();
 		expect(client.pause).toHaveBeenCalledWith(CONNECTION, SESSION);
@@ -2158,7 +2386,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
 		await settle();
 
-		const resume = [...container.querySelectorAll("button")].find((button) => button.textContent === "Resume");
+		const resume = container.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]');
 		resume?.click();
 		await settle();
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
@@ -2168,7 +2396,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		const { container } = await renderPanel();
 		await settle();
 
-		const compact = [...container.querySelectorAll("button")].find((button) => button.textContent === "Compact");
+		const compact = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]');
 		compact?.click();
 		await settle();
 
@@ -2199,8 +2427,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		const { container } = await renderPanel();
 		await settle();
 
-		const labels = [...container.querySelectorAll("button")].map((button) => button.textContent);
-		expect(labels).not.toContain("Pause");
-		expect(labels).not.toContain("Compact");
+		expect(container.querySelector('button[aria-label="Pause the turn"]')).toBeNull();
+		expect(container.querySelector('button[aria-label="Compact the conversation"]')).toBeNull();
 	});
 });

@@ -119,7 +119,7 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 	const selectOptions = () => props.chat.configOptions().filter((option): option is SelectOption => option.type === "select");
 	const summary = () => selectOptions()
 		.filter((option) => option.id === "model" || option.id === "mode")
-		.map((option) => `${option.name}: ${choiceName(option)}`)
+		.map((option) => `${option.name}: ${option.id === "model" ? choiceName(option).split("/").at(-1) : choiceName(option)}`)
 		.join(" · ");
 
 	return (
@@ -165,21 +165,23 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 						<button
 							type="button"
 							class={s.headerBtn}
+							aria-label="Pause the turn"
 							title="Pause the turn"
 							disabled={!props.chat.busy()}
 							onClick={() => void props.chat.pause()}
 						>
-							Pause
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 2h3v12H3zm7 0h3v12h-3z" /></svg>
 						</button>
 					}
 				>
 					<button
 						type="button"
 						class={cx(s.headerBtn, s.headerBtnActive)}
+						aria-label="Resume the turn"
 						title="Resume the turn"
 						onClick={() => void props.chat.resume()}
 					>
-						Resume
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" /></svg>
 					</button>
 				</Show>
 			</Show>
@@ -188,21 +190,23 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 				<button
 					type="button"
 					class={s.headerBtn}
+					aria-label="Compact the conversation"
 					title="Compact the conversation"
 					disabled={props.chat.busy()}
 					onClick={() => void props.chat.compact()}
 				>
-					Compact
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 6h5V1H5v2.6L1.7.3.3 1.7 3.6 5H2zm12 4H9v5h2v-2.6l3.3 3.3 1.4-1.4L12.4 11H14z" /></svg>
 				</button>
 			</Show>
 
 			<button
 				type="button"
 				class={s.headerBtn}
+				aria-label="Start another conversation on this repository"
 				title="Start another conversation on this repository"
 				onClick={() => void props.chat.startSession()}
 			>
-				New
+				<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M6.4 1h1.2v5.4H13v1.2H7.6V13H6.4V7.6H1V6.4h5.4z" /></svg>
 			</button>
 			<Show when={settingsOpen()}>
 				<SessionSettingsDialog chat={props.chat} options={selectOptions()} onClose={() => setSettingsOpen(false)} />

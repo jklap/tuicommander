@@ -36,6 +36,26 @@ beforeEach(() => {
 });
 
 describe("acpTranscript: messages", () => {
+	// Catches: appending an ACP echo to the promptSent bubble doubles the user's text.
+	it("shows a sent prompt once when ego echoes it in chunks", () => {
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "Diagnose connection" }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "user_message_chunk", content: text("Diagnose ") }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "user_message_chunk", content: text("connection") }));
+		expect(acpTranscript.entries(SESSION).filter((entry) => entry.kind === "user")).toEqual([
+			{ id: "e1", kind: "user", text: "Diagnose connection" },
+		]);
+	});
+
+	// Catches: suppressing a changed echo just because it starts like the sent prompt.
+	it("shows a changed echo once when ego rewrites the sent prompt", () => {
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "Diagnose connection" }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "user_message_chunk", content: text("Diagnose ") }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "user_message_chunk", content: text("network") }));
+		expect(acpTranscript.entries(SESSION).filter((entry) => entry.kind === "user")).toEqual([
+			{ id: "e1", kind: "user", text: "Diagnose network" },
+		]);
+	});
+
 	// A turn streams one chunk at a time. Kept apart they render as one bubble
 	// per word; joined at render time the grouping is re-derived every frame.
 	it("joins consecutive chunks of the same kind into one message", () => {
