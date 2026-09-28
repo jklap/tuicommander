@@ -23,6 +23,8 @@ pub(crate) struct RemoteConnection {
     pub(crate) auth_username: String,
     pub(crate) enabled: bool,
     #[serde(default)]
+    pub(crate) auto_update: bool,
+    #[serde(default)]
     pub(crate) deploy: DeployMode,
     #[serde(default = "default_survive_secs")]
     pub(crate) survive_secs: u64,
@@ -77,6 +79,7 @@ impl RemoteConnection {
             },
             auth_username: ssh_user,
             enabled: true,
+            auto_update: false,
             deploy: DeployMode::Never,
             survive_secs: default_survive_secs(),
         }
@@ -130,6 +133,7 @@ impl RemoteConnection {
             transport: RemoteTransport::Direct { url: url.into() },
             auth_username: auth_username.into(),
             enabled: true,
+            auto_update: false,
             deploy: DeployMode::Never,
             survive_secs: default_survive_secs(),
         }
@@ -506,6 +510,7 @@ mod tests {
                 "transport",
                 "auth_username",
                 "enabled",
+                "auto_update",
                 "deploy",
                 "survive_secs"
             ],
@@ -526,11 +531,13 @@ mod tests {
         .unwrap();
         value.as_object_mut().unwrap().remove("deploy");
         value.as_object_mut().unwrap().remove("survive_secs");
+        value.as_object_mut().unwrap().remove("auto_update");
 
         let decoded: RemoteConnection = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.deploy, DeployMode::Never);
         assert_eq!(decoded.survive_secs, 1_800);
+        assert!(!decoded.auto_update);
     }
 
     #[tokio::test]

@@ -2368,6 +2368,9 @@ pub fn run() {
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
                         }
+                        // End every ego AI Chat started: `std::process::exit`
+                        // skips the destructors that would kill them.
+                        tauri::async_runtime::block_on(state.acp.shutdown_all());
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the
@@ -2618,6 +2621,7 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     );
     // The daemon is precisely where nobody can watch a CPU spike happen.
     cpu_watchdog::spawn(state.clone());
+    mcp_http::acp_mcp::install(state);
     mcp_http::spawn_maintenance_sweep(state);
 
     // Deliberately NOT started on the daemon:
@@ -3353,6 +3357,22 @@ mod tests {
                 "run_remote must call {call} — without it the machine's repos have no index"
             );
         }
+    }
+
+    /// The remote boot path enters a Tokio runtime before registering its
+    /// repositories. Registering a real watcher here exercises the same
+    /// runtime-dependent path that panicked in synchronous headless tests.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn remote_boot_can_register_a_repository_watcher() {
+        let repo = tempfile::tempdir().expect("repository directory");
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let path = repo.path().to_str().expect("UTF-8 test path");
+
+        crate::repo_watcher::start_watching(path, &state)
+            .expect("remote boot must register a watcher inside its Tokio runtime");
+        assert!(state.repo_watchers.contains_key(path));
+        crate::repo_watcher::stop_watching(path, &state);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub(crate) mod acp_mcp;
 mod acp_routes;
 mod agent_routes;
 pub(crate) mod auth;
@@ -2374,11 +2375,6 @@ pub(crate) async fn spawn_ipc_listener(state: &Arc<AppState>, mcp_enabled: bool)
             Ok(initial_uds) => {
                 tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket listening");
                 *state.bound_socket_path.write() = sock.clone();
-                // An ego session's one MCP server is `tuic-bridge` pointed at
-                // THIS socket. Told rather than searched for: the bridge's own
-                // search finds the default instance's socket, which is the wrong
-                // instance whenever this one is named or bound an alternative.
-                state.acp.set_socket_path(Some(sock.clone()));
                 // Watchdog task: if axum::serve() returns unexpectedly, rebind
                 // and restart. No shutdown signal — this task runs until the
                 // process exits.
@@ -2491,6 +2487,7 @@ pub async fn start_server(
     if first_start {
         crate::pty::spawn_process_snapshot_refresher(Arc::clone(&state));
 
+        acp_mcp::install(&state);
         // Reap idle MCP sessions, expired rate limits and expired tasks every 60s.
         spawn_maintenance_sweep(&state);
 
@@ -7957,5 +7954,38 @@ mod tests {
             "clients must still be told to dismiss the dialog even when the \
              outer layer, not the handler, would previously have cut the connection"
         );
+    }
+
+    /// Catches: registering agent config only on the desktop router makes
+    /// remote hydration return 404 even when the daemon is authenticated.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn remote_agent_config_round_trip_is_available_to_an_authenticated_client() {
+        let dir = tempfile::tempdir().expect("isolated config directory");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = test_state();
+        *state.session_token.write() = "remote-agent-config-test".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        let body = serde_json::json!({
+            "agents": {
+                "claude": {"run_configs": [{"name": "remote", "command": "claude", "args": [], "env": {}, "is_default": true}]}
+            }
+        });
+        let url = "/config/agents?token=remote-agent-config-test";
+        let address = std::net::SocketAddr::from(([203, 0, 113, 5], 5555));
+
+        let put = app.clone().oneshot(put_from(url, &body, address)).await.unwrap();
+        assert_eq!(put.status(), StatusCode::OK);
+
+        let mut get = Request::get(url).body(Body::empty()).unwrap();
+        get.extensions_mut().insert(ConnectInfo(address));
+        let response = app.oneshot(get).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["agents"]["claude"]["run_configs"][0]["name"], "remote");
     }
 }

@@ -20,9 +20,11 @@ export function MobileChatScreen() {
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
 
+	// The chat is global and ego starts on the first message, so a push link
+	// selects its conversation at once; sending is what loads it.
 	createEffect(() => {
 		if (linkHandled || !linkedRepository || !linkedSession || root() !== linkedRepository) return;
-		if (chat.phase() !== "live" || !chat.sessions().some((session) => session.sessionId === linkedSession)) return;
+		if (chat.phase() === "unconfigured" || chat.phase() === "starting") return;
 		linkHandled = true;
 		if (chat.sessionId() !== linkedSession) void chat.selectSession(linkedSession);
 	});
@@ -117,9 +119,7 @@ export function MobileChatScreen() {
 				emptyMessage={
 					chat.phase() === "unconfigured"
 						? "Configure ego in desktop Settings to start a conversation."
-						: root()
-							? "Ask ego about this repository."
-							: "Add a repository to start a conversation."
+						: "Ask ego about any repository. The one selected above is sent as context."
 				}
 			>
 				<Interactions
@@ -139,7 +139,7 @@ export function MobileChatScreen() {
 					}
 				/>
 			</Transcript>
-			<Show when={chat.phase() === "live"}>
+			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer chat={chat} />
 			</Show>
 		</section>

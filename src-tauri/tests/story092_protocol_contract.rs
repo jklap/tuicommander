@@ -205,14 +205,17 @@ fn initialize_response_becomes_an_immutable_full_capability_snapshot() {
     assert!(snapshot.load && snapshot.list && snapshot.resume && snapshot.fork);
     assert!(snapshot.delete && snapshot.close && snapshot.prompt_image);
     assert!(snapshot.prompt_embedded_context && snapshot.mcp_http && snapshot.mcp_sse);
-    // Stdio does not move with the recorded response either, and for a sharper
-    // reason than form elicitation: v1's `mcpCapabilities` has no `stdio` field
-    // to record. Stdio is the protocol baseline, so this is a fact about what
-    // this client carries — one server, its own bridge (#796-7fa3) — and it read
-    // `false` only while it carried none.
-    assert!(snapshot.mcp_stdio);
+    // The MCP transports this client carries do not move with the recorded
+    // response either: they are facts about this side. It carries one server,
+    // `tuicommander`, on the ACP transport (#1156-1b61) and no stdio bridge any
+    // more (#796-7fa3 retired), so stdio is excluded by contract.
+    assert!(snapshot.mcp_acp && !snapshot.mcp_stdio);
     assert!(!snapshot.client_boolean_config);
-    assert_eq!(snapshot.availability(AcpOperation::McpStdio).reason, None);
+    assert_eq!(snapshot.availability(AcpOperation::McpAcp).reason, None);
+    assert_eq!(
+        snapshot.availability(AcpOperation::McpStdio).reason,
+        Some(AcpUnavailableReason::ExcludedByContract)
+    );
     // Form elicitation reads as available because this client now seats an
     // `elicitation/create` and lets a person answer it. It is a fact about
     // this side, so it does not move with the recorded response above.

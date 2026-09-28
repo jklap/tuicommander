@@ -84,6 +84,8 @@ pub(super) enum Command {
     Prompt {
         session_id: v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
+        /// Context for this turn only, such as the repository on screen.
+        meta: Option<v1::Meta>,
         reply: Reply<AcpTurnId>,
     },
     Cancel {
@@ -142,6 +144,8 @@ pub(super) enum Answer {
 /// nothing about a request it has already sent.
 pub(super) enum Pending {
     Attach {
+        /// The session a load or resume holds in `attaching` until it settles.
+        claimed: Option<v1::SessionId>,
         outcome: Result<Attached, AcpClientError>,
         authority: AcpSessionAuthority,
         reply: Reply<AcpAttachmentSnapshot>,
@@ -313,8 +317,10 @@ pub(super) struct ConnectionActor {
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
+    /// Pending load/resume sessions and usage received before their reply.
+    attaching: HashMap<v1::SessionId, Option<AcpUsageSnapshot>>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
-    queued_contents: HashMap<AcpTurnId, Vec<v1::ContentBlock>>,
+    queued_contents: HashMap<AcpTurnId, (Vec<v1::ContentBlock>, Option<v1::Meta>)>,
     /// Open seats in the order the agent asked, which is the order they are
     /// shown in and the order a cancel settles them in. A map keyed by id
     /// would have made that order depend on hashing.
@@ -352,6 +358,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
+            attaching: HashMap::new(),
             queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
@@ -411,9 +418,16 @@ impl ConnectionActor {
     ) {
         match command {
             Command::NewSession { authority, reply } => {
+                tracing::info!(
+                    source = "acp",
+                    connection_id = %self.connection_id,
+                    method = "session/new",
+                    "ACP attach"
+                );
                 match self.start_new_session(&authority, connection) {
                     Ok(sent) => in_flight.push(Box::pin(async move {
                         Pending::Attach {
+                            claimed: None,
                             outcome: sent.await,
                             authority,
                             reply,
@@ -428,8 +442,9 @@ impl ConnectionActor {
                 authority,
                 reply,
             } => match self.start_attach(kind, session_id, &authority, connection) {
-                Ok(sent) => in_flight.push(Box::pin(async move {
+                Ok((claimed, sent)) => in_flight.push(Box::pin(async move {
                     Pending::Attach {
+                        claimed,
                         outcome: sent.await,
                         authority,
                         reply,
@@ -466,8 +481,9 @@ impl ConnectionActor {
             Command::Prompt {
                 session_id,
                 prompt,
+                meta,
                 reply,
-            } => match self.start_prompt(&session_id, prompt, connection) {
+            } => match self.start_prompt(&session_id, prompt, meta, connection) {
                 Ok((turn_id, sent)) => {
                     let _ = reply.send(Ok(turn_id));
                     if let Some(sent) = sent {
@@ -901,11 +917,13 @@ impl ConnectionActor {
     fn settle(&mut self, pending: Pending, connection: &ConnectionTo<Agent>, in_flight: &InFlight) {
         match pending {
             Pending::Attach {
+                claimed,
                 outcome,
                 authority,
                 reply,
             } => {
-                let outcome = outcome.map(|attached| self.record(attached, authority));
+                let usage = claimed.and_then(|id| self.attaching.remove(&id)).flatten();
+                let outcome = outcome.map(|attached| self.record(attached, authority, usage));
                 let _ = reply.send(outcome);
             }
             Pending::Detach {
@@ -984,6 +1002,24 @@ impl ConnectionActor {
     /// owner would put one turn's output into another turn's transcript.
     fn project(&mut self, notification: v1::SessionNotification) {
         let Some(attachment) = self.attachments.get_mut(&notification.session_id) else {
+            // Ego sends replay chunks before answering session/load. This id is
+            // known from the request even though its attachment is not yet
+            // recorded; other unknown session ids must still be ignored.
+            if let Some(usage) = self.attaching.get_mut(&notification.session_id) {
+                if let v1::SessionUpdate::UsageUpdate(context) = &notification.update {
+                    *usage = Some(AcpUsageSnapshot {
+                        context: Some(context.clone()),
+                        end_turn: None,
+                    });
+                }
+                self.journal.append(
+                    Some(notification.session_id),
+                    None,
+                    AcpClientEvent::SessionUpdate {
+                        update: Box::new(notification.update),
+                    },
+                );
+            }
             return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
@@ -1038,12 +1074,19 @@ impl ConnectionActor {
     /// shared, so they are written once. Fork is the one that comes back with
     /// an id the caller did not name, because a fork is a second session.
     fn start_attach(
-        &self,
+        &mut self,
         kind: AcpAttachKind,
         session_id: v1::SessionId,
         authority: &AcpSessionAuthority,
         connection: &ConnectionTo<Agent>,
-    ) -> Result<Sent<Attached>, AcpClientError> {
+    ) -> Result<(Option<v1::SessionId>, Sent<Attached>), AcpClientError> {
+        tracing::info!(
+            source = "acp",
+            connection_id = %self.connection_id,
+            method = kind.method(),
+            session_id = %session_id,
+            "ACP attach"
+        );
         let operation = kind.operation();
         self.require(operation)?;
         self.require_authority(authority)?;
@@ -1052,19 +1095,29 @@ impl ConnectionActor {
         // two can land on an attachment this connection already holds. Landing
         // on one would overwrite the running turn, the usage and the open
         // interaction ids with the empty state of a fresh attachment — while
-        // the seats themselves survive, so the two would then disagree.
-        if !matches!(kind, AcpAttachKind::Fork) && self.attachments.contains_key(&session_id) {
-            return Err(AcpClientError::already_attached(
-                self.connection_id,
-                session_id,
-            ));
-        }
+        // the seats themselves survive, so the two would then disagree. One
+        // still unanswered counts too: each load makes ego admit every MCP
+        // server again, and a host that asked twice would pay for both.
+        let claimed = if matches!(kind, AcpAttachKind::Fork) {
+            None
+        } else {
+            if self.attachments.contains_key(&session_id)
+                || self.attaching.contains_key(&session_id)
+            {
+                return Err(AcpClientError::already_attached(
+                    self.connection_id,
+                    session_id,
+                ));
+            }
+            self.attaching.insert(session_id.clone(), None);
+            Some(session_id.clone())
+        };
         let operation = Some(operation);
         let cwd = authority.cwd.clone();
         let roots = authority.additional_directories.clone();
         let servers = authority.mcp_servers.clone();
 
-        Ok(match kind {
+        let sent: Sent<Attached> = match kind {
             AcpAttachKind::Load => {
                 let mut request = v1::LoadSessionRequest::new(session_id.clone(), cwd);
                 request.additional_directories = roots;
@@ -1101,7 +1154,8 @@ impl ConnectionActor {
                     })
                 })
             }
-        })
+        };
+        Ok((claimed, sent))
     }
 
     fn start_detach(
@@ -1137,6 +1191,7 @@ impl ConnectionActor {
         &mut self,
         session_id: &v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<(AcpTurnId, Option<Sent<v1::PromptResponse>>), AcpClientError> {
         let attachment = self.attachment(session_id)?;
@@ -1165,7 +1220,7 @@ impl ConnectionActor {
                 turn_id,
                 summary: prompt_display(&prompt, 200),
             });
-            self.queued_contents.insert(turn_id, prompt);
+            self.queued_contents.insert(turn_id, (prompt, meta));
             let queued_prompts = attachment.queued_prompts.clone();
             self.publish();
             self.journal.append(
@@ -1177,7 +1232,7 @@ impl ConnectionActor {
         }
         Ok((
             turn_id,
-            Some(self.send_prompt(session_id, turn_id, prompt, connection)),
+            Some(self.send_prompt(session_id, turn_id, prompt, meta, connection)),
         ))
     }
 
@@ -1186,10 +1241,11 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         turn_id: AcpTurnId,
         prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
         connection: &ConnectionTo<Agent>,
     ) -> Sent<v1::PromptResponse> {
         let text = prompt_display(&prompt, usize::MAX);
-        let request = v1::PromptRequest::new(session_id.clone(), prompt);
+        let request = v1::PromptRequest::new(session_id.clone(), prompt).meta(meta);
         let sent = self.send(request, connection, None);
 
         let attachment = self
@@ -1242,11 +1298,11 @@ impl ConnectionActor {
                 Some(queued.turn_id),
                 AcpClientEvent::PromptQueueChanged { queued_prompts },
             );
-            let Some(prompt) = self.queued_contents.remove(&queued.turn_id) else {
+            let Some((prompt, meta)) = self.queued_contents.remove(&queued.turn_id) else {
                 tracing::warn!(turn_id = ?queued.turn_id, "ACP queued prompt payload missing");
                 continue;
             };
-            let sent = self.send_prompt(session_id, queued.turn_id, prompt, connection);
+            let sent = self.send_prompt(session_id, queued.turn_id, prompt, meta, connection);
             let session_id = session_id.clone();
             in_flight.push(Box::pin(async move {
                 Pending::Turn {
@@ -1463,6 +1519,7 @@ impl ConnectionActor {
         &mut self,
         attached: Attached,
         authority: AcpSessionAuthority,
+        usage: Option<AcpUsageSnapshot>,
     ) -> AcpAttachmentSnapshot {
         let attachment = AcpAttachmentSnapshot {
             session_id: attached.session_id,
@@ -1470,7 +1527,7 @@ impl ConnectionActor {
             cwd: authority.cwd,
             additional_directories: authority.additional_directories,
             config_options: attached.config_options.unwrap_or_default(),
-            usage: None,
+            usage,
             active_turn: None,
             queued_prompts: Vec::new(),
             pending_permission_ids: Vec::new(),
@@ -1642,6 +1699,7 @@ fn mcp_server_operation(server: &v1::McpServer) -> Option<AcpOperation> {
         v1::McpServer::Http(_) => Some(AcpOperation::McpHttp),
         v1::McpServer::Sse(_) => Some(AcpOperation::McpSse),
         v1::McpServer::Stdio(_) => Some(AcpOperation::McpStdio),
+        v1::McpServer::Acp(_) => Some(AcpOperation::McpAcp),
         _ => None,
     }
 }
