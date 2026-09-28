@@ -12,6 +12,10 @@
 
 # To Test
 
+## Codex approval cancellation (story 1125-f4ea) — Rust restart required
+
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, create a disposable Codex session and trigger a shell approval. Confirm its tab reports awaiting input; press Esc and confirm the badge clears when the idle composer returns. Trigger another approval and confirm the badge appears again. The running backend cannot load this Rust change until restart.
+
 ## AI Chat ACP session details (story 1072-6787)
 
 - [ ] In an isolated test instance running this frontend, open a disposable ego conversation and confirm its updated title fits the panel header and picker. After a usage update, confirm the context percentage and optional cost remain readable above the panel edge. The targeted component tests cover the values; no instance running this worktree was available for a screenshot.
