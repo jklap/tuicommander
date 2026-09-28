@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **AI Chat controls** — Pause, Resume, Compact and New use accessible icon buttons in one row, with a shortened model name that yields space to the actions.
 
+- **MCP tool search** — `search_tools` again ranks `repo` first for GitHub PR and CI queries; its description names the PR/CI summary that `repo action=status` returns.
+
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
 
 - **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.
