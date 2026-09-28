@@ -14376,6 +14376,161 @@ fn replay_final_screen(bytes: &[u8]) -> Vec<String> {
     vt_log.screen_rows()
 }
 
+/// Captured from live Codex 0.157.1 (`--no-alt-screen`) and OpenCode 1.18.30
+/// (`--mini`) launched through the HTTP agent route. Both kept TUIC's native
+/// scrollback through startup and a resize; the Codex capture also spans an
+/// approval prompt and its cancellation.
+#[test]
+fn live_native_scrollback_captures_never_enter_alternate_screen() {
+    for fixture in [
+        "codex-0.157.1-no-alt-approval-resize.tcap",
+        "opencode-1.18.30-mini-resize.tcap",
+    ] {
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture))
+            .expect("valid live capture");
+        let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        let mut output_count = 0;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            output_count += 1;
+            vt.process(&record.data);
+            assert!(
+                !vt.is_alternate_screen(),
+                "{fixture}: alternate screen entered at {} us",
+                record.elapsed_us
+            );
+        }
+        assert!(output_count > 0, "{fixture}: capture has no agent output");
+    }
+}
+
+#[test]
+fn codex_native_scrollback_capture_keeps_approval_and_idle_composer_visible() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-0.157.1-no-alt-approval-resize.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    let mut approval_visible = false;
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            approval_visible |= vt
+                .screen_rows()
+                .iter()
+                .any(|row| row.contains("Would you like to run the following command?"));
+        }
+    }
+    assert!(
+        approval_visible,
+        "live approval prompt was lost during replay"
+    );
+    let screen = vt.screen_rows();
+    let refs: Vec<_> = screen.iter().map(String::as_str).collect();
+    let cutoff = crate::chrome::find_chrome_cutoff(&refs)
+        .expect("the final Codex composer must anchor the chrome cutoff");
+    assert!(
+        screen[..cutoff]
+            .iter()
+            .any(|row| row.contains("You canceled the request")),
+        "cancellation must remain in the transcript above the composer: {screen:#?}"
+    );
+    assert!(
+        screen[cutoff..]
+            .iter()
+            .any(|row| row.contains("Ask Codex to do anything")),
+        "the idle composer must remain visible below the cutoff: {screen:#?}"
+    );
+}
+
+#[test]
+fn opencode_mini_resize_repaint_does_not_reopen_an_idle_turn() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-resize.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-resize";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut resize_output = Vec::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        if record.elapsed_us < 10_000_000 {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        } else {
+            resize_output.push(record);
+        }
+    }
+    assert!(
+        !resize_output.is_empty(),
+        "fixture must contain SIGWINCH repaint"
+    );
+    silence.lock().force_idle_unconfirmed();
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(32, 100);
+    silence.lock().on_resize();
+    let mut rx = state.event_bus.subscribe();
+    for record in resize_output {
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+            &silence,
+            sid,
+            &state,
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .shell_states
+                .get(sid)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_IDLE,
+            "resize-only output must not mark OpenCode busy"
+        );
+    }
+    while let Ok(event) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = event {
+            assert!(
+                parsed["type"] != "shell-state" || parsed["state"] != "busy",
+                "resize emitted a BUSY edge: {parsed}"
+            );
+        }
+    }
+}
+
 /// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
 /// nothing is running, so the session must read Ready. Without this the OSC 133
 /// busy bit set once by the long-lived `goose session` command survives for the
