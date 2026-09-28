@@ -24,9 +24,15 @@
 
 # To Test
 
+## AI Chat layout and composer (story 1166-ef2f)
+
+- [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
+
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
 - [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus.
+- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`.
+- [ ] Send a typed AI Chat message and choose a suggested reply; confirm each user bubble shows the text once after ego replies. Targeted reducer and panel tests cover both paths.
 
 ## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
 
@@ -4041,6 +4047,16 @@ or credential is touched.
       host picker and monochrome icons were rendered in an isolated browser on
       port 9877. _(verified 2026-09-22 from the worktree build; proof in
       `.tmp/visual-proof/remote-machines-fields.png`)_
+
+## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated test instance, connect the Installed-service
+      `aws-graviton` remote (56481148) over SSH. It should progress from
+      Connecting to Connected once the local forward listens and `/health`
+      answers, without an intermediate "installed daemon not answering" error.
+      Record the elapsed time and the tunnel status transitions. Use only the
+      configured host and credentials; the targeted Rust tests cover delayed
+      local ports and delayed health independently.
 
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 

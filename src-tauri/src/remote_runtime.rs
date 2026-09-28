@@ -34,13 +34,12 @@ use crate::remote_connection::{
     DeployMode, RemoteConnection, RemoteConnectionStore, RemoteTransport,
 };
 use crate::state::{AppEvent, AppState};
+use crate::tunnels::supervisor::TUNNEL_CONNECT_TIMEOUT;
 
 /// How often a connected connection re-proves itself against `/api/version`.
 const STATUS_POLL: Duration = Duration::from_secs(5);
 /// Budget for one probe. Generous: a tunnel over a slow link is not a failure.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long `connect` waits for an SSH tunnel to report Connected.
-const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TUNNEL_POLL: Duration = Duration::from_millis(250);
 const LISTEN_GRACE: Duration = Duration::from_secs(15);
 pub(crate) const REMOTE_PROTOCOL_VERSION: u64 = 1;
@@ -811,14 +810,20 @@ async fn handshake(
         .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
 
-    let first_health = read_health(&client, &base_url).await;
-    if connection.deploy == DeployMode::Installed
-        && let Err(error) = &first_health
-    {
-        return Err(ConnectFailure::error(format!(
-            "installed daemon not answering: {error}"
-        )));
-    }
+    let first_health = if connection.deploy == DeployMode::Installed {
+        Ok(
+            wait_until_listening(&client, &base_url, TUNNEL_CONNECT_TIMEOUT)
+                .await
+                .map_err(|failure| {
+                    ConnectFailure::error(format!(
+                        "installed daemon not answering: {}",
+                        failure.message
+                    ))
+                })?,
+        )
+    } else {
+        read_health(&client, &base_url).await
+    };
 
     let mut deployed = false;
     let health =
@@ -947,9 +952,12 @@ async fn wait_until_listening(
 ) -> Result<Health, ConnectFailure> {
     let deadline = std::time::Instant::now() + grace;
     loop {
-        let last_error = match read_health(client, base_url).await {
-            Ok(health) => return Ok(health),
-            Err(error) => error,
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let last_error = match tokio::time::timeout(remaining, read_health(client, base_url)).await
+        {
+            Ok(Ok(health)) => return Ok(health),
+            Ok(Err(error)) => error,
+            Err(_) => "health request timed out".to_string(),
         };
         if std::time::Instant::now() >= deadline {
             return Err(ConnectFailure::error(format!(
@@ -957,7 +965,10 @@ async fn wait_until_listening(
                 grace.as_secs()
             )));
         }
-        tokio::time::sleep(TUNNEL_POLL).await;
+        tokio::time::sleep(
+            TUNNEL_POLL.min(deadline.saturating_duration_since(std::time::Instant::now())),
+        )
+        .await;
     }
 }
 
@@ -1868,6 +1879,43 @@ mod tests {
         );
         assert_eq!(state.remote.snapshot()[0].protocol_version, Some(4));
         teardown(&state, &id);
+    }
+
+    #[tokio::test]
+    async fn installed_daemon_recovers_when_health_starts_answering_after_one_second() {
+        let ready_at = tokio::time::Instant::now() + Duration::from_secs(1);
+        let app = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get(move || async move {
+                    if tokio::time::Instant::now() < ready_at {
+                        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "{}")
+                    } else {
+                        (axum::http::StatusCode::OK, r#"{"protocol_version":1}"#)
+                    }
+                }),
+            )
+            .route("/api/version", axum::routing::get(|| async { "{}" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("installed", &base_url, "boss");
+        connection.deploy = DeployMode::Installed;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+
+        connect(&state, &id)
+            .await
+            .expect("a temporarily unavailable installed daemon should connect");
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Connected);
+        assert_eq!(
+            state.remote.base_url(&id).as_deref(),
+            Some(base_url.as_str())
+        );
+        teardown(&state, &id);
+        server.abort();
     }
 
     /// A Direct connection aimed at this machine's own daemon mirrors every

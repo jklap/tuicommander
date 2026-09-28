@@ -12,6 +12,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **AI Chat replay storm** — A chat tab replays its conversation at most once at a time, and a failed replay waits for the person to select the tab or press Retry instead of repeating on every update. The backend refuses a second `session/load` or `session/resume` while one is pending, and logs every attach with its method and session id.
 
+- **AI Chat layout and composer** — Collapsed tool activity keeps commands in the expanded view, message Copy has reserved space, and streaming output follows the bottom until you scroll up. The composer grows with text and condenses pastes over 200 words into a marker until sending.
+
+- **New worktree tabs** — A session spawned before its worktree appears in the repository list moves under the registered repository after a refresh, without a misleading Register toast.
+
+- **SSH remote readiness** — Tunnels become Connected after SSH survives startup and every local forward accepts connections. Installed remote daemons get a bounded health retry during startup.
+
+- **AI Chat sent messages** — A sent prompt appears once when ego streams it back in chunks, including replies chosen from suggestion buttons.
+
+- **AI Chat controls** — Pause, Resume, Compact and New use accessible icon buttons in one row, with a shortened model name that yields space to the actions.
+
+- **MCP tool search** — `search_tools` again ranks `repo` first for GitHub PR and CI queries; its description names the PR/CI summary that `repo action=status` returns.
+
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
 
 - **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.

@@ -157,6 +157,7 @@ per cell and the configured history limit still apply.
 - Terminals report their current working directory via OSC 7 escape sequences
 - Parsed in the Rust backend from PTY output and stored per-session as `session_cwd`
 - When a terminal's CWD falls inside a known worktree path, the session is automatically reassigned to the correct branch in the sidebar
+- Sessions spawned into a new sibling worktree refresh their registered repository before final tab placement
 - Enables accurate branch association even when the user `cd`s into a different worktree from a single terminal
 
 ### 1.12 Kitty Keyboard Protocol
@@ -857,10 +858,12 @@ one configured ego binary and speaks ACP to it, per
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
-  replaced whole each time it changes
+  replaced whole each time it changes. The view follows new output while the
+  reader is at the bottom; collapsed tool rows keep full commands in details
 - The connection acknowledgement is hidden; `intent:` is shown as turn status;
   bracketed `suggest:` items on their own line or at the end of an answer become
-  buttons that send the selected reply. Message Copy appears on hover or keyboard focus
+  buttons that send the selected reply. A sent reply appears once even when ego
+  echoes it in chunks. Message Copy appears on hover or keyboard focus
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
 - Untitled sessions show a readable prompt or activity-time label in the picker;
@@ -868,6 +871,8 @@ one configured ego binary and speaks ACP to it, per
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
+- The composer grows up to a bounded height. Pastes over 200 words are shown as
+  numbered markers until Send restores the full text
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client
@@ -876,7 +881,8 @@ one configured ego binary and speaks ACP to it, per
   forms. Each new question produces one desktop notification, cleared when the
   question settles
 - **Session settings** come from the options the session publishes through
-  `set_config_option`. The control bar summarizes model and mode; a dialog labels
+  `set_config_option`. The one-row control bar summarizes the model's short name
+  and mode; Pause, Resume, Compact and New use named icon buttons. A dialog labels
   every select option and shows its description and current choice. Errors from
   rejected changes appear in the dialog. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each
@@ -2254,7 +2260,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 23.1 Supervised Tunnels
 - Managed SSH processes with automatic lifecycle supervision
 - Tunnel states: Starting, Connected, Reconnecting, Stopped, Error
-- Health check: process must survive 500ms after spawn to be considered connected
+- Readiness check: SSH must survive 500 ms and every local forward must accept TCP connections before the tunnel is considered connected (30-second limit)
 - Graceful shutdown: SIGTERM with 5s grace period, then SIGKILL escalation
 - SSH agent forwarding: auto-discovers `SSH_AUTH_SOCK` for key-based auth
 
