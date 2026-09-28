@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected. Stalled transfers time out, and the manual update action is disabled during an automatic update.
+
 - **One AI Chat across repositories** — The AI Chat is the same conversation whichever repository is on screen: switching repository keeps its tabs and starts nothing, and the repository you are viewing is sent with each message as context. ego starts with your first message (or **+**), runs in `~/Gits`, is shared by every window and the phone, and is ended when TUICommander quits.
 
 - **ego reaches TUICommander over ACP** — The AI Chat's ego sessions now get the `tuicommander` MCP server on the ACP connection itself (MCP-over-ACP) instead of a `tuic-bridge` process. Each tool call no longer opens a fresh HTTP MCP session; the tools, their names and ego's permission rules are unchanged, and ego can cancel a running call. Claude Code, Codex and other agents keep using the bridge and HTTP `/mcp`.
