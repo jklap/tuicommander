@@ -127,9 +127,14 @@ List the changed source files or line ranges before `--`, and the tests that
 exercise them after it. Read
 `reports/mutation/mutation.json` and the console verdicts. A known behavior
 change, such as inverting the `pathBasename` condition above, must be reported
-`Killed` before treating the other verdicts as evidence. The checked-in Stryker
-config copies only frontend inputs into its sandbox, leaves the worktree source
-untouched, and runs Vitest as a separate command for each mutant. Stryker 10's
+`Killed` before treating the other verdicts as evidence. Install this checkout's
+dependencies with `pnpm install --offline --frozen-lockfile` when its local
+`node_modules/.bin/stryker` is missing; linked worktrees do not share the main
+checkout's executables. The checked-in Stryker config copies frontend inputs,
+Rust `.rs` files under `src-tauri/src/`, the terminal-grid source, and the generated
+`command_table_paths.txt` into its sandbox. Add any new files read directly by a
+Vitest test to that copy policy. It leaves the worktree source untouched and runs
+Vitest as a separate command for each mutant. Stryker 10's
 Vitest runner reports false survivors with this repo's Vitest 5, so it is not
 used. Stryker's TypeScript preprocessor is pointed at an absent file because
 this repo's TypeScript 7 does not expose the compiler API it calls; Vitest still
