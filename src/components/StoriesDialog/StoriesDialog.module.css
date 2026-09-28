@@ -35,6 +35,11 @@
 .item[aria-current="true"] { background: var(--bg-highlight); border-left: 2px solid var(--accent); padding-left: 10px; }
 .item small { color: var(--fg-muted); font-size: var(--font-xs); text-transform: capitalize; }
 .form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
+.sourceHeader { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--fg-secondary); font-size: var(--font-xs); }
+.form button small { display: block; margin-top: 3px; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); overflow-wrap: anywhere; }
+.form details { color: var(--fg-secondary); font-size: var(--font-xs); }
+.form summary { cursor: pointer; }
+.manualForm { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-secondary); font-size: var(--font-xs); }
 .form input, .form textarea, .form select, .inline select { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 6px 8px; font: var(--font-sm) var(--font-ui); }
 .form textarea { min-height: 58px; resize: vertical; }

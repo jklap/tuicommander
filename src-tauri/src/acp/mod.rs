@@ -163,11 +163,17 @@ pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 pub fn tuicommander_mcp_server(
     bridge: Option<std::path::PathBuf>,
     socket: Option<&std::path::Path>,
+    peer_id: Option<&str>,
 ) -> Option<v1::McpServer> {
     let mut server = v1::McpServerStdio::new(TUICOMMANDER_MCP_SERVER_NAME, bridge?);
+    let mut env = Vec::new();
     if let Some(socket) = socket.and_then(|s| s.to_str()) {
-        server = server.env(vec![v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket)]);
+        env.push(v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket));
     }
+    if let Some(peer_id) = peer_id {
+        env.push(v1::EnvVariable::new("TUIC_SESSION", peer_id));
+    }
+    server = server.env(env);
     Some(v1::McpServer::Stdio(server))
 }
 
@@ -177,9 +183,15 @@ pub fn tuicommander_mcp_server(
 /// crate, so the two ends agree by spelling and by the story796 contract test.
 pub const BRIDGE_SOCKET_ENV_VAR: &str = "TUIC_SOCKET";
 
+/// The bridge header accepts only the canonical UUID form used for TUIC peers.
+pub(crate) fn valid_peer_id(id: &str) -> bool {
+    id.len() == 36 && uuid::Uuid::parse_str(id).is_ok()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {
     pub executable: PathBuf,
+    pub profile: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,9 +215,25 @@ pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, Acp
         .to_str()
         .ok_or_else(|| AcpClientError::invalid_input("ACP root must be valid UTF-8"))?;
 
+    let profile = &config.profile;
+    if !profile.is_empty()
+        && (profile.len() > 64
+            || profile.starts_with('-')
+            || profile
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_ascii_control()))
+    {
+        return Err(AcpClientError::invalid_input("invalid ego profile name"));
+    }
+
+    let mut args = vec!["acp".to_string(), "-C".to_string(), root.to_string()];
+    if !profile.is_empty() {
+        args.extend(["--profile".to_string(), profile.clone()]);
+    }
+
     Ok(LaunchSpec {
         program: config.executable.clone(),
-        args: vec!["acp".to_string(), "-C".to_string(), root.to_string()],
+        args,
     })
 }
 
@@ -471,6 +499,14 @@ pub enum AcpClientEvent {
         state: AcpAttachmentState,
     },
     TurnStarted,
+    /// The accepted user input was sent to the agent; all views render it once.
+    PromptSent {
+        text: String,
+    },
+    /// The complete queue after a change, so every subscriber sees the same order.
+    PromptQueueChanged {
+        queued_prompts: Vec<AcpQueuedPrompt>,
+    },
     /// Ego's own update, forwarded whole rather than reduced.
     ///
     /// The client has no business deciding which parts of what the agent said
@@ -494,6 +530,11 @@ pub enum AcpClientEvent {
     TurnSettled {
         stop_reason: v1::StopReason,
         usage: Option<v1::Usage>,
+    },
+    /// The prompt answered with an ACP error; preserve its diagnostic for every viewer.
+    TurnFailed {
+        message: String,
+        state: AcpAttachmentState,
     },
     /// The agent is waiting on a person, and this is what it asked.
     ///
@@ -577,7 +618,8 @@ impl AcpNotice {
                 state:
                     AcpConnectionState::Closed | AcpConnectionState::Failed | AcpConnectionState::Killed,
             }
-            | AcpClientEvent::TurnSettled { .. } => (AcpNoticeKind::Settled, None),
+            | AcpClientEvent::TurnSettled { .. }
+            | AcpClientEvent::TurnFailed { .. } => (AcpNoticeKind::Settled, None),
             AcpClientEvent::PermissionRequested { request_id, .. }
             | AcpClientEvent::ElicitationRequested { request_id, .. } => {
                 (AcpNoticeKind::InteractionPending, Some(*request_id))
@@ -747,6 +789,14 @@ pub struct AcpTurnSnapshot {
     pub usage: Option<v1::Usage>,
 }
 
+/// A prompt accepted by the host but not yet sent to the agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpQueuedPrompt {
+    pub turn_id: AcpTurnId,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAttachmentSnapshot {
@@ -757,6 +807,7 @@ pub struct AcpAttachmentSnapshot {
     pub config_options: Vec<v1::SessionConfigOption>,
     pub usage: Option<AcpUsageSnapshot>,
     pub active_turn: Option<AcpTurnSnapshot>,
+    pub queued_prompts: Vec<AcpQueuedPrompt>,
     pub pending_permission_ids: Vec<AcpHostRequestId>,
     pub pending_elicitation_ids: Vec<AcpHostRequestId>,
 }
@@ -845,6 +896,8 @@ pub struct AcpClientError {
     pub session_id: Option<v1::SessionId>,
     pub operation: Option<AcpOperation>,
     pub retryable: bool,
+    #[serde(skip)]
+    agent_code: Option<i32>,
 }
 
 impl AcpClientError {
@@ -981,24 +1034,6 @@ impl AcpClientError {
         .with_session_id(session_id)
     }
 
-    /// A second prompt arrived while the first was still running.
-    ///
-    /// Retryable, because the answer changes on its own: the turn settles and
-    /// the session takes prompts again.
-    pub(super) fn turn_in_progress(
-        connection_id: AcpConnectionId,
-        session_id: v1::SessionId,
-    ) -> Self {
-        let mut error = Self::new(
-            AcpClientErrorCode::InvalidInput,
-            format!("ACP session {session_id} already has a turn in progress"),
-        )
-        .with_connection_id(connection_id)
-        .with_session_id(session_id);
-        error.retryable = true;
-        error
-    }
-
     /// A config option, or a value for one, that this session never offered.
     ///
     /// Refused here rather than forwarded because the offer is the whole
@@ -1131,6 +1166,7 @@ impl AcpClientError {
             session_id: None,
             operation: None,
             retryable: false,
+            agent_code: None,
         }
     }
 

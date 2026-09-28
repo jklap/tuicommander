@@ -291,6 +291,56 @@ describe("activityStore persistence", () => {
 	});
 
 	describe("hydrate()", () => {
+		it("loads active items from the array returned by the Activity API", async () => {
+			store.addItem({
+				id: "live",
+				pluginId: "core",
+				sectionId: "messages",
+				title: "Live notice",
+				icon: "<svg/>",
+				dismissible: true,
+			});
+			mockInvoke.mockResolvedValueOnce([
+				{
+					id: "saved",
+					pluginId: "core",
+					sectionId: "messages",
+					title: "Saved notice",
+					icon: "<svg/>",
+					dismissible: true,
+					createdAt: 1000,
+				},
+				{
+					id: "hidden",
+					pluginId: "core",
+					sectionId: "messages",
+					title: "Dismissed notice",
+					icon: "<svg/>",
+					dismissible: true,
+					dismissed: true,
+					createdAt: 900,
+				},
+				{
+					id: "live",
+					pluginId: "core",
+					sectionId: "messages",
+					title: "Stale notice",
+					icon: "<svg/>",
+					dismissible: true,
+					createdAt: 800,
+				},
+			]);
+
+			await store.hydrate();
+			expect(
+				store
+					.getActive()
+					.map((item) => item.title)
+					.sort(),
+			).toEqual(["Live notice", "Saved notice"]);
+			expect(store.state.items.find((item) => item.id === "hidden")?.dismissed).toBe(true);
+		});
+
 		it("loads items from backend", async () => {
 			const savedItems = [
 				{

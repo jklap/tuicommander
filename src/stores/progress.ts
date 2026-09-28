@@ -84,6 +84,8 @@ export interface ProjectFlowState {
 export interface ProgressList {
 	project: string;
 	entries: ProgressEntry[];
+	total: number;
+	nextCursor: number | null;
 	ptyIds: string[];
 	lastViewedMs?: number;
 }
@@ -134,19 +136,28 @@ export function createProgressStore() {
 	async function refreshProject(project: string, freezeDivider = true): Promise<void> {
 		ensure(project);
 		const ptyId = selectedPtyId();
+		const blocked = blockedOnly();
 		setState("projects", project, { loading: true, error: null });
 		try {
-			const list = await invoke<ProgressList>("progress_list", {
+			const input = { blockedOnly: blocked, ...(ptyId ? { ptyId } : {}), limit: 100 };
+			let page = await invoke<ProgressList>("progress_list", {
 				project,
-				input: { blockedOnly: blockedOnly(), ...(ptyId ? { ptyId } : {}) },
+				input,
 			});
-			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
-			const frozen = freezeDivider ? (state.projects[project]?.dividerMs ?? list.lastViewedMs) : list.lastViewedMs;
+			const first = page;
+			const entries = [...page.entries];
+			while (page.nextCursor != null) {
+				if (requestedProject() !== project || selectedPtyId() !== ptyId || blockedOnly() !== blocked) return;
+				page = await invoke<ProgressList>("progress_list", { project, input: { ...input, cursor: page.nextCursor } });
+				entries.push(...page.entries);
+			}
+			if (requestedProject() !== project || selectedPtyId() !== ptyId || blockedOnly() !== blocked) return;
+			const frozen = freezeDivider ? (state.projects[project]?.dividerMs ?? first.lastViewedMs) : first.lastViewedMs;
 			setState("projects", project, { loading: false, error: null, dividerMs: frozen });
-			setState("projects", project, "entries", reconcile(list.entries));
-			setState("projects", project, "ptyIds", reconcile(list.ptyIds ?? []));
+			setState("projects", project, "entries", reconcile(entries));
+			setState("projects", project, "ptyIds", reconcile(first.ptyIds ?? []));
 		} catch (error) {
-			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
+			if (requestedProject() !== project || selectedPtyId() !== ptyId || blockedOnly() !== blocked) return;
 			setState("projects", project, { loading: false, error: messageOf(error) });
 		}
 	}
@@ -254,17 +265,19 @@ export function createProgressStore() {
 		const entry = payload.payload.entry;
 		const project = payload.repo_path;
 		const showing = dialogVisible() && requestedProject() === project;
+		let onScreen = true;
 		if (showing && (selectedPtyId() === null || selectedPtyId() === entry.ptyId)) {
 			refreshVisible(project);
 		} else if (showing && drawnInFlow(project, entry)) {
 			void refreshFlow(project);
 		} else {
-			setArrivedSinceOpen((count) => count + 1);
+			onScreen = false;
 		}
 		// An `intent:` is what the agent set out to do, and a hand-off is one
 		// agent talking to another — neither is an outcome. They belong in the
-		// journal and not in the user's face.
+		// journal and not in the user's face: no toast, and no bell count.
 		if (entry.type !== "done" && entry.type !== "blocked") return;
+		if (!onScreen) setArrivedSinceOpen((count) => count + 1);
 		const projectName =
 			repositoriesStore.get(payload.repo_path)?.displayName ??
 			payload.repo_path.split(/[\\/]/).pop() ??
@@ -283,7 +296,7 @@ export function createProgressStore() {
 			{ label: "Open Progress", onClick: () => open(payload.repo_path, entry.ptyId ?? null) },
 			undefined,
 			payload.repo_path,
-			undefined,
+			entry.ptyId,
 			false,
 		);
 	}

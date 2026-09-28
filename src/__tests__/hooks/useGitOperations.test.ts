@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
 import * as platform from "../../platform";
+import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { getForRepo as getFocusForRepo, recordTerminalRepo } from "../../stores/focusRegistry";
@@ -31,6 +32,13 @@ function resetStores() {
 	mdTabsStore.clearAll();
 }
 
+function defaultInvoke(cmd: string): Promise<unknown> {
+	if (cmd === "load_agents_config") return Promise.resolve({ agents: {} });
+	if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
+	if (cmd === "check_worktree_dirty") return Promise.resolve(false);
+	return Promise.resolve(undefined);
+}
+
 /** Build the id-keyed workspace map the backend now returns from a plain
  *  branch -> path object. Under the identity migration a git worktree's
  *  workspace id IS its branch, so the key is reused as the id and the branch
@@ -45,6 +53,7 @@ describe("buildAgentSeed", () => {
 	let isWindowsSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
+		mockInvoke.mockImplementation(defaultInvoke);
 		// Installed fresh per test and fully restored in afterEach so the mock
 		// cannot leak into later describes (e.g. handleConflictAssist's POSIX
 		// quoting assertions) — a plain mockReset() left the spy installed.
@@ -113,6 +122,7 @@ describe("useGitOperations", () => {
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
+			dirtyFingerprint: "confirmed-worktree",
 			dirtyFiles: 0,
 			commitStatus: "merged",
 			removalSafety: "safe",
@@ -155,11 +165,7 @@ describe("useGitOperations", () => {
 		// The post-merge cleanup dialog asks two dirtiness questions before it opens.
 		// Both fail SAFE (an unanswered question reads as dirty), so a bare
 		// `resolves undefined` mock would make every ask-mode test look dirty.
-		mockInvoke.mockImplementation((cmd: string) => {
-			if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
-			if (cmd === "check_worktree_dirty") return Promise.resolve(false);
-			return Promise.resolve(undefined);
-		});
+		mockInvoke.mockImplementation(defaultInvoke);
 		mockRepo.switchBranch.mockResolvedValue({
 			success: true,
 			stashed: false,
@@ -511,8 +517,11 @@ describe("useGitOperations", () => {
 			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Only the agent tab is restored (plain shell filtered out)
 			expect(branch?.terminals.length).toBe(1);
-			const agentTerm = terminalsStore.get(branch!.terminals[0]);
-			expect(agentTerm?.pendingResumeCommand).toBe("claude --continue");
+			// Resume verification is a deliberate non-blocking second pass
+			// (it asks the backend for launch arguments), so wait for it.
+			await vi.waitFor(() =>
+				expect(terminalsStore.get(branch!.terminals[0])?.pendingResumeCommand).toBe("claude --continue"),
+			);
 		});
 
 		it("does not restore savedTerminals when live terminals exist", async () => {
@@ -1063,7 +1072,12 @@ describe("useGitOperations", () => {
 
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "archive", 0);
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith(
+					"feature/x",
+					"archive",
+					0,
+					expect.objectContaining({ dirtyFingerprint: "confirmed-worktree" }),
+				);
 				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledTimes(1);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
@@ -1084,7 +1098,12 @@ describe("useGitOperations", () => {
 
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "delete");
 
-				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "delete", 7);
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith(
+					"feature/x",
+					"delete",
+					7,
+					expect.objectContaining({ dirtyFingerprint: "confirmed-worktree" }),
+				);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
 
@@ -1118,6 +1137,7 @@ describe("useGitOperations", () => {
 					"main",
 					"archive",
 					true,
+					"confirmed-worktree",
 				);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeUndefined();
 			});
@@ -1171,6 +1191,7 @@ describe("useGitOperations", () => {
 				baseBranch: "main",
 				hasDirtyFiles: false,
 				worktreeDirty: false,
+				worktreeFingerprint: "confirmed-worktree",
 			});
 		});
 
@@ -1287,6 +1308,7 @@ describe("useGitOperations", () => {
 				baseBranch: "main",
 				hasDirtyFiles: false,
 				worktreeDirty: false,
+				worktreeFingerprint: "confirmed-worktree",
 			});
 			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 		});
@@ -1343,7 +1365,7 @@ describe("useGitOperations", () => {
 			prompt: string;
 		}) {
 			mockInvoke.mockImplementation((cmd: string) =>
-				cmd === "start_conflict_assist" ? Promise.resolve(result) : Promise.resolve(undefined),
+				cmd === "start_conflict_assist" ? Promise.resolve(result) : defaultInvoke(cmd),
 			);
 		}
 
@@ -1987,6 +2009,8 @@ describe("useGitOperations", () => {
 		it("passes force only after confirming destructive state", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 2,
+				dirtyFingerprint: "confirmed-state",
+				submoduleUnpushedCommits: [{ path: "plugins", count: 3 }],
 				commitStatus: "merged",
 				removalSafety: "requires_force",
 			});
@@ -1999,7 +2023,24 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, "confirmed-state");
+		});
+
+		it("confirms a missing registered checkout without a fabricated fingerprint", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, undefined, true);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("closes branch terminals before removing", async () => {
@@ -2027,6 +2068,26 @@ describe("useGitOperations", () => {
 	describe("handleRemoveWorkspace (locked worktree)", () => {
 		const LOCKED_ERROR = "worktree_locked:fatal: cannot remove a locked working tree, lock reason: claude agent";
 
+		it("asks separately before overriding a missing checkout lock", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR)).mockResolvedValueOnce(undefined);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith(
+				"/repo", "feature", true, true, true, undefined, true,
+			);
+		});
+
 		it("shows confirmation dialog when worktree is locked by agent", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -2034,22 +2095,22 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			// Dialog now receives the deleteBranch flag so it can warn about
-			// unmerged-commit loss when `-D` will run.
+			// Dialog receives the requested branch action while the backend
+			// independently proves whether deleting that branch is safe.
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
 		});
 
-		it("retries with force=true when user confirms force removal of locked worktree", async () => {
+		it("retries with an explicit lock override after confirmation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error(LOCKED_ERROR)) // first attempt: locked
-				.mockResolvedValueOnce(undefined); // second attempt (force): success
+				.mockResolvedValueOnce(undefined); // second attempt (lock override): success
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, false, true);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
@@ -2806,6 +2867,17 @@ describe("useGitOperations", () => {
 		});
 
 		it("uses promptRepoPath callback instead of window.prompt in browser mode", async () => {
+			const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+				const url = String(input);
+				if (!url.endsWith("/watchers/hot-repos") && !url.endsWith("/watchers/repo?path=%2Fbrowser-repo")) {
+					throw new Error(`unexpected browser request: ${url}`);
+				}
+				return new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			});
+			onTestFinished(() => fetchMock.mockRestore());
 			const promptRepoPath = vi.fn().mockResolvedValue("/browser-repo");
 			const browserGitOps = useGitOperations({
 				repo: mockRepo,
@@ -2831,6 +2903,10 @@ describe("useGitOperations", () => {
 
 			expect(promptRepoPath).toHaveBeenCalledOnce();
 			expect(repositoriesStore.get("/browser-repo")).toBeDefined();
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://localhost:3000/watchers/repo?path=%2Fbrowser-repo",
+				expect.objectContaining({ method: "POST" }),
+			);
 		});
 
 		it("does nothing when promptRepoPath returns null in browser mode", async () => {
@@ -3216,7 +3292,6 @@ describe("useGitOperations", () => {
 
 			mockPty.write.mockRejectedValue(new Error("write failed"));
 
-			const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 			await gitOps.executeRunCommand("failing-cmd");
 
 			const ids = terminalsStore.getIds();
@@ -3224,8 +3299,14 @@ describe("useGitOperations", () => {
 
 			await vi.advanceTimersByTimeAsync(500);
 
-			expect(errSpy).toHaveBeenCalledWith("[terminal]", "Failed to send run command", expect.any(Error));
-			errSpy.mockRestore();
+			expect(appLogger.getEntries()).toContainEqual(
+				expect.objectContaining({
+					level: "error",
+					source: "terminal",
+					message: "Failed to send run command",
+					data: expect.objectContaining({ message: "write failed" }),
+				}),
+			);
 		});
 	});
 

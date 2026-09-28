@@ -93,12 +93,44 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
+### Receive and answer an agent's question away from the desk
+
+1. On the Mac, enable **Remote Access** and **Tailscale HTTPS** in TUICommander
+   Settings. Connect both the Mac and phone to the same tailnet. Use the HTTPS
+   Tailscale URL shown in Settings; a plain LAN `http://` URL cannot register a
+   phone service worker for push. Do not expose the port to the public internet.
+2. Open `<Tailscale HTTPS URL>/mobile` on the phone and sign in. On iPhone, add
+   it to the Home Screen, then launch that installed PWA. In mobile **Settings**,
+   turn **Push notifications** on and grant notification permission. If it says
+   **Enabled** for an old subscription, turn it off and back on to re-subscribe.
+3. On the Mac, run an authenticated `POST /api/push/test` against that HTTPS
+   server. `sent` counts accepted push-service requests, not notification
+   display. A 404 means no subscription; `stale_removed` after HTTP 410 means
+   the phone must re-subscribe. A 503 means push is disabled or the VAPID key is
+   unavailable. Confirm the notification actually appears on the phone.
+4. Have a managed agent report `progress type=blocked` with its question.
+   After the desktop is unfocused, or the Mac has had no HID input for two
+   minutes, the phone notification contains the question and opens that
+   session. Type one answer and tap Send. The PWA waits for the same submission
+   receipt as `session action=submit`; if the session closed or is busy, it
+   keeps the draft for review instead of blindly retrying.
+
+The question is encrypted to the phone's Web Push subscription. It does not
+pass through TUICommander's content-blind cloud relay. TUICommander sends at
+most one question or completion push per session every 30 seconds.
+Notifications from different sessions remain separate. A newer notification
+for one session can replace its earlier one; tapping either remaining session
+notification opens that session.
+
 ### Mobile Features
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
 - **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input
+- **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
+- **Progress** — Select a project with journal entries to read its recent reports
+- **Remote sessions** — Open live output and close a session on its connected owning machine from the same phone page
 - **Notification sounds** — Audio alerts for questions, errors, completions, and rate limits
 
 ### Tips
@@ -132,6 +164,8 @@ fast and the CPU is the scarcer thing. Profiles written before this option exist
 keep compressing.
 
 Tunnel profiles are stored as TOML files. **Global profiles** live in `<config_dir>/tunnels/` and are available across all repos. **Per-repo profiles** are stored in `<repo>/.tuic/tunnels/` and override global profiles with the same ID.
+
+A tunnel shows **Connected** only after SSH survives its initial 500 ms. With local forwards, every local port must also accept a TCP connection. If SSH exits first or a port does not start listening within 30 seconds, the tunnel reports the failure instead.
 
 ### Auto-Connect
 
@@ -221,6 +255,8 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 7. Set the auth username and password the daemon was configured with
 8. Save, then click **Connect**
 
+For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
+
 ### Adding a Direct Connection
 
 1. Open **Settings** → **Remote Machines** and click **+**
@@ -256,6 +292,33 @@ path also uses `tuic-remote.pid`; deleting an on-connect machine sends a
 best-effort stop, while deleting an installed connection deliberately leaves its
 service alone. The daemon is launched with `--no-agent-configs`, so deploying it
 does not rewrite the host's Claude, Codex, or other agent configuration.
+
+### Update and restart a remote machine
+
+When a connected daemon reports a different binary SHA-256 from the binary the
+desktop would deploy, **Remote out of date** appears beside the connection.
+Select **Update & restart remote** for either Direct or SSH transport. The
+preview reports the remote target and build, selected desktop build and source,
+and the number of live PTY sessions. Confirming ends those sessions. The
+desktop uses the matching release asset first; if that asset does not exist, a
+locally built `tuic-remote` beside the desktop executable is used only when its
+target triple matches the remote. A target mismatch names both targets; a
+missing local binary reports its expected path.
+
+Direct updates stream the binary over the authenticated connection. The daemon
+verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
+count, stages it in its own install directory, then starts the new build. SSH
+updates use the existing SCP deployment path. TUICommander waits for `/health`
+to report the selected build after restart; the connection's status polling
+re-authenticates when the daemon mints a new token. A changed session count or
+binary between preview and confirmation cancels the update. In-process update
+on Windows is unavailable: a running `.exe` cannot be overwritten, and the
+daemon answers 501.
+
+An older daemon without `/health.build` is shown as out of date. SSH can
+bootstrap it because the desktop probes the host target with `uname`; an older
+Direct daemon has no update endpoint or reported target, so it needs one manual
+installation of a compatible daemon before this action can update it.
 
 ### Authentication
 
@@ -329,8 +392,8 @@ dialog update without moving the journal to the local machine.
 
 Once a remote connection is configured:
 
-- **Add remote repo** — When adding a repository, select a connection. The repo appears in the sidebar with a remote badge
-- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. I/O works identically to local terminals
+- **Add remote repo** — Select a connection and browse from that machine's home directory. If a directory cannot be read, the picker explains the error and still allows entering a path or moving to its parent. The repo appears in the sidebar with a remote badge
+- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection shows a persistent error toast
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
@@ -382,6 +445,9 @@ The frontend keeps one copy per machine, read the first time that machine is nee
 dropped whenever its connection changes state — a daemon that went away and came back may
 have been reconfigured, or be a different box behind the same name. A local repository
 costs no round trip at all: its config is read once at boot.
+If a remote config cannot be read, the Agents tab shows the connection error and retries
+on the next load. It does not save a fallback empty config over the remote file. A 404
+for `/config/agents` means the remote daemon needs an update that includes this route.
 
 **Stays here — this app owns it.** Theme, keybindings, pane layout, notification config
 and the repository registry describe this window on this desktop. None of them is ever

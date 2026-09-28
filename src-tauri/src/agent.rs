@@ -3,6 +3,7 @@ use portable_pty::{CommandBuilder, PtySize};
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, State};
@@ -581,6 +582,440 @@ pub(crate) fn detect_installed_ides() -> Vec<String> {
 pub(crate) struct AgentBinaryDetection {
     pub(crate) path: Option<String>,
     pub(crate) version: Option<String>,
+    pub(crate) supports_no_alt_screen: bool,
+}
+
+#[derive(Default)]
+struct ScreenProbeState {
+    known: Option<bool>,
+    retry_after: Option<std::time::Instant>,
+    warned: bool,
+}
+
+fn help_advertises_flag(text: &str, flag: &str) -> bool {
+    text.match_indices(flag).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + flag.len()..].chars().next();
+        !before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            && !after.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    })
+}
+
+fn agent_probe_command(path: &str) -> Command {
+    #[cfg(windows)]
+    if std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
+    {
+        let mut cmd = Command::new(crate::fs::system32_exe("cmd.exe"));
+        cmd.arg("/D").arg("/C").arg(path);
+        return cmd;
+    }
+    Command::new(path)
+}
+
+#[derive(Debug)]
+enum ScreenProbeError {
+    TimedOut,
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ScreenProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => write!(f, "--help timed out"),
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+#[cfg(unix)]
+struct ScreenProbeTree;
+
+#[cfg(unix)]
+impl ScreenProbeTree {
+    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+        Ok(Self)
+    }
+
+    fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn terminate(self, pid: u32) {
+        // The probe owns this group: signal its grandchildren as well as the
+        // direct child. The child is reaped separately below.
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+    }
+}
+
+#[cfg(windows)]
+struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl ScreenProbeTree {
+    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+        // Rust's Child does not expose its primary thread on stable Windows.
+        // Suspend creation so no launcher can fork before job assignment.
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let job = Self(handle);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+        if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Self::resume_primary_thread(child.id())
+    }
+
+    fn resume_primary_thread(pid: u32) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+        };
+
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut found = None;
+        let mut has_entry = unsafe { Thread32First(snapshot, &mut entry) };
+        while has_entry != 0 {
+            if entry.th32OwnerProcessID == pid {
+                found = Some(entry.th32ThreadID);
+                break;
+            }
+            has_entry = unsafe { Thread32Next(snapshot, &mut entry) };
+        }
+        unsafe { CloseHandle(snapshot) };
+        let thread_id = found.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "probe primary thread not found",
+            )
+        })?;
+        let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+        if thread.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let previous_count = unsafe { ResumeThread(thread) };
+        let error = if previous_count == u32::MAX {
+            Some(std::io::Error::last_os_error())
+        } else if previous_count != 1 {
+            Some(std::io::Error::other(format!(
+                "probe primary thread had suspend count {previous_count}"
+            )))
+        } else {
+            None
+        };
+        unsafe { CloseHandle(thread) };
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn terminate(self, _pid: u32) {
+        // Closing the last handle kills the whole job, including cmd.exe's
+        // node.exe child when a Windows npm shim hangs on --help.
+        drop(self);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ScreenProbeTree {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// A help probe owns and tears down its process tree, including descendants
+/// that inherited stdout or stderr. The shared git deadline helper deliberately
+/// has different child-only semantics, so screen probes keep this local.
+fn screen_probe_output(
+    cmd: &mut Command,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, ScreenProbeError> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let tree = ScreenProbeTree::prepare(cmd).map_err(ScreenProbeError::Io)?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(ScreenProbeError::Io)?;
+    if let Err(error) = tree.assign(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ScreenProbeError::Io(error));
+    }
+    let mut stdout = child.stdout.take().expect("stdout piped above");
+    let mut stderr = child.stderr.take().expect("stderr piped above");
+    let out_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let mut poll = std::time::Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(
+                    poll.min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+                poll = (poll * 2).min(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                tree.terminate(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ScreenProbeError::TimedOut);
+            }
+            Err(error) => {
+                tree.terminate(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ScreenProbeError::Io(error));
+            }
+        }
+    };
+    tree.terminate(child.id());
+    Ok(std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    })
+}
+
+fn preferred_agent_path(output: &str) -> Option<&str> {
+    let mut paths = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    #[cfg(windows)]
+    {
+        let choices: Vec<&str> = paths.collect();
+        return choices
+            .iter()
+            .copied()
+            .find(|path| {
+                std::path::Path::new(path)
+                    .extension()
+                    .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("exe"))
+            })
+            .or_else(|| {
+                choices.iter().copied().find(|path| {
+                    std::path::Path::new(path)
+                        .extension()
+                        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
+                })
+            })
+            .or_else(|| choices.first().copied());
+    }
+    #[cfg(not(windows))]
+    {
+        paths.next()
+    }
+}
+
+fn resolve_probe_executable(path: &str) -> std::path::PathBuf {
+    let enriched = crate::cli::enriched_path();
+    #[cfg(windows)]
+    let suffixes = &["exe", "cmd"];
+    #[cfg(not(windows))]
+    let suffixes: &[&str] = &[];
+    resolve_probe_executable_from_dirs(
+        path,
+        std::env::split_paths(std::ffi::OsStr::new(&enriched)),
+        suffixes,
+    )
+}
+
+fn resolve_probe_executable_from_dirs(
+    path: &str,
+    dirs: impl IntoIterator<Item = std::path::PathBuf>,
+    suffixes: &[&str],
+) -> std::path::PathBuf {
+    let given = std::path::Path::new(path);
+    if given.components().count() != 1 {
+        return given.to_path_buf();
+    }
+    for dir in dirs {
+        let candidate = dir.join(path);
+        if (suffixes.is_empty() || given.extension().is_some()) && candidate.is_file() {
+            return candidate;
+        }
+        for suffix in suffixes {
+            let candidate = dir.join(format!("{path}.{suffix}"));
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    given.to_path_buf()
+}
+
+/// Probe the configured CLI with a bounded, single-flight help request. A
+/// timeout is final for this binary version; quick inconclusive exits can be
+/// retried after a short cooldown.
+// DEFERRED (2026-09-25) — Codex `--no-alt-screen` and OpenCode `--mini`
+// capture fixtures (story 939-475b): recording them launches a TUIC binary,
+// which can rewrite the user's agent MCP configs until the mcp-config-guard
+// fix (story 949-0421) lands. Capture them right after that landing.
+pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
+    let binary_name = std::path::Path::new(agent_type)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(agent_type);
+    let binary_name = binary_name.to_ascii_lowercase();
+    let binary_name = binary_name
+        .strip_suffix(".exe")
+        .or_else(|| binary_name.strip_suffix(".cmd"))
+        .unwrap_or(&binary_name);
+    let Some((flag, _)) = crate::agent_hook_launch::screen_policy(binary_name) else {
+        return false;
+    };
+    type Entry = Arc<Mutex<ScreenProbeState>>;
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Entry>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let executable = resolve_probe_executable(path);
+    let target = std::fs::canonicalize(&executable).unwrap_or_else(|_| executable.clone());
+    let metadata = std::fs::metadata(&target).ok();
+    let key = format!(
+        "{binary_name}:{}:{:?}:{:?}",
+        target.display(),
+        metadata.as_ref().map(std::fs::Metadata::len),
+        metadata.as_ref().and_then(|info| info.modified().ok())
+    );
+    let entry = cache
+        .lock()
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(ScreenProbeState::default())))
+        .clone();
+    let mut state = entry.lock();
+    if let Some(known) = state.known {
+        return known;
+    }
+    if state
+        .retry_after
+        .is_some_and(|at| std::time::Instant::now() < at)
+    {
+        return false;
+    }
+    let mut cmd = agent_probe_command(executable.to_str().unwrap_or(path));
+    cmd.arg("--help");
+    let enriched = crate::cli::enriched_path();
+    let mut dirs = Vec::new();
+    if let Some(parent) = executable
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+    {
+        dirs.push(parent.to_path_buf());
+    }
+    dirs.extend(std::env::split_paths(std::ffi::OsStr::new(&enriched)));
+    cmd.env(
+        "PATH",
+        std::env::join_paths(dirs).unwrap_or_else(|_| std::ffi::OsString::from(enriched)),
+    );
+    crate::cli::apply_no_window(&mut cmd);
+    let mut timed_out = false;
+    let result = match screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)) {
+        Ok(output) => {
+            let help = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if help_advertises_flag(&help, flag) {
+                Ok(true)
+            } else if output.status.success() && !help.trim().is_empty() {
+                Ok(false)
+            } else {
+                Err(format!(
+                    "--help exited {:?}: {}",
+                    output.status.code(),
+                    help.lines().next().unwrap_or("")
+                ))
+            }
+        }
+        Err(error) => {
+            timed_out = matches!(error, ScreenProbeError::TimedOut);
+            Err(error.to_string())
+        }
+    };
+    match result {
+        Ok(supported) => {
+            state.known = Some(supported);
+            supported
+        }
+        Err(error) => {
+            if timed_out {
+                state.known = Some(false);
+            } else {
+                state.retry_after =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            }
+            if !state.warned {
+                tracing::warn!(
+                    source = "agent",
+                    agent_type,
+                    path,
+                    error,
+                    "Agent screen capability probe failed"
+                );
+                state.warned = true;
+            }
+            false
+        }
+    }
 }
 
 /// Agent binaries TUIC knows how to launch — the Rust-side mirror of `AGENTS` in
@@ -601,8 +1036,15 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
 ];
 
 /// Detect any agent binary location
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
+pub(crate) fn detect_agent_binary_sync(binary: String) -> AgentBinaryDetection {
+    let direct_path = std::path::Path::new(&binary);
+    if direct_path.is_absolute() && direct_path.is_file() {
+        return AgentBinaryDetection {
+            path: Some(binary.clone()),
+            version: get_binary_version(&binary),
+            supports_no_alt_screen: supports_no_alt_screen(&binary, &binary),
+        };
+    }
     let home = dirs::home_dir()
         .unwrap_or_default()
         .to_string_lossy()
@@ -660,14 +1102,15 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
     if let Ok(output) = checker_cmd.output()
         && output.status.success()
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        // `where` on Windows may return multiple lines; take the first
-        let path = path.lines().next().unwrap_or("").to_string();
+        let listed = String::from_utf8_lossy(&output.stdout);
+        let path = preferred_agent_path(&listed).unwrap_or("").to_string();
         if !path.is_empty() && std::path::Path::new(&path).exists() {
             let version = get_binary_version(&path);
+            let supports_no_alt_screen = supports_no_alt_screen(&binary, &path);
             return AgentBinaryDetection {
                 path: Some(path),
                 version,
+                supports_no_alt_screen,
             };
         }
     }
@@ -679,6 +1122,7 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
             return AgentBinaryDetection {
                 path: Some(candidate.clone()),
                 version,
+                supports_no_alt_screen: supports_no_alt_screen(&binary, candidate),
             };
         }
     }
@@ -686,7 +1130,21 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
     AgentBinaryDetection {
         path: None,
         version: None,
+        supports_no_alt_screen: false,
     }
+}
+
+/// The desktop command runs on an async executor so CLI discovery and help
+/// probing never park the WebView's command thread.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
+    tokio::task::spawn_blocking(move || detect_agent_binary_sync(binary))
+        .await
+        .unwrap_or(AgentBinaryDetection {
+            path: None,
+            version: None,
+            supports_no_alt_screen: false,
+        })
 }
 
 /// Batch-detect multiple agent binaries in parallel.
@@ -772,12 +1230,13 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
     if let Ok(output) = checker_cmd.output()
         && output.status.success()
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let path = path.lines().next().unwrap_or("").to_string();
+        let listed = String::from_utf8_lossy(&output.stdout);
+        let path = preferred_agent_path(&listed).unwrap_or("").to_string();
         if !path.is_empty() && std::path::Path::new(&path).exists() {
             return AgentBinaryDetection {
                 path: Some(path),
                 version: None,
+                supports_no_alt_screen: false,
             };
         }
     }
@@ -787,6 +1246,7 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
             return AgentBinaryDetection {
                 path: Some(candidate.clone()),
                 version: None,
+                supports_no_alt_screen: false,
             };
         }
     }
@@ -794,35 +1254,25 @@ fn detect_binary_path_only(binary: &str) -> AgentBinaryDetection {
     AgentBinaryDetection {
         path: None,
         version: None,
+        supports_no_alt_screen: false,
     }
 }
 
 /// Get version of a binary (try --version or -v)
 fn get_binary_version(path: &str) -> Option<String> {
-    // Try --version first
-    let mut cmd = Command::new(path);
-    cmd.arg("--version");
-    crate::cli::apply_no_window(&mut cmd);
-    if let Ok(output) = cmd.output()
-        && output.status.success()
-    {
-        let version = String::from_utf8_lossy(&output.stdout);
-        let first_line = version.lines().next().unwrap_or("").trim();
-        if !first_line.is_empty() {
-            return Some(first_line.to_string());
-        }
-    }
-    // Try -v
-    let mut cmd = Command::new(path);
-    cmd.arg("-v");
-    crate::cli::apply_no_window(&mut cmd);
-    if let Ok(output) = cmd.output()
-        && output.status.success()
-    {
-        let version = String::from_utf8_lossy(&output.stdout);
-        let first_line = version.lines().next().unwrap_or("").trim();
-        if !first_line.is_empty() {
-            return Some(first_line.to_string());
+    for flag in ["--version", "-v"] {
+        let mut cmd = agent_probe_command(path);
+        cmd.arg(flag).env("PATH", crate::cli::enriched_path());
+        crate::cli::apply_no_window(&mut cmd);
+        if let Ok(output) =
+            crate::git_cli::output_with_deadline(&mut cmd, std::time::Duration::from_secs(2))
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let first_line = version.lines().next().unwrap_or("").trim();
+            if !first_line.is_empty() {
+                return Some(first_line.to_string());
+            }
         }
     }
     None
@@ -882,8 +1332,8 @@ pub(crate) fn prompt_prefill_only(agent_type: &str) -> bool {
 
 /// Detect claude binary location (legacy, delegates to detect_agent_binary)
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn detect_claude_binary() -> Result<String, String> {
-    let detection = detect_agent_binary("claude".to_string());
+pub(crate) async fn detect_claude_binary() -> Result<String, String> {
+    let detection = detect_agent_binary("claude".to_string()).await;
     detection.path.ok_or_else(|| {
         "Claude binary not found. Install with: npm install -g @anthropic-ai/claude-code"
             .to_string()
@@ -911,12 +1361,12 @@ pub(crate) async fn spawn_agent(
         }
         expanded
     } else if let Some(ref agent_type) = agent_config.agent_type {
-        let detection = detect_agent_binary(agent_type.clone());
+        let detection = detect_agent_binary(agent_type.clone()).await;
         detection
             .path
             .ok_or_else(|| format!("Agent binary '{agent_type}' not found"))?
     } else {
-        detect_claude_binary()?
+        detect_claude_binary().await?
     };
 
     let session_id = Uuid::new_v4().to_string();
@@ -964,6 +1414,7 @@ pub(crate) async fn spawn_agent(
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
             for arg in crate::agent_hook_launch::augment_args(
                 agent_type,
+                &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
             ) {
@@ -982,6 +1433,7 @@ pub(crate) async fn spawn_agent(
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
             );
+            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_pty_config.env);
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_pty_config.env {
                 cmd.env(key, value);
@@ -1054,7 +1506,262 @@ pub(crate) async fn spawn_agent(
 mod tests {
     use super::*;
 
+    #[test]
+    fn windows_probe_resolution_prefers_runnable_shims_over_extensionless_script() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let npm = root.path().join("npm");
+        std::fs::create_dir(&npm).unwrap();
+        std::fs::write(npm.join("codex"), "#!/bin/sh\n").unwrap();
+        std::fs::write(npm.join("codex.cmd"), "@echo off\r\n").unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.cmd")
+        );
+
+        std::fs::write(npm.join("codex.exe"), []).unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.exe")
+        );
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex.cmd", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.cmd")
+        );
+
+        std::fs::remove_file(npm.join("codex.exe")).unwrap();
+        std::fs::remove_file(npm.join("codex.cmd")).unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            std::path::PathBuf::from("codex")
+        );
+
+        let later = root.path().join("later");
+        std::fs::create_dir(&later).unwrap();
+        std::fs::write(later.join("codex.cmd"), "@echo off\r\n").unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs(
+                "codex",
+                [npm.clone(), later.clone()],
+                &["exe", "cmd"]
+            ),
+            later.join("codex.cmd")
+        );
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &[]),
+            npm.join("codex")
+        );
+    }
+
+    #[test]
+    fn screen_help_flag_matching_requires_option_boundaries() {
+        assert!(help_advertises_flag("  --mini  compact mode", "--mini"));
+        assert!(help_advertises_flag("[--no-alt-screen]", "--no-alt-screen"));
+        assert!(!help_advertises_flag("--minimal", "--mini"));
+        assert!(!help_advertises_flag(
+            "--no-alt-screen-extra",
+            "--no-alt-screen"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn screen_help_probe_has_a_deadline_and_reaps_its_child() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-timeout",
+            "exec sleep 8",
+            "echo --no-alt-screen",
+        );
+        let start = std::time::Instant::now();
+        assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_screen_help_is_probed_once_per_binary_version() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-hang-version",
+            "printf x >> \"${0%/*}/screen-help-hang-version.count\"; sleep 8",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-hang-version.count");
+        let _ = std::fs::remove_file(&marker);
+        let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        assert!(!supports_no_alt_screen("codex", &path));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x");
+
+        let replacement = crate::test_support::fake_ssh_script(
+            "screen-help-hang-version",
+            "printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        assert_eq!(script, replacement);
+        assert!(supports_no_alt_screen("codex", &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_screen_help_stops_its_grandchild() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-hang-tree",
+            "(i=0; while [ \"$i\" -lt 35 ]; do printf x >> \"${0%/*}/screen-help-hang-tree.count\"; i=$((i + 1)); sleep 0.1; done) & wait",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-hang-tree.count");
+        let _ = std::fs::remove_file(&marker);
+        assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+        let at_timeout = std::fs::read(&marker).unwrap().len();
+        assert!(at_timeout > 0, "the grandchild must have run");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(
+            std::fs::read(&marker).unwrap().len(),
+            at_timeout,
+            "the timed-out probe must stop its grandchild"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_version_detection_does_not_wait_for_a_hung_version_flag() {
+        let script = crate::test_support::fake_ssh_script(
+            "agent-version-timeout",
+            "if [ \"$1\" = '--version' ]; then exec sleep 8; fi; echo 0.1.0",
+            "echo 0.1.0",
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(
+            get_binary_version(&script.to_string_lossy()).as_deref(),
+            Some("0.1.0")
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_screen_help_requests_share_one_probe() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-single-flight",
+            "printf x >> \"${0%/*}/screen-help-single-flight.count\"; sleep 1; printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-single-flight.count");
+        let _ = std::fs::remove_file(&marker);
+        let path = script.to_string_lossy().into_owned();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    supports_no_alt_screen("codex", &path)
+                })
+            })
+            .collect();
+        barrier.wait();
+        for handle in handles {
+            assert!(handle.join().unwrap());
+        }
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "x");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_screen_help_probe_is_retried_after_cooldown() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-retry",
+            "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-retry.ready");
+        let _ = std::fs::remove_file(&marker);
+        let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        assert!(supports_no_alt_screen("codex", &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_successful_help_is_inconclusive_and_retried() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-empty",
+            "marker=\"${0%/*}/screen-help-empty.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 0; fi; printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-help-empty.ready");
+        let _ = std::fs::remove_file(&marker);
+        let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        assert!(supports_no_alt_screen("codex", &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn screen_help_probe_finds_sibling_tools_missing_from_parent_path() {
+        let helper = crate::test_support::fake_ssh_script(
+            "screen-help-sibling-helper",
+            "exit 0",
+            "exit /b 0",
+        );
+        let helper_name = helper.file_name().unwrap().to_string_lossy();
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-sibling-path",
+            &format!(
+                "command -v '{helper_name}' >/dev/null || exit 1; printf '%s\\n' '--no-alt-screen'"
+            ),
+            "echo --no-alt-screen",
+        );
+        assert!(supports_no_alt_screen("codex", &script.to_string_lossy()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn screen_help_probe_accepts_a_flag_printed_on_stderr() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-help-stderr",
+            "printf '%s\\n' '--mini' >&2; exit 1",
+            "echo --mini",
+        );
+        assert!(supports_no_alt_screen(
+            "opencode",
+            &script.to_string_lossy()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_an_agent_binary_invalidates_its_screen_capability() {
+        let old = crate::test_support::fake_ssh_script(
+            "screen-help-upgrade",
+            "printf '%s\\n' 'old help'",
+            "echo old help",
+        );
+        assert!(!supports_no_alt_screen("codex", &old.to_string_lossy()));
+        let new = crate::test_support::fake_ssh_script(
+            "screen-help-upgrade",
+            "printf '%s\\n' 'new help --no-alt-screen'",
+            "echo new help --no-alt-screen",
+        );
+        assert_eq!(old, new);
+        assert!(supports_no_alt_screen("codex", &new.to_string_lossy()));
+    }
+
     // resolve_cli and extra_bin_dirs tests are now in cli.rs
+
+    #[test]
+    fn direct_agent_binary_path_is_detected_without_using_path_search() {
+        let path = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let detected = detect_agent_binary_sync(path.clone());
+        assert_eq!(detected.path.as_deref(), Some(path.as_str()));
+        assert!(!detected.supports_no_alt_screen);
+    }
 
     /// The MCP/HTTP detect surface reports KNOWN_AGENT_BINARIES verbatim, so an agent added to
     /// the frontend registry but not here is installed-yet-invisible to an orchestrator.
@@ -1150,11 +1857,11 @@ mod tests {
         assert_eq!(default_prompt_args("totally-unknown"), None);
     }
 
-    #[test]
-    fn test_detect_claude_binary() {
+    #[tokio::test]
+    async fn test_detect_claude_binary() {
         // This test checks that detect_claude_binary returns a result
         // It may succeed or fail depending on whether claude is installed
-        let result = detect_claude_binary();
+        let result = detect_claude_binary().await;
         // We just verify it doesn't panic and returns a proper Result
         match result {
             Ok(path) => {

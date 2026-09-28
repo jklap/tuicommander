@@ -7,9 +7,10 @@ import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { IFRAME_EXTERNAL_LINK_SCRIPT } from "../../utils/iframeExternalLinks";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SCROLLBAR_STYLE, IFRAME_SEARCH_BRIDGE_SCRIPT } from "../../utils/iframeSearch";
-import { openLocalPath } from "../../utils/openUrl";
+import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { buildSearchPattern, type SearchOptions } from "../shared/DomSearchEngine";
 import e from "../shared/editor-header.module.css";
@@ -100,6 +101,9 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 		const data = event.data;
 		if (!data || typeof data !== "object") return;
 		switch (data.type) {
+			case "tuic:preview-open-url":
+				if (typeof data.url === "string") handleOpenUrl(data.url);
+				break;
 			case "tuic:reload-request":
 				reloadIframe();
 				break;
@@ -207,10 +211,12 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 						fileContent =
 							fileContent.slice(0, headClose) +
 							IFRAME_SEARCH_BRIDGE_SCRIPT +
+							IFRAME_EXTERNAL_LINK_SCRIPT +
 							IFRAME_SCROLLBAR_STYLE +
 							fileContent.slice(headClose);
 					} else {
-						fileContent = IFRAME_SEARCH_BRIDGE_SCRIPT + IFRAME_SCROLLBAR_STYLE + fileContent;
+						fileContent =
+							IFRAME_SEARCH_BRIDGE_SCRIPT + IFRAME_EXTERNAL_LINK_SCRIPT + IFRAME_SCROLLBAR_STYLE + fileContent;
 					}
 				}
 				setContent(fileContent);

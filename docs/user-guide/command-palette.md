@@ -37,7 +37,8 @@ Hovering over a row highlights it (same as keyboard selection). Clicking a row e
 Run **Open Terminal Progress** to open the active terminal's journal in a dialog.
 Use the selector to inspect another terminal or the whole repository.
 This action is available in desktop and browser mode. The same dialog opens from
-the aggregate Progress entry in the notification bell.
+the always available **Terminal Progress** entry in the notification bell, or
+with `Cmd/Ctrl+Shift+P`. The bell badge still counts unread updates.
 
 ### Powered by the Action Registry
 
@@ -84,6 +85,8 @@ These appear as regular commands in the palette — type "Search" to find them.
 ## Activity Dashboard
 
 Open with `Cmd+Shift+A`. A real-time overview of all your terminal sessions.
+The overlay stays compact in the main window and fits narrow windows; detaching
+it keeps the same list in a separate window.
 
 ### What You See
 
@@ -95,6 +98,9 @@ A compact list where each row shows:
 | **Agent type** | Detected agent (Claude, Aider, etc.) with brand icon |
 | **Status** | Current state with color indicator |
 | **Last activity** | Relative timestamp ("2s ago", "1m ago") — auto-refreshes |
+
+Spawned agent rows include a robot-head marker. Hover it to see the parent
+terminal's name, or "external agent" when its tab is unavailable.
 
 ### Status Colors
 

@@ -89,17 +89,6 @@ impl ScriptMaps {
         true
     }
 
-    pub(crate) async fn on_script_parsed(
-        &mut self,
-        script_url: &str,
-        source_map_url: &str,
-    ) -> bool {
-        match fetch_source_map(script_url, source_map_url).await {
-            Some(bytes) => self.insert(script_url, &bytes),
-            None => false,
-        }
-    }
-
     fn lookup(&mut self, script_url: &str, line: u32, column: u32) -> Option<SourceLoc> {
         let entry = self.entries.get(script_url)?;
         let token = entry
@@ -365,19 +354,6 @@ mod tests {
         assert_eq!(maps.lookup(SCRIPT, 1, 1).unwrap().file, "src/App.tsx");
         assert!(maps.insert(SCRIPT, INDEX));
         assert_eq!(maps.lookup(SCRIPT, 1, 1).unwrap().file, "src/Indexed.tsx");
-    }
-
-    #[tokio::test]
-    async fn data_uri_map_resolves_without_network() {
-        use base64::Engine as _;
-        let body = br#"{"version":3,"sources":["src/Inline.tsx"],"names":[],"mappings":"AAAA"}"#;
-        let map = format!(
-            "data:application/json;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(body)
-        );
-        let mut maps = ScriptMaps::default();
-        assert!(maps.on_script_parsed(SCRIPT, &map).await);
-        assert_eq!(maps.lookup(SCRIPT, 1, 1).unwrap().file, "src/Inline.tsx");
     }
 
     #[test]

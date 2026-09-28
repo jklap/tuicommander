@@ -180,7 +180,8 @@ struct IsolatedEnv {
 
 impl IsolatedEnv {
     fn new() -> Self {
-        let dir = tempfile::tempdir().expect("temporary test directory");
+        let dir = tempfile::tempdir_in(tuic_test_support::test_temp_root())
+            .expect("temporary test directory");
         let home = dir.path().join("home");
         let config = dir.path().join("xdg-config");
         let appdata = dir.path().join("appdata");

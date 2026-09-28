@@ -346,7 +346,7 @@ fn looks_like_contract_failure(message: &str) -> bool {
 }
 
 async fn fetch_snapshot() -> Result<CodexSnapshot, String> {
-    let detection = crate::agent::detect_agent_binary("codex".to_string());
+    let detection = crate::agent::detect_agent_binary("codex".to_string()).await;
     let binary = detection
         .path
         .ok_or_else(|| "Codex CLI not found".to_string())?;

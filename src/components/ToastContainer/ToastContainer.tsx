@@ -7,25 +7,9 @@ import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { pathBasename } from "../../utils/pathUtils";
 import { type RepoAction, ToastList } from "./ToastList";
 
-/**
- * Dismiss, and take the user to the terminal that raised the toast when there
- * is one to go to. An agent's `ui action=toast` says something happened in one
- * of ~25 open tabs; without this the user is told the news and then left to
- * find the speaker. A toast with no session, or one whose tab has since closed,
- * still just dismisses — the lookup happens here rather than in setActive so a
- * closed tab is a silent no-op instead of a warning.
- *
- * `navigateToTerminal`, not `terminalsStore.setActive`: the speaker is usually in
- * ANOTHER repo, and setActive moves only the active terminal. The sidebar and the
- * tab strip filter on `activeRepoPath`, so on its own it left the pane drawing a
- * terminal from a repo the user was not looking at, with no tab for it in the
- * strip — the same three-state split a cd used to cause.
- */
-function dismissAndReveal(toast: Toast): void {
+/** Closing the toast never navigates; the explicit repo action owns navigation. */
+function dismiss(toast: Toast): void {
 	toastsStore.remove(toast.id);
-	if (!toast.sessionId) return;
-	const terminalId = terminalsStore.findBySessionId(toast.sessionId);
-	if (terminalId) navigateToTerminal(terminalId);
 }
 
 /** The repo a toast came from, for the badge. Prefers what the backend resolved
@@ -60,10 +44,18 @@ function toastRepoAction(toast: Toast): RepoAction | null {
 					appLogger.warn("app", "Go to repo: the repository is no longer registered", { repoPath });
 					return false;
 				}
+				if (toast.sessionId) {
+					const terminalId = terminalsStore.findBySessionId(toast.sessionId);
+					if (terminalId) {
+						navigateToTerminal(terminalId);
+						return true;
+					}
+					appLogger.warn("app", "Go to repo: the originating terminal is no longer open", {
+						repoPath,
+						sessionId: toast.sessionId,
+					});
+				}
 				repositoriesStore.setActive(repoPath);
-				if (!toast.sessionId) return true;
-				const terminalId = terminalsStore.findBySessionId(toast.sessionId);
-				if (terminalId) navigateToTerminal(terminalId);
 				return true;
 			},
 		};
@@ -74,5 +66,5 @@ function toastRepoAction(toast: Toast): RepoAction | null {
 }
 
 export const ToastContainer: Component = () => {
-	return <ToastList onDismiss={dismissAndReveal} repoName={toastRepoName} repoAction={toastRepoAction} />;
+	return <ToastList onDismiss={dismiss} repoName={toastRepoName} repoAction={toastRepoAction} />;
 };

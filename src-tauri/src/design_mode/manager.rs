@@ -104,14 +104,6 @@ impl DesignModeManager {
         }
     }
 
-    pub(crate) async fn status(&self, repo_path: &str) -> Option<ModeStatus> {
-        self.modes
-            .lock()
-            .await
-            .get(repo_path)
-            .map(|mode| mode.status.clone())
-    }
-
     pub(crate) async fn statuses(&self) -> Vec<ModeStatus> {
         let mut statuses: Vec<_> = self
             .modes
@@ -890,7 +882,6 @@ mod tests {
         assert_eq!(recv(&mut events).await.status, "armed");
         drop(tx);
         assert_eq!(recv(&mut events).await.status, "stopped");
-        assert_eq!(manager.status("/repo").await.unwrap().status, "stopped");
     }
 
     #[tokio::test]
@@ -1112,7 +1103,6 @@ mod tests {
         release_tx.send(()).unwrap();
         assert!(starting.await.unwrap().is_err());
         assert_eq!(browser.closed.load(Ordering::SeqCst), 1);
-        assert_eq!(manager.status("/repo").await.unwrap().status, "stopped");
     }
 
     #[tokio::test]

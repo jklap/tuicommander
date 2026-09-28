@@ -74,8 +74,9 @@ import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { gitPanelAdapter } from "./panelAdapters/git";
 import { ideasPanelAdapter } from "./panelAdapters/ideas";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
+import { createMarkdownDocumentPanelAdapter } from "./panelAdapters/markdownDocument";
 import { outlinePanelAdapter } from "./panelAdapters/outline";
-import { registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
+import { detachPanel, reattachPanel, registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
 import { activityDashboardStore } from "./stores/activityDashboard";
 import { activityStore } from "./stores/activityStore";
 import { agentConfigsStore } from "./stores/agentConfigs";
@@ -96,7 +97,7 @@ import { prNotificationsStore } from "./stores/prNotifications";
 import { promptLibraryStore } from "./stores/promptLibrary";
 import { repoDefaultsStore } from "./stores/repoDefaults";
 import { repoSettingsStore } from "./stores/repoSettings";
-import { locateFile, repositoriesStore } from "./stores/repositories";
+import { repositoriesStore } from "./stores/repositories";
 import { settingsStore } from "./stores/settings";
 import { tasksStore } from "./stores/tasks";
 import { terminalsStore } from "./stores/terminals";
@@ -106,7 +107,8 @@ import { updaterStore } from "./stores/updater";
 import { userActivityStore } from "./stores/userActivity";
 import { worktreeManagerStore } from "./stores/worktreeManager";
 import { isTauri } from "./transport";
-import { openFileAction } from "./utils/filePreview";
+import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
+import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
@@ -349,6 +351,8 @@ const App: Component = () => {
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((s) => ({ id: s.id, checked: s.checked })),
 			worktreeAction: worktreeCleanupAction(),
+			worktreeDirty: ctx.worktreeDirty,
+			worktreeFingerprint: ctx.worktreeFingerprint,
 			unstash: options?.unstash,
 			onStepStart: (id) => setWorktreeCleanupStepStatuses((prev) => ({ ...prev, [id]: "running" as StepStatus })),
 			onStepDone: (id, result, error) => {
@@ -507,16 +511,18 @@ const App: Component = () => {
 	};
 
 	/** Open a file path from terminal output — .md/.mdx in MD viewer, others in internal editor */
-	const handleOpenFilePath = (absolutePath: string, _line?: number, _col?: number) => {
+	const handleOpenFilePath = (absolutePath: string, line?: number, col?: number) => {
 		// Scoped to the repo that owns the PATH. It used to relativize against the
 		// active worktree, so a path printed by an agent working in another repo
 		// opened as a tab filed under whichever repo the user happened to be on.
-		const { repoPath, fsRoot, filePath } = locateFile(absolutePath);
-		if (!repoPath) return;
-
-		openFileAction(filePath, repoPath, fsRoot, undefined, (tabId) => {
-			terminalLifecycle.handleTerminalSelect(tabId);
-		});
+		openTerminalFilePath(
+			absolutePath,
+			(tabId) => {
+				terminalLifecycle.handleTerminalSelect(tabId);
+			},
+			line,
+			col,
+		);
 	};
 
 	useFileOpenBridge();
@@ -542,7 +548,14 @@ const App: Component = () => {
 		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
 		const shellFamily = await getShellFamily(sessionId);
 		try {
-			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily);
+			await sendCommand(
+				(data) => invoke("write_pty", { sessionId, data }),
+				cmd,
+				agentType,
+				shellFamily,
+				true,
+				sessionId,
+			);
 			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
 		} catch (err) {
 			appLogger.error(
@@ -635,6 +648,13 @@ const App: Component = () => {
 	/** Detach a terminal tab to a floating OS window */
 	const handleDetachTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			if (mdTabsStore.get(tabId)?.type !== "file") return;
+			const adapter = createMarkdownDocumentPanelAdapter(tabId, terminalLifecycle.handleTerminalSelect);
+			registerPanel(adapter);
+			await detachPanel(adapter.id);
+			return;
+		}
 		const term = terminalsStore.get(tabId);
 		if (!term?.sessionId) return;
 
@@ -680,6 +700,10 @@ const App: Component = () => {
 	/** Focus a detached terminal's floating window */
 	const handleFocusDetachedTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			togglePanel(markdownDocumentPanelId(tabId));
+			return;
+		}
 		const windowLabel = terminalsStore.state.detachedWindows[tabId];
 		if (!windowLabel) return;
 		try {
@@ -700,6 +724,10 @@ const App: Component = () => {
 	/** Reattach a detached terminal by closing its floating window */
 	const handleReattachTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			await reattachPanel(markdownDocumentPanelId(tabId));
+			return;
+		}
 		const windowLabel = terminalsStore.state.detachedWindows[tabId];
 		if (!windowLabel) return;
 		try {
@@ -781,7 +809,7 @@ const App: Component = () => {
 		setHelpPanelVisible,
 	});
 	useDictationHotkey({
-		onStart: dictation.handleDictationStart,
+		onStart: () => void dictation.handleDictationStart(dictationStore.state.hotkey === "Fn" ? "fn" : "hotkey"),
 		onStop: dictation.handleDictationStop,
 	});
 

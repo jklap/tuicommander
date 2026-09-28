@@ -9228,6 +9228,7 @@ dependencies = [
  "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 
@@ -9482,6 +9483,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tuic-test-support",
 ]
 
 [[package]]
@@ -9491,6 +9493,106 @@ dependencies = [
  "clap",
  "dirs",
  "serde_json",
+ "tempfile",
+ "tuic-test-support",
+]
+
+[[package]]
+name = "tuic-core"
+version = "1.7.7"
+dependencies = [
+ "bm25",
+ "dirs",
+ "jsonc-parser",
+ "keyring",
+ "lazy_static",
+ "libc",
+ "parking_lot",
+ "rand 0.10.2",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tuic-test-support",
+ "uuid",
+]
+
+[[package]]
+name = "tuic-dictation"
+version = "1.7.7"
+dependencies = [
+ "block2",
+ "cpal",
+ "flate2",
+ "objc2",
+ "objc2-foundation",
+ "ort",
+ "parking_lot",
+ "rand 0.10.2",
+ "rodio",
+ "safetensors",
+ "sentencepiece-model",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tokenizers",
+ "tracing",
+ "tuic-core",
+ "tuic-test-support",
+ "webrtc-audio-processing",
+ "whisper-rs",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "tuic-git"
+version = "1.7.7"
+dependencies = [
+ "dashmap",
+ "gix",
+ "hex",
+ "moka",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "strip-ansi-escapes",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tuic-core",
+ "tuic-test-support",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "tuic-terminal"
+version = "1.7.7"
+dependencies = [
+ "alacritty_terminal",
+ "dirs",
+ "lazy_static",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "strip-ansi-escapes",
+ "tempfile",
+ "tracing",
+ "tuic-test-support",
+ "unicode-width 0.2.2",
+ "vte 0.15.0",
+]
+
+[[package]]
+name = "tuic-test-support"
+version = "1.7.7"
+dependencies = [
+ "ctor",
+ "portable-pty",
+ "tempfile",
 ]
 
 [[package]]
@@ -9514,7 +9616,6 @@ dependencies = [
  "chromey",
  "chrono",
  "console-subscriber",
- "cpal",
  "cron",
  "cuid2",
  "dashmap",
@@ -9545,7 +9646,6 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "ort",
  "parking_lot",
  "portable-pty",
  "rand 0.10.2",
@@ -9557,8 +9657,6 @@ dependencies = [
  "rodio",
  "rusqlite",
  "rustls",
- "safetensors",
- "sentencepiece-model",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -9580,21 +9678,25 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tempfile",
- "tokenizers",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "toml 1.1.3+spec-1.1.0",
+ "toml_edit 0.25.13+spec-1.1.0",
  "tower",
  "tower-http 0.7.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tuic-core",
+ "tuic-dictation",
+ "tuic-git",
+ "tuic-terminal",
+ "tuic-test-support",
  "ulid",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
  "web-push-native",
- "webrtc-audio-processing",
- "whisper-rs",
  "windows-sys 0.61.2",
  "zeroize",
  "zip 8.6.0",

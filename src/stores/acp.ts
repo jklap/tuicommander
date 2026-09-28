@@ -71,7 +71,44 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 			// The event names no session; the envelope does. Reading it off the
 			// event would move every attachment on the connection at once.
 			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
-			if (attachment) attachment.state = event.state;
+			if (attachment) {
+				attachment.state = event.state;
+				if (event.state === "cancelling" && attachment.activeTurn) attachment.activeTurn.state = "cancelling";
+			}
+			break;
+		}
+		case "turnStarted": {
+			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+			if (attachment && frame.turnId) {
+				attachment.state = "prompting";
+				attachment.activeTurn = { turnId: frame.turnId, state: "running", stopReason: null, usage: null };
+			}
+			break;
+		}
+		case "turnSettled": {
+			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+			if (attachment && attachment.activeTurn?.turnId === frame.turnId) {
+				attachment.state = "idle";
+				attachment.activeTurn = {
+					turnId: frame.turnId,
+					state: "settled",
+					stopReason: event.stopReason,
+					usage: event.usage,
+				};
+			}
+			break;
+		}
+		case "turnFailed": {
+			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+			if (attachment && attachment.activeTurn?.turnId === frame.turnId) {
+				attachment.state = event.state;
+				attachment.activeTurn = null;
+			}
+			break;
+		}
+		case "promptQueueChanged": {
+			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+			if (attachment) attachment.queuedPrompts = event.queuedPrompts;
 			break;
 		}
 		case "permissionRequested":
@@ -101,9 +138,7 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 			entry.interactions = entry.interactions.filter((i) => i.requestId !== event.requestId);
 			break;
 		default:
-			// `turnStarted`, `turnSettled` and every `sessionUpdate` belong to the
-			// transcript, which the panel owns. They still move the cursor, which
-			// is what this store is holding on their behalf.
+			// Session updates belong to the transcript; they still move the cursor.
 			break;
 	}
 }

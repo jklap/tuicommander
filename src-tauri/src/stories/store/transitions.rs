@@ -173,15 +173,17 @@ impl StoryStore {
                         return Err("story is not claimed by calling session".into());
                     }
                 }
+                StoryCommand::Approve => {
+                    if story.claim_session.as_deref() == Some(actor) {
+                        return Err("a story cannot be approved by its implementer".into());
+                    }
+                }
                 _ => {
                     return Err(
                         "review and administrative transitions require a user action".into(),
                     );
                 }
             }
-        }
-        if actor == StoryTransitionActor::LocalApi && command == StoryCommand::Approve {
-            return Err("approval requires an authenticated user action".into());
         }
         match command {
             StoryCommand::StartManual => {

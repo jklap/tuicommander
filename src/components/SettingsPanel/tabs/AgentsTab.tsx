@@ -122,6 +122,7 @@ const AddConfigForm: Component<{
 	const [name, setName] = createSignal("");
 	const [command, setCommand] = createSignal(AGENTS[props.agentType].binary);
 	const [args, setArgs] = createSignal("");
+	const [model, setModel] = createSignal("");
 	const [envVars, setEnvVars] = createSignal<Array<{ key: string; value: string }>>([]);
 
 	// Cross-agent duplicate name detection (case-insensitive). AddConfigForm
@@ -152,6 +153,7 @@ const AddConfigForm: Component<{
 			name: n,
 			command: command().trim() || AGENTS[props.agentType].binary,
 			args: args().trim() ? args().trim().split(/\s+/) : [],
+			model: model().trim() || undefined,
 			env: buildEnvFromEntries(envVars()),
 			is_default: false,
 		};
@@ -193,6 +195,15 @@ const AddConfigForm: Component<{
 						if (e.key === "Enter") handleSave();
 						if (e.key === "Escape") props.onClose();
 					}}
+				/>
+			</div>
+			<div class={a.formRow}>
+				<input
+					class={`${a.formInput} ${a.mono}`}
+					aria-label="Model"
+					placeholder="Model (optional)"
+					value={model()}
+					onInput={(e) => setModel(e.currentTarget.value)}
 				/>
 			</div>
 			{/* Env vars section */}
@@ -252,6 +263,7 @@ const RunConfigRow: Component<{
 	const [editName, setEditName] = createSignal("");
 	const [editCommand, setEditCommand] = createSignal("");
 	const [editArgs, setEditArgs] = createSignal("");
+	const [editModel, setEditModel] = createSignal("");
 	let menuRef: HTMLDivElement | undefined;
 
 	const cmdPreview = () => {
@@ -271,6 +283,7 @@ const RunConfigRow: Component<{
 		setEditName(props.config.name);
 		setEditCommand(props.config.command);
 		setEditArgs(props.config.args.join(" "));
+		setEditModel(props.config.model ?? "");
 		setEditingConfig(true);
 		setMenuOpen(false);
 	};
@@ -294,6 +307,7 @@ const RunConfigRow: Component<{
 			name: n,
 			command: editCommand().trim() || props.config.command,
 			args: editArgs().trim() ? editArgs().trim().split(/\s+/) : [],
+			model: editModel().trim() || undefined,
 		};
 		await configStore.updateRunConfig(props.agentType, props.index, updated);
 		setEditingConfig(false);
@@ -403,6 +417,15 @@ const RunConfigRow: Component<{
 								if (e.key === "Enter") saveConfig();
 								if (e.key === "Escape") setEditingConfig(false);
 							}}
+						/>
+					</div>
+					<div class={a.formRow}>
+						<input
+							class={`${a.formInput} ${a.mono}`}
+							aria-label="Model"
+							placeholder="Model (optional)"
+							value={editModel()}
+							onInput={(e) => setEditModel(e.currentTarget.value)}
 						/>
 					</div>
 					<div class={a.formRow}>
@@ -823,6 +846,49 @@ const AgentRow: Component<{
 							<p class={s.hint}>Inject "continue" on 5xx errors with backoff (5s, 15s, 30s)</p>
 						</div>
 					</ExpertSetting>
+
+					<ExpertSetting
+						configKey="agent_settings.prevent_alt_screen"
+						value={configStore.state.agents[props.agentType]?.prevent_alt_screen ?? null}
+					>
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									checked={configStore.getPreventAltScreen(props.agentType)}
+									onChange={() =>
+										configStore.setPreventAltScreen(props.agentType, !configStore.getPreventAltScreen(props.agentType))
+									}
+								/>
+								<span>Prevent alternate screen</span>
+							</label>
+							<p class={s.hint}>Use native terminal scrollback when this agent supports it. Applies to new launches.</p>
+						</div>
+					</ExpertSetting>
+
+					<Show when={props.agentType === "claude" || props.agentType === "codex"}>
+						<ExpertSetting
+							configKey="agent_settings.skip_trust_dialog"
+							value={configStore.state.agents[props.agentType]?.skip_trust_dialog ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getSkipTrustDialog(props.agentType)}
+										onChange={() =>
+											configStore.setSkipTrustDialog(props.agentType, !configStore.getSkipTrustDialog(props.agentType))
+										}
+									/>
+									<span>Accept workspace trust for managed spawns</span>
+								</label>
+								<p class={s.hint}>
+									Start agents in a new folder without stopping at their workspace trust question. Applies only to
+									agent-to-agent spawns.
+								</p>
+							</div>
+						</ExpertSetting>
+					</Show>
 
 					<Show when={supportsLaunchSignals()}>
 						<ExpertSetting

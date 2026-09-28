@@ -114,7 +114,10 @@ vi.mock("../../stores/userActivity", () => ({
 }));
 
 import { StatusBar } from "../../components/StatusBar/StatusBar";
+import { acpStore } from "../../stores/acp";
+import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
+import { uiStore } from "../../stores/ui";
 
 /** Build a mock BranchPrStatus for testing */
 function makePrData(overrides: Record<string, unknown> = {}) {
@@ -186,11 +189,54 @@ describe("StatusBar", () => {
 		mockIsGitRepo.mockReturnValue(true);
 		mockGetAllReposOrdered.mockReturnValue([]);
 		mockGetConnections.mockReturnValue({});
+		acpStore.reset();
+		uiStore.setAiChatPanelVisible(false);
 	});
 
 	afterEach(() => {
 		statusBarTicker.clear();
 		vi.useRealTimers();
+	});
+
+	it("shows pending ACP permission and elicitation counts on the hidden AI Chat toggle, then clears on settlement", () => {
+		vi.spyOn(settingsStore, "isAiChatEnabled").mockReturnValue(true);
+		acpStore.applySnapshot({
+			connectionId: "connection-1",
+			generation: 1,
+			state: "ready",
+			agentInfo: null,
+			capabilities: null,
+			attachments: [],
+			earliestSequence: 1,
+			latestSequence: 1,
+			settlement: null,
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		const toggle = findToggleByTitle(container, "AI Chat");
+		expect(toggle?.textContent).not.toContain("1");
+
+		acpStore.applyInteractions("connection-1", [
+			{
+				kind: "permission",
+				requestId: "permission-1",
+				sessionId: "session-1",
+				request: { sessionId: "session-1", toolCall: {}, options: [] },
+			},
+			{
+				kind: "elicitation",
+				requestId: "elicitation-1",
+				sessionId: "session-1",
+				request: { sessionId: "session-1", message: "Need a value", mode: "form", requestedSchema: {} },
+			},
+		]);
+		expect(toggle?.textContent).toContain("2");
+		uiStore.setAiChatPanelVisible(true);
+		expect(toggle?.textContent).not.toContain("2");
+		uiStore.setAiChatPanelVisible(false);
+		expect(toggle?.textContent).toContain("2");
+
+		acpStore.applyInteractions("connection-1", []);
+		expect(toggle?.textContent).not.toContain("2");
 	});
 
 	it("renders status info text", () => {

@@ -1,6 +1,6 @@
 # Output Parser
 
-**Module:** `src-tauri/src/output_parser.rs`
+**Module:** `src-tauri/crates/tuic-terminal/src/output_parser.rs`
 
 Parses terminal output to detect structured events: rate limits, status lines, PR URLs, and progress indicators.
 
@@ -84,10 +84,10 @@ Question events have two sources:
 
 - **Response-required OSC 777 notifications** are parsed from the raw PTY byte
   stream before VT rendering consumes the escape sequence. Only explicit
-  permission, approval, or waiting-for-input wording is accepted. A generic
-  desktop notification such as `Claude Code needs your attention` does not prove
-  that the composer awaits a response and is ignored for awaiting-state
-  detection. The accepted bodies do not carry the same weight:
+  permission or approval wording is accepted. Generic desktop notifications
+  such as `Claude Code needs your attention` and `Claude is waiting for your
+  input` do not prove that the composer awaits a response; the latter also
+  follows an ordinary completed turn and caused a transient false badge.
 
   Every qualifying notification in a raw chunk is retained in stream order;
   a later OSC sequence cannot overwrite an earlier approval request merely
@@ -96,15 +96,15 @@ Question events have two sources:
   | Body | Confidence | Why |
   |------|-----------|-----|
   | `needs your permission`, `approval required` | high | A request with one reading. Cleared by the answer. |
-  | `is waiting for your input` | **low** | Claude sends it for a blocked picker *and* on its 60s idle timer after a finished turn. Retractable, so `question-cleared` drops it when the screen shows no prompt. |
+  | `is waiting for your input` | ignored | The ready composer can produce the same notification. A visible Ink footer or choice prompt supplies the picker signal. |
 
-  A high-confidence question is retracted by nothing but real user input, so a
-  body that also means "idle" must never be high-confidence — it latched the
-  badge on a session that had finished 17h earlier (observed 2026-08-11).
+  A high-confidence question is retracted by nothing but real user input; the
+  generic body once latched the badge on a session that had finished 17h earlier
+  (observed 2026-08-11).
 - **Screen-verified silence detection** handles rendered questions (all instant
   regex patterns were removed due to false positives from Ink agent streaming):
 
-1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), and code syntax (`->`, `=>`, `::`, `)?`)
+1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), code syntax (`->`, `=>`, `::`, `)?`), and wrapped `suggest: [ … ]` protocol items
 2. `SilenceState` stores the candidate and starts a 10s silence timer
 3. When the timer fires, a visible input box restricts detection to the latest chat content above that prompt; only an unanchored screen may use the bounded changed-row fallback
 4. If verified, emits `ParsedEvent::Question { confident: false }`
@@ -130,11 +130,13 @@ Guards against false positives:
 - **User echo suppression**: 500ms window after user input ignores PTY echo of typed text
 - **Resize grace**: 1s suppression after terminal resize to avoid re-detection of redrawn content
 
-Hook-instrumented agents normally report awaiting through OSC 7770
-`state=awaiting`, but that hook covers only the agent's explicit question-tool
-event. Plan and skill pickers can instead be represented only by a qualifying
-OSC 777 notification, so raw-stream events bypass the heuristic-question
-suppression used for hook-instrumented sessions.
+Hook-instrumented agents report explicit question-tool waits through OSC 7770
+`state=awaiting`. Plan and skill Ink pickers are detected by their rendered
+footer, including the full-screen presence recovery when a hook does not fire.
+OSC 777 desktop notifications bypass heuristic-question suppression only for
+unambiguous permission or approval wording. Claude's generic `is waiting for
+your input` body also appears after a completed turn at the ready composer, so
+it cannot set awaiting by itself.
 
 The full-screen Ink-footer recovery also applies with hooks enabled. A later
 busy hook can clear awaiting while the dialog is still open. Before recovery,
@@ -168,7 +170,8 @@ not proof that it was answered.
 
 Agent-state failures must be captured from the raw PTY stream before analysis.
 Enable `POST /diagnostics/capture` before reproducing, stop it afterward, then
-copy the reported `<config dir>/captures/<session-id>.tcap` file into
+copy the reported capture file (under `<config dir>/captures/` by default, or
+under the absolute `TUIC_CAPTURE_DIR` override) into
 `src-tauri/src/fixtures/agent_prompts/`. `/sessions/:id/output` is not a fixture
 source: it is a rendered, bounded ring snapshot and can lose one-shot escape
 sequences. TUICCAP2 fixtures preserve the initial terminal geometry,
@@ -231,10 +234,37 @@ ParsedEvent::Intent {
 
 Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
 
+AI Chat receives ACP markdown chunks in both desktop and browser mode, without
+terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
+for that UI: it removes the connection acknowledgement, presents anchored
+`intent:` as status, and exposes bounded bracketed `suggest:` items as replies.
+It leaves fenced or indented code and prose mentions literal. This is a separate
+logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
+a new backend ACP projection and wire contract, including HTTP/IPC parity.
+
 Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
 
 - **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.
-- **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins at most two following rows, and only the wrap shape an Ink-hosted agent produces: indented, non-empty, no bullet or prompt glyph, and never past a row that already carries a closed `(title)`.
+- **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins indented rows only when the preceding row plus the next word would exceed the terminal width. The parser's 2048-character budget also bounds soft-wrap traversal, allowing a 12-row intent in a narrow pane. The input-box chrome cutoff bounds continuation reads. Blank rows, bullets, prompt and chrome glyphs, and a closed `(title)` stop the join. Closing a title-less intent removes an unfinished `(` title fragment.
+
+The PTY reader retains one open intent per session while a TUI redraws growing
+prefixes. It reconstructs soft-wrapped grid lines and joins width-verified
+hard-wrap rows before parsing. It reads continuation rows lazily and caches
+each anchor for one reader tick, so a repaint below an intent does not
+repeatedly scan the same grid rows. The grid reconstruction budget matches
+the parser's 2048-character candidate budget, including UTF-8 and terminal
+padding. Long intent text is redacted and truncated to the Progress journal
+limit, while the parsed event keeps the full text. An unfinished `(` suffix
+is recorded as titleless text when a different intent replaces it. The reader
+journals on a closed `(title)`, a VTE hard
+line break that did not grow the candidate, subsequent prose below the line,
+replacement of the line, or an idle turn boundary after output has gone quiet.
+Cursor moves, carriage returns, and growing Ink frame repaints do not close an
+intent. A repaint that keeps the anchor line while temporarily replacing its
+continuation also keeps the open candidate until the completed marker arrives.
+A pending intent is flushed when its session is removed. Repainting the
+last recorded value adds no journal row; a different intervening intent lets
+the earlier value be recorded again.
 
 Agents receive this instruction automatically via MCP init. To use manually without MCP, add to CLAUDE.md or equivalent:
 
@@ -255,7 +285,7 @@ shorter submissions leave the previous qualifying prompt in place.
 
 **Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 
-**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `state.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
+**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `vt_log.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
 
 **Active subtask detection:** The output parser recognizes `⏵⏵` (U+23F5) and `››` (U+203A) mode-line prefixes as active subtask indicators. The `active_sub_tasks` count is tracked in `SessionState` and used to suppress premature completion notifications.
 

@@ -14,6 +14,7 @@ import { mdTabsStore } from "../stores/mdTabs";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { paneLayoutKey } from "../stores/savedPaneLayouts";
+import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
@@ -53,9 +54,24 @@ interface AppShortcutHandlerOptions {
 export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): ShortcutHandlers {
 	const { terminalLifecycle, gitOps, splitPanes, quickSwitcher } = options;
 	return {
-		zoomIn: () => (mdTabsStore.state.activeId ? mdTabsStore.zoomIn() : terminalLifecycle.zoomIn()),
-		zoomOut: () => (mdTabsStore.state.activeId ? mdTabsStore.zoomOut() : terminalLifecycle.zoomOut()),
-		zoomReset: () => (mdTabsStore.state.activeId ? mdTabsStore.zoomReset() : terminalLifecycle.zoomReset()),
+		zoomIn: () =>
+			editorTabsStore.state.activeId
+				? editorTabsStore.zoomIn(settingsStore.state.defaultFontSize)
+				: mdTabsStore.state.activeId
+					? mdTabsStore.zoomIn()
+					: terminalLifecycle.zoomIn(),
+		zoomOut: () =>
+			editorTabsStore.state.activeId
+				? editorTabsStore.zoomOut(settingsStore.state.defaultFontSize)
+				: mdTabsStore.state.activeId
+					? mdTabsStore.zoomOut()
+					: terminalLifecycle.zoomOut(),
+		zoomReset: () =>
+			editorTabsStore.state.activeId
+				? editorTabsStore.zoomReset(settingsStore.state.defaultFontSize)
+				: mdTabsStore.state.activeId
+					? mdTabsStore.zoomReset()
+					: terminalLifecycle.zoomReset(),
 		zoomInAll: terminalLifecycle.zoomInAll,
 		zoomOutAll: terminalLifecycle.zoomOutAll,
 		zoomResetAll: terminalLifecycle.zoomResetAll,

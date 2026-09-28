@@ -7,6 +7,7 @@ import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -397,6 +398,25 @@ describe("useTerminalLifecycle", () => {
 
 			await lifecycle.closeTerminal(ids[0]);
 			expect(mdTabsStore.getIds().length).toBe(0);
+		});
+
+		it("closes the detached Markdown window when its tab is closed", async () => {
+			const id = mdTabsStore.add("/repo", "README.md");
+			const panelId = `markdown-tab-${id}`;
+			uiStore.setDetached(panelId, `panel-${panelId}`);
+			await lifecycle.closeTerminal(id);
+			expect(mockInvoke).toHaveBeenCalledWith("close_panel_window", { panelId });
+			expect(uiStore.isDetached(panelId)).toBe(false);
+		});
+
+		it("closes a detached Markdown tab even when its window has already closed", async () => {
+			const id = mdTabsStore.add("/repo", "README.md");
+			const panelId = `markdown-tab-${id}`;
+			uiStore.setDetached(panelId, `panel-${panelId}`);
+			mockInvoke.mockRejectedValueOnce(new Error("window already closed"));
+			await lifecycle.closeTerminal(id);
+			expect(mdTabsStore.get(id)).toBeUndefined();
+			expect(uiStore.isDetached(panelId)).toBe(false);
 		});
 
 		it("restores terminal focus when closing last diff tab", async () => {

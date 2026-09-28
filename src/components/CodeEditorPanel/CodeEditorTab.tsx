@@ -30,18 +30,22 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { referencesStore } from "../../stores/references";
-import { repositoriesStore } from "../../stores/repositories";
+import { locateFile, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
-import { isAbsolutePath } from "../../utils/pathUtils";
+import { handleOpenUrl } from "../../utils/openUrl";
+import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import { markPerf } from "../../utils/perfTrace";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility } from "../shared/SearchBar";
 import s from "./CodeEditorTab.module.css";
 import { EditorSearch } from "./EditorSearch";
+import { editorLinkAt } from "./editorLinks";
+import { navigateEditorTo } from "./editorNavigation";
 import { type GutterChange, gitChangeGutter, setChangesEffect } from "./gitGutter";
 import { type BlameLine, inlineBlame, setBlameEffect, setBlameEnabledEffect } from "./inlineBlame";
 import { detectLanguage, editorWrapKind } from "./languageDetection";
@@ -54,7 +58,8 @@ export interface CodeEditorTabProps {
 	/** On-disk root for file I/O (worktree path when active, otherwise repoPath). */
 	fsRoot?: string;
 	filePath: string;
-	initialLine?: number; // Line to scroll to on first mount (1-based)
+	initialLine?: number; // Line to select on first mount (1-based)
+	initialCol?: number; // Column to select on first mount (1-based)
 	externalEditable?: boolean; // External files start unlocked when true, locked (but unlockable) when false
 	onClose?: () => void;
 }
@@ -192,7 +197,9 @@ function hoverLinkHandlers(): Extension {
 				view.dispatch({ effects: setHoverLink.of(null) });
 				return false;
 			}
-			const range = wordRangeAt(view, pos);
+			const line = view.state.doc.lineAt(pos);
+			const link = editorLinkAt(line.text, pos - line.from);
+			const range = link ? { from: line.from + link.from, to: line.from + link.to } : wordRangeAt(view, pos);
 			view.dispatch({ effects: setHoverLink.of(range) });
 			return false;
 		},
@@ -258,6 +265,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		openSearch: () => openSearchBar(),
 		save: () => handleSave(),
 		isDirty: () => dirty(),
+		goToPosition: (line: number, col?: number) => {
+			const view = editorView();
+			if (view) navigateEditorTo(view, line, col);
+		},
 	});
 	onCleanup(() => editorTabsStore.clearHandle(props.id));
 	/** Current symbol under cursor (for breadcrumb) */
@@ -283,7 +294,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 			.then((stat) => (stat.exists ? { modifiedAt: stat.modified_at, size: stat.size } : null))
 			.catch(() => null);
 
-	/** Guard: scroll to initialLine only once on first file load */
+	/** Guard: select initialLine only once on first file load */
 	let didScrollToInitialLine = false;
 
 	/**
@@ -335,15 +346,14 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					// Large but under the hard cap: open as normal, warn it may be slow.
 					setLargeFile(content.length > WARN_FILE_BYTES);
 
-					// Scroll to initialLine on the very first load only
+					// Select the requested position on the very first load only.
 					if (props.initialLine !== undefined && !didScrollToInitialLine) {
 						didScrollToInitialLine = true;
 						const targetLine = props.initialLine;
 						requestAnimationFrame(() => {
 							const view = editorView();
 							if (!view) return;
-							const line = view.state.doc.line(Math.max(1, Math.min(targetLine, view.state.doc.lines)));
-							view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+							navigateEditorTo(view, targetLine, props.initialCol);
 						});
 					}
 				} catch (err) {
@@ -651,7 +661,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	createExtension(hoverLinkTheme);
 	createExtension(hoverLinkHandlers());
 
-	// Cmd+Click (Mac) / Ctrl+Click (other) → go to definition via mdkb
+	// Cmd+Click (Mac) / Ctrl+Click (other) opens links, then falls back to definitions.
 	createExtension(
 		EditorView.domEventHandlers({
 			click(event: MouseEvent, view: EditorView) {
@@ -661,6 +671,40 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				if (pos === null) return false;
 				const line = view.state.doc.lineAt(pos);
 				const col = pos - line.from;
+				const link = editorLinkAt(line.text, col);
+				if (link) {
+					if (link.web) {
+						handleOpenUrl(link.target);
+					} else {
+						const match = link.target.match(/:(\d+)(?::\d+)?$/);
+						const targetLine = match ? Number(match[1]) : undefined;
+						const cwd = isAbsolutePath(props.filePath)
+							? pathDirname(props.filePath)
+							: joinPath(fsRoot(), pathDirname(props.filePath));
+						const resolve = (directory: string) =>
+							invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
+								cwd: directory,
+								candidate: link.target,
+							});
+						void resolve(cwd)
+							.then((result) => result ?? (fsRoot() !== cwd ? resolve(fsRoot()) : null))
+							.then((result) => {
+								if (!result) {
+									toastsStore.add("File not found", link.target, "warn");
+									return;
+								}
+								if (result.is_directory) {
+									uiStore.setFileBrowserExternalRoot(result.absolute_path);
+									uiStore.setFileBrowserPanelVisible(true);
+									return;
+								}
+								const { repoPath, fsRoot: root, filePath } = locateFile(result.absolute_path);
+								openFileAction(filePath, repoPath, root, targetLine);
+							})
+							.catch((error) => appLogger.debug("editor", "Link lookup failed", { error: String(error) }));
+					}
+					return true;
+				}
 				invoke<{ filePath: string; line: number } | null>("mdkb_goto_definition", {
 					repoPath: props.repoPath,
 					filePath: props.filePath,
@@ -958,7 +1002,10 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 						editorDiv = el;
 						ref(el);
 					}}
-					style={{ display: loading() || error() ? "none" : undefined }}
+					style={{
+						display: loading() || error() ? "none" : undefined,
+						"font-size": `${editorTabsStore.state.tabs[props.id]?.fontSize ?? settingsStore.state.defaultFontSize}px`,
+					}}
 				/>
 				<EditorSearch
 					visible={searchVisible()}

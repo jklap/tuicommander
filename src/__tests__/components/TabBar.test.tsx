@@ -59,6 +59,7 @@ import { settingsStore, type TabOrderingMode } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
 
 describe("TabBar", () => {
@@ -87,6 +88,9 @@ describe("TabBar", () => {
 			editorTabsStore.remove(id);
 		}
 		tabOrderingStore.clear();
+		for (const panelId of Object.keys(uiStore.state.detachedPanels)) {
+			if (panelId.startsWith("markdown-tab-")) uiStore.clearDetached(panelId);
+		}
 		settingsStore.setTabOrderingMode("grouped-by-type");
 		// Deactivate global workspace
 		if (globalWorkspaceStore.isActive()) {
@@ -875,6 +879,102 @@ describe("TabBar", () => {
 	});
 
 	describe("markdown tabs", () => {
+		it("retains an MCP file tab after selecting a terminal in a repo without a workspace", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setActive("/repo");
+			const terminalId = addTerminal();
+			const id = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/ego-coordinator-proposal.md");
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			terminalsStore.setActive(terminalId);
+			expect(mdTabsStore.get(id)).toBeDefined();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			repositoriesStore.add({ path: "/other", displayName: "other" });
+			repositoriesStore.setActive("/other");
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+			repositoriesStore.setActive("/repo");
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+		});
+
+		it("shows two different MCP file tabs together in a repo without a workspace", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setActive("/repo");
+			const first = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/ego-coordinator-proposal.md");
+			const second = mdTabsStore.add("/repo", "/Users/boss/Gits/.tmp/boss/tuic-mobile-files.md");
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(first).not.toBe(second);
+			expect(container.querySelector(`[data-tab-id="${first}"]`)).not.toBeNull();
+			expect(container.querySelector(`[data-tab-id="${second}"]`)).not.toBeNull();
+		});
+		it.each(["markdown", "editor"])("keeps an active pinned MCP %s tab visible across a repo switch", (kind) => {
+			for (const path of ["/repo-a", "/repo-b"]) {
+				repositoriesStore.add({ path, displayName: path });
+				repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+				repositoriesStore.setActiveWorkspace(path, "main");
+			}
+			repositoriesStore.setActive("/repo-a");
+			const id =
+				kind === "markdown"
+					? mdTabsStore.openUiTab("pinned-preview", "Preview", "<p>test</p>", true)
+					: editorTabsStore.add("/repo-a", "/outside/notes.txt");
+			const tabs = kind === "markdown" ? mdTabsStore : editorTabsStore;
+			if (kind === "editor") editorTabsStore.setPinned(id, true, true);
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			repositoriesStore.setActive("/repo-b");
+			expect(tabs.state.activeId).toBe(id);
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			tabs.setPinned(id, false);
+			expect(tabs.state.activeId).toBeNull();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+		});
+		it("hides an active MCP tab on repo switch and restores it on return", () => {
+			for (const path of ["/repo-a", "/repo-b"]) {
+				repositoriesStore.add({ path, displayName: path });
+				repositoriesStore.setWorkspace(path, "main", { worktreePath: path });
+				repositoriesStore.setActiveWorkspace(path, "main");
+			}
+			repositoriesStore.setActive("/repo-a");
+			const id = mdTabsStore.openUiTab("repo-preview", "Preview", "<p>test</p>", false);
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+			repositoriesStore.setActive("/repo-b");
+			expect(mdTabsStore.state.activeId).toBeNull();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).toBeNull();
+			repositoriesStore.setActive("/repo-a");
+			expect(mdTabsStore.get(id)).toBeDefined();
+			expect(container.querySelector(`[data-tab-id="${id}"]`)).not.toBeNull();
+		});
 		function setupActiveRepo() {
 			repositoriesStore.add({ path: "/repo", displayName: "repo" });
 			repositoriesStore.setActive("/repo");
@@ -1368,6 +1468,48 @@ describe("TabBar", () => {
 	});
 
 	describe("context menu", () => {
+		it("focuses the detached Markdown window instead of selecting a second copy", () => {
+			const id = mdTabsStore.add("/repo", "notes.md");
+			uiStore.setDetached(`markdown-tab-${id}`, `panel-markdown-tab-${id}`);
+			const onSelect = vi.fn();
+			const onFocusDetached = vi.fn();
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={onSelect}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+					onFocusDetachedTab={onFocusDetached}
+				/>
+			));
+			fireEvent.click(container.querySelector(`[data-tab-id="${id}"]`)!);
+			expect(onFocusDetached).toHaveBeenCalledExactlyOnceWith(id);
+			expect(onSelect).not.toHaveBeenCalled();
+		});
+
+		it("offers Detach to Window for a tuic://open Markdown document outside registered repos", () => {
+			const id = mdTabsStore.addMcpFile("digest-1", "", "/Users/boss/Gits/.tmp/report.md", false, false);
+			const onDetachTab = vi.fn();
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+					onDetachTab={onDetachTab}
+				/>
+			));
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find(
+				(node) => node.querySelector(".label")?.textContent === "Detach to Window",
+			);
+			expect(item).toBeDefined();
+			fireEvent.click(item!);
+			expect(onDetachTab).toHaveBeenCalledExactlyOnceWith(id);
+		});
+
 		it("right-click opens context menu", () => {
 			addTerminal({ name: "Tab 1" });
 

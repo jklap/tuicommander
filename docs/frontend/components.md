@@ -35,7 +35,7 @@ App.tsx (central orchestrator)
 │   ├── MarkdownPanel/        # Markdown file browser
 │   │   └── ContentRenderer  # Markdown to HTML (DOMPurify), interactive checkboxes, tweak highlights
 │   ├── HtmlPreviewTab/       # Multi-format preview tab (HTML, PDF, images, video, audio, text)
-│   ├── MarkdownTab/          # Markdown tab (checkboxes, tweak comments, queued agent review, search)
+│   ├── MarkdownTab/          # Markdown tab and detached document window (checkboxes, tweak comments, search)
 │   ├── IdeasPanel/           # Ideas panel with edit, send, delete
 │   ├── FileBrowserPanel/     # File tree browser with content search
 │   │   └── TreeNode          # Recursive tree node (lazy-loaded)
@@ -70,7 +70,7 @@ App.tsx (central orchestrator)
 ├── PromptOverlay/            # Agent prompt interception
 ├── PromptDrawer/             # Prompt library management
 ├── CommandPalette/           # Cmd+P / browser-toolbar palette with transport-safe actions
-├── ActivityDashboard/        # Activity center (bell dropdown)
+├── ActivityDashboard/        # Compact inline or detached terminal activity list
 ├── BranchSwitcher/           # Quick branch switcher (held-key overlay)
 ├── BranchPopover/            # Branch selection popover
 ├── TipOfTheDay/              # Startup tip notification
@@ -103,7 +103,61 @@ composes them and owns the top-level layout. Git operations retain the
 Each coordinator owns its timers, queues, generations, or locks. These are
 behavioral boundaries rather than generic service wrappers.
 
+`PanelOrchestrator` loads the AI Chat panel after its first inline opening and
+keeps it mounted when hidden. The detached AI Chat adapter loads the same panel
+when its window opens. Neither path loads its markdown renderer before the
+desktop terminal view.
+`SessionControls` lists ego's durable `session/list` results by `updatedAt` and
+loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
+binding from app config after a fresh document opens.
+The control bar summarizes the current model and mode. Its session settings
+button opens a shared-style modal with one labeled select and description per
+ACP select config option. Choices and displayed values come from the selected
+session's latest attachment snapshot. Flat choices use ACP `value` fields;
+grouped choices use `group` and nested `options`. Rejected changes show an error
+in the modal.
+The panel draws open chat tabs from `aiChatTabs`; each tab selects one ACP
+session on the repository's connection. A detached window reads the saved tab
+list and replays each open conversation. `aiChatDraft` keeps unsent text and
+staged images per tab while the document is mounted.
+ACP session title updates rename the panel header and picker entry. The usage
+footer shows context-window occupancy and the reported cumulative cost.
+Untitled sessions use their first prompt or latest activity time in the picker,
+with the session ID in the option tooltip. Small single-choice elicitation
+forms use direct answer buttons and Cancel. Prompt failures and empty completed
+turns appear in the transcript.
+`Transcript` interprets complete ACP answer text as it streams: it hides the
+connection acknowledgement, shows a declared intent as status, and offers
+bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
+Messages, tool output and code blocks have copy actions. The transcript has
+text selection, find/select-all/clear shortcuts, and local file paths use the
+terminal's backend path resolver and file opener. Web links use the shared
+external URL opener. A detached AI Chat window sends resolved file links to
+the main window's same file opener, where the editor and viewer tabs live.
+Tool-call dots pulse only while a call is pending or in progress. The
+transcript projection settles unfinished calls when their turn ends, so a
+missing final tool update cannot leave an old dot animating.
+The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
+questions while the panel is hidden.
+The composer stages pasted images in its shared draft and sends ACP image
+blocks through `acpClient.prompt`. It checks `promptImage` and the 10 MiB cap
+before reading clipboard bytes; each preview can be removed before sending.
+During a turn it offers **Queue** beside **Stop**, lists the host-owned queued
+prompts, and can remove any queued ID. The list follows ACP snapshots and
+events, so another window or a phone sees the same order and cancellations.
+
+## Mobile Screens (`src/mobile/`)
+
+`MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
+`FilesScreen` at the session's worktree or containing registered repository.
+The session's output stream and command draft stay alive while Files is shown;
+the regular Files bottom tab still starts at the repository picker.
+
 ## Core Components
+
+### PluginPanel (`PluginPanel/`)
+
+URL tabs and inline plugin panels mount their sandboxed iframe only while their tab is visible. Hiding a tab, switching repositories or pane tabs, or covering split panes with an orphan tab removes the iframe from the DOM. Showing it again loads the page anew, so iframe scroll, focus and JavaScript state do not persist. This prevents hidden page timers from blocking terminal input on the shared WebContent main thread. Native `tuic://edit` and `tuic://open` tabs use their own components and are unaffected.
 
 ### Terminal (`Terminal/`)
 
@@ -244,6 +298,7 @@ one group under a shared label.
 The **Voice** page (nav key `dictation`). One `<h3>` per section. Speech-to-text and
 text-to-speech are separate sections, and each keeps its own advanced controls
 at its bottom — there is deliberately no shared "Advanced" section:
+The Rust dictation crate split does not change these controls or their transport calls.
 
 1. **Dictation** — enable, hotkey, long-press threshold, auto-send
 2. **Speech recognition** (`SpeechRecognition`) — input device (desktop only),
@@ -385,8 +440,8 @@ ordered events through `workflow_run_action`; `workflowRunSignals` is a wake hin
 that causes a cursor-based read, so missed or duplicate notifications cannot
 replace the backend's durable sequence. The view pages events and stays usable
 without starting a workflow.
-The review view offers Approve only in the desktop app; browser clients show
-that approval requires the desktop app.
+The review view offers Approve in both the desktop app and browser. The backend
+rejects approval from the managed session that claimed the story.
 
 ### ProgressDialog (`ProgressDialog/`)
 
@@ -397,6 +452,8 @@ checkbox. Blocked entries are red, host-written `intent` entries are muted, and
 each row can be deleted. There are no pages, no tabs, no workstream projections
 and no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
+The toolbar bell always includes Terminal Progress, regardless of unread count.
+The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
 
 Opening asks the shared journal once, for the selected PTY or project. The old panel
 fanned out across every registered repository and answered with one red
@@ -429,7 +486,7 @@ Reusable in-app confirmation dialog that replaces native Tauri `ask()` dialogs (
 
 ### ClaudeUsageDashboard (`ClaudeUsageDashboard/`)
 
-Native SolidJS component (not a plugin) showing Claude API usage data. Displayed as a tab in the markdown/editor area. Features rate bucket gauges, per-model token breakdown, daily usage chart, and project stats. Opened by clicking the Claude Usage ticker in the status bar.
+Native SolidJS component (not a plugin) showing Claude API usage data. Displayed as a tab in the markdown/editor area. Features rate bucket gauges, per-model token breakdown, daily usage chart, and project stats. Clicking the Claude Usage ticker opens it for that terminal session's credential profile. The rate-limit API follows `CLAUDE_CONFIG_DIR`; transcript statistics still use the default Claude projects directory.
 
 ### CodexUsageDashboard (`CodexUsageDashboard/`)
 
@@ -452,7 +509,7 @@ system and never turns an absent provider value into zero.
 | `CiRing` | SVG circular CI status indicator with proportional segments |
 | `DiffViewer` | Syntax-highlighted unified diff renderer |
 | `Dropdown` | Reusable dropdown select component |
-| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization, interactive checkboxes, tweak highlights |
+| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
 | `PromptOption` | Agent prompt multiple-choice option |
 | `StatusBadge` | Git status badges (clean/dirty/conflict) |
@@ -484,3 +541,11 @@ system and never turns an absent provider value into zero.
 | Activity Dashboard | — | `activityDashboardStore.toggle()` |
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
+
+Activity Dashboard uses a 500px inline overlay and the same compact row layout
+in its detached window. On startup and reopening, saved detached geometry cannot
+make the Activity window larger than its 550×650 default; smaller saved sizes
+remain in effect. `SubAgentIcon` supplies the shared 11px robot marker
+for both the dashboard and sidebar; only its tooltip/accessible name contains
+the parent name. The session list supplies each parent's live `tuic_session`
+when its PTY ID differs from that identity.

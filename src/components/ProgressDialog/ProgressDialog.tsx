@@ -1,4 +1,4 @@
-import { type Component, createMemo, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createMemo, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import {
 	type ProgressFlow as FlowData,
@@ -47,6 +47,9 @@ export interface ProgressDialogProps {
 	 * would create — so it drops the overlay and keeps the list.
 	 */
 	embedded?: boolean;
+	/** Populated journal projects supplied by the mobile backend. */
+	projects?: string[];
+	projectsError?: string;
 }
 
 /**
@@ -56,9 +59,9 @@ export interface ProgressDialogProps {
  */
 export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 	if (!props.embedded) registerModal(() => void progressStore.close());
-	// Embedded, nothing opened the dialog, so nothing chose the project either.
-	onMount(() => {
-		if (props.embedded && !progressStore.requestedProject()) progressStore.open();
+	createEffect(() => {
+		if (!props.embedded || !props.projects?.length) return;
+		if (!props.projects.includes(progressStore.requestedProject() ?? "")) progressStore.open(props.projects[0], null);
 	});
 
 	const project = () => progressStore.requestedProject();
@@ -121,6 +124,18 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					<h4>Progress</h4>
 					<span class={s.project}>{displayName()}</span>
 				</div>
+				<Show when={props.embedded && (props.projects?.length ?? 0) > 0}>
+					<select
+						class={s.terminalSelect}
+						aria-label="Progress project"
+						value={project() ?? ""}
+						onChange={(event) => progressStore.open(event.currentTarget.value, null)}
+					>
+						<For each={props.projects}>
+							{(path) => <option value={path}>{path.split(/[\\/]/).pop() || path}</option>}
+						</For>
+					</select>
+				</Show>
 				<select
 					class={s.terminalSelect}
 					aria-label="Progress terminal"
@@ -206,13 +221,19 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 							    finished, empty project. */}
 							{projectState()?.error
 								? "This project's journal is unavailable."
-								: projectState()?.loading
-									? "Loading…"
-									: progressStore.blockedOnly()
-										? "Nothing is blocked."
-										: progressStore.selectedPtyId()
-											? "No progress recorded for this terminal yet."
-											: "No progress recorded for this project yet."}
+								: props.embedded && props.projectsError
+									? "Progress projects are unavailable."
+									: props.embedded && props.projects === undefined
+										? "Loading Progress projects…"
+										: props.embedded && props.projects?.length === 0
+											? "No project with Progress entries is available."
+											: projectState()?.loading
+												? "Loading…"
+												: progressStore.blockedOnly()
+													? "Nothing is blocked."
+													: progressStore.selectedPtyId()
+														? "No progress recorded for this terminal yet."
+														: "No progress recorded for this project yet."}
 						</p>
 					}
 				>

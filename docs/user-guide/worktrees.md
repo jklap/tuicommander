@@ -36,7 +36,8 @@ ignored build directory is missing and the first build is a full one.
 TUICommander asks git which directories the parent ignores and copies them into
 the new worktree copy-on-write, at the same near-zero disk cost. It is
 language-agnostic — `node_modules`, `target`, `.venv`, `dist`, `vendor` and
-anything else your `.gitignore` covers — and it copies **directories only**: an
+anything else your `.gitignore` covers, except `.tmp` and `.mdkb` directories —
+and it copies **directories only**: an
 ignored *file* such as `.env` stays where it is, because materialising a
 credential into a new workspace is not a convenience.
 
@@ -49,12 +50,19 @@ it runs, so a copy that fails costs build time and nothing else — creation sti
 succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
+For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
+`done` or `failed` before installing dependencies or building. When creation
+runs a configured setup script through HTTP or MCP, it finishes before the copy
+starts. Desktop setup and warming can overlap.
 
 Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*
 for this — it makes a real copy-on-write copy of one file and looks at whether it
 worked, trying macOS `clonefile` and then a reflink copy. Where neither works,
 creation still succeeds with one warning and a cold worktree.
+Copied files and directories gain owner write permission in the new worktree,
+even when ignored build evidence is read-only in the source. Symlinks are not
+followed, and the source permissions and contents stay unchanged.
 
 ## Creating Worktrees
 
@@ -104,7 +112,7 @@ Right-click a worktree branch → **Merge & Archive** to:
 
 1. Merge the branch into the main branch
 2. Handle the worktree based on the "After merge" setting:
-   - **Archive**: Moves the worktree directory to `__archived/` — the whole directory, uncommitted changes included (accessible but removed from sidebar)
+   - **Archive**: Moves the worktree directory to `__archived/` — the whole directory, uncommitted changes included. Its Git checkout, HEAD, reflog, and initialized submodules remain usable; it is hidden from the sidebar. A locked worktree is left untouched.
    - **Delete**: Removes the worktree and branch entirely. Anything not committed is gone
    - **Ask**: Merge succeeds, then you choose what to do
 
@@ -115,6 +123,21 @@ The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflict
 Both **Archive** and **Delete** remove the worktree, so TUICommander asks first whenever the worktree is not known to be clean — whether or not the branch carries commits, and whether the cleanup was started by hand or by **Auto-archive merged**. The confirmation names what happens to the work: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, that counts as "not clean" and the cleanup still stops.
 
 The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).
+
+Removing a worktree without force also refuses uncommitted changes when the
+branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive
+script adds a commit after the removal check, the worktree can be removed, but
+the branch stays and the result warns that the branch changed.
+The confirmation lists submodule commits absent from remote-tracking branches.
+A changed checkout status, HEAD, or submodule ref after force confirmation stops removal
+for a fresh review. The status check tracks which paths are dirty, not further
+edits to a path that was already dirty. Initialized submodule refs, stash entries,
+and reflog-only commits are preserved in the main checkout's module repository
+before removal. If the main checkout's copy of a
+submodule is uninitialized or points at the wrong Git repository, removal stops
+and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
+Deinitialized submodules with retained Git history also block removal, even when
+their Git module name differs from the checkout path or they are nested.
 
 When using **Ask** mode, the cleanup dialog detects uncommitted changes and auto-stashes them during the branch switch. An "Unstash after switch" checkbox lets you restore changes on the target branch. That stash covers the **base repository**; the warning under the worktree step is about the branch's own directory, which is a different place.
 
@@ -141,15 +164,27 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 
 Removing a worktree:
 1. Closes all terminals associated with that branch
-2. Runs `git worktree remove` to clean up
+2. Checks checkout and submodule state, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check
 3. Removes the branch entry from the sidebar
-4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks the operation and stays in the sidebar. Merge it first, or turn off **Delete branch on remove** to keep the branch.
+4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks a normal removal. A confirmed dirty-file removal can remove the checkout, but keeps an unmerged branch and reports a warning. Merge it first, or turn off **Delete branch on remove** to keep the branch.
 5. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
 
 Immediately before removal, TUICommander refreshes the backend lifecycle verdict
 for the exact workspace id. Dirty files require an explicit destructive
 confirmation; `Unknown` blocks removal. Commits live in the parent object store,
 and a clean worktree with unmerged commits is marked `Unmerged` in the sidebar.
+The proof also accepts a tip contained in the main checkout's current branch,
+or a merged GitHub PR whose verified head contains the local tip after a squash.
+An open or closed unmerged PR, or a PR head behind the local tip, is insufficient.
+Turning off **Delete branch on remove** keeps the branch without needing merge
+proof, while the clean-checkout and lock checks still apply.
+
+For a local branch that has no worktree, agents can use MCP
+`repo action=branch_delete` with the repository path and branch name. It
+deletes only the local ref after proving its commits are in the checked-out
+integration branch, including equivalent patches from a squash merge. A
+checked-out, current, default, unmerged, or changed branch is kept; no remote
+branch is deleted.
 
 ## Worktree Manager Panel
 
@@ -165,7 +200,7 @@ Each worktree row displays:
 - **Last commit timestamp** — relative time since last activity
 - **Main badge** — marks the main branch (actions disabled)
 
-Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button to clean them up.
+Orphan worktrees (detached HEAD or deleted branch) appear at the bottom with a warning badge and a **Prune** button. Prune refuses a Git operation in progress and keeps detached commits that have no durable branch, tag, or other ref. Create a ref for that commit before retrying if you want to keep the commit and remove the checkout.
 
 ### Filtering
 
@@ -215,6 +250,7 @@ Non-Claude Code MCP clients receive the standard `{worktree_path, branch}` respo
 ## External Worktree Detection
 
 TUICommander monitors `.git/worktrees/` for changes. Worktrees created outside the app (via CLI or other tools) are detected and appear in the sidebar after the next refresh.
+If a session starts in a new sibling worktree before that refresh, TUICommander refreshes its registered repository and places the tab under the new worktree.
 
 ## Branch Switching
 

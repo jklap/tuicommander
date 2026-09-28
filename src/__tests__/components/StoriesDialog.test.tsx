@@ -42,6 +42,58 @@ beforeEach(() => {
 });
 
 describe("StoriesDialog", () => {
+	it("offers repository plans first and adds one without a typed title", async () => {
+		let created = false;
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
+			const action = (args as { action: { action: string; source?: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: created ? [plan] : [] };
+			if (action.action === "list_plan_sources")
+				return { type: "plan_sources", value: [{ title: "Plan A", source: "plans/a.md" }] };
+			if (action.action === "add_plan_source") {
+				created = true;
+				return { type: "plan", value: plan };
+			}
+			if (action.action === "plan_view")
+				return { type: "plan_view", value: { stories: [], state: "draft", wontFixCount: 0, allCancelled: false } };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		fireEvent.click(await screen.findByRole("button", { name: /Plan A/ }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Plan A" })).toBeTruthy());
+		expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/repo",
+			action: { action: "add_plan_source", source: "plans/a.md" },
+		});
+	});
+
+	it("shows discovered plans immediately when no plan is registered", async () => {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [] };
+			if (action.action === "list_plan_sources")
+				return { type: "plan_sources", value: [{ title: "Agent plan", source: "plans/agent.md" }] };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		expect(await screen.findByRole("button", { name: /Agent plan/ })).toBeTruthy();
+	});
+
+	it("rejects an invalid response when adding a discovered plan", async () => {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [] };
+			if (action.action === "list_plan_sources")
+				return { type: "plan_sources", value: [{ title: "Agent plan", source: "plans/agent.md" }] };
+			if (action.action === "add_plan_source") return { type: "plans", value: [] };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		fireEvent.click(await screen.findByRole("button", { name: /Agent plan/ }));
+		await screen.findByText("Invalid plan response");
+	});
 	it("moves initial focus into the dialog", async () => {
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });
@@ -186,7 +238,8 @@ describe("StoriesDialog", () => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: created ? [plan] : [] };
-			if (action.action === "create_plan") {
+			if (action.action === "list_plan_sources") return { type: "plan_sources", value: [] };
+			if (action.action === "add_plan_source") {
 				created = true;
 				return { type: "plan", value: plan };
 			}
@@ -201,13 +254,13 @@ describe("StoriesDialog", () => {
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText("Create a plan to begin.");
 		fireEvent.click(screen.getByRole("button", { name: "New plan" }));
-		fireEvent.input(screen.getByLabelText("Title"), { target: { value: "Plan A" } });
+		fireEvent.click(screen.getByText("Add from path or link"));
 		fireEvent.input(screen.getByLabelText("Plan document or link"), { target: { value: "plans/a.md" } });
 		fireEvent.click(screen.getByRole("button", { name: "Create plan" }));
 		await screen.findByRole("heading", { name: "Implement API" });
 		expect(invoke).toHaveBeenCalledWith("story_action_command", {
 			project: "/repo",
-			action: { action: "create_plan", title: "Plan A", source: "plans/a.md" },
+			action: { action: "add_plan_source", source: "plans/a.md" },
 		});
 		fireEvent.change(screen.getByRole("combobox", { name: "Add dependency" }), { target: { value: "s2" } });
 		fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
@@ -316,7 +369,7 @@ describe("StoriesDialog", () => {
 	});
 
 
-	it("shows the browser approval limitation instead of an action that cannot succeed", async () => {
+	it("offers browser approval and sends the selected transition", async () => {
 		const environment = globalThis as Record<string, unknown>;
 		const priorShim = environment.__TAURI_SHIM__;
 		environment.__TAURI_SHIM__ = true;
@@ -326,12 +379,16 @@ describe("StoriesDialog", () => {
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "transition") return { type: "story", value: { ...story, status: "done" } };
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });
-		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
-		expect(screen.getByText("Approval requires the desktop app.")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/repo",
+			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+		}));
 		} finally {
 			environment.__TAURI_SHIM__ = priorShim;
 		}

@@ -8,6 +8,93 @@ use crate::state::VtLogBuffer;
 use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
 use crate::test_support::{agent_session, insert_recording_session};
 
+#[test]
+fn agent_alternate_screen_warning_is_once_per_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "agent-alt-screen-warning";
+    agent_session(&state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    assert!(!processor.alt_screen_warned);
+    processor.process_chunk("\x1b[?1049h", &silence, session_id, &state);
+    assert!(processor.alt_screen_warned);
+    processor.process_chunk("\x1b[?1049l\x1b[?1049h", &silence, session_id, &state);
+    assert!(processor.alt_screen_warned);
+    assert!(!processor.should_warn_alt_screen(None, true));
+    assert!(!processor.should_warn_alt_screen(Some("codex"), false));
+    assert!(!processor.should_warn_alt_screen(Some("codex"), true));
+}
+
+#[test]
+fn pty_identity_defaults_claude_to_native_scrollback() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut cmd, "screen-default", None);
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "0");
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("0"))
+    );
+
+    let mut ipc = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut ipc, "screen-ipc", None);
+    let mut http = CommandBuilder::new("claude");
+    let env = std::collections::HashMap::new();
+    apply_agent_screen_env(&mut ipc, &env);
+    apply_agent_screen_env(&mut http, &env);
+    assert_eq!(
+        ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        http.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
+    );
+    assert_eq!(
+        ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+}
+
+#[test]
+fn claude_screen_setting_off_preserves_explicit_environment() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+    let mut config = crate::config::AgentsConfig::default();
+    config.agents.insert(
+        "claude".into(),
+        crate::config::AgentSettings {
+            prevent_alt_screen: Some(false),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(config).unwrap();
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "custom");
+    bind_pty_identity(&state, &mut cmd, "screen-setting-off", None);
+    apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
+        Some(std::ffi::OsStr::new("custom"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prefill_agent_input_preserves_partial_input_and_accumulates_grabs() {
@@ -2560,6 +2647,286 @@ fn protocol_stale_recovery_requires_a_ready_screen_for_the_full_timeout() {
     assert!(silence.protocol_busy_is_stale());
 }
 
+/// A mail wake can submit into Claude's detailed transcript view, where the
+/// composer is hidden and the screen adapter returns Unknown. No later hook
+/// busy or output means the submitted turn never started.
+#[cfg(unix)]
+#[test]
+fn stale_busy_mail_wake_in_claude_transcript_returns_to_idle() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-transcript";
+    let written = insert_recording_session(&state, sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    assert_eq!(
+        deliver_notice_to_pty(&state, sid, PEER_MAIL_WAKE),
+        PtyDelivery::Typed
+    );
+    assert!(
+        written
+            .lock()
+            .unwrap()
+            .windows(PEER_MAIL_WAKE.len())
+            .any(|part| part == PEER_MAIL_WAKE.as_bytes())
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert_eq!(
+        detect_claude_screen_activity(&["Showing detailed transcript · ctrl+o to toggle".into()]),
+        AgentScreenActivity::Unknown
+    );
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    state.session_maps.last_output_ms.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU64::new(
+            now_epoch_ms() - PROTOCOL_STALE_TIMEOUT.as_millis() as u64,
+        ),
+    );
+    let epoch = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .turn_epoch;
+    assert!(
+        try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(epoch)
+        )
+        .transitioned
+    );
+    let visible = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(visible.shell_state.as_deref(), Some("idle"));
+    assert_eq!(visible.agent_state.as_deref(), Some("idle"));
+}
+
+#[test]
+fn stale_busy_fresh_mail_wake_in_transcript_remains_working() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-fresh";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_recent_output_keeps_claude_working_without_a_visible_composer() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-output";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    silence.lock().evidence.busy.as_mut().unwrap().at =
+        std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_new_hook_busy_in_transcript_keeps_working() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-hook";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    transition_explicit_shell_state(&state, sid, SHELL_BUSY, "busy", true);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    state.session_maps.last_output_ms.insert(
+        sid.to_string(),
+        std::sync::atomic::AtomicU64::new(
+            now_epoch_ms() - PROTOCOL_STALE_TIMEOUT.as_millis() as u64,
+        ),
+    );
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_uncertain_mail_write_does_not_hide_possible_work() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-uncertain";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_IDLE, "idle", true);
+    let claim = claim_idle_for_injection(&state, sid).unwrap();
+    commit_injection_claim(&state, sid, claim);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.injection_delivery_uncertain = true;
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_prior_hook_busy_cannot_be_treated_as_prior_idle() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-prior-hook";
+    agent_session(&state, sid, SHELL_BUSY);
+    transition_explicit_shell_state(&state, sid, SHELL_BUSY, "busy", true);
+    note_submitted_input(&state, sid);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.evidence.busy.as_mut().unwrap().at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+        sl.last_output_at = std::time::Instant::now() - PROTOCOL_STALE_TIMEOUT;
+    }
+    assert!(
+        !try_timer_idle_transition(
+            &state,
+            &silence,
+            sid,
+            AgentScreenActivity::Unknown,
+            Some("claude"),
+            Some(1)
+        )
+        .transitioned
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+}
+
+#[test]
+fn stale_busy_injection_claim_and_rollback_each_leave_one_transition_trace() {
+    #[derive(Clone)]
+    struct LogSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "stale-busy-trace";
+    agent_session(&state, sid, SHELL_IDLE);
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(LogSink(log.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        let claim = claim_idle_for_injection(&state, sid).unwrap();
+        assert!(rollback_injection_claim(&state, sid, claim));
+    });
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    assert_eq!(log.matches("Shell state → busy").count(), 1, "{log}");
+    assert_eq!(log.matches("Shell state → idle").count(), 1, "{log}");
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .shell_state
+            .as_deref(),
+        Some("idle")
+    );
+}
+
 #[test]
 fn protocol_busy_parks_suggest_without_downgrading_working_screen() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -3977,6 +4344,7 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
 }
 
 #[test]
+// Catches: a reused ready probe or a missing second idle notice after same-epoch work.
 fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "background-same-epoch-ready";
@@ -4039,7 +4407,10 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         )
         .transitioned
     );
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+    let first_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(first_notice.len(), 1);
+    let first_notice_timestamp = first_notice.front().unwrap().timestamp;
+    drop(first_notice);
     assert_eq!(
         state
             .session_maps
@@ -4122,7 +4493,11 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let final_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(final_notice.len(), 1);
+    let final_notice_timestamp = final_notice.front().unwrap().timestamp;
+    assert!(final_notice_timestamp > first_notice_timestamp);
+    drop(final_notice);
     let content: serde_json::Value = serde_json::from_str(
         &state
             .agent_inbox
@@ -4146,7 +4521,12 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let retained_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(retained_notice.len(), 1);
+    assert_eq!(
+        retained_notice.front().unwrap().timestamp,
+        final_notice_timestamp
+    );
 }
 
 /// Build a codex agent session held BUSY by a Protocol-rank submitted line
@@ -5247,6 +5627,152 @@ fn test_find_last_chat_question_skips_wrapped_suggest_block() {
 }
 
 #[test]
+fn wrapped_suggest_question_is_not_an_agent_question() {
+    let rows = screen(&[
+        "The work is complete.",
+        "suggest: [ Inspect the report | Review the changes |",
+        "  Chi ha lanciato powermetrics?",
+        "────────────────────────────────",
+        "> ",
+    ]);
+    assert_eq!(find_last_chat_question(&rows), None);
+    assert_eq!(
+        extract_question_line(&[
+            ChangedRow {
+                row_index: 1,
+                text: "suggest: [ Inspect the report | Review the changes |".into(),
+            },
+            ChangedRow {
+                row_index: 2,
+                text: "  Chi ha lanciato powermetrics?".into(),
+            },
+        ]),
+        None,
+        "a wrapped suggest item must not arm the silence fallback"
+    );
+}
+
+#[test]
+fn suggest_following_real_question_preserves_question_candidate() {
+    let changed = [
+        ChangedRow {
+            row_index: 0,
+            text: "Should I proceed?".into(),
+        },
+        ChangedRow {
+            row_index: 1,
+            text: "suggest: [ Review it | Inspect the report |".into(),
+        },
+        ChangedRow {
+            row_index: 2,
+            text: "  Chi ha lanciato powermetrics?".into(),
+        },
+    ];
+    assert_eq!(
+        extract_question_line(&changed),
+        Some("Should I proceed?".into())
+    );
+}
+
+#[test]
+fn closing_suggest_does_not_hide_a_later_question() {
+    let rows = screen(&[
+        "suggest: [ Inspect the report | Review the changes |",
+        "  Chi ha lanciato powermetrics? ]",
+        "Should I proceed?",
+        "────────────────────────────────",
+        "> ",
+    ]);
+    assert_eq!(
+        find_last_chat_question(&rows),
+        Some("Should I proceed?".into())
+    );
+}
+
+#[test]
+fn ordinary_question_with_protocol_punctuation_remains_visible() {
+    let question = "Should I use [safe] mode | continue?";
+    let rows = screen(&[question, "────────────────────────────────", "> "]);
+    assert_eq!(find_last_chat_question(&rows), Some(question.into()));
+    assert_eq!(
+        extract_question_line(&[ChangedRow {
+            row_index: 0,
+            text: question.into(),
+        }]),
+        Some(question.into())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hooked_claude_keeps_suggestions_distinct_from_real_questions() {
+    let sid = "hooked-claude-suggest-question";
+    let state = accumulating_state(sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.hook_instrumented = true;
+    }
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-wrapped-suggest-question-synthetic.tcap",
+    ))
+    .expect("valid synthetic PTY capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).unwrap(),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+    assert!(
+        !silence.lock().hook_state_seen,
+        "configured hooks need a runtime marker before heuristic suppression"
+    );
+    let screen = state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .screen_rows();
+    assert_eq!(
+        current_chat_question(&screen),
+        CurrentChatQuestion::PromptAnchored(None)
+    );
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+
+    // A plain question may be pending before hooks start. The next submitted
+    // prompt and observed busy marker must clear its badge.
+    state.emit_pty_event(heuristic_question(sid, "Shall I continue?"));
+    assert!(await_session(&state, sid, |s| s.awaiting_input).await);
+    note_submitted_input(&state, sid);
+    processor.process_chunk("\x1b]7770;state=busy\x07", &silence, sid, &state);
+    assert!(await_session(&state, sid, |s| !s.awaiting_input).await);
+
+    // AskUserQuestion still has an authoritative awaiting signal.
+    processor.process_chunk("\x1b]7770;state=awaiting\x07", &silence, sid, &state);
+    assert!(
+        await_session(&state, sid, |s| s.awaiting_input && s.question_confident).await,
+        "AskUserQuestion must report a confident question"
+    );
+}
+
+#[test]
 fn test_find_last_chat_question_no_question() {
     // Agent statement (not a question) above prompt → None.
     let rows = screen(&[
@@ -5741,27 +6267,14 @@ fn test_vt_log_pipeline_status_line_normal_screen() {
     );
 }
 
-/// VtLogBuffer changed rows feed parse_clean_lines and produce an Intent event
-/// during alternate screen (e.g. Claude Code / Ink).
+/// The production chunk pipeline captures an alternate-screen intent.
+#[cfg(unix)]
 #[test]
 fn test_vt_log_pipeline_intent_alternate_screen() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    // Enter alternate screen (smcup: ESC[?1049h)
-    let _ = vt_log.process(b"\x1b[?1049h");
-    let changed = vt_log.process(b"intent: Doing work (Test)");
-    let events = parser.parse_clean_lines(&changed, true);
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::Intent { .. })),
-        "expected Intent from alternate screen, got: {:?}",
-        events
-    );
+    let (events, entries) =
+        run_progress_intent_case(&["intent: Doing work (Test)"], 80, true, false);
+    assert_eq!(events, [("Doing work".into(), Some("Test".into()))]);
+    assert_eq!(entries, ["Doing work"]);
 }
 
 /// parse_osc94 is called on raw data (OSC 9;4 is invisible in clean rows).
@@ -5879,26 +6392,14 @@ fn test_e2e_question_then_decoration_then_silence() {
 
 // --- Headless reader structured event tests ---
 
-/// The headless reader logic: after process(), parse_clean_lines produces events.
-/// This verifies the core data flow without spawning a full AppState.
+/// A title-less marker reaches the journal at the idle boundary.
+#[cfg(unix)]
 #[test]
 fn test_headless_reader_intent_event_logic() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    let changed = vt_log.process(b"intent: Testing headless reader");
-    let events = parser.parse_clean_lines(&changed, true);
-
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::Intent { .. })),
-        "expected Intent from headless reader logic, got: {:?}",
-        events
-    );
+    let (events, entries) =
+        run_progress_intent_case(&["intent: Testing headless reader"], 80, true, true);
+    assert_eq!(events, [("Testing headless reader".into(), None)]);
+    assert_eq!(entries, ["Testing headless reader"]);
 }
 
 /// The headless reader emits events for alternate screen content (e.g. Claude Code).
@@ -5971,40 +6472,27 @@ fn test_cnl_sequence_does_not_leak() {
     );
 }
 
-/// Simulate Ink-style rendering: write intent, then use CPL to update it.
-/// This is what Claude Code does when updating its status line.
+/// Ink's CPL overwrite reaches the same chunk pipeline as a live PTY.
+#[cfg(unix)]
 #[test]
 fn test_vt100_ink_style_intent_with_cpl() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    // Simulate Ink render: write placeholder, then CPL + overwrite with intent
-    let _ = vt_log.process(b"\x1b[?1049h"); // alternate screen
-    let _ = vt_log.process(b"placeholder text\r\n");
-    // Ink update: go up, clear line, write intent
-    let changed =
-        vt_log.process(b"\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)");
-    let events = parser.parse_clean_lines(&changed, true);
-    let intent = events.iter().find_map(|e| match e {
-        ParsedEvent::Intent { text, title, .. } => Some((text.clone(), title.clone())),
-        _ => None,
-    });
-    assert!(
-        intent.is_some(),
-        "intent must be detected after CPL overwrite; changed={:?}, events={:?}",
-        changed,
-        events
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "placeholder text\r\n",
+            "\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)",
+        ],
+        80,
+        true,
+        false,
     );
-    let (text, title) = intent.unwrap();
     assert_eq!(
-        text, "Fix all 34 documentation gaps",
-        "intent text must be clean (no '1F' leak); got: {:?}",
-        text
+        events,
+        [(
+            "Fix all 34 documentation gaps".into(),
+            Some("Fixing gaps".into())
+        )]
     );
-    assert_eq!(title.as_deref(), Some("Fixing gaps"));
+    assert_eq!(entries, ["Fix all 34 documentation gaps"]);
 }
 
 /// Chunked delivery: CSI split across two process() calls.
@@ -6065,53 +6553,38 @@ fn test_unknown_private_csi_does_not_leak() {
 
 /// Simulate realistic Ink output with SGR + cursor movement + text.
 /// This mimics what Claude Code actually sends through the PTY.
+#[cfg(unix)]
 #[test]
 fn test_vt100_realistic_ink_render_cycle() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    let _ = vt_log.process(b"\x1b[?1049h"); // alternate screen
-
-    // Frame 1: Ink renders initial content with colors
-    let _ = vt_log.process(
-        b"\x1b[1;1H\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Reading codebase structure (Reading code)\x1b[0m"
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[1;1H\x1b[38;2;128;128;128m●\x1b[0m \x1b[1mintent: Reading codebase structure (Reading code)\x1b[0m",
+            "\x1b[1F\x1b[2K\x1b[38;2;128;128;128m●\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m",
+        ],
+        80,
+        true,
+        false,
     );
-
-    // Frame 2: Ink updates — cursor up, erase line, rewrite
-    // This is how Ink typically does incremental updates
-    let changed = vt_log.process(
-        b"\x1b[1F\x1b[2K\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m"
+    assert_eq!(
+        events,
+        [
+            (
+                "Reading codebase structure".into(),
+                Some("Reading code".into())
+            ),
+            (
+                "Fix all 34 documentation gaps".into(),
+                Some("Fixing gaps".into())
+            )
+        ]
     );
-
-    let events = parser.parse_clean_lines(&changed, true);
-    let intent = events.iter().find_map(|e| match e {
-        ParsedEvent::Intent { text, title, .. } => Some((text.clone(), title.clone())),
-        _ => None,
-    });
-
-    // Print all changed rows for debugging
-    eprintln!("changed rows:");
-    for r in &changed {
-        eprintln!("  row[{}]: {:?}", r.row_index, r.text);
-    }
-    eprintln!("events: {:?}", events);
-
-    assert!(
-        intent.is_some(),
-        "intent must be detected in realistic Ink render; events={:?}",
-        events
+    assert_eq!(
+        entries,
+        [
+            "Fix all 34 documentation gaps",
+            "Reading codebase structure"
+        ]
     );
-    let (text, title) = intent.unwrap();
-    assert!(
-        !text.contains("1F"),
-        "intent text must not contain escape leak '1F'; got: {:?}",
-        text
-    );
-    assert_eq!(text, "Fix all 34 documentation gaps");
-    assert_eq!(title.as_deref(), Some("Fixing gaps"));
 }
 
 /// Multi-chunk Ink render: data arrives in small fragments.
@@ -7887,6 +8360,159 @@ fn pty_parent_env_sanitizer_removes_no_color_and_allows_override() {
     );
 }
 
+#[test]
+fn pty_spawn_env_does_not_inherit_tuic_build_context() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "pty::tests::pty_spawn_env_child_checks_inherited_build_context",
+        ])
+        .env("TUIC_TEST_PTY_BUILD_ENV", "1")
+        .env("CARGO_TARGET_DIR", "/tuic-dev-build-target")
+        .env("CARGO_MANIFEST_DIR", "/tuic/src-tauri")
+        .env("CARGO_MANIFEST_PATH", "/tuic/src-tauri/Cargo.toml")
+        .env("CARGO_MANIFEST_LINKS", "tuic-native")
+        .env("CARGO_PKG_NAME", "tuicommander")
+        .env("OUT_DIR", "/tuic-dev-build-target/debug/build/out")
+        .env("RUSTDOC", "/tuic-dev-rustdoc")
+        .env("CARGO_INCREMENTAL", "0")
+        .env("RUSTC_WRAPPER", "/tuic-dev-mbx-shim")
+        .env("RUSTC_WORKSPACE_WRAPPER", "/tuic-dev-workspace-shim")
+        .env("HOST_CC", "/tuic-dev-cc")
+        .env("HOST_CXX", "/tuic-dev-cxx")
+        .env("MBX_SOCKET", "/tuic-dev-mbx.sock")
+        .env("MBX_FUTURE_BUILD_KEY", "tuic-only")
+        .env("CARGO", "/tuic-dev-cargo")
+        .env("CARGO_PRIMARY_PACKAGE", "1")
+        .env("CARGO_BIN_NAME", "tuicommander")
+        .env("CARGO_CRATE_NAME", "tuicommander")
+        .env("CARGO_MAKEFLAGS", "--jobserver-auth=3,4")
+        .env("CARGO_TARGET_TMPDIR", "/tuic-dev-target/tmp")
+        .env(
+            "CARGO_BIN_EXE_tuicommander",
+            "/tuic-dev-target/tuicommander",
+        )
+        .env("CARGO_FEATURE_DESKTOP", "1")
+        .env("CARGO_CFG_TARGET_OS", "macos")
+        .env("RUSTFLAGS", "-Ctarget-cpu=native")
+        .env("RUSTC", "/tuic-dev-rustc")
+        .env("RUSTC_LINKER", "/tuic-dev-linker")
+        .env("DEP_TUIC_NATIVE_PATH", "/tuic-dev-native")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-Ctarget-cpu=native")
+        .env("TARGET", "aarch64-apple-darwin")
+        .env("HOST", "aarch64-apple-darwin")
+        .env("PROFILE", "dev")
+        .env("NUM_JOBS", "12")
+        .env("OPT_LEVEL", "0")
+        .env("DEBUG", "true")
+        .env("CARGO_HOME", "/user/cargo")
+        .env("CARGO_TERM_COLOR", "always")
+        .env("TUIC_TEST_USER_ENV", "keep-me")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "isolated spawn-env check failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "spawn-env child was not selected: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn pty_spawn_env_child_checks_inherited_build_context() {
+    if std::env::var_os("TUIC_TEST_PTY_BUILD_ENV").is_none() {
+        return;
+    }
+    assert_eq!(
+        std::env::var("CARGO_TARGET_DIR").unwrap(),
+        "/tuic-dev-build-target"
+    );
+    let mut agent = CommandBuilder::new("agent");
+    assert_eq!(
+        agent.get_env("CARGO_TARGET_DIR"),
+        Some(std::ffi::OsStr::new("/tuic-dev-build-target"))
+    );
+    sanitize_pty_parent_env(&mut agent);
+    let shell = build_shell_command("/bin/sh");
+    for cmd in [&agent, &shell] {
+        for key in [
+            "CARGO_TARGET_DIR",
+            "CARGO_MANIFEST_DIR",
+            "CARGO_MANIFEST_PATH",
+            "CARGO_MANIFEST_LINKS",
+            "CARGO_PKG_NAME",
+            "OUT_DIR",
+            "RUSTDOC",
+            "CARGO_INCREMENTAL",
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "HOST_CC",
+            "HOST_CXX",
+            "MBX_SOCKET",
+            "MBX_FUTURE_BUILD_KEY",
+            "CARGO",
+            "CARGO_PRIMARY_PACKAGE",
+            "CARGO_BIN_NAME",
+            "CARGO_CRATE_NAME",
+            "CARGO_MAKEFLAGS",
+            "CARGO_TARGET_TMPDIR",
+            "CARGO_BIN_EXE_tuicommander",
+            "CARGO_FEATURE_DESKTOP",
+            "CARGO_CFG_TARGET_OS",
+            "RUSTFLAGS",
+            "RUSTC",
+            "RUSTC_LINKER",
+            "DEP_TUIC_NATIVE_PATH",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "TARGET",
+            "HOST",
+            "PROFILE",
+            "NUM_JOBS",
+            "OPT_LEVEL",
+            "DEBUG",
+        ] {
+            assert_eq!(cmd.get_env(key), None, "{key} leaked into a PTY");
+        }
+        assert_eq!(
+            cmd.get_env("CARGO_HOME"),
+            Some(std::ffi::OsStr::new("/user/cargo"))
+        );
+        assert_eq!(
+            cmd.get_env("CARGO_TERM_COLOR"),
+            Some(std::ffi::OsStr::new("always"))
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_TEST_USER_ENV"),
+            Some(std::ffi::OsStr::new("keep-me"))
+        );
+    }
+    agent.env("CARGO_TARGET_DIR", "/intentional-agent-target");
+    agent.env("CARGO_INCREMENTAL", "1");
+    agent.env("RUSTC_WRAPPER", "/intentional-agent-wrapper");
+    agent.env("MBX_SOCKET", "/intentional-agent-mbx.sock");
+    assert_eq!(
+        agent.get_env("CARGO_TARGET_DIR"),
+        Some(std::ffi::OsStr::new("/intentional-agent-target"))
+    );
+    assert_eq!(
+        agent.get_env("CARGO_INCREMENTAL"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    assert_eq!(
+        agent.get_env("RUSTC_WRAPPER"),
+        Some(std::ffi::OsStr::new("/intentional-agent-wrapper"))
+    );
+    assert_eq!(
+        agent.get_env("MBX_SOCKET"),
+        Some(std::ffi::OsStr::new("/intentional-agent-mbx.sock"))
+    );
+}
+
 // --- windows_to_wsl_path tests ---
 
 #[test]
@@ -7984,16 +8610,17 @@ fn lifecycle_inbox_message(
 }
 
 const SUMMARY_CHILD: &str = "8c261794-91e5-44a4-bf63-ec8afafd2adc";
+const SUMMARY_CHILD_B: &str = "9d3728a5-91e5-44a4-bf63-ec8afafd2adc";
 
-fn idle_payload() -> serde_json::Value {
-    serde_json::json!({"type": "state_change", "state": "idle", "session_id": SUMMARY_CHILD})
+fn idle_payload(child: &str) -> serde_json::Value {
+    serde_json::json!({"type": "state_change", "state": "idle", "session_id": child})
 }
 
-fn exited_payload() -> serde_json::Value {
+fn exited_payload(child: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "state_change",
         "state": "exited",
-        "session_id": SUMMARY_CHILD,
+        "session_id": child,
         "exit_code": 0,
     })
 }
@@ -8004,11 +8631,21 @@ fn lifecycle_summary_carries_every_event_in_the_window() {
     let parent = "parent-summary";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-idle",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-exit", SUMMARY_CHILD, 20, exited_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-exit",
+            SUMMARY_CHILD_B,
+            20,
+            exited_payload(SUMMARY_CHILD_B),
+        ),
     );
 
     let summary = summarize_lifecycle_group(
@@ -8026,7 +8663,7 @@ fn lifecycle_summary_carries_every_event_in_the_window() {
         "{summary}"
     );
     assert!(
-        summary.contains("child agent 8c261794 exited (exit 0)"),
+        summary.contains("child agent 9d3728a5 exited (exit 0)"),
         "{summary}"
     );
     assert!(
@@ -8042,7 +8679,12 @@ fn peer_payload_in_the_window_forces_the_generic_wake() {
     let parent = "parent-mixed";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-idle",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
@@ -8076,11 +8718,21 @@ fn lifecycle_summary_ignores_messages_outside_the_reserved_window() {
     let parent = "parent-window";
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-old", SUMMARY_CHILD, 10, idle_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-old",
+            SUMMARY_CHILD,
+            10,
+            idle_payload(SUMMARY_CHILD),
+        ),
     );
     state.push_agent_inbox(
         parent,
-        lifecycle_inbox_message("tuic-auto-covered", SUMMARY_CHILD, 20, exited_payload()),
+        lifecycle_inbox_message(
+            "tuic-auto-covered",
+            SUMMARY_CHILD,
+            20,
+            exited_payload(SUMMARY_CHILD),
+        ),
     );
     // Arrived after the reservation: neither described nor disqualifying.
     state.push_agent_inbox(
@@ -8118,13 +8770,14 @@ fn oversize_lifecycle_summary_falls_back_to_the_generic_wake() {
     let state = crate::state::tests_support::make_test_app_state();
     let parent = "parent-oversize";
     for index in 0..12u64 {
+        let child = format!("8c2617{index:02}-91e5-44a4-bf63-ec8afafd2adc");
         state.push_agent_inbox(
             parent,
             lifecycle_inbox_message(
                 &format!("tuic-auto-{index}"),
-                SUMMARY_CHILD,
+                &child,
                 index + 1,
-                idle_payload(),
+                idle_payload(&child),
             ),
         );
     }
@@ -9919,6 +10572,67 @@ fn agent_submission_rejects_partial_composer_without_writing() {
 
 #[cfg(unix)]
 #[test]
+fn a_human_reply_can_answer_a_confident_question_without_weakening_agent_injection() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "human-question", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "human-question");
+    state
+        .session_maps
+        .session_states
+        .get_mut("human-question")
+        .unwrap()
+        .question_confident = true;
+
+    assert!(!should_inject_now(&state, "human-question"));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, "human-question", "yes"),
+        AgentSubmissionWrite::Rejected {
+            reason: "awaiting_input",
+            ..
+        }
+    ));
+    assert!(bytes.lock().unwrap().is_empty());
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "human-question", "yes"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    let written = bytes.lock().unwrap();
+    assert_eq!(written.iter().filter(|byte| **byte == b'y').count(), 1);
+    assert_eq!(written.last(), Some(&b'\r'));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_human_reply_cannot_overwrite_a_partial_composer() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "human-partial", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "human-partial");
+    state
+        .session_maps
+        .session_states
+        .get_mut("human-partial")
+        .unwrap()
+        .question_confident = true;
+    let mut buffer = InputLineBuffer::new();
+    buffer.feed("existing draft");
+    state
+        .session_maps
+        .input_buffers
+        .insert("human-partial".to_string(), parking_lot::Mutex::new(buffer));
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "human-partial", "yes"),
+        AgentSubmissionWrite::Rejected {
+            reason: "partial_composer",
+            ..
+        }
+    ));
+    assert!(bytes.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn agent_submission_does_not_overtake_existing_queue() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "submit-queued", SHELL_IDLE);
@@ -10303,6 +11017,143 @@ fn enqueue_parks_command_while_agent_is_busy() {
     );
 }
 
+/// Regression: a silence-only idle edge leaves the queue parked; a later
+/// stable Ready screen must wake it even when no second shell edge or PTY read
+/// occurs. A callback writer observes the actual queue-to-PTY boundary.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
+    struct WriteChannel(std::sync::mpsc::Sender<Vec<u8>>);
+
+    impl std::io::Write for WriteChannel {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    tokio::time::pause();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "codex-ready-after-idle";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
+
+    let enqueued = enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    assert_eq!((enqueued.typed, enqueued.queued), (false, 1));
+    assert!(
+        received.try_recv().is_err(),
+        "busy turn must receive no input"
+    );
+
+    // This state sequence is observed in :9876: shell idle with
+    // idle_confirmed=false, then a queued flush is deferred. The reader's
+    // cached Ready verdict subsequently matures without another output chunk.
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    {
+        let mut silence = silence.lock();
+        let forty_minutes_ago = std::time::Instant::now() - std::time::Duration::from_secs(40 * 60);
+        silence.force_idle_unconfirmed();
+        silence.cached_screen_activity = AgentScreenActivity::Ready;
+        silence.last_output_at = forty_minutes_ago;
+        silence.last_chunk_at = forty_minutes_ago;
+        silence.screen_ready_pending_since = Some(forty_minutes_ago);
+    }
+    assert!(!should_inject_now(&state, sid));
+    flush_pending_injections_blocking(&state, sid);
+    assert!(received.try_recv().is_err());
+    assert_eq!(queued_command_count(&state, sid), 1);
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    for expected in [b"\x15".as_slice(), b"resume queued work", b"\r"] {
+        let actual = received
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .expect("ready confirmation must submit queued command without a new shell edge");
+        assert_eq!(actual, expected);
+    }
+    assert!(
+        received.try_recv().is_err(),
+        "the command must be submitted once"
+    );
+    assert_eq!(queued_command_count(&state, sid), 0);
+
+    // A later timer tick must not replay the command after the first drain.
+    let running = Arc::new(AtomicBool::new(true));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    assert!(received.try_recv().is_err());
+    assert_eq!(queued_command_count(&state, sid), 0);
+}
+
+/// A quiet PTY is not a ready composer while Codex still paints Working.
+/// The readiness retry must leave that queued user command untouched.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_codex_command_waits_when_idle_shell_still_shows_working() {
+    tokio::time::pause();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "codex-working-on-idle-shell";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let bytes = insert_recording_session(&state, sid);
+    assert_eq!(
+        enqueue_user_command(&state, sid, "wait for completion")
+            .unwrap()
+            .queued,
+        1
+    );
+    assert!(try_shell_transition(
+        &state, sid, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut silence = silence.lock();
+        silence.force_idle_unconfirmed();
+        silence.cached_screen_activity = AgentScreenActivity::Working;
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "Working must not receive queued input"
+    );
+    assert_eq!(queued_command_count(&state, sid), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn enqueue_refuses_shells_and_dead_sessions() {
@@ -10338,6 +11189,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     assert_eq!(queued_command_count(&state, "blank"), 0);
 }
 
+#[cfg(feature = "desktop")]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -10347,6 +11199,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
+#[cfg(feature = "desktop")]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps
@@ -10361,7 +11214,7 @@ fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
 /// agent queues or takes mid-turn itself. The Compose queue is for something
 /// else (one message, let the agent work, then the next), so the turn never
 /// enters it. Parking it there until idle cost a median 103 s, max 594 s.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10388,7 +11241,7 @@ fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
 
 /// An idle agent takes it too, through the same claim the queue uses, and is
 /// busy afterwards — the write started a turn.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10408,7 +11261,7 @@ fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
 
 /// A confident question owns the composer even mid-turn: speech aimed at the
 /// agent must not answer a permission dialog.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_held_by_a_confident_question() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10430,7 +11283,7 @@ fn a_voice_turn_is_held_by_a_confident_question() {
 
 /// A draft in the composer holds the turn: the Ctrl-U that opens every write
 /// would erase what the user is typing.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_held_by_partial_input() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10453,7 +11306,7 @@ fn a_voice_turn_is_held_by_partial_input() {
 
 /// The Compose queue is not touched: a typed entry parked for the next idle
 /// stays parked, in place, and a busy agent still receives nothing of it.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_leaves_the_compose_queue_alone() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10482,7 +11335,7 @@ fn a_voice_turn_leaves_the_compose_queue_alone() {
 
 /// A write that never started is held, not lost, and leaves the agent busy:
 /// releasing a claim that never took the idle atom must not invent an idle edge.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -10513,7 +11366,7 @@ fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() 
 }
 
 /// Refused outright, as before: not an agent, gone, or empty.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 #[test]
 fn a_voice_turn_is_refused_for_shells_dead_sessions_and_empty_text() {
     use std::sync::atomic::AtomicU8;
@@ -11614,7 +12467,7 @@ impl std::io::Write for TimedWriter {
 /// text, and the text a real gap before the Enter.
 #[cfg(unix)]
 #[test]
-fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
+fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -11625,6 +12478,13 @@ fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
         }),
         TtyMode::Raw,
     );
+    agent_session(&state, "timed-submit", SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut("timed-submit")
+        .unwrap()
+        .agent_type = Some("codex".into());
     let text = "dictated text ".repeat(50);
     let text = text.trim();
 
@@ -11641,8 +12501,51 @@ fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
         "Ctrl-U and the text must not share a read"
     );
     assert!(
-        writes[2].0 - writes[1].0 >= INJECT_ENTER_GAP,
-        "the text and the Enter must not share a read"
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        "Codex Enter must arrive after its 120ms paste suppression window"
+    );
+
+    assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        "unrecognized-agent",
+        Box::new(TimedWriter {
+            writes: Arc::clone(&writes),
+        }),
+        TtyMode::Raw,
+    );
+    agent_session(&state, "unrecognized-agent", SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut("unrecognized-agent")
+        .unwrap()
+        .agent_type = Some("future-agent".into());
+
+    write_agent_command_to_pty(&state, "unrecognized-agent", "review this").unwrap();
+
+    let writes = writes.lock().unwrap();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|(_, bytes)| bytes.as_slice())
+            .collect::<Vec<_>>(),
+        vec![
+            b"\x15".as_slice(),
+            b"review this".as_slice(),
+            b"\r".as_slice()
+        ]
+    );
+    assert!(
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        "unknown agent must tolerate Codex paste suppression"
     );
 }
 
@@ -12150,6 +13053,1343 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
     })
 }
 
+/// Codex CLI 0.156, captured through `/diagnostics/capture` on 2026-09-24.
+/// The TUI redraws this marker through several growing cursor prefixes. Replay
+/// the production chunk processor rather than the row parser alone: an open
+/// intent must absorb every growing prefix before Progress sees it.
+#[test]
+fn captured_codex_streaming_intent_emits_one_complete_marker() {
+    #[cfg(not(feature = "desktop"))]
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test Tokio runtime");
+    #[cfg(not(feature = "desktop"))]
+    let _runtime_guard = runtime.enter();
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project");
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-streaming-intent-20260924.tcap",
+    ))
+    .expect("valid framed capture");
+    // A capture taken before the session's grid is initialized has no recorded
+    // geometry; replay it at a fixed, spacious size rather than rejecting valid
+    // stream evidence before it reaches the parser.
+    let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "captured-codex-streaming-intent";
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("start project watcher");
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("Codex capture is UTF-8"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        intents,
+        vec![(
+            "validating the streaming capture".to_string(),
+            Some("Capture test".to_string())
+        )],
+        "the captured growing prefixes must produce one complete intent"
+    );
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent
+            && entry.text == "validating the streaming capture"));
+}
+
+/// Codex redraws its streaming response in place, then returns its cursor to
+/// the input row. Cursor-local filtering therefore cannot see the marker.
+/// This is deliberately raw VT input: CSI H moves back to the same row and
+/// CSI K clears the prior render just as the captured Codex repaint stream
+/// does.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_cursor_away_repaint_journals_only_the_closed_intent_and_title() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-narrow-streaming-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 128, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let prefixes = [
+        "Individuo",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino il comportamento corretto (Accapo mobile)",
+    ];
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    for prefix in prefixes {
+        processor.process_chunk(
+            &format!("\x1b[4;1H\x1b[2K• intent: {prefix}\x1b[14;3H"),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let text = prefixes
+        .last()
+        .expect("complete prefix")
+        .split(" (")
+        .next()
+        .unwrap();
+    assert_eq!(
+        intents,
+        vec![(text.to_string(), Some("Accapo mobile".to_string()))]
+    );
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// A legacy intent need not have a title. Once its row is no longer live under
+/// the cursor, the production parser must journal it rather than treating the
+/// missing optional title as a streaming redraw.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_cursor_away_titleless_intent_is_journaled_once() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-titleless-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 128, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let text = "Read the configuration loader";
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    processor.process_chunk(
+        &format!("\x1b[4;1H\x1b[2K• intent: {text}\r\n"),
+        &silence,
+        sid,
+        &state,
+    );
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, vec![(text.to_string(), None)]);
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// A title can close an intent after it soft-wraps. The logical marker must be
+/// retained when Codex returns the cursor to its composer in the same chunk.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_narrow_cursor_away_intent_journals_full_text_and_title_once() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-wrapped-away-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 20, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let text = "Restore the mobile terminal line wrapping behavior";
+    let title = "Mobile wrapping";
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    processor.process_chunk(
+        &format!("\x1b[4;1H\x1b[2K• intent: {text} ({title})\x1b[14;3H"),
+        &silence,
+        sid,
+        &state,
+    );
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, vec![(text.to_string(), Some(title.to_string()))]);
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// At 20 columns the completed marker spans six soft-wrapped rows. The cursor
+/// remains on the marker while Codex repaints it, so this exercises the grid
+/// prefix path rather than parsing a hand-built logical line.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_narrow_repaint_journals_only_the_closed_intent_and_title() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-narrow-streaming-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 20, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let prefixes = [
+        "Individuo",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino il comportamento corretto (Accapo mobile)",
+    ];
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    for prefix in prefixes {
+        processor.process_chunk(
+            &format!("\x1b[4;1H\x1b[2K• intent: {prefix}"),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let text = prefixes
+        .last()
+        .expect("complete prefix")
+        .split(" (")
+        .next()
+        .unwrap();
+    assert_eq!(
+        intents,
+        vec![(text.to_string(), Some("Accapo mobile".to_string()))]
+    );
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// A live Codex 80-column capture. Its marker grows across an indented second
+/// row while the first row repaints; only the completed title is a journal row.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
+    replay_captured_codex_narrow_intent(
+        "codex-narrow-progress-intent-20260925.tcap",
+        "Controllo la cattura a 80 colonne e preparo la prova del journal con righe di continuazione e titolo finale",
+        "Verifica stretta",
+    );
+}
+
+/// A second real narrow capture exercises Ink's continuation-row repaint after
+/// the first fixture exposed an early partial publication.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn captured_codex_narrow_ink_replay_journals_complete_intent() {
+    replay_captured_codex_narrow_intent(
+        "codex-narrow-ink-replay-20260925.tcap",
+        "Verifico il secondo replay Codex a larghezza stretta dopo la correzione dei frame Ink e degli intent ancora aperti",
+        "Replay finale",
+    );
+}
+
+#[cfg(unix)]
+fn replay_captured_codex_narrow_intent(name: &str, text: &str, title: &str) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(name))
+        .expect("decode Codex capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    assert_eq!(cols, 80);
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "captured-codex-narrow-hard-wrap";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut intents = Vec::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("complete UTF-8 chunk"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+        for event in std::iter::from_fn(|| parsed_events.try_recv().ok()) {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent")
+            {
+                intents.push((
+                    parsed["text"].as_str().unwrap_or_default().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ));
+            }
+        }
+    }
+    assert_eq!(intents, [(text.to_string(), Some(title.to_string()))]);
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+#[cfg(unix)]
+fn run_progress_intent_case(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    run_progress_intent_case_ending(chunks, cols, agent, timer_idle, None, true, false)
+}
+
+#[cfg(unix)]
+fn run_progress_intent_case_ending(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+    teardown: Option<&str>,
+    idle_is_quiet: bool,
+    fail_journal: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    run_progress_intent_case_grid(
+        chunks,
+        cols,
+        agent,
+        timer_idle,
+        teardown,
+        idle_is_quiet,
+        fail_journal,
+        2000,
+        true,
+    )
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_progress_intent_case_grid(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+    teardown: Option<&str>,
+    idle_is_quiet: bool,
+    fail_journal: bool,
+    history_capacity: usize,
+    alt_screen: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    #[cfg(not(feature = "desktop"))]
+    let runtime = tokio::runtime::Handle::try_current().is_err().then(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test Tokio runtime")
+    });
+    #[cfg(not(feature = "desktop"))]
+    let _runtime_guard = runtime.as_ref().map(|runtime| runtime.enter());
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    if fail_journal {
+        std::fs::create_dir(config.path().join("progress.sqlite3"))
+            .expect("block journal database path");
+    }
+    let sid = "progress-intent-matrix";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("session")
+        .agent_type = agent.then(|| "codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, cols, history_capacity)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    if alt_screen {
+        processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    }
+    let mut capped_intent_start = None;
+    for (index, chunk) in chunks.iter().enumerate() {
+        processor.process_chunk(chunk, &silence, sid, &state);
+        if !alt_screen && history_capacity == 20 && index == 1 {
+            capped_intent_start = Some(
+                silence
+                    .lock()
+                    .open_intent
+                    .as_ref()
+                    .expect("the capped-scroll fixture opened an intent")
+                    .start_row,
+            );
+        }
+        if !alt_screen && history_capacity == 20 && index == 2 {
+            assert_eq!(
+                silence
+                    .lock()
+                    .open_intent
+                    .as_ref()
+                    .expect("scroll must retain the open intent")
+                    .start_row,
+                capped_intent_start.expect("captured the anchor before scrolling"),
+                "the capped history origin must not move the open intent anchor"
+            );
+        }
+    }
+    if !alt_screen && history_capacity == 20 {
+        let vt = state.grid.vt_log_buffers.get(sid).expect("terminal grid");
+        let vt = vt.lock();
+        assert!(
+            vt.grid_screen_origin() > vt.grid_history_size(),
+            "the main-screen test must scroll beyond the actual grid history cap"
+        );
+    }
+    if timer_idle {
+        if idle_is_quiet {
+            silence.lock().last_output_at = std::time::Instant::now()
+                - SILENCE_INTENT_THRESHOLD
+                - std::time::Duration::from_millis(1);
+        }
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .expect("shell state")
+            .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        emit_open_intent_if_idle(&state, &silence, sid);
+        emit_open_intent_if_idle(&state, &silence, sid);
+    }
+    match teardown {
+        Some("close") => {
+            close_pty_core(&state, sid, false);
+            assert!(!state.session_maps.sessions.contains_key(sid));
+        }
+        Some("kill") => assert!(kill_pty_core(&state, sid)),
+        Some("exit") => mark_session_exited(sid, &state),
+        None => {}
+        Some(other) => panic!("unknown teardown {other}"),
+    }
+    let events = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed["text"].as_str().unwrap_or_default().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let entries = if fail_journal {
+        Vec::new()
+    } else {
+        crate::progress::ProgressStore::open()
+            .expect("open Progress journal")
+            .list(
+                &project
+                    .path()
+                    .canonicalize()
+                    .expect("canonical project")
+                    .to_string_lossy(),
+                &crate::progress::ProgressListInput::default(),
+            )
+            .expect("list Progress journal")
+            .entries
+            .into_iter()
+            .filter(|entry| entry.kind == crate::progress::ProgressKind::Intent)
+            .map(|entry| entry.text)
+            .collect()
+    };
+    (events, entries)
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn progress_open_intent_close_matrix() {
+    for ending in ["close", "kill", "exit"] {
+        let (events, entries) = run_progress_intent_case_ending(
+            &["\x1b[4;1H\x1b[2K• intent: Preserve the final journal entry"],
+            80,
+            true,
+            false,
+            Some(ending),
+            true,
+            false,
+        );
+        assert_eq!(
+            events,
+            [("Preserve the final journal entry".into(), None)],
+            "{ending}"
+        );
+        assert_eq!(entries, ["Preserve the final journal entry"], "{ending}");
+    }
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Reviewing the streaming parser for the Progress journal\r\n  correctness guarantees (Review parser)",
+        ],
+        72,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [(
+            "Reviewing the streaming parser for the Progress journal correctness guarantees".into(),
+            Some("Review parser".into())
+        )]
+    );
+    assert_eq!(
+        entries,
+        ["Reviewing the streaming parser for the Progress journal correctness guarantees"]
+    );
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Reviewing the narrow terminal\r\n  and the Progress journal carefully\r\n  together (Narrow replay)",
+        ],
+        40,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [(
+            "Reviewing the narrow terminal and the Progress journal carefully together".into(),
+            Some("Narrow replay".into())
+        )]
+    );
+    assert_eq!(
+        entries,
+        ["Reviewing the narrow terminal and the Progress journal carefully together"]
+    );
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Inspect\n\x1b[5;1H\x1b[2K⠋ Working",
+            "\x1b[5;1H\x1b[2K\x1b[4;1H\x1b[2K● intent: Inspect the auth\n\x1b[5;1H\x1b[2K⠋ Working",
+            "\x1b[5;1H\x1b[2K\x1b[4;1H\x1b[2K● intent: Inspect the auth path (Auth path)\n\x1b[5;1H\x1b[2K⠋ Working",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Inspect the auth path".into(), Some("Auth path".into()))]
+    );
+    assert_eq!(entries, ["Inspect the auth path"]);
+
+    for chunks in [
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H"],
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\r"],
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader"],
+    ] {
+        let (events, entries) = run_progress_intent_case(&chunks, 128, true, false);
+        assert!(events.is_empty(), "cursor move or CR closed an open intent");
+        assert!(entries.is_empty());
+    }
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Restore terminal wrapping across narrow panes"],
+        20,
+        true,
+        false,
+    );
+    assert!(events.is_empty(), "soft wrap closed an open intent");
+    assert!(entries.is_empty());
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Read",
+            "\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H",
+            "\x1b[5;1HChecking the settings now",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Read the configuration loader".into(), None)]);
+    assert_eq!(entries, ["Read the configuration loader"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Inspect the startup path\x1b[14;3H"],
+        128,
+        true,
+        true,
+    );
+    assert_eq!(events, [("Inspect the startup path".into(), None)]);
+    assert_eq!(entries, ["Inspect the startup path"]);
+
+    let (events, entries) = run_progress_intent_case_ending(
+        &["\x1b[4;1H\x1b[2K• intent: Still streaming"],
+        80,
+        true,
+        true,
+        None,
+        false,
+        false,
+    );
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
+
+    let (events, entries) = run_progress_intent_case_ending(
+        &["\x1b[4;1H\x1b[2K• intent: Inspect a closed store (Store error)"],
+        80,
+        true,
+        false,
+        None,
+        true,
+        true,
+    );
+    assert!(
+        events.is_empty(),
+        "failed journal write must not publish an intent"
+    );
+    assert!(entries.is_empty());
+
+    let secret = format!("ghp_{}", "A".repeat(40));
+    let chunk = format!("\x1b[4;1H\x1b[2K• intent: Inspect {secret} (Secret check)");
+    let (_, entries) = run_progress_intent_case(&[&chunk], 128, true, false);
+    assert_eq!(entries.len(), 1);
+    assert!(
+        !entries[0].contains(&secret),
+        "the journal persisted a secret"
+    );
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the session journal",
+            "\r",
+            "\n",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Inspect the session journal".into(), None)]);
+    assert_eq!(entries, ["Inspect the session journal"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Check the completion signal\x1b[14;3H",
+            "\x1b]7770;state=idle\x07",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Check the completion signal".into(), None)]);
+    assert_eq!(entries, ["Check the completion signal"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Restore terminal wrapping across narrow panes",
+            "\x1b[8;1HFollowing prose closes the wrapped line",
+        ],
+        20,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Restore terminal wrapping across narrow panes".into(), None)]
+    );
+    assert_eq!(entries, ["Restore terminal wrapping across narrow panes"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect routing (Routing)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].0, "Inspect auth");
+    assert_eq!(events[1].0, "Inspect routing");
+    assert_eq!(events[2].0, "Inspect auth");
+    assert_eq!(entries.len(), 3);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events.len(), 1);
+    assert_eq!(entries.len(), 1);
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Shell output (Ignored)"],
+        128,
+        false,
+        false,
+    );
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn indented_prose_after_a_short_intent_is_not_a_wrap() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the auth path\r\n  Reading src/auth.rs (the entry point)",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Inspect the auth path".into(), None)]);
+    assert_eq!(entries, ["Inspect the auth path"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn indented_prose_after_a_soft_wrapped_intent_is_not_a_hard_wrap() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the authentication path carefully\r\n  Reading src/auth.rs (the entry point)",
+        ],
+        40,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Inspect the authentication path carefully".into(), None)]
+    );
+    assert_eq!(entries, ["Inspect the authentication path carefully"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn capped_main_screen_origin_closes_a_titleless_intent() {
+    let filler = "filler\r\n".repeat(10_040);
+    let (events, entries) = run_progress_intent_case_grid(
+        &[
+            &filler,
+            "\x1b[12;1H\x1b[2K• intent: Inspect capped scrollback",
+            "\x1b[S",
+            // The prose is only one row below the scrolled anchor. A capped
+            // history_size origin leaves the old row number in place.
+            "\x1b[12;1H\x1b[2KFollowing prose after the scroll",
+        ],
+        80,
+        true,
+        false,
+        None,
+        true,
+        false,
+        20,
+        false,
+    );
+    assert_eq!(events, [("Inspect capped scrollback".into(), None)]);
+    assert_eq!(entries, ["Inspect capped scrollback"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn narrow_intent_absorbs_three_hard_wrap_rows() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and\r\n  journal text (Narrow complete)",
+        ],
+        40,
+        true,
+        false,
+    );
+    let full = "Review narrow rows and preserve every continuation while collecting the complete title and journal text";
+    assert_eq!(events, [(full.into(), Some("Narrow complete".into()))]);
+    assert_eq!(entries, [full]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn incomplete_narrow_title_is_not_discarded_by_the_next_intent() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and (",
+            "\r\n  Narrow complete)",
+            "\r\n• intent: Begin the next step (Next)",
+        ],
+        40,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [
+            (
+                "Review narrow rows and preserve every continuation while collecting the complete title and".into(),
+                Some("Narrow complete".into())
+            ),
+            ("Begin the next step".into(), Some("Next".into()))
+        ]
+    );
+    assert_eq!(
+        entries,
+        [
+            "Begin the next step",
+            "Review narrow rows and preserve every continuation while collecting the complete title and"
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn long_intent_keeps_its_title_and_truncates_only_the_journal() {
+    let full = format!("{} {}", "a".repeat(380), "b".repeat(220));
+    let chunk = format!(
+        "\x1b[4;1H\x1b[2K• intent: {}\r\n  {} (Long)",
+        "a".repeat(380),
+        "b".repeat(220)
+    );
+    let (events, entries) = run_progress_intent_case(&[&chunk], 400, true, false);
+    assert_eq!(events, [(full.clone(), Some("Long".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].chars().count(), crate::progress::MAX_TEXT_CHARS);
+    assert!(entries[0].ends_with('…'));
+    assert!(full.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
+    let mut frame = String::new();
+    for row in 1..=16 {
+        frame.push_str(&format!("\x1b[{row};1H\x1b[2KFrame row {row}"));
+    }
+    INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(0));
+    let (events, entries) = run_progress_intent_case(&[&frame], 80, true, false);
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
+    INTENT_CANDIDATE_GRID_READS.with(|reads| {
+        assert!(
+            reads.get() <= 2,
+            "{} logical grid scans for a non-intent repaint",
+            reads.get()
+        );
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn wide_soft_wrapped_intent_keeps_complete_title_and_journal() {
+    let text = "review ".repeat(76).trim_end().to_string();
+    let chunk = format!("\x1b[4;1H\x1b[2K• intent: {text} (Wide review)");
+    let (events, entries) = run_progress_intent_case(&[&chunk], 120, true, false);
+    assert_eq!(events, [(text.clone(), Some("Wide review".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert!(text.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn twelve_row_soft_wrapped_intent_keeps_progress_and_title() {
+    let text = "review ".repeat(68).trim_end().to_string();
+    let chunk = format!("\x1b[2;1H\x1b[2K• intent: {text} (Twelve rows)");
+    let (events, entries) = run_progress_intent_case(&[&chunk], 40, true, false);
+    assert_eq!(events, [(text.clone(), Some("Twelve rows".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert!(text.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn intent_continuation_does_not_read_below_chrome_cutoff() {
+    let chunk = "\x1b[4;1H\x1b[2K• intent: Inspect the module\x1b[5;1H\x1b[2K────────────────────────────────────────\x1b[6;1H\x1b[2K❯ ";
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let (events, _) = run_progress_intent_case(&[chunk], 40, true, true);
+    assert_eq!(events, [("Inspect the module".into(), None)]);
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert_eq!(
+            reads.get(),
+            0,
+            "chrome rows must not be read as continuations"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn unclosed_title_does_not_silently_discard_prior_intent() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (",
+            "\x1b[5;1H\x1b[2K• intent: Review routing (Routing)",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [
+            ("Inspect auth".into(), None),
+            ("Review routing".into(), Some("Routing".into()))
+        ]
+    );
+    assert_eq!(entries, ["Review routing", "Inspect auth"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn repaint_below_open_intent_reads_each_continuation_once() {
+    let mut frame = String::from("\x1b[1;1H\x1b[2K• intent: Inspect current state");
+    for row in 2..=16 {
+        frame.push_str(&format!("\x1b[{row};1H\x1b[2KFrame row {row}"));
+    }
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let _ = run_progress_intent_case(&[&frame], 80, true, false);
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert!(reads.get() <= 2, "{} continuation grid reads", reads.get());
+    });
+
+    let completed = frame.replace("Inspect current state", "Inspect current state (Current)");
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let (events, _) = run_progress_intent_case(&[&completed], 80, true, false);
+    assert_eq!(
+        events,
+        [("Inspect current state".into(), Some("Current".into()))]
+    );
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert_eq!(reads.get(), 0, "closed title scanned continuation rows");
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn silence_timer_drains_open_intent_after_idle() {
+    tokio::time::pause();
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "progress-intent-timer";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 80, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    ChunkProcessor::new(None, None).process_chunk(
+        "\x1b[4;1H\x1b[2K• intent: Review idle drain",
+        &silence,
+        sid,
+        &state,
+    );
+    silence.lock().last_output_at =
+        std::time::Instant::now() - STARTUP_SETTLE_SILENCE - std::time::Duration::from_secs(1);
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, Ordering::Release);
+    let running = std::sync::Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state);
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                parsed["text"].as_str().map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, ["Review idle drain"]);
+}
+
 /// Live idle Codex animation from brainstorming (2026-09-21). The capture
 /// starts after turn completion: seed that observed protocol boundary, then
 /// replay the original repaint chunks through the production reader.
@@ -12293,6 +14533,315 @@ fn replay_final_screen(bytes: &[u8]) -> Vec<String> {
         }
     }
     vt_log.screen_rows()
+}
+
+/// Captured from live Codex 0.157.1 (`--no-alt-screen`) and OpenCode 1.18.30
+/// (`--mini`) launched through the HTTP agent route. Both kept TUIC's native
+/// scrollback through startup and a resize; the Codex capture also spans an
+/// approval prompt and its cancellation.
+#[test]
+fn live_native_scrollback_captures_never_enter_alternate_screen() {
+    for fixture in [
+        "codex-0.157.1-no-alt-approval-resize.tcap",
+        "opencode-1.18.30-mini-resize.tcap",
+    ] {
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture))
+            .expect("valid live capture");
+        let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        let mut output_count = 0;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            output_count += 1;
+            vt.process(&record.data);
+            assert!(
+                !vt.is_alternate_screen(),
+                "{fixture}: alternate screen entered at {} us",
+                record.elapsed_us
+            );
+        }
+        assert!(output_count > 0, "{fixture}: capture has no agent output");
+    }
+}
+
+#[test]
+fn codex_native_scrollback_capture_keeps_approval_and_idle_composer_visible() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-0.157.1-no-alt-approval-resize.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    let mut approval_visible = false;
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            approval_visible |= vt
+                .screen_rows()
+                .iter()
+                .any(|row| row.contains("Would you like to run the following command?"));
+        }
+    }
+    assert!(
+        approval_visible,
+        "live approval prompt was lost during replay"
+    );
+    let screen = vt.screen_rows();
+    let refs: Vec<_> = screen.iter().map(String::as_str).collect();
+    let cutoff = crate::chrome::find_chrome_cutoff(&refs)
+        .expect("the final Codex composer must anchor the chrome cutoff");
+    assert!(
+        screen[..cutoff]
+            .iter()
+            .any(|row| row.contains("You canceled the request")),
+        "cancellation must remain in the transcript above the composer: {screen:#?}"
+    );
+    assert!(
+        screen[cutoff..]
+            .iter()
+            .any(|row| row.contains("Ask Codex to do anything")),
+        "the idle composer must remain visible below the cutoff: {screen:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn codex_canceled_approval_capture_clears_the_waiting_badge() {
+    // Exact records 1775..1826 from the committed live capture, with its
+    // original geometry and chunk boundaries retained.
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-0.157.1-approval-cancel.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "codex-canceled-approval";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_approval = false;
+    let mut approval_title = None;
+    let mut ordinary_title = None;
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = utf8.push(&record.data);
+        let data = escape.push(&data);
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        if clean.contains("Action Required") && approval_title.is_none() {
+            approval_title = Some(clean.to_string());
+        }
+        if let Some(start) = clean.find("\x1b]0;Create approval marker")
+            && ordinary_title.is_none()
+        {
+            let end = start + clean[start..].find('\x07').expect("complete OSC title") + 1;
+            ordinary_title = Some(clean[start..end].to_string());
+        }
+        processor.process_chunk(&clean, &silence, sid, &state);
+        let screen = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .screen_rows();
+        if screen
+            .iter()
+            .any(|row| row.contains("Would you like to run the following command?"))
+        {
+            saw_approval = true;
+            assert!(
+                await_session(&state, sid, |session| session.awaiting_input
+                    && session.question_confident)
+                .await,
+                "the live approval dialog must set the waiting badge"
+            );
+        }
+    }
+    assert!(saw_approval, "capture must include the approval dialog");
+    assert!(
+        await_session(&state, sid, |session| !session.awaiting_input
+            && !session.question_confident)
+        .await,
+        "the canceled dialog and idle composer must clear the waiting badge"
+    );
+    processor.process_chunk(
+        &approval_title.expect("capture must include an approval title"),
+        &silence,
+        sid,
+        &state,
+    );
+    assert!(
+        await_session(&state, sid, |session| session.awaiting_input
+            && session.question_confident)
+        .await,
+        "a later approval must set the badge again"
+    );
+    let repaint = format!(
+        "{}\x1b[1;1H.",
+        ordinary_title.expect("capture must include the ordinary title after cancellation")
+    );
+    processor.process_chunk(&repaint, &silence, sid, &state);
+    assert!(
+        !await_session(&state, sid, |session| !session.awaiting_input).await,
+        "an old cancellation in scrollback must not clear a new approval"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canceled_approval_does_not_clear_a_different_confident_question() {
+    let sid = "approval-followed-by-another-question";
+    let state = accumulating_state(sid);
+    for prompt in [
+        "| Create approval marker | project",
+        "Confirm a different operation?",
+    ] {
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: sid.into(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": prompt,
+                "confident": true,
+            })
+            .into(),
+        });
+        assert!(
+            await_session(&state, sid, |session| session.question_text.as_deref()
+                == Some(prompt))
+            .await
+        );
+    }
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.into(),
+        parsed: serde_json::json!({
+            "type": "protocol-question-cleared",
+            "expected_question_text": "| Create approval marker | project",
+        })
+        .into(),
+    });
+    assert!(
+        !await_session(&state, sid, |session| !session.awaiting_input).await,
+        "cancellation of the earlier approval must preserve the later question"
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .question_confident
+    );
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.into(),
+        parsed: serde_json::json!({
+            "type": "protocol-question-cleared",
+            "expected_question_text": "Confirm a different operation?",
+        })
+        .into(),
+    });
+    assert!(
+        await_session(&state, sid, |session| !session.awaiting_input
+            && !session.question_confident)
+        .await,
+        "clearing the current question must still work"
+    );
+}
+
+#[test]
+fn opencode_mini_resize_repaint_does_not_reopen_an_idle_turn() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-resize.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-resize";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut resize_output = Vec::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        if record.elapsed_us < 10_000_000 {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        } else {
+            resize_output.push(record);
+        }
+    }
+    assert!(
+        !resize_output.is_empty(),
+        "fixture must contain SIGWINCH repaint"
+    );
+    silence.lock().force_idle_unconfirmed();
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(32, 100);
+    silence.lock().on_resize();
+    let mut rx = state.event_bus.subscribe();
+    for record in resize_output {
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+            &silence,
+            sid,
+            &state,
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .shell_states
+                .get(sid)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_IDLE,
+            "resize-only output must not mark OpenCode busy"
+        );
+    }
+    while let Ok(event) = rx.try_recv() {
+        if let crate::state::AppEvent::PtyParsed { parsed, .. } = event {
+            assert!(
+                parsed["type"] != "shell-state" || parsed["state"] != "busy",
+                "resize emitted a BUSY edge: {parsed}"
+            );
+        }
+    }
 }
 
 /// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
@@ -13016,10 +15565,7 @@ fn awaiting_prompts(events: &[ParsedEvent]) -> Vec<String> {
         .collect()
 }
 
-/// Every prompt the pipeline reported, whatever its confidence. A signal
-/// that badges the tab but stays retractable — Claude's `is waiting for
-/// your input` notify — is invisible to `awaiting_prompts`, so asserting
-/// "the notify survived the pipeline" needs this view instead.
+/// Every prompt the pipeline reported, whatever its confidence.
 fn awaiting_prompts_any_confidence(events: &[ParsedEvent]) -> Vec<String> {
     events
         .iter()
@@ -13030,44 +15576,32 @@ fn awaiting_prompts_any_confidence(events: &[ParsedEvent]) -> Vec<String> {
         .collect()
 }
 
-/// Regression, captured 2026-08-08 from a live session parked on a plan
-/// picker while its tab showed a "working" dot.
-///
-/// The session is hook-instrumented Claude, so every regex Question is
-/// dropped by design — and the picker is not `PreToolUse(AskUserQuestion)`,
-/// so the hook emitted no `state=awaiting` either. Both channels silent, the
-/// agent blocked. The one thing Claude did say is in these bytes:
-/// `ESC]777;notify;Claude Code;Claude is waiting for your input BEL`.
-/// Before that sequence was parsed this assertion found nothing.
+/// The old fixture name calls this a plan picker, but its bytes show a ready
+/// `❯` composer followed by Claude's generic desktop notification. There is
+/// no Ink footer or visible picker in the captured suffix. This notification
+/// is therefore insufficient evidence of awaiting even for a hooked session.
 #[test]
-fn hook_instrumented_session_still_reports_awaiting_via_osc777() {
+fn hooked_claude_generic_notify_capture_is_not_a_question() {
     let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), true);
-    // Retractable on purpose: the same body arrives on Claude's 60s idle
-    // timer after a finished turn. The picker keeps the badge because the
-    // prompt stays on screen, not because the notify is trusted forever.
     let prompts = awaiting_prompts_any_confidence(&events);
-
     assert!(
-        prompts
+        !prompts
             .iter()
             .any(|p| p == "Claude is waiting for your input"),
-        "hook suppression must not swallow the agent's own notification; \
-             questions seen: {prompts:?}"
+        "the ready-composer notification is not a question: {prompts:?}"
     );
 }
 
-/// The same capture with hook instrumentation off: the notify is a property
-/// of the agent's output, not of our suppression, so it must survive either
-/// way. Guards against "fixed it by disabling the filter".
+/// The OSC notification's ambiguity is independent of hook configuration.
 #[test]
-fn osc777_awaiting_does_not_depend_on_hook_instrumentation() {
+fn generic_osc777_notify_is_not_a_question_with_or_without_hooks() {
     for hook in [true, false] {
         let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), hook);
         assert!(
-            awaiting_prompts_any_confidence(&events)
+            !awaiting_prompts_any_confidence(&events)
                 .iter()
                 .any(|p| p == "Claude is waiting for your input"),
-            "notify lost with hook_instrumented={hook}"
+            "generic notify badged a session with hook_instrumented={hook}"
         );
     }
 }
@@ -13085,6 +15619,198 @@ fn generic_osc777_attention_does_not_report_awaiting() {
             "generic notification became awaiting with hook_instrumented={hook}: {events:?}"
         );
     }
+}
+
+/// The OSC body is taken from the recorded Claude PTY sequence in
+/// `claude-plan-picker.raw`. A normal completed turn leaves a ready composer;
+/// the same generic desktop notification arrives later even without a dialog.
+/// Both prose endings were observed on live Claude screens on 2026-09-27.
+#[test]
+fn completed_claude_prose_notification_does_not_flash_awaiting() {
+    let capture = agent_prompt_fixture("claude-plan-picker.raw");
+    let notify = "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
+    assert!(
+        capture
+            .windows(notify.len())
+            .any(|bytes| bytes == notify.as_bytes())
+    );
+
+    for answer in ["The review is complete.", "Would you like a summary?"] {
+        let sid = "claude-completed-notify";
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, sid, SHELL_IDLE);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_type = Some("claude".into());
+            session.hook_instrumented = true;
+        }
+        state.grid.vt_log_buffers.insert(
+            sid.into(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 100, 2000)),
+        );
+        let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+        silence.lock().startup_settled = true;
+        let mut processor = ChunkProcessor::new(None, None);
+        let screen = format!(
+            "\x1b[2J\x1b[H{answer}\r\n✻ Cooked for 15s · done\r\n────────────────────────\r\n❯\r\n────────────────────────"
+        );
+        processor.process_chunk(&screen, &silence, sid, &state);
+        processor.process_chunk("\x1b]7770;state=idle\x07", &silence, sid, &state);
+        assert!(silence.lock().hook_state_seen);
+        let mut events = state.event_bus.subscribe();
+        processor.process_chunk(notify, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::PtyParsed { parsed, .. }
+                    if parsed["type"] == "question"),
+                "a desktop idle notification after {answer:?} must not badge Waiting input"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hooked_claude_prose_question_stays_idle_after_silence_tick() {
+    tokio::time::pause();
+    let sid = "claude-ready-prose-question";
+    let state = accumulating_state(sid);
+    agent_session(&state, sid, SHELL_IDLE);
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("claude".into());
+        session.hook_instrumented = true;
+    }
+    let mut vt = crate::state::VtLogBuffer::new(24, 100, 2000);
+    vt.process("\x1b[2J\x1b[HWould you like a summary?\r\n────\r\n❯".as_bytes());
+    assert_eq!(
+        current_chat_question(&vt.screen_rows()),
+        CurrentChatQuestion::PromptAnchored(Some("Would you like a summary?".into())),
+        "the screen really has the candidate the silence timer would consider"
+    );
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    {
+        let mut sl = silence.lock();
+        sl.startup_settled = true;
+        sl.note_explicit_state(SHELL_IDLE, true);
+        sl.last_output_at = std::time::Instant::now() - SILENCE_QUESTION_THRESHOLD;
+    }
+    let mut events = state.event_bus.subscribe();
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed["type"] == "question"),
+            "hooked Claude prose must not produce a silence-timer question"
+        );
+    }
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+}
+
+#[test]
+fn recorded_claude_ready_notification_does_not_report_awaiting() {
+    let notify = b"\x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
+    for fixture in [
+        "claude-ready-idle-notify.tcap",
+        "claude-ready-idle-notify-statement.tcap",
+    ] {
+        let bytes = agent_prompt_fixture(fixture);
+        let capture = crate::pty_capture::decode_capture(&bytes).expect("recorded PTY capture");
+        assert!(
+            capture
+                .records
+                .iter()
+                .any(|record| { record.data.windows(notify.len()).any(|part| part == notify) })
+        );
+        assert!(
+            awaiting_prompts_any_confidence(&replay_capture(&bytes, true)).is_empty(),
+            "{fixture}: a ready composer plus generic idle notify must not report a question"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn visible_dialog_and_explicit_permission_still_badge_awaiting() {
+    let ink = askuserquestion_wizard_screen(0);
+    let choice: Vec<String> = ["Proceed with deletion?", "❯ 1. Yes", "  2. No"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let signals = [
+        rearm_awaiting_for_open_dialog(&ink, false, false, false)
+            .expect("the visible Ink footer is a real dialog"),
+        crate::output_parser::parse_choice_prompt(&choice)
+            .expect("the numbered choice is a real dialog"),
+        crate::output_parser::parse_osc777_notify(
+            "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
+        )
+        .expect("permission wording requires a response"),
+    ];
+    for (index, signal) in signals.into_iter().enumerate() {
+        let sid = format!("real-awaiting-{index}");
+        let state = accumulating_state(&sid);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: sid.clone(),
+            parsed: serde_json::to_value(&signal).unwrap().into(),
+        });
+        assert!(
+            await_session(&state, &sid, |s| s.awaiting_input && s.question_confident).await,
+            "a real interactive signal must reach the badge: {signal:?}"
+        );
+    }
+}
+
+#[test]
+fn codex_ready_prompt_remains_idle_and_deliverable() {
+    let sid = "codex-ready-no-question";
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .unwrap()
+        .lock()
+        .confirm_idle();
+    let rows = vec![
+        "• Done. Updated Cargo.toml.".to_string(),
+        "› Improve documentation in @filename".to_string(),
+        "  gpt-5.5 high · ~/Gits/LS/agent2".to_string(),
+    ];
+    assert_eq!(
+        detect_codex_screen_activity(&rows),
+        AgentScreenActivity::Ready
+    );
+    assert!(
+        !state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(
+        should_inject_now(&state, sid),
+        "the idle composer must accept the next turn"
+    );
 }
 
 // --- Awaiting RETRACTION -----------------------------------------------
@@ -13185,22 +15911,11 @@ async fn stale_heuristic_awaiting_is_retracted_when_the_prompt_leaves_the_screen
     );
 }
 
-/// Regression, observed 2026-08-11 on a live Claude tab: the turn had ended
-/// 17h earlier, its recap was the last thing on screen, no prompt anywhere —
-/// and the tab still read "question". The session carried
-/// `question_text = "Claude is waiting for your input"`, which is what Claude
-/// notifies on its 60s idle timer as well as on a blocked picker. Parsed as
-/// confident, it was retractable by nothing but a typed line, and there was
-/// nothing to type.
-///
-/// Both bodies go through the real parser here: hard-coding the JSON would
-/// let the test keep passing after the parser stopped agreeing with it.
+/// Permission wording remains a confident question; the generic idle wording
+/// never reaches the accumulator as a Question.
 #[tokio::test(flavor = "current_thread")]
-async fn osc777_notify_retraction_follows_the_wording() {
-    for (body, survives) in [
-        ("Claude is waiting for your input", false),
-        ("Claude needs your permission", true),
-    ] {
+async fn osc777_notify_only_badges_unambiguous_permission() {
+    for body in ["Claude needs your permission", "approval required"] {
         let raw = format!("\x1b]777;notify;Claude Code;{body}\x07");
         let notify = crate::output_parser::parse_osc777_notify(&raw)
             .unwrap_or_else(|| panic!("{body:?} must still report awaiting"));
@@ -13218,11 +15933,14 @@ async fn osc777_notify_retraction_follows_the_wording() {
         // The screen is quiet and carries no prompt — the recap case.
         emit_question_cleared_if_stale(&state, "s1");
         let cleared = await_session(&state, "s1", |s| !s.awaiting_input).await;
-        assert_eq!(
-            cleared, !survives,
-            "{body:?}: expected survives={survives}, badge cleared={cleared}"
-        );
+        assert!(!cleared, "{body:?} must remain until user input");
     }
+    assert!(
+        crate::output_parser::parse_osc777_notify(
+            "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07"
+        )
+        .is_none()
+    );
 }
 
 /// grok repaints while it waits, so "not on screen this tick" is not proof
@@ -13906,8 +16624,8 @@ fn cc_no_bullet_not_tool_call() {
 fn close_pty_core_kills_agent_grandchild() {
     use std::time::{Duration, Instant};
 
-    let pidfile = std::env::temp_dir().join(format!("tuic_pgkill_{}.pid", std::process::id()));
-    let _ = std::fs::remove_file(&pidfile);
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let pidfile = scratch.path().join("grandchild.pid");
 
     let pty = native_pty_system()
         .openpty(PtySize {
@@ -13989,7 +16707,6 @@ fn close_pty_core_kills_agent_grandchild() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let _ = std::fs::remove_file(&pidfile);
     assert!(
         dead,
         "grandchild {grandchild} survived tab close — orphaned process tree"
@@ -14442,9 +17159,8 @@ fn check_pending_planfiles_emits_when_file_appears() {
     let sid = "planfile-emit";
     let mut cp = ChunkProcessor::new(None, None);
 
-    let dir = std::env::temp_dir().join(format!("tuic_planfile_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let file = dir.join("plan.md");
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let file = dir.path().join("plan.md");
     std::fs::write(&file, "# plan").expect("write plan file");
     let path = file.to_string_lossy().to_string();
 
@@ -14475,8 +17191,6 @@ fn check_pending_planfiles_emits_when_file_appears() {
         got,
         "a resolved plan file must emit a plan-file PtyParsed event"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── wake_session ────────────────────────────────────────────────
@@ -15116,14 +17830,14 @@ mod grid_subscriber_tests {
         state
             .grid
             .watch
-            .insert("s1".to_string(), crate::grid_gate::new_grid_watch());
+            .insert("s1".to_string(), crate::grid_watch::new_grid_watch());
         assert!(!grid_has_subscriber(&state, "s1"));
     }
 
     #[test]
     fn a_live_watch_receiver_is_a_subscriber() {
         let state = crate::state::tests_support::make_test_app_state();
-        let tx = crate::grid_gate::new_grid_watch();
+        let tx = crate::grid_watch::new_grid_watch();
         let rx = tx.subscribe();
         state.grid.watch.insert("s1".to_string(), tx);
 
@@ -15139,7 +17853,7 @@ mod grid_subscriber_tests {
     #[test]
     fn one_session_having_a_subscriber_says_nothing_about_another() {
         let state = crate::state::tests_support::make_test_app_state();
-        let tx = crate::grid_gate::new_grid_watch();
+        let tx = crate::grid_watch::new_grid_watch();
         let _rx = tx.subscribe();
         state.grid.watch.insert("watched".to_string(), tx);
 
@@ -15337,7 +18051,8 @@ mod normalize_path_tests {
 #[cfg(test)]
 mod grid_delivery_tests {
     use super::*;
-    use crate::grid_gate::{GridGate, new_grid_watch};
+    use crate::grid_gate::GridGate;
+    use crate::grid_watch::new_grid_watch;
 
     // --- Frame ordering (670-b9a2) ---
     //
@@ -15359,7 +18074,7 @@ mod grid_delivery_tests {
     fn grid_session(
         state: &Arc<AppState>,
         session_id: &str,
-    ) -> tokio::sync::watch::Receiver<crate::grid_gate::GridWatchFrame> {
+    ) -> tokio::sync::watch::Receiver<crate::grid_watch::GridWatchFrame> {
         state.grid.vt_log_buffers.insert(
             session_id.to_string(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
@@ -15570,12 +18285,16 @@ mod grid_delivery_tests {
         let sink = received.clone();
         state.grid.channels.insert(
             session_id.to_string(),
-            tauri::ipc::Channel::new(move |body| {
-                if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
-                    sink.lock().push(bytes);
-                }
-                Ok(())
-            }),
+            crate::state::DesktopGridChannel {
+                channel: tauri::ipc::Channel::new(move |body| {
+                    if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                        sink.lock().push(bytes);
+                    }
+                    Ok(())
+                }),
+                webview_label: "main".to_string(),
+                epoch: gate.epoch(),
+            },
         );
         (gate, received)
     }

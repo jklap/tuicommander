@@ -52,7 +52,6 @@ fn append(
     if !progress_tracking_enabled(state, agent_type) {
         return Err(TRACKING_DISABLED.to_string());
     }
-    entry.validate()?;
     let project = resolve_owning_project(project_hint)?;
     ProgressStore::open()?.record_hand_off(
         &project.to_string_lossy(),
@@ -204,12 +203,22 @@ pub fn record_intent(
     agent_type: Option<&str>,
     pty_id: Option<&str>,
 ) -> Result<ProgressEntry, String> {
+    let redacted = crate::redaction::redact_secrets(text);
+    let journal_text = if redacted.chars().count() > MAX_TEXT_CHARS {
+        redacted
+            .chars()
+            .take(MAX_TEXT_CHARS - 1)
+            .chain(['…'])
+            .collect()
+    } else {
+        redacted
+    };
     append(
         state,
         project_hint,
         NewProgressEntry {
             kind: ProgressKind::Intent,
-            text: text.to_string(),
+            text: journal_text,
             step: None,
             agent_name,
         },
@@ -227,6 +236,10 @@ pub(crate) fn project_of(project: &str) -> Result<String, String> {
 
 pub fn progress_list(project: &str, input: ProgressListInput) -> Result<ProgressList, String> {
     ProgressStore::open()?.list(&project_of(project)?, &input)
+}
+
+pub fn progress_projects() -> Result<Vec<String>, String> {
+    ProgressStore::open()?.recent_projects()
 }
 
 pub fn progress_delete(
@@ -330,6 +343,166 @@ mod tests {
             entry.project,
             project.path().canonicalize().unwrap().to_string_lossy()
         );
+    }
+
+    #[test]
+    fn every_progress_journal_write_redacts_secrets() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        let hint = project.path().to_string_lossy();
+        let secret = format!("ghp_{}", "A".repeat(40));
+        let intent = record_intent(
+            &state,
+            Some(&hint),
+            &format!("Inspect {secret}"),
+            None,
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(intent.text, "Inspect [REDACTED]");
+        for kind in [ProgressKind::Done, ProgressKind::Blocked] {
+            let report = submit_progress_report(
+                &state,
+                Some(&hint),
+                ProgressReportInput {
+                    kind,
+                    text: format!("Handled {secret}"),
+                    step: Some(format!("step {secret}")),
+                },
+                None,
+                Some("codex"),
+                None,
+            )
+            .unwrap();
+            assert_eq!(report.text, "Handled [REDACTED]");
+            assert_eq!(report.step.as_deref(), Some("step [REDACTED]"));
+        }
+        for kind in [ProgressKind::Delegated, ProgressKind::Message] {
+            let hand_off = ProgressStore::open()
+                .unwrap()
+                .record_hand_off(
+                    &project.path().canonicalize().unwrap().to_string_lossy(),
+                    &NewProgressEntry {
+                        kind,
+                        text: format!("Review {secret}"),
+                        step: None,
+                        agent_name: None,
+                    },
+                    Some("pty-a"),
+                    Some("pty-b"),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(hand_off.text, "Review [REDACTED]");
+        }
+        let stored = progress_list(&hint, ProgressListInput::default()).unwrap();
+        assert!(
+            stored
+                .entries
+                .iter()
+                .all(|entry| !entry.text.contains(&secret))
+        );
+    }
+
+    #[test]
+    fn redaction_precedes_progress_length_validation() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        let hint = project.path().to_string_lossy();
+        let secret = format!("ghp_{}", "A".repeat(40));
+        let raw = format!("{} {secret}", "a".repeat(470));
+        assert!(raw.chars().count() > MAX_TEXT_CHARS);
+        let entry = record_intent(&state, Some(&hint), &raw, None, Some("codex"), None)
+            .expect("redacted intent fits the journal cap");
+        assert!(!entry.text.contains(&secret));
+        assert!(entry.text.chars().count() <= MAX_TEXT_CHARS);
+    }
+
+    #[test]
+    fn progress_names_are_bounded_before_storage() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        let hint = project.path().to_string_lossy();
+        let long_name = "n".repeat(1000);
+        let secret = format!("ghp_{}", "A".repeat(40));
+        let intent = record_intent(
+            &state,
+            Some(&hint),
+            "Inspect the journal",
+            Some(long_name.clone()),
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(intent.agent_name.as_deref().unwrap().chars().count(), 80);
+        let redacted_name = record_intent(
+            &state,
+            Some(&hint),
+            "Inspect the credentials",
+            Some(format!("Agent {secret}")),
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            redacted_name.agent_name.as_deref(),
+            Some("Agent [REDACTED]")
+        );
+        let hand_off = ProgressStore::open()
+            .unwrap()
+            .record_hand_off(
+                &project.path().canonicalize().unwrap().to_string_lossy(),
+                &NewProgressEntry {
+                    kind: ProgressKind::Delegated,
+                    text: "Review this".into(),
+                    step: None,
+                    agent_name: None,
+                },
+                Some("pty-a"),
+                Some("pty-b"),
+                Some(&long_name),
+            )
+            .unwrap();
+        assert_eq!(hand_off.target_name.as_deref().unwrap().chars().count(), 80);
+        let unicode_name = "é".repeat(81);
+        let unicode_hand_off = ProgressStore::open()
+            .unwrap()
+            .record_hand_off(
+                &project.path().canonicalize().unwrap().to_string_lossy(),
+                &NewProgressEntry {
+                    kind: ProgressKind::Message,
+                    text: "Review this".into(),
+                    step: None,
+                    agent_name: None,
+                },
+                Some("pty-a"),
+                Some("pty-b"),
+                Some(&unicode_name),
+            )
+            .unwrap();
+        let expected_name = "é".repeat(80);
+        assert_eq!(
+            unicode_hand_off.target_name.as_deref(),
+            Some(expected_name.as_str())
+        );
+        let space_at_limit = format!("{} suffix", "n".repeat(MAX_NAME_CHARS - 1));
+        let bounded = record_intent(
+            &state,
+            Some(&hint),
+            "Inspect the name limit",
+            Some(space_at_limit),
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(bounded.agent_name.as_deref(), Some("n".repeat(79).as_str()));
     }
 
     /// Collection off means the journal does not grow — not that it grows more

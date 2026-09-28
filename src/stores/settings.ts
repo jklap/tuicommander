@@ -77,6 +77,8 @@ interface RustAppConfig {
 	inline_blame_enabled?: boolean;
 	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
 	ego_executable?: string;
+	/** Optional ego user-config profile for AI Chat ACP launches. */
+	ego_profile?: string;
 }
 
 // Default values
@@ -322,6 +324,7 @@ interface SettingsStoreState {
 	 * while it is empty, and the panel says so rather than launching nothing.
 	 */
 	egoExecutable: string;
+	egoProfile: string;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -373,6 +376,7 @@ function createSettingsStore() {
 		customLaunchers: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
+		egoProfile: "",
 	});
 
 	// Cache of the last loaded config, refreshed on hydrate and each persist.
@@ -440,6 +444,7 @@ function createSettingsStore() {
 		config.custom_launchers = [...state.customLaunchers];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
 		config.ego_executable = state.egoExecutable;
+		config.ego_profile = state.egoProfile;
 		return config;
 	}
 
@@ -547,6 +552,7 @@ function createSettingsStore() {
 				setState("customLaunchers", config.custom_launchers ?? []);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 				setState("egoExecutable", config.ego_executable ?? "");
+				setState("egoProfile", config.ego_profile ?? "");
 				hydrated = true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
@@ -795,6 +801,19 @@ function createSettingsStore() {
 		setEgoExecutable(path: string): void {
 			setState("egoExecutable", path.trim());
 			save();
+		},
+
+		/** Keep the profile as one unambiguous argument, or leave it unset. */
+		setEgoProfile(name: string): boolean {
+			if (
+				name !== "" &&
+				(name.startsWith("-") || /\s|[\x00-\x1f\x7f\x85]/u.test(name) || new TextEncoder().encode(name).length > 64)
+			) {
+				return false;
+			}
+			setState("egoProfile", name);
+			save();
+			return true;
 		},
 
 		/** Toggle GitLens-style inline git blame on the editor's active line */

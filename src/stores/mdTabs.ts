@@ -1,5 +1,6 @@
+import { batch } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
-import { branchKeyFor, resolveRepoPathFor } from "./repositories";
+import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
@@ -63,6 +64,7 @@ export interface PluginPanelTab extends BaseTab {
 export interface ClaudeUsageTab extends BaseTab {
 	type: "claude-usage";
 	title: string;
+	sessionId?: string;
 }
 
 /** Native Codex Usage Dashboard tab */
@@ -160,6 +162,7 @@ function findFileTab(
 	return Object.values(tabs).find(
 		(tab): tab is FileTab =>
 			tab.type === "file" &&
+			!tab.mcpUiId &&
 			tab.repoPath === repoPath &&
 			(tab as FileTab).fsRoot === effectiveRoot &&
 			tab.filePath === filePath,
@@ -272,6 +275,35 @@ function createMdTabsStore() {
 			return id;
 		},
 
+		/** Open a native Markdown tab using the MCP id, independent of its file path. */
+		addMcpFile(mcpUiId: string, repoPath: string, filePath: string, pinned: boolean, background: boolean): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			const id = existing?.id ?? base._nextId("md");
+			const tab: FileTab = {
+				type: "file",
+				id,
+				mcpUiId,
+				repoPath,
+				filePath,
+				fileName: pathBasename(filePath) || filePath,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: repoPath,
+				pinned,
+				pinAcrossRepos: true,
+			};
+			if (existing) {
+				base._setState("tabs", id, tab);
+				if (!background) base.setActive(id);
+				return id;
+			}
+			return background ? base._addTabBackground(tab) : base._addTab(tab);
+		},
+
+		closeMcpFile(mcpUiId: string): void {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			if (existing) base.remove(existing.id);
+		},
+
 		/** Add a virtual markdown tab (or return existing if same contentUri already open) */
 		addVirtual(title: string, contentUri: string, repoPath?: string): string {
 			const existing = Object.values(base.state.tabs).find(
@@ -330,11 +362,8 @@ function createMdTabsStore() {
 			}
 
 			const id = base._nextId("md");
-			// pinned: an SDK dashboard is global, not a per-repo view — it carries no
-			// repoPath, so evictNonPinnedPluginPanelsForOtherRepos would leave it
-			// alone either way. The flag is the honest label for a tab the user opened
-			// deliberately and expects to find again, and it is what protects the
-			// panel the day one of these does become repo-scoped.
+			// SDK dashboards are global, so they carry no repoPath. Pinning also
+			// describes the panel the user opened deliberately and expects to find again.
 			const tabId = base._addTab({
 				type: "plugin-panel",
 				id,
@@ -352,9 +381,8 @@ function createMdTabsStore() {
 		 * Open or update a UI tab (MCP-driven). Deduplicates on pluginId alone.
 		 * focus=true (default): switch to this tab. focus=false: update content silently.
 		 *
-		 * originRepoPath: repo/cwd of the MCP caller. When resolvable to a
-		 * registered repo, the tab is scoped there. When unresolvable, the tab
-		 * is left unscoped (visible in all repos) rather than guessing from focus.
+		 * Scope to the caller's registered repo when known, falling back to the
+		 * visible repo only for callers without repository metadata.
 		 */
 		openUiTab(
 			pluginId: string,
@@ -365,14 +393,33 @@ function createMdTabsStore() {
 			focus = true,
 			originRepoPath?: string,
 		): string {
+			const repoPath = resolveRepoForCwd(originRepoPath) ?? repositoriesStore.state.activeRepoPath;
 			const existing = Object.values(base.state.tabs).find(
 				(tab) => tab.type === "plugin-panel" && (tab as PluginPanelTab).pluginId === pluginId,
 			) as PluginPanelTab | undefined;
 			if (existing) {
-				base._setState("tabs", existing.id, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
-				base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
-				if (url !== undefined)
+				batch(() => {
+					base._setState(
+						"tabs",
+						existing.id,
+						"html" as keyof MdTabData,
+						(url ? "" : html) as MdTabData[keyof MdTabData],
+					);
+					base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
 					base._setState("tabs", existing.id, "url" as keyof MdTabData, url as MdTabData[keyof MdTabData]);
+				});
+				base.setPinned(existing.id, pinned, true);
+				if (repoPath) {
+					base._setState("tabs", existing.id, "repoPath" as keyof MdTabData, repoPath as MdTabData[keyof MdTabData]);
+					base._setState(
+						"tabs",
+						existing.id,
+						"branchKey" as keyof MdTabData,
+						branchKeyFor(repoPath) as MdTabData[keyof MdTabData],
+					);
+				}
+				if (focus && repoPath && repoPath !== repositoriesStore.state.activeRepoPath)
+					repositoriesStore.setActive(repoPath);
 				if (focus) base.setActive(existing.id);
 				return existing.id;
 			}
@@ -381,11 +428,23 @@ function createMdTabsStore() {
 			// MCP `ui` tabs are design/preview surfaces: keep their own styling and
 			// omit PLUGIN_BASE_CSS (#080). SDK plugin dashboards use addPluginPanel,
 			// which leaves selfStyled unset so the base sheet is injected.
-			const tab: PluginPanelTab = { type: "plugin-panel", id, title, pluginId, html, pinned, selfStyled: true };
-			const resolvedRepo = resolveRepoForCwd(originRepoPath) ?? undefined;
-			if (resolvedRepo) tab.repoPath = resolvedRepo;
+			const tab: PluginPanelTab = {
+				type: "plugin-panel",
+				id,
+				title,
+				pluginId,
+				html: url ? "" : html,
+				pinned,
+				pinAcrossRepos: true,
+				selfStyled: true,
+			};
+			if (repoPath) {
+				tab.repoPath = repoPath;
+				tab.branchKey = branchKeyFor(repoPath);
+			}
 			if (url) tab.url = url;
 			if (focus) {
+				if (repoPath && repoPath !== repositoriesStore.state.activeRepoPath) repositoriesStore.setActive(repoPath);
 				return base._addTab(tab);
 			}
 			base._addTabBackground(tab);
@@ -415,18 +474,25 @@ function createMdTabsStore() {
 		},
 
 		/** Add the Claude Usage Dashboard tab (singleton — reuses existing if open) */
-		addClaudeUsage(): string {
+		addClaudeUsage(sessionId?: string): string {
 			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "claude-usage") as
 				| ClaudeUsageTab
 				| undefined;
 			if (existing) {
+				base._setState("tabs", existing.id, "sessionId" as keyof MdTabData, sessionId as MdTabData[keyof MdTabData]);
 				base.setActive(existing.id);
 
 				return existing.id;
 			}
 
 			const id = base._nextId("md");
-			const tabId = base._addTab({ type: "claude-usage", id, title: "Claude Usage", pinned: true } as ClaudeUsageTab);
+			const tabId = base._addTab({
+				type: "claude-usage",
+				id,
+				title: "Claude Usage",
+				pinned: true,
+				sessionId,
+			} as ClaudeUsageTab);
 
 			return tabId;
 		},
@@ -608,21 +674,6 @@ function createMdTabsStore() {
 		/** Retrieve the imperative handle for a tab */
 		getHandle<T = unknown>(tabId: string): T | undefined {
 			return handles.get(tabId) as T | undefined;
-		},
-
-		/**
-		 * Evict non-pinned plugin-panel tabs whose repoPath is set and doesn't match
-		 * the given repo. Without this, every visited repo leaves a stale UI tab in
-		 * state.tabs forever — invisible (getVisibleIds hides them) but still holding
-		 * HTML in memory. Called on repo switch. Pinned tabs and tabs with no
-		 * repoPath (globally scoped) are preserved. Non-plugin-panel tabs (file,
-		 * virtual, pr-diff, html-preview, etc.) are untouched — they have their own
-		 * lifecycle and users rely on them persisting across repo switches.
-		 */
-		evictNonPinnedPluginPanelsForOtherRepos(currentRepoPath: string | null): void {
-			base._clearWhere(
-				(tab) => tab.type === "plugin-panel" && !tab.pinned && !!tab.repoPath && tab.repoPath !== currentRepoPath,
-			);
 		},
 
 		/** Clear all file-based markdown tabs for a repository (virtual tabs are unaffected) */

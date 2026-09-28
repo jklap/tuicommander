@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 // Import the store once (it's a singleton)
-import { agentConfigsStore as store } from "../../stores/agentConfigs";
+import { agentConfigsStore as store, createAgentConfigsStore } from "../../stores/agentConfigs";
 import { testInScopeAsync } from "../helpers/store";
 
 const configWithClaude = (): AgentsConfig => ({
@@ -37,6 +37,61 @@ describe("agentConfigsStore", () => {
 	});
 
 	describe("hydrate()", () => {
+		it("reports a failed load and permits a later successful retry", async () => {
+			const load = vi.fn()
+				.mockRejectedValueOnce(new Error("RPC load_agents_config failed: 404"))
+				.mockResolvedValueOnce(configWithClaude());
+			const machine = createAgentConfigsStore({ load, save: vi.fn() });
+
+			await expect(machine.hydrate()).rejects.toThrow("404");
+			expect(machine.state.loaded).toBe(false);
+			expect(machine.state.loadError).toContain("404");
+			await machine.hydrate();
+			expect(machine.state.loaded).toBe(true);
+			expect(machine.state.loadError).toBeNull();
+			expect(machine.getDefaultConfig("claude")?.command).toBe("claude");
+		});
+
+		it("keeps the last good config when a refresh fails", async () => {
+			const load = vi.fn()
+				.mockResolvedValueOnce(configWithClaude())
+				.mockRejectedValueOnce(new Error("connection lost"));
+			const machine = createAgentConfigsStore({ load, save: vi.fn() });
+
+			await machine.hydrate();
+			await expect(machine.hydrate()).rejects.toThrow("connection lost");
+			expect(machine.state.loaded).toBe(false);
+			expect(machine.state.loadError).toContain("connection lost");
+			expect(machine.getRunConfigs("claude")).toHaveLength(2);
+		});
+
+		it("does not overwrite remote config after a failed load", async () => {
+			const save = vi.fn();
+			const machine = createAgentConfigsStore({
+				load: async () => {
+					throw new Error("RPC load_agents_config failed: 404");
+				},
+				save,
+			});
+			await expect(machine.hydrate()).rejects.toThrow("404");
+			await machine.addRunConfig("claude", {
+				name: "new",
+				command: "claude",
+				args: [],
+				env: {},
+				is_default: true,
+			});
+			expect(save).not.toHaveBeenCalled();
+		});
+
+		it("accepts an empty successful response as loaded without an error", async () => {
+			const machine = createAgentConfigsStore({ load: async () => ({ agents: {} }), save: vi.fn() });
+			await machine.hydrate();
+			expect(machine.state.loaded).toBe(true);
+			expect(machine.state.loadError).toBeNull();
+			expect(machine.getRunConfigs("claude")).toEqual([]);
+		});
+
 		it("loads agent configs from Rust backend", async () => {
 			await testInScopeAsync(async () => {
 				await hydrateWith(configWithClaude());
@@ -54,13 +109,14 @@ describe("agentConfigsStore", () => {
 			});
 		});
 
-		it("handles hydrate failure gracefully", async () => {
+		it("reports a local hydrate failure without marking it loaded", async () => {
 			mockInvoke.mockRejectedValueOnce(new Error("load failed"));
 			const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 			await testInScopeAsync(async () => {
-				await store.hydrate();
-				expect(store.state.loaded).toBe(true);
+				await expect(store.hydrate()).rejects.toThrow("load failed");
+				expect(store.state.loaded).toBe(false);
+				expect(store.state.loadError).toContain("load failed");
 				expect(errSpy).toHaveBeenCalled();
 				errSpy.mockRestore();
 			});

@@ -17,17 +17,16 @@ use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 
 pub(super) async fn detect_agents() -> impl IntoResponse {
-    let results: Vec<serde_json::Value> = crate::agent::KNOWN_AGENT_BINARIES
-        .iter()
-        .map(|name| {
-            let detection = crate::agent::detect_agent_binary(name.to_string());
-            serde_json::json!({
-                "name": name,
-                "path": detection.path,
-                "version": detection.version,
-            })
-        })
-        .collect();
+    let mut results = Vec::new();
+    for name in crate::agent::KNOWN_AGENT_BINARIES {
+        let detection = crate::agent::detect_agent_binary(name.to_string()).await;
+        results.push(serde_json::json!({
+            "name": name,
+            "path": detection.path,
+            "version": detection.version,
+            "supports_no_alt_screen": detection.supports_no_alt_screen,
+        }));
+    }
     Json(results)
 }
 
@@ -35,11 +34,31 @@ pub(super) async fn detect_agent_binary_http(Query(q): Query<DetectBinaryQuery>)
     if !crate::agent::KNOWN_AGENT_BINARIES.contains(&q.binary.as_str()) {
         return Json(serde_json::json!({"error": "Unknown agent"})).into_response();
     }
-    let detection = crate::agent::detect_agent_binary(q.binary);
+    let detection = crate::agent::detect_agent_binary(q.binary).await;
     Json(serde_json::json!({
         "path": detection.path,
         "version": detection.version,
+        "supports_no_alt_screen": detection.supports_no_alt_screen,
     }))
+    .into_response()
+}
+
+pub(super) async fn prepare_agent_launch_args_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<PrepareAgentLaunchArgsRequest>,
+) -> Response {
+    if let Err(response) = require_local_or_auth(&addr, auth.is_some()) {
+        return response.into_response();
+    }
+    Json(
+        crate::agent_hook_launch::prepare_agent_launch_args(
+            body.agent_type,
+            body.binary_path,
+            body.args,
+        )
+        .await,
+    )
     .into_response()
 }
 
@@ -228,7 +247,7 @@ pub(super) async fn spawn_agent_session(
         }
         path.clone()
     } else if let Some(ref agent_type) = body.agent_type {
-        let detection = crate::agent::detect_agent_binary(agent_type.clone());
+        let detection = crate::agent::detect_agent_binary(agent_type.clone()).await;
         match detection.path {
             Some(p) => p,
             None => {
@@ -240,7 +259,7 @@ pub(super) async fn spawn_agent_session(
         }
     } else {
         // Default to claude
-        let detection = crate::agent::detect_agent_binary("claude".to_string());
+        let detection = crate::agent::detect_agent_binary("claude".to_string()).await;
         match detection.path {
             Some(p) => p,
             None => {
@@ -290,6 +309,13 @@ pub(super) async fn spawn_agent_session(
     let spawn_output_format = body.output_format.clone();
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
+    let spawn_env = body.env.clone();
+    let spawn_state = Arc::clone(&state);
+    let spawn_session_id = session_id.clone();
+    let spawn_agent_type = body
+        .agent_type
+        .clone()
+        .unwrap_or_else(|| "claude".to_string());
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -301,24 +327,38 @@ pub(super) async fn spawn_agent_session(
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
+            let mut launch_args = Vec::new();
             if let Some(ref args) = spawn_args {
-                for arg in args {
-                    cmd.arg(arg);
-                }
+                launch_args.extend(args.iter().cloned());
             } else {
                 if spawn_print_mode.unwrap_or(false) {
-                    cmd.arg("--print");
+                    launch_args.push("--print".to_string());
                 }
                 if let Some(ref format) = spawn_output_format {
-                    cmd.arg("--output-format");
-                    cmd.arg(format);
+                    launch_args.push("--output-format".to_string());
+                    launch_args.push(format.clone());
                 }
                 if let Some(ref model) = spawn_model {
-                    cmd.arg("--model");
-                    cmd.arg(model);
+                    launch_args.push("--model".to_string());
+                    launch_args.push(model.clone());
                 }
-                cmd.arg(&spawn_prompt);
+                launch_args.push(spawn_prompt.clone());
             }
+            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_env);
+            for arg in crate::agent_hook_launch::augment_args(
+                &spawn_agent_type,
+                &spawn_binary_path,
+                &launch_args,
+                &crate::config::config_dir(),
+            ) {
+                cmd.arg(arg);
+            }
+
+            for (key, value) in &spawn_env {
+                cmd.env(key, value);
+            }
+
+            crate::pty::bind_pty_identity(&spawn_state, &mut cmd, &spawn_session_id, None);
 
             if let Some(ref cwd) = spawn_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));
@@ -330,6 +370,7 @@ pub(super) async fn spawn_agent_session(
     {
         Ok(pair_and_child) => pair_and_child,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e})),
@@ -341,6 +382,7 @@ pub(super) async fn spawn_agent_session(
     let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to get PTY writer: {}", e)})),
@@ -352,6 +394,7 @@ pub(super) async fn spawn_agent_session(
     let reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
         Err(e) => {
+            state.unbind_live_pty(&session_id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to get PTY reader: {}", e)})),
@@ -448,7 +491,177 @@ mod tests {
                     .into_owned(),
             ),
             args: Some(vec!["--help".into()]),
+            env: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn http_typed_agent_launch_uses_the_same_rust_screen_policy() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-terminal-screen-args",
+            "printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let request = PrepareAgentLaunchArgsRequest {
+            agent_type: "codex".into(),
+            binary_path: script.to_string_lossy().into_owned(),
+            args: vec!["resume".into()],
+        };
+        let response =
+            prepare_agent_launch_args_http(ConnectInfo(loopback()), None, Json(request)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await,
+            serde_json::json!(["--no-alt-screen", "resume"])
+        );
+
+        let forbidden = PrepareAgentLaunchArgsRequest {
+            agent_type: "codex".into(),
+            binary_path: script.to_string_lossy().into_owned(),
+            args: vec!["resume".into()],
+        };
+        let response =
+            prepare_agent_launch_args_http(ConnectInfo(lan()), None, Json(forbidden)).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn launch_args_request_rejects_removed_screen_override() {
+        let request = serde_json::json!({
+            "agentType": "codex",
+            "binaryPath": "codex",
+            "args": [],
+            "allowAltScreen": true,
+        });
+        assert!(serde_json::from_value::<PrepareAgentLaunchArgsRequest>(request).is_err());
+    }
+
+    #[test]
+    fn spawn_request_rejects_removed_screen_override() {
+        for key in ["allow_alt_screen", "allowAltScreen"] {
+            let mut request = serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "prompt": "work",
+            });
+            request[key] = serde_json::json!(true);
+            assert!(serde_json::from_value::<SpawnAgentRequest>(request).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn spawn_request_accepts_browser_transport_body() {
+        let body = include_str!("../../tests/fixtures/spawn_agent_http_body.json");
+        let parsed: SpawnAgentRequest = serde_json::from_str(body).expect("HTTP spawn request");
+        assert_eq!(parsed.rows, Some(30));
+        assert_eq!(parsed.cols, Some(100));
+        assert_eq!(parsed.cwd.as_deref(), Some("/agent"));
+        assert_eq!(parsed.env.get("PROFILE").map(String::as_str), Some("work"));
+    }
+
+    #[tokio::test]
+    async fn http_agent_spawn_uses_per_agent_screen_setting() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-agent-screen-choice",
+            "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else printf 'ARGS=%s\\nTUIC_SESSION=%s\\n' \"$*\" \"$TUIC_SESSION\"; read unused; fi",
+            "if \"%1\"==\"--help\" (echo --no-alt-screen) else (echo ARGS=%* & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=)",
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "rows": 24,
+            "cols": 80,
+            "prompt": "ignored",
+            "agent_type": "codex",
+            "binary_path": script.to_string_lossy(),
+            "args": ["resume"],
+        }))
+        .unwrap();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
+                    let text = buffer.lock().screen_rows().join("\n");
+                    if text.contains("ARGS=") {
+                        break text;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake agent output");
+        assert!(output.contains("ARGS=--no-alt-screen resume"), "{output}");
+        assert!(
+            output.contains(&format!("TUIC_SESSION={session_id}")),
+            "the spawned process must know its terminal identity: {output}"
+        );
+        let row = super::super::session::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .unwrap();
+        assert_eq!(row.tuic_session.as_deref(), Some(session_id.as_str()));
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    #[tokio::test]
+    async fn http_agent_spawn_accepts_model_and_env_with_ipc_field_names() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-agent-model-env",
+            "printf 'ARGS=%s\nSPAWN_VALUE=%s\nTUIC_SESSION=%s\n' \"$*\" \"$SPAWN_VALUE\" \"$TUIC_SESSION\"; read unused",
+            "echo ARGS=%* & echo SPAWN_VALUE=%SPAWN_VALUE% & echo TUIC_SESSION=%TUIC_SESSION% & set /p HOLD=",
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "prompt": "task",
+            "agent_type": "claude",
+            "binary_path": script.to_string_lossy(),
+            "model": "sonnet",
+            "env": {"SPAWN_VALUE": "caller"},
+        }))
+        .unwrap();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
+                    let text = buffer.lock().screen_rows().join("\n");
+                    if text.contains("SPAWN_VALUE=") {
+                        break text;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake agent output");
+        assert!(output.contains("ARGS=--model sonnet task"), "{output}");
+        assert!(output.contains("SPAWN_VALUE=caller"), "{output}");
+        assert!(
+            output.contains(&format!("TUIC_SESSION={session_id}")),
+            "{output}"
+        );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
     async fn response_json(response: Response) -> serde_json::Value {

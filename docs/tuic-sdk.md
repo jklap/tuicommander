@@ -122,6 +122,10 @@ Open a file in the external editor.
 | `path` | `string` | File path — relative or absolute |
 | `opts.line` | `number` | Line number to jump to (default: `0`) |
 
+#### `tuic.openUrl(url)`
+
+Open an `http`, `https`, or `mailto` URL outside TUICommander from an inline HTML panel. Clicked absolute links with these schemes use the same path automatically. Other schemes are rejected. Cross-origin URL tabs cannot prove a user click to the host, so this method is unavailable there; use the tab menu's **Open in Browser** action instead.
+
 #### `tuic.getFile(path): Promise<string>`
 
 Read a file's text content from the active repo.

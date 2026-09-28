@@ -49,23 +49,76 @@ const STARTUP_DELAY: Duration = Duration::from_secs(30);
 /// True when the main frame is no longer showing the app.
 ///
 /// Every `about:` URL qualifies: `about:blank` after a WebContent crash,
-/// `about:srcdoc` after the standby incident above. Nothing else can legitimately
-/// be the top document — the navigation handler in `lib.rs` sends external links
-/// to the system browser instead of loading them — and restricting the test to
-/// the `about:` scheme means a healthy URL can never be mistaken for a lost one
-/// and re-navigated in a loop.
+/// `about:srcdoc` after the standby incident above. Restricting this test to
+/// the `about:` scheme prevents a healthy URL from being re-navigated in a loop.
+/// The separate boot-URL guard refuses non-app URLs as recovery targets.
 pub(crate) fn is_lost(url: &str) -> bool {
     url.starts_with("about:")
 }
 
+#[cfg(any(feature = "desktop", test))]
+fn record_boot_url(
+    slot: &parking_lot::RwLock<Option<url::Url>>,
+    observed: &url::Url,
+    dev_url: Option<&url::Url>,
+) {
+    let bundled = (observed.scheme() == "tauri" && observed.host_str() == Some("localhost"))
+        || (cfg!(windows)
+            && observed.scheme() == "http"
+            && observed.host_str() == Some("tauri.localhost")
+            && observed.port().is_none());
+    let development =
+        cfg!(debug_assertions) && dev_url.is_some_and(|dev| observed.origin() == dev.origin());
+    if observed.username().is_empty() && observed.password().is_none() && (bundled || development) {
+        *slot.write() = Some(observed.clone());
+    }
+}
+
+#[cfg(any(feature = "desktop", test))]
+fn navigate_home_with(
+    target: Option<url::Url>,
+    trigger: &'static str,
+    reload: impl FnOnce() -> Result<(), String>,
+    navigate: impl FnOnce(url::Url) -> Result<(), String>,
+) -> serde_json::Value {
+    let action = if target.is_some() {
+        "navigate"
+    } else {
+        "reload"
+    };
+    let url = target.as_ref().map_or("<none>", url::Url::as_str);
+    let result = match target.clone() {
+        Some(target) => navigate(target),
+        None => reload(),
+    };
+    tracing::info!(
+        source = "webview",
+        trigger,
+        action,
+        url,
+        ok = result.is_ok(),
+        "Native WebView navigation"
+    );
+    match (action, result) {
+        ("navigate", Ok(())) => serde_json::json!({"ok": true, "action": action, "url": url}),
+        ("reload", Ok(())) => serde_json::json!({
+            "ok": true,
+            "action": action,
+            "warning": "no boot URL recorded yet — reload does not recover a blank document",
+        }),
+        (action, Err(e)) => serde_json::json!({"error": format!("{action} failed: {e}")}),
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(feature = "desktop")]
 mod desktop {
-    use super::{POLL_INTERVAL, STARTUP_DELAY, is_lost};
+    use super::{POLL_INTERVAL, STARTUP_DELAY, is_lost, record_boot_url};
     use crate::state::AppState;
     use std::sync::Arc;
+    use tauri::Manager;
 
     fn main_window(state: &Arc<AppState>) -> Option<tauri::WebviewWindow> {
-        use tauri::Manager;
         state.app_handle.read().as_ref()?.get_webview_window("main")
     }
 
@@ -74,33 +127,17 @@ mod desktop {
     /// Shared by the automatic poller, the `on_page_load` crash hook and
     /// `POST /debug/reload_webview`, because all three want the same thing and
     /// only one of them can be tested by hand.
-    pub(crate) fn navigate_home(state: &Arc<AppState>) -> serde_json::Value {
+    pub(crate) fn navigate_home(state: &Arc<AppState>, trigger: &'static str) -> serde_json::Value {
         let Some(window) = main_window(state) else {
             return serde_json::json!({"error": "main window not found"});
         };
         let target = state.webview_boot_url.read().clone();
-        let Some(target) = target else {
-            // No healthy URL was ever recorded, so there is nothing to aim at.
-            // `reload` is the only move left and it is precisely the one that
-            // does not work against a blank srcdoc — say so rather than report
-            // a success the caller cannot verify.
-            return match window.reload() {
-                Ok(()) => serde_json::json!({
-                    "ok": true,
-                    "action": "reload",
-                    "warning": "no boot URL recorded yet — reload does not recover a blank document",
-                }),
-                Err(e) => serde_json::json!({"error": format!("reload failed: {e}")}),
-            };
-        };
-        match window.navigate(target.clone()) {
-            Ok(()) => serde_json::json!({
-                "ok": true,
-                "action": "navigate",
-                "url": target.as_str(),
-            }),
-            Err(e) => serde_json::json!({"error": format!("navigate failed: {e}")}),
-        }
+        super::navigate_home_with(
+            target,
+            trigger,
+            || window.reload().map_err(|e| e.to_string()),
+            |url| window.navigate(url).map_err(|e| e.to_string()),
+        )
     }
 
     /// One poll. Returns the lost document's URL, or `None` while the frame
@@ -117,8 +154,13 @@ mod desktop {
     fn lost_document(state: &Arc<AppState>) -> Option<String> {
         let window = main_window(state)?; // No window yet — nothing to recover.
         let url = window.url().ok()?; // A failed probe is not a lost document.
-        if !is_lost(url.as_str()) {
-            *state.webview_boot_url.write() = Some(url);
+        let lost = is_lost(url.as_str());
+        record_boot_url(
+            &state.webview_boot_url,
+            &url,
+            window.app_handle().config().build.dev_url.as_ref(),
+        );
+        if !lost {
             return None;
         }
         Some(url.to_string())
@@ -172,8 +214,8 @@ mod desktop {
                         polls_until_retry -= 1;
                         continue;
                     }
-                    let outcome = navigate_home(&state);
-                    tracing::info!(
+                    let outcome = navigate_home(&state, "recovery_thread");
+                    tracing::debug!(
                         source = "webview",
                         outcome = %outcome,
                         "WebView recovery attempted"
@@ -190,13 +232,84 @@ mod desktop {
 pub(crate) use desktop::{navigate_home, spawn};
 
 #[cfg(not(feature = "desktop"))]
-pub(crate) fn navigate_home(_state: &std::sync::Arc<crate::state::AppState>) -> serde_json::Value {
+pub(crate) fn navigate_home(
+    _state: &std::sync::Arc<crate::state::AppState>,
+    _trigger: &'static str,
+) -> serde_json::Value {
     serde_json::json!({"error": "webview recovery requires the desktop feature"})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct LogSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn native_navigation_logs_action_target_and_trigger_for_both_branches() {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(LogSink(output.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let reload = navigate_home_with(
+                None,
+                "http_route",
+                || Ok(()),
+                |_| panic!("unexpected navigate"),
+            );
+            assert_eq!(reload["action"], "reload");
+            let target = url::Url::parse("http://127.0.0.1:1421/").unwrap();
+            let navigate = navigate_home_with(
+                Some(target),
+                "recovery_thread",
+                || panic!("unexpected reload"),
+                |_| Ok(()),
+            );
+            assert_eq!(navigate["url"], "http://127.0.0.1:1421/");
+            let failed = navigate_home_with(
+                None,
+                "page_load_hook",
+                || Err("window closed".into()),
+                |_| panic!("unexpected navigate"),
+            );
+            assert_eq!(failed["error"], "reload failed: window closed");
+        });
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("trigger=\"http_route\" action=\"reload\" url=\"<none>\""),
+            "{log}"
+        );
+        assert!(
+            log.contains(
+                "trigger=\"recovery_thread\" action=\"navigate\" url=\"http://127.0.0.1:1421/\""
+            ),
+            "{log}"
+        );
+        assert!(
+            log.contains("trigger=\"page_load_hook\" action=\"reload\" url=\"<none>\" ok=false"),
+            "{log}"
+        );
+    }
 
     #[test]
     fn the_observed_blank_documents_are_lost() {
@@ -222,5 +335,38 @@ mod tests {
         // is a page of the app, not a lost frame.
         assert!(!is_lost("http://127.0.0.1:1421/about"));
         assert!(!is_lost("tauri://localhost/#/about:srcdoc"));
+    }
+
+    #[test]
+    fn recovery_keeps_the_last_app_url_when_other_documents_are_observed() {
+        let dev = url::Url::parse("http://localhost:1421/").unwrap();
+        let saved = url::Url::parse("http://localhost:1421/#/workspace").unwrap();
+        let slot = parking_lot::RwLock::new(Some(saved.clone()));
+        for candidate in [
+            "about:config",
+            "http://localhost.evil.com/",
+            "http://127.0.0.2:1421/",
+            "HTTP://LOCALHOST.EVIL.COM:1421/",
+            "http://localhost:14319/",
+            "asset://localhost/file.pdf",
+            "tauri://localhost.evil.com/",
+            "http://user@localhost:1421/",
+        ] {
+            record_boot_url(&slot, &url::Url::parse(candidate).unwrap(), Some(&dev));
+            assert_eq!(*slot.read(), Some(saved.clone()), "{candidate}");
+        }
+    }
+
+    #[test]
+    fn recovery_remembers_routes_on_the_configured_app_origin() {
+        let dev = url::Url::parse("http://localhost:1421/").unwrap();
+        let slot = parking_lot::RwLock::new(None);
+        let route = url::Url::parse("HTTP://LOCALHOST:1421/#/settings").unwrap();
+        record_boot_url(&slot, &route, Some(&dev));
+        assert_eq!(*slot.read(), Some(route));
+
+        let bundled = url::Url::parse("tauri://localhost/index.html#/workspace").unwrap();
+        record_boot_url(&slot, &bundled, None);
+        assert_eq!(*slot.read(), Some(bundled));
     }
 }

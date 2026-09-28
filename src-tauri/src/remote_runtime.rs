@@ -34,13 +34,12 @@ use crate::remote_connection::{
     DeployMode, RemoteConnection, RemoteConnectionStore, RemoteTransport,
 };
 use crate::state::{AppEvent, AppState};
+use crate::tunnels::supervisor::TUNNEL_CONNECT_TIMEOUT;
 
 /// How often a connected connection re-proves itself against `/api/version`.
 const STATUS_POLL: Duration = Duration::from_secs(5);
 /// Budget for one probe. Generous: a tunnel over a slow link is not a failure.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long `connect` waits for an SSH tunnel to report Connected.
-const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TUNNEL_POLL: Duration = Duration::from_millis(250);
 const LISTEN_GRACE: Duration = Duration::from_secs(15);
 pub(crate) const REMOTE_PROTOCOL_VERSION: u64 = 1;
@@ -122,6 +121,10 @@ pub(crate) struct RemoteConnectionStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) protocol_version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) out_of_date: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<String>,
@@ -136,6 +139,8 @@ struct Entry {
     base_url: Option<String>,
     token: Option<String>,
     protocol_version: Option<u64>,
+    build: Option<crate::remote_deploy::assets::BuildIdentity>,
+    out_of_date: Option<bool>,
     error: Option<String>,
     tunnel_id: Option<String>,
     /// The task that owns this connection's whole lifecycle: bring it up, keep
@@ -170,6 +175,8 @@ impl Entry {
             base_url: connected.then(|| self.base_url.clone()).flatten(),
             token: connected.then(|| self.token.clone()).flatten(),
             protocol_version: connected.then_some(self.protocol_version).flatten(),
+            build: connected.then(|| self.build.clone()).flatten(),
+            out_of_date: connected.then_some(self.out_of_date).flatten(),
             error: self.error.clone(),
             step,
         }
@@ -351,6 +358,27 @@ pub(crate) fn remote_connection_status_payload(
     serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({ "id": status.id }))
 }
 
+pub(crate) fn record_updated_build(
+    state: &Arc<AppState>,
+    id: &str,
+    build: crate::remote_deploy::assets::BuildIdentity,
+) {
+    let Some(mut entry) = state.remote.entries.get_mut(id) else {
+        return;
+    };
+    if entry.status != Some(RemoteStatus::Connected) {
+        return;
+    }
+    let before = entry.snapshot(id);
+    entry.build = Some(build);
+    entry.out_of_date = Some(false);
+    let after = entry.snapshot(id);
+    drop(entry);
+    if before != after {
+        publish(state, &after);
+    }
+}
+
 /// Apply `mutate` to a connection's entry and announce the result if the client
 /// view moved.
 ///
@@ -368,6 +396,45 @@ fn update<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
         return;
     }
     publish(state, &after);
+}
+
+fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
+    let state = state.clone();
+    let id = id.to_string();
+    tokio::spawn(async move {
+        let Some(build) = state
+            .remote
+            .entries
+            .get(&id)
+            .and_then(|entry| entry.build.clone())
+        else {
+            return;
+        };
+        let Ok(asset) = crate::remote_deploy::assets::resolve_update_asset(&build.target).await
+        else {
+            return;
+        };
+        let selected = crate::remote_deploy::assets::BuildIdentity {
+            version: asset.version,
+            target: asset.target,
+            sha256: asset.binary.sha256,
+        };
+        let Some(mut entry) = state.remote.entries.get_mut(&id) else {
+            return;
+        };
+        if entry.status != Some(RemoteStatus::Connected) || entry.build.as_ref() != Some(&build) {
+            return;
+        }
+        let before = entry.snapshot(&id);
+        entry.out_of_date = Some(crate::remote_update::build_is_out_of_date(
+            &build, &selected,
+        ));
+        let after = entry.snapshot(&id);
+        drop(entry);
+        if before != after {
+            publish(&state, &after);
+        }
+    });
 }
 
 /// Dual-emit. Nothing forwards the bus to the desktop window, so the window
@@ -418,17 +485,22 @@ fn set_error(state: &Arc<AppState>, id: &str, status: RemoteStatus, error: Strin
 
 /// What `/health` says about the daemon behind a base URL.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct Health {
-    protocol_version: Option<u64>,
+pub(crate) struct Health {
+    pub(crate) protocol_version: Option<u64>,
     /// Which process answered. `None` from a daemon older than the field —
     /// unknown identity cannot prove a self-connection, so it is not treated as
     /// one.
-    instance_id: Option<String>,
+    pub(crate) instance_id: Option<String>,
+    pub(crate) session_count: Option<usize>,
+    pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
 }
 
 /// Read `/health` — the one route served without a credential — to learn the
 /// protocol version and prove the daemon is reachable at all.
-async fn read_health(client: &reqwest::Client, base_url: &str) -> Result<Health, String> {
+pub(crate) async fn read_health(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<Health, String> {
     let url = format!("{}/health", base_url.trim_end_matches('/'));
     let response = client
         .get(&url)
@@ -451,6 +523,13 @@ async fn read_health(client: &reqwest::Client, base_url: &str) -> Result<Health,
             .get("instance_id")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
+        session_count: body
+            .get("session_count")
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| n as usize),
+        build: body
+            .get("build")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
     })
 }
 
@@ -508,7 +587,7 @@ async fn authenticate(
 // Connect / disconnect
 // ---------------------------------------------------------------------------
 
-fn load_connection(state: &Arc<AppState>, id: &str) -> Result<RemoteConnection, String> {
+pub(crate) fn load_connection(state: &Arc<AppState>, id: &str) -> Result<RemoteConnection, String> {
     RemoteConnectionStore::load(&state.data_dir)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -644,6 +723,7 @@ async fn attempt(
             // and it is already running — either because `connect` spawned it
             // or because this call came from inside it.
             spawn_mirror(state, id.to_string());
+            spawn_build_comparison(state, id);
             tracing::info!(source = "remote", connection = id, "Connected");
             Ok(())
         }
@@ -730,14 +810,20 @@ async fn handshake(
         .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
 
-    let first_health = read_health(&client, &base_url).await;
-    if connection.deploy == DeployMode::Installed
-        && let Err(error) = &first_health
-    {
-        return Err(ConnectFailure::error(format!(
-            "installed daemon not answering: {error}"
-        )));
-    }
+    let first_health = if connection.deploy == DeployMode::Installed {
+        Ok(
+            wait_until_listening(&client, &base_url, TUNNEL_CONNECT_TIMEOUT)
+                .await
+                .map_err(|failure| {
+                    ConnectFailure::error(format!(
+                        "installed daemon not answering: {}",
+                        failure.message
+                    ))
+                })?,
+        )
+    } else {
+        read_health(&client, &base_url).await
+    };
 
     let mut deployed = false;
     let health =
@@ -772,7 +858,11 @@ async fn handshake(
              Point this connection at another machine's daemon."
         )));
     }
-    update(state, id, |e| e.protocol_version = health.protocol_version);
+    update(state, id, |e| {
+        e.protocol_version = health.protocol_version;
+        e.build = health.build.clone();
+        e.out_of_date = health.build.is_none().then_some(true);
+    });
 
     let mut token = authenticate(connection, &base_url)
         .await
@@ -862,9 +952,12 @@ async fn wait_until_listening(
 ) -> Result<Health, ConnectFailure> {
     let deadline = std::time::Instant::now() + grace;
     loop {
-        let last_error = match read_health(client, base_url).await {
-            Ok(health) => return Ok(health),
-            Err(error) => error,
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let last_error = match tokio::time::timeout(remaining, read_health(client, base_url)).await
+        {
+            Ok(Ok(health)) => return Ok(health),
+            Ok(Err(error)) => error,
+            Err(_) => "health request timed out".to_string(),
         };
         if std::time::Instant::now() >= deadline {
             return Err(ConnectFailure::error(format!(
@@ -872,7 +965,10 @@ async fn wait_until_listening(
                 grace.as_secs()
             )));
         }
-        tokio::time::sleep(TUNNEL_POLL).await;
+        tokio::time::sleep(
+            TUNNEL_POLL.min(deadline.saturating_duration_since(std::time::Instant::now())),
+        )
+        .await;
     }
 }
 
@@ -935,7 +1031,9 @@ async fn resolve_base_url(
     }
 }
 
-fn ssh_profile(connection: &RemoteConnection) -> Option<crate::tunnels::profile::TunnelProfile> {
+pub(crate) fn ssh_profile(
+    connection: &RemoteConnection,
+) -> Option<crate::tunnels::profile::TunnelProfile> {
     let RemoteTransport::Ssh {
         ssh_host,
         ssh_port,
@@ -1433,6 +1531,27 @@ mod tests {
     }
 
     #[test]
+    fn verified_update_clears_badge_without_resurrecting_a_disconnected_machine() {
+        let state = test_state();
+        let build = crate::remote_deploy::assets::BuildIdentity {
+            version: "1.7.7".into(),
+            target: "aarch64-apple-darwin".into(),
+            sha256: "b".repeat(64),
+        };
+        state
+            .remote
+            .force_connected_for_test("machine", "http://host:9877", Some("token"));
+        update(&state, "machine", |entry| entry.out_of_date = Some(true));
+        record_updated_build(&state, "machine", build.clone());
+        assert_eq!(state.remote.snapshot()[0].out_of_date, Some(false));
+        assert_eq!(state.remote.snapshot()[0].build.as_ref(), Some(&build));
+
+        state.remote.entries.remove("machine");
+        record_updated_build(&state, "machine", build);
+        assert!(state.remote.snapshot().is_empty());
+    }
+
+    #[test]
     fn status_serializes_as_the_frontend_spells_it() {
         // The frontend renders these strings directly; a rename here is a silent
         // "unknown status" there.
@@ -1457,6 +1576,8 @@ mod tests {
             base_url: None,
             token: None,
             protocol_version: None,
+            build: None,
+            out_of_date: None,
             error: None,
             step: Some("asset".into()),
         });
@@ -1488,10 +1609,12 @@ mod tests {
         let healthy = Health {
             protocol_version: Some(REMOTE_PROTOCOL_VERSION),
             instance_id: None,
+            ..Health::default()
         };
         let incompatible = Health {
             protocol_version: Some(REMOTE_PROTOCOL_VERSION + 1),
             instance_id: None,
+            ..Health::default()
         };
 
         assert_eq!(deploy_reason(&connection, Ok(&healthy)), None);
@@ -1534,6 +1657,7 @@ mod tests {
             Health {
                 protocol_version: Some(4),
                 instance_id: Some("other-process".into()),
+                ..Health::default()
             }
         );
         mock.assert_async().await;
@@ -1755,6 +1879,43 @@ mod tests {
         );
         assert_eq!(state.remote.snapshot()[0].protocol_version, Some(4));
         teardown(&state, &id);
+    }
+
+    #[tokio::test]
+    async fn installed_daemon_recovers_when_health_starts_answering_after_one_second() {
+        let ready_at = tokio::time::Instant::now() + Duration::from_secs(1);
+        let app = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get(move || async move {
+                    if tokio::time::Instant::now() < ready_at {
+                        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "{}")
+                    } else {
+                        (axum::http::StatusCode::OK, r#"{"protocol_version":1}"#)
+                    }
+                }),
+            )
+            .route("/api/version", axum::routing::get(|| async { "{}" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("installed", &base_url, "boss");
+        connection.deploy = DeployMode::Installed;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+
+        connect(&state, &id)
+            .await
+            .expect("a temporarily unavailable installed daemon should connect");
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Connected);
+        assert_eq!(
+            state.remote.base_url(&id).as_deref(),
+            Some(base_url.as_str())
+        );
+        teardown(&state, &id);
+        server.abort();
     }
 
     /// A Direct connection aimed at this machine's own daemon mirrors every
@@ -2432,6 +2593,8 @@ mod tests {
                 base_url: None,
                 token: None,
                 protocol_version: None,
+                build: None,
+                out_of_date: None,
                 error: None,
                 step: None,
             });

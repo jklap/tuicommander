@@ -116,6 +116,53 @@ Key names: `Enter`, `Space`, `Tab`, `Escape`, `BSpace`, `Up`, `Down`, `Left`, `R
 
 ## Agent Orchestration
 
+### Generic MCP calls
+
+Use `tuic mcp <tool> [<json>|-]` to call a native MCP tool over the local
+socket. Omit the JSON argument for `{}`, or pass `-` to read a JSON object from
+stdin. The tool's text payload is printed unchanged with a trailing newline,
+so it can be piped to `jq`:
+
+```bash
+tuic mcp session '{"action":"list"}' | jq length
+tuic mcp agent '{"action":"wait","timeout_ms":8000}'
+cat <<'JSON' | tuic mcp agent -
+{"action":"send","to":"peer-id","message":"it's ready"}
+JSON
+```
+
+Tool and protocol errors go to stderr with exit code 1. Invalid JSON or CLI
+arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
+peer binding; callers outside TUICommander register an external identity for
+that invocation.
+
+### Detached commands
+
+Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
+once while the command runs in a separate process group. The command's stdout
+and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
+When it finishes, `tuic` requests one `BG DONE exit=<code> log=<log> cmd=…`
+wake for the originating session. If that session is busy, the wake is queued
+until it becomes idle. `<log>.wake` records the request outcome as JSON:
+`{"status":"queued"}`, `{"status":"mailed","queue_error":"…"}`, or
+`{"status":"failed","error":"…"}`. A queue lookup or request failure falls
+back to MCP agent mail addressed to the same `TUIC_SESSION`; that mail includes
+the `BG DONE` text and the queue error. `queued` means the queue took the
+request, not that the agent later submitted it. `mailed` means the mail was
+surfaced to the caller; inbox-only mail remains a failure. The command works
+on macOS, Linux, and Windows.
+
+```bash
+tuic bg "$HOME/Gits/.tmp/build.log" -- make check
+```
+
+`TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
+command. The launcher prints the wake-status path and removes stale `.exit`
+and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`
+for command completion and `.wake` for both queue and mail failures. Both
+errors are also appended to the log. Neither status file can start a new agent
+turn while TUICommander is unavailable.
+
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)
 tuic agent spawn claude "review the failing tests"
@@ -135,7 +182,7 @@ tuic agent type <id-or-name> "fix the tests"
 # Wait for mail or inspect peers without polling
 tuic agent wait --timeout-ms 60000 --json
 tuic agent inbox --json
-tuic agent list-peers --json
+tuic agent list-peers --path /path/to/repo --json
 tuic agent stats --json
 
 # Server-owned session state and output
@@ -146,8 +193,12 @@ tuic session output <id-or-name> --limit 50 --json
 # Server-owned worktree lifecycle
 tuic repo worktree-list /path/to/repo --json
 tuic repo worktree-create /path/to/repo --branch feature/task --spawn-session --json
-tuic repo worktree-remove /path/to/repo <workspace-id> --json
+tuic repo worktree-remove /path/to/repo <branch> --json
 ```
+
+`agent wait` and `session wait` size their IPC read timeout from `--timeout-ms`
+(60 seconds by default) with a five-second transport margin. Other CLI
+requests retain a short read timeout, so a stalled app fails promptly.
 
 The orchestration commands above call the same MCP tools as an agent. They use
 the local `mcp.sock` transport and send `$TUIC_SESSION` as `x-tuic-session`, so

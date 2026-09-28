@@ -98,6 +98,48 @@
   white-space: nowrap;
 }
 
+.chatTabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chatTab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.chatTabActive {
+  background: var(--bg-highlight);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.chatTab button, .newChatTab {
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-sm);
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.chatTab button:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+
+.newChatTab {
+  color: var(--fg-secondary);
+}
+
 .frozenBanner {
   padding: 4px 16px;
   font-size: var(--font-xs);
@@ -116,6 +158,83 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.messageList, .messageList * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.messageList button {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.findBar {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.findBar input {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--fg-primary);
+}
+
+.findBar button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-xs);
+}
+
+.copyAction {
+  display: block;
+  opacity: 0;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-xs);
+}
+
+.userMsg .copyAction,
+.assistantMsg .copyAction {
+  min-height: 18px;
+  margin-top: 4px;
+}
+
+.userMsg:hover .copyAction,
+.userMsg:focus-within .copyAction,
+.assistantMsg:hover .copyAction,
+.assistantMsg:focus-within .copyAction {
+  opacity: 1;
+}
+
+.messageList :global(pre[data-raw-code]) {
+  position: relative;
+}
+
+.messageList :global(pre[data-raw-code] button[data-copy-code]) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  cursor: pointer;
 }
 
 .messageList > * {
@@ -151,6 +270,40 @@
   width: 100%;
   font-size: var(--font-base);
   line-height: 1.5;
+}
+
+.agentIntent {
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  margin-bottom: 8px;
+}
+
+.agentIntent span {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.suggestedReplies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.suggestedReplies button {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-sm);
+  padding: 4px 8px;
+}
+
+.suggestedReplies button:hover {
+  background: var(--bg-highlight);
 }
 
 .assistantMsg :global(#markdown-content) {
@@ -282,8 +435,54 @@
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
+}
+
+.inputBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.imagePreviews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.imagePreview {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.imagePreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.imagePreview button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.pasteError {
+  color: var(--error);
+  font-size: var(--font-xs);
 }
 
 .textarea {
@@ -314,7 +513,8 @@
 }
 
 .sendBtn {
-  width: 32px;
+  min-width: 44px;
+  padding: 0 8px;
   height: 32px;
   display: flex;
   align-items: center;
@@ -338,7 +538,8 @@
 }
 
 .stopBtn {
-  width: 32px;
+  min-width: 44px;
+  padding: 0 8px;
   height: 32px;
   display: flex;
   align-items: center;
@@ -436,6 +637,55 @@
 }
 
 /* ── Tool call cards ───────────────────────────────────── */
+.toolActivity {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
+  overflow: hidden;
+}
+
+.toolActivitySummary,
+.toolActivityCallSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.toolActivitySummary:hover,
+.toolActivityCallSummary:hover {
+  background: var(--bg-highlight);
+}
+
+.toolActivityTitles {
+  flex: 1;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.toolCallCount,
+.toolActivitySummary .toolCallDuration {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.toolActivityCalls {
+  border-top: 1px solid var(--border);
+}
+
+.toolActivityCall + .toolActivityCall {
+  border-top: 1px solid var(--border);
+}
+
+.toolActivityCallSummary {
+  padding-left: 18px;
+}
+
 .toolCallCard {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -571,6 +821,7 @@
 
 .approvalActions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -654,6 +905,55 @@
   border-radius: 8px;
   padding: 0 4px;
 }
+
+.queueList {
+  display: flex;
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.queueText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+}
+
+.queueCancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  color: var(--fg-secondary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.queueCancel:hover { color: var(--error); }
 
 /* ── History panel ──────────────────────────────────── */
 .historyPanel {
@@ -794,7 +1094,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 4px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
@@ -802,6 +1102,59 @@
 
 .controlSpacer {
   flex: 1;
+  min-width: 0;
+}
+
+.controlBar .headerBtn {
+  flex-shrink: 0;
+}
+
+.sessionSettingsSummary {
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  min-width: 0;
+}
+
+.sessionSettingsDialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.sessionSettingRow + .sessionSettingRow {
+  margin-top: 16px;
+}
+
+.sessionSettingLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+}
+
+.sessionSettingDescription {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+}
+
+.sessionSettingSelect {
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+}
+
+.sessionSettingSelect:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .planList {

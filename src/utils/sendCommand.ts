@@ -10,10 +10,8 @@ export type ShellFamily = "posix" | "windows-native" | "unknown";
  *  use and reused afterwards — the shell doesn't change mid-session. */
 const shellFamilyCache = new Map<string, ShellFamily>();
 
-/** Real-time gap between the payload write and the Enter write when an agent
- *  is attached. Mirrors `INJECT_ENTER_GAP` in `pty.rs`, which documented the
- *  same 50ms as "verified live against Codex: back-to-back hangs, CR after a
- *  gap submits".
+/** Real-time gap between Ctrl-U and payload, and between payload and Enter
+ *  for agents other than Codex. Mirrors `INJECT_ENTER_GAP` in `pty.rs`.
  *
  *  That constant's comment used to claim the frontend "gets this gap for free —
  *  its two `writeFn` calls are separate IPC round-trips". It does not: a Tauri
@@ -22,6 +20,14 @@ const shellFamilyCache = new Map<string, ShellFamily>();
  *  instead of submitting. Separate flushes never guaranteed separate reads —
  *  only elapsed time does. */
 export const AGENT_ENTER_GAP_MS = 50;
+/** Codex suppresses Enter for 120ms after a paste burst. Its burst detector
+ *  sees rapid payload characters, not the earlier Ctrl-U control key.
+ *  Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs */
+export const CODEX_ENTER_GAP_MS = 200;
+
+// Keep in step with Rust's injection_enter_gap: an unrecognized type must use
+// the Codex-safe default until its input semantics are known.
+const SHORT_ENTER_GAP_AGENTS = new Set(["claude", "gemini", "opencode", "aider", "amp", "cursor", "goose", "grok", "droid", "pi"]);
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -77,6 +83,7 @@ export function clearShellFamilyCache(sessionId: string): void {
  *                      Used by reviewable Smart Prompts and by suggestion chips
  *                      carrying shell metacharacters (spoofable via OSC 7770
  *                      from untrusted output). Default true.
+ *  @param sessionId    PTY to probe when the foreground agent type is unknown.
  */
 export async function sendCommand(
 	writeFn: (data: string) => Promise<void>,
@@ -84,11 +91,23 @@ export async function sendCommand(
 	agentType?: string | null,
 	shellFamily?: ShellFamily,
 	submit = true,
+	sessionId?: string,
 ): Promise<void> {
-	const skipPrefix = !agentType && isWindowsNative(shellFamily);
+	let unknownForeground = false;
+	let foregroundProbeFailed = false;
+	if (!agentType && sessionId) {
+		try {
+			unknownForeground = Boolean(await rpc<string | null>("has_foreground_process", { sessionId }));
+		} catch (err) {
+			appLogger.warn("terminal", "Failed to identify foreground process; keeping a safe Enter gap", err);
+			foregroundProbeFailed = true;
+		}
+	}
+	const agentInput = Boolean(agentType) || unknownForeground;
+	const skipPrefix = !agentInput && isWindowsNative(shellFamily);
 	const prefix = skipPrefix ? "" : "\x15";
 	const payload = text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text;
-	if (agentType) {
+	if (agentInput) {
 		// Ctrl-U must reach an agent in its own read. Claude Code treats a long
 		// input chunk as a paste: a Ctrl-U inside it is stripped as an invisible
 		// character, and Claude then refuses the Enter that follows ("review and
@@ -100,12 +119,10 @@ export async function sendCommand(
 		await writeFn(prefix + payload);
 	}
 	if (!submit) return;
-	// Two writes are not two reads. An Ink/raw-mode agent only treats the CR as
-	// submit when it arrives in a SEPARATE read() from the text; back-to-back
-	// writes — even flushed individually — are coalesced by the PTY into one
-	// read and the CR is swallowed into the composer as a newline, leaving the
-	// command typed but unsent. A plain shell is line-buffered and does not care.
-	if (agentType) await delay(AGENT_ENTER_GAP_MS);
+	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents;
+	// Codex also treats Enter as a newline for 120ms after a rapid paste burst.
+	if (agentInput || foregroundProbeFailed)
+		await delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : CODEX_ENTER_GAP_MS);
 	await writeFn("\r");
 }
 

@@ -1720,7 +1720,7 @@ mod tests {
             )
             .unwrap();
         store.delete(&project, &[1]).unwrap();
-        store.mark_viewed(&project).unwrap();
+        store.mark_viewed_for_pty(&project, None).unwrap();
 
         assert_eq!(
             tree_snapshot(&repo),

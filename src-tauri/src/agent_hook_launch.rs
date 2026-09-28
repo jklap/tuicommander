@@ -12,6 +12,34 @@ pub(crate) fn enabled(agent_type: &str) -> bool {
         .unwrap_or(true)
 }
 
+pub(crate) static SCREEN_POLICIES: &[(&str, &str, Option<&str>)] = &[
+    ("codex", "--no-alt-screen", Some("exec")),
+    ("grok", "--no-alt-screen", None),
+    ("opencode", "--mini", Some("run")),
+];
+
+pub(crate) fn screen_policy(agent_type: &str) -> Option<(&'static str, Option<&'static str>)> {
+    SCREEN_POLICIES
+        .iter()
+        .find(|(agent, _, _)| *agent == agent_type)
+        .map(|(_, flag, skip)| (*flag, *skip))
+}
+
+pub(crate) fn prevents_alt_screen_in(
+    config: &crate::config::AgentsConfig,
+    agent_type: &str,
+) -> bool {
+    config
+        .agents
+        .get(agent_type)
+        .and_then(|settings| settings.prevent_alt_screen)
+        .unwrap_or(true)
+}
+
+pub(crate) fn prevents_alt_screen(agent_type: &str) -> bool {
+    prevents_alt_screen_in(&crate::config::load_agents_config(), agent_type)
+}
+
 fn claude_document() -> Value {
     let mut hooks = Map::new();
     for (event, matcher, command) in claude_hook_map() {
@@ -97,8 +125,80 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     Ok(())
 }
 
-pub(crate) fn augment_args(agent_type: &str, args: &[String], config_dir: &Path) -> Vec<String> {
-    augment_args_when(enabled(agent_type), agent_type, args, config_dir)
+pub(crate) fn augment_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+) -> Vec<String> {
+    let result = augment_args_when(enabled(agent_type), agent_type, args, config_dir);
+    if screen_flag_candidate(agent_type, args).is_none() {
+        return result;
+    }
+    add_screen_flag(
+        agent_type,
+        args,
+        result,
+        crate::agent::supports_no_alt_screen(agent_type, binary_path),
+    )
+}
+
+/// Use the same screen policy for commands typed into an existing terminal.
+/// The frontend owns shell quoting, while this function owns the agent-specific
+/// flag and its capability check.
+pub(crate) fn build_agent_launch_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+) -> Vec<String> {
+    if screen_flag_candidate(agent_type, args).is_none() {
+        return args.to_vec();
+    }
+    add_screen_flag(
+        agent_type,
+        args,
+        args.to_vec(),
+        crate::agent::supports_no_alt_screen(agent_type, binary_path),
+    )
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn prepare_agent_launch_args(
+    agent_type: String,
+    binary_path: String,
+    args: Vec<String>,
+) -> Vec<String> {
+    let fallback = args.clone();
+    tokio::task::spawn_blocking(move || build_agent_launch_args(&agent_type, &binary_path, &args))
+        .await
+        .unwrap_or(fallback)
+}
+
+fn screen_flag_candidate(agent_type: &str, args: &[String]) -> Option<&'static str> {
+    if !prevents_alt_screen(agent_type) {
+        return None;
+    }
+    let (flag, excluded_first_arg) = screen_policy(agent_type)?;
+    if excluded_first_arg.is_some_and(|excluded| args.first().is_some_and(|arg| arg == excluded))
+        || args.iter().any(|arg| arg == flag)
+    {
+        return None;
+    }
+    Some(flag)
+}
+
+fn add_screen_flag(
+    agent_type: &str,
+    args: &[String],
+    mut result: Vec<String>,
+    supported: bool,
+) -> Vec<String> {
+    if let Some(screen_flag) = screen_flag_candidate(agent_type, args)
+        && supported
+    {
+        result.insert(0, screen_flag.to_string());
+    }
+    result
 }
 
 fn augment_args_when(
@@ -149,6 +249,143 @@ fn augment_args_when(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn screen_probe_is_skipped_when_its_answer_cannot_change_launch_args() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-lazy-probe",
+            "printf x >> \"${0%/*}/screen-lazy-probe.invoked\"; printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let marker = script.with_file_name("screen-lazy-probe.invoked");
+        let _ = std::fs::remove_file(&marker);
+        let binary = script.to_string_lossy();
+        for (agent, args) in [
+            ("codex", vec!["--no-alt-screen".into()]),
+            ("codex", vec!["exec".into(), "echo".into()]),
+        ] {
+            let _ = augment_args(agent, &binary, &args, Path::new("/unused"));
+            assert!(!marker.exists(), "{agent} {args:?} needlessly ran --help");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_launch_args_share_the_structured_spawn_screen_policy() {
+        let script = crate::test_support::fake_ssh_script(
+            "screen-terminal-launch-args",
+            "printf '%s\\n' '--no-alt-screen --mini'",
+            "echo --no-alt-screen --mini",
+        );
+        let binary = script.to_string_lossy();
+        assert_eq!(
+            build_agent_launch_args("codex", &binary, &["resume".into()]),
+            ["--no-alt-screen", "resume"]
+        );
+        assert_eq!(
+            build_agent_launch_args("codex", &binary, &["exec".into()]),
+            ["exec"]
+        );
+        assert_eq!(
+            build_agent_launch_args("opencode", &binary, &["run".into()]),
+            ["run"]
+        );
+        assert_eq!(
+            build_agent_launch_args("codex", &binary, &["--no-alt-screen".into()]),
+            ["--no-alt-screen"]
+        );
+        assert_eq!(
+            build_agent_launch_args("grok", &binary, &["--fullscreen".into()]),
+            ["--no-alt-screen", "--fullscreen"]
+        );
+        assert_eq!(
+            build_agent_launch_args("gemini", &binary, &[]),
+            Vec::<String>::new()
+        );
+
+        let older = crate::test_support::fake_ssh_script(
+            "screen-terminal-older-codex",
+            "printf '%s\\n' 'old help'",
+            "echo old help",
+        );
+        assert_eq!(
+            build_agent_launch_args("codex", &older.to_string_lossy(), &["resume".into()]),
+            ["resume"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_agent_screen_setting_disables_the_structured_flag() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let mut config = crate::config::AgentsConfig::default();
+        config.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                prevent_alt_screen: Some(false),
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(config).unwrap();
+        let binary = crate::test_support::fake_ssh_script(
+            "screen-setting-codex",
+            "printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        assert_eq!(
+            build_agent_launch_args("codex", &binary.to_string_lossy(), &["resume".into()]),
+            ["resume"]
+        );
+    }
+
+    #[test]
+    fn actual_agent_argument_builder_defaults_to_native_scrollback() {
+        for (agent, flag) in [
+            ("codex", "--no-alt-screen"),
+            ("grok", "--no-alt-screen"),
+            ("opencode", "--mini"),
+        ] {
+            let script = crate::test_support::fake_ssh_script(
+                &format!("screen-help-{agent}"),
+                &format!("printf '%s\\n' '{flag}'"),
+                &format!("echo {flag}"),
+            );
+            let binary = script.to_string_lossy();
+            let args = vec!["resume".to_string()];
+            let built = augment_args(agent, &binary, &args, Path::new("/unused"));
+            assert_eq!(built.first().map(String::as_str), Some(flag), "{agent}");
+            assert_eq!(built.get(1).map(String::as_str), Some("resume"), "{agent}");
+        }
+    }
+
+    #[test]
+    fn screen_flags_are_placed_before_subcommands_only_when_supported() {
+        let args = vec!["resume".to_string(), "abc".to_string()];
+        assert_eq!(
+            add_screen_flag("codex", &args, args.clone(), true),
+            ["--no-alt-screen", "resume", "abc"]
+        );
+        assert_eq!(add_screen_flag("codex", &args, args.clone(), false), args);
+        let args = vec!["--model".to_string(), "fast".to_string()];
+        assert_eq!(
+            add_screen_flag("grok", &args, args.clone(), true),
+            ["--no-alt-screen", "--model", "fast"]
+        );
+        assert_eq!(
+            add_screen_flag("opencode", &args, args.clone(), true),
+            ["--mini", "--model", "fast"]
+        );
+    }
+
+    #[test]
+    fn screen_flags_respect_existing_flags_and_subcommands() {
+        let args = vec!["--no-alt-screen".to_string()];
+        assert_eq!(add_screen_flag("codex", &args, args.clone(), true), args);
+        let args = vec!["run".to_string(), "task".to_string()];
+        assert_eq!(add_screen_flag("opencode", &args, args.clone(), true), args);
+    }
+
     /// Gated with its only caller, which is unix-only because the hooks it
     /// builds are POSIX shell. Without the gate this is dead code on Windows,
     /// and the Windows job warns about it where nothing reads the warning.
@@ -167,15 +404,20 @@ mod tests {
     fn explicit_agent_flags_are_not_overridden() {
         let root = Path::new("/config");
         assert_eq!(
-            augment_args("claude", &["--bare".into()], root),
+            augment_args_when(true, "claude", &["--bare".into()], root),
             vec!["--bare"]
         );
         assert_eq!(
-            augment_args("claude", &["--settings=x".into()], root),
+            augment_args_when(true, "claude", &["--settings=x".into()], root),
             vec!["--settings=x"]
         );
         assert_eq!(
-            augment_args("codex", &["-c".into(), "notify=['mine']".into()], root),
+            augment_args_when(
+                true,
+                "codex",
+                &["-c".into(), "notify=['mine']".into()],
+                root
+            ),
             vec!["-c", "notify=['mine']"]
         );
     }

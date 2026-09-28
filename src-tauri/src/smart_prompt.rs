@@ -303,7 +303,8 @@ mod tests {
         // the Windows stand-in for `/bin/echo`, and it is sound for this string
         // because none of `;`, `$(…)` or a backtick means anything to `cmd` —
         // a POSIX shell layer anywhere in the call would still rewrite them.
-        let marker = std::env::temp_dir().join("tuictest_inject");
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let marker = scratch.path().join("tuictest_inject");
         let injection = format!("safe; rm -rf {}; $(whoami); `whoami`", marker.display());
         let (command, args) = if cfg!(windows) {
             (

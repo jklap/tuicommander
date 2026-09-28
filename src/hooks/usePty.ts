@@ -95,6 +95,7 @@ export interface ActiveSessionInfo {
 		last_prompt?: string | null;
 		background_work?: boolean;
 		queued_commands?: number;
+		last_activity_ms?: number;
 	} | null;
 	/**
 	 * Which remote machine runs this session; absent for a local one. The list
@@ -103,6 +104,8 @@ export interface ActiveSessionInfo {
 	 * purpose.
 	 */
 	connection_id?: string | null;
+	/** Live agent identity; may differ from the PTY's session_id. */
+	tuic_session?: string | null;
 }
 
 /** PTY hook for managing terminal sessions */
@@ -152,7 +155,7 @@ export function usePty() {
 	/** Send or insert text through the central agent-aware command path. */
 	async function sendCommand(sessionId: string, text: string, agentType?: string | null, submit = true): Promise<void> {
 		const shellFamily = await getShellFamily(sessionId);
-		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily, submit);
+		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily, submit, sessionId);
 	}
 
 	/** Hand a command to the backend's idle gate instead of typing it now: it is

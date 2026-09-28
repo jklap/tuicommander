@@ -28,6 +28,13 @@ of every task — so even an agent that never calls the tool leaves a trail of
 what it set out to do. An agent cannot write an `intent` entry itself; the
 reporting tool refuses that kind.
 
+TUI agents can redraw an intent one word at a time. Progress waits for the
+completed line or turn boundary before saving it, so a growing preview appears
+as one entry rather than a series of partial entries.
+The journal redacts secrets from intents and agent reports before writing them.
+Long intents keep their full terminal event, while the stored note is shortened
+to 500 characters after redaction.
+
 ## How an agent reports
 
 The MCP `progress` tool takes three fields.
@@ -62,8 +69,15 @@ the same label.
 
 ## Reading it
 
-Open the Progress dialog from the command palette (`progress`) or from the
-toolbar bell, which shows how many entries arrived since you last opened it.
+Open the Progress dialog from the command palette (`progress`), with
+`Cmd/Ctrl+Shift+P`, or from **Terminal Progress** in the toolbar bell. The bell
+entry remains available when there are no unread updates; its badge counts
+entries that arrived since you last opened the dialog.
+An outcome toast's **Go to repo** action also opens the reporting terminal
+in its workspace when that terminal is still open. If it has closed, the
+action opens the repository instead.
+Clicking the toast body closes it without changing the current repository or
+terminal. Use **Go to repo** when you want to navigate.
 
 The dialog opens on the active PTY, newest first. The selector switches to
 another PTY in the project or **All repo**, which combines their histories.

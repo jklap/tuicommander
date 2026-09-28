@@ -71,6 +71,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"toggle-sidebar": { label: "Toggle sidebar", category: "Navigation" },
 
 	"command-palette": { label: "Command palette", category: "Navigation" },
+	progress: { label: "Open Terminal Progress", category: "Navigation" },
 	"activity-dashboard": { label: "Activity dashboard", category: "Navigation" },
 	"worktree-manager": { label: "Worktree manager", category: "Git" },
 	"quick-branch-switch": { label: "Quick branch switch", category: "Git" },
@@ -113,15 +114,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
  * since those aren't useful in a palette.
  */
 export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
-	const entries: ActionEntry[] = [
-		{
-			id: "progress",
-			label: "Open Terminal Progress",
-			category: "Navigation",
-			keybinding: "",
-			execute: progressStore.toggle,
-		},
-	];
+	const entries: ActionEntry[] = [];
 
 	const handlerMap: Partial<Record<ActionName, () => void>> = {
 		"new-terminal": handlers.createNewTerminal,
@@ -158,6 +151,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"split-horizontal": () => handlers.handleSplit("horizontal"),
 		"toggle-sidebar": handlers.toggleSidebar,
 		"command-palette": handlers.toggleCommandPalette,
+		progress: progressStore.toggle,
 		"activity-dashboard": handlers.toggleActivityDashboard,
 		"worktree-manager": handlers.toggleWorktreeManager,
 		"quick-branch-switch": handlers.toggleBranchSwitcher,

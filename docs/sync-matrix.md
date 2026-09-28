@@ -24,7 +24,7 @@ When modifying PluginHost API, capabilities, manifest schema, Tauri commands use
 | `src/plugins/pluginRegistry.ts` | Implementation in `buildHost()` |
 | `src/components/PluginPanel/pluginBaseStyles.ts` | Base CSS classes available to all plugin panels |
 | `src-tauri/src/plugins.rs` | `KNOWN_CAPABILITIES` list (new capabilities); `set_plugin_output_watchers` sync |
-| `src-tauri/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
+| `src-tauri/crates/tuic-terminal/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
 | `src-tauri/src/lib.rs` | Register new Tauri commands in `invoke_handler` |
 | `docs/backend/command-threading.md` | Where a new command runs (`fn` = macOS main thread). Update the audit when a command changes placement |
 | `docs/plugins.md` | Plugin developer guide (API reference, capabilities table, **Panel CSS Design Strategy** section, examples) |
@@ -105,7 +105,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
 | `session-state-changed` | `{ session_id: string, state: SessionState }` — `state` is exactly the object `list_active_sessions` returns per session, snake_case, with serde skipping the zero-valued fields. Both transports build it from `state.rs session_state_payload()`, one function on purpose | `state.rs publish_session_state_change()`, called only from the session-state accumulator — the sole writer of `session_states` and therefore the only place that can see a transition. Deduped by `SessionState`'s `PartialEq` (which excludes `last_activity_ms`), so a repaint that changes nothing a client renders emits nothing. Dual-emitted on `event_bus` as `SessionStateChanged` (`session-state-changed` SSE on `/events`). Ignored by `apply_event_to_session_state` — it is the accumulator's output, never its input | `useAgentPolling.ts` → `subscribeEvents({"session-state-changed"})` → `applySessionState()` → tab awaiting/busy badges + Activity Dashboard. Replaced a 1 Hz `list_active_sessions` poll; the only remaining reads are a single mount-time catch-up, for sessions already idle and silent, and the same catch-up re-run from `subscribeEvents`' `onResync` when the SSE stream reconnects or reports `lagged` (browser only — Tauri `listen()` cannot drop) |
 | `acp-notice` | `{ connectionId, generation, sessionId?, requestId?, sequence, kind }` — `kind` is `ready` \| `settled` \| `interaction_pending` \| `interaction_settled`. camelCase, unlike the PTY rows above: it is the same object the `/acp` routes and the `acp_*` commands return, and a second spelling would be a second thing to keep in sync | `state.rs spawn_acp_notice_pump()`, fed by `acp/events.rs` `AcpEventJournal::append` — the one place every ACP event is stamped, so a notice cannot be forgotten by a new producer. Dual-emitted on `event_bus` as `AcpNotice` (`acp-notice` SSE on `/events`) | TBD — no ACP frontend yet. It is a wake signal: react by reading `acp_connection_snapshot`, `acp_pending_interactions`, or the stream from the `sequence` it names. The ordered turn frames stay on `acp_subscribe` / the `/acp/connections/:id/stream` WebSocket and never ride this bus |
-| `remote-connection-status` | `{ id, status, base_url?, token?, protocol_version?, error? }` — `status` is `disconnected` \| `connecting` \| `connected` \| `unauthenticated` \| `error`. snake_case: it is the `RemoteConnectionStatus` struct as `/config/remote-connections/status` returns it, and the push is the whole client view rather than a delta, so a missed event cannot leave a client holding a route the backend has retracted. `base_url` and `token` are present only while connected | `remote_runtime.rs publish()` — dual-emitted on every real change (dedup is on the snapshot, so a poll that keeps answering 200 emits nothing) | `stores/remoteConnections.ts` `applyStatus()` → store state + the SSE bridge, which exists exactly while the connection is connected |
+| `remote-connection-status` | `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error? }` — `status` is `disconnected` \| `connecting` \| `connected` \| `unauthenticated` \| `error`. snake_case: it is the `RemoteConnectionStatus` struct as `/config/remote-connections/status` returns it, and the push is the whole client view rather than a delta, so a missed event cannot leave a client holding a route the backend has retracted. `base_url` and `token` are present only while connected | `remote_runtime.rs publish()` — dual-emitted on every real change (dedup is on the snapshot, so a poll that keeps answering 200 emits nothing) | `stores/remoteConnections.ts` `applyStatus()` → store state + the SSE bridge, which exists exactly while the connection is connected |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
@@ -133,8 +133,8 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
-| `src-tauri/src/chrome.rs` | Bottom-zone cutoff — anything at or below the input box must stay unparsed |
+| `src-tauri/crates/tuic-terminal/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
+| `src-tauri/crates/tuic-terminal/src/chrome.rs` | Bottom-zone cutoff — anything at or below the input box must stay unparsed |
 | `src-tauri/src/pty.rs` | `raw_stream_events` composition + `suppress_heuristic_question` gating |
 | `src-tauri/src/state.rs` | `apply_event_to_session_state` — the arms that SET and CLEAR `awaiting_input`. A signal nothing retracts latches the badge |
 | `src/components/Terminal/Terminal.tsx` | The frontend twin of those arms (`terminalsStore` awaiting flags) |
@@ -153,6 +153,9 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 | `src-tauri/src/mcp_proxy/registry.rs` | `aggregated_tools`, `proxy_tool_call` (filter is enforced on BOTH — discovery no longer gates dispatch under `collapse_tools`) |
 | `src-tauri/src/tool_search.rs` | BM25 `ToolSearchIndex` backing `search_tools` / `get_tool_schema` |
 | `docs/backend/mcp-http.md` | Lazy Tool Discovery section, meta-tool table, filter-enforcement note |
+| `src-tauri/src/mcp_http/plugin_docs.rs` | AI plugin guide references to MCP worktree inputs |
+| `src-tauri/crates/tuic-cli/` | CLI callers of renamed or removed native actions |
+| `docs/user-guide/cli.md`, `CHANGELOG.md` | Public CLI examples and BREAKING migration instructions |
 | `docs/backend/config.md` | `collapse_tools` field in `AppConfig` table |
 | `docs/user-guide/settings.md` | MCP page → TUIC Tools — "Collapse tools" checkbox description |
 
@@ -160,12 +163,13 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 - `session action=submit` — submits one command to a confirmed-idle managed agent and returns a bounded terminal-movement receipt in the same response. It never queues or overwrites a partial composer; `session action=input` remains raw and write-only.
 - `session action=status` — returns `{shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}`. Useful for polling agent progress without streaming output.
 - `session action=list` response now includes `shell_state` per entry, plus `tuic_session` (the identity the tab persists) and `alias`. It no longer includes `child_pid` or `foreground_pgid` — no action accepts a raw pid.
-- `session_id` on every action, and `to` on `agent action=send`, accept three interchangeable forms of one address: the PTY id, the `tuic_session`, or the alias. Resolution lives in `AppState::resolve_session_ref` / `resolve_peer_ref`; an unresolvable reference falls through unchanged so a tombstoned session can still be read.
+- `session_id` on every action accepts the PTY id, `tuic_session`, alias, unique short PTY-id prefix, or unique display name; `to` on `agent action=send` uses the same resolver. Ambiguous prefixes or names return an error. Resolution lives in `AppState::resolve_session_ref_checked` / `resolve_peer_ref_checked`; an unresolvable reference falls through unchanged so a tombstoned session can still be read.
 - `session action=create` (and `POST /sessions`) accept an optional `alias`, which the frontend replays from persisted tab state so an alias survives a restart.
 
 #### Agent tool actions added (swarm inbox)
-- `agent action=inbox` response now includes `missed_count` — number of messages evicted from the FIFO inbox since last read. Non-zero means the orchestrator missed messages and should increase polling frequency.
-- `agent action=send` response includes **`delivered`** (bool) plus, when false, `warning` and `recipient_has_terminal`. `delivered` is false exactly when `delivery_path == "inbox_only"`: no waiter, channel, direct terminal delivery, or already-pending coalesced orchestrator wake will surface it, so it stays unread until the recipient polls. Registered orchestrators add `wake_notification_and_inbox`, `coalesced_wake_and_inbox` and `lifecycle_summary_and_inbox`; none of them exposes a peer payload — the last one is reachable only for a window made entirely of server-authored `tuic-auto-*` lifecycle notifications, which it prints inline and acknowledges itself. Canonical idle/completed state may claim the wake; derived `working` may also claim it only through the stricter composer gate (idle shell, confirmed readiness, no question, no partial input), so background work cannot strand a result while active work remains protected. A payload-free wake gets at most one retry after an uncertain PTY write per unread-mail group; coalesced mail does not reset that budget, and inbox/wait observation does. `delivered` plus `delivery_path` are the whole verdict: `ok`, `accepted`, `buffered_in_inbox` and `recipient_has_terminal` were removed because they answered "buffered" to a question about delivery. Keep these distinct in every client and in the tool descriptions — reporting `inbox_only` as success is how a reply to an agent with no PTY silently vanished.
+- `agent action=inbox` response now includes `missed_count` — number of unread messages evicted at capacity since last read. Same-child, same-kind lifecycle notice replacement does not increase it. Non-zero means the orchestrator missed messages and should increase polling frequency.
+- Reading `agent action=inbox` settles delivery for the returned messages, including queued terminal wakes. A queued generic wake is removed once no pending terminal-owned mail remains, so read mail can be reclaimed at the 100-message inbox limit.
+- `agent action=send` response includes **`delivered`** (bool) plus, when false, `warning` and `recipient_has_terminal`. `delivered` is false exactly when `delivery_path == "inbox_only"`: no waiter, channel, direct terminal delivery, or already-pending coalesced orchestrator wake will surface it, so it stays unread until the recipient polls. Registered orchestrators add `wake_notification_and_inbox`, `coalesced_wake_and_inbox` and `lifecycle_summary_and_inbox`; none of them exposes a peer payload — the last one is reachable only for a window made entirely of server-authored `tuic-auto-*` lifecycle notifications, which it prints inline and acknowledges itself. Canonical idle/completed state may claim the wake; derived `working` may also claim it only through the stricter composer gate (idle shell, confirmed readiness, no question, no partial input), so background work cannot strand a result while active work remains protected. Ordinary Claude recipients use that same gate before selecting their SSE channel: a ready composer held `working` by background work receives a PTY wake instead. A payload-free wake gets at most one retry after an uncertain PTY write per unread-mail group; coalesced mail does not reset that budget, and inbox/wait observation does. `delivered` plus `delivery_path` are the whole verdict: `ok`, `accepted`, `buffered_in_inbox` and `recipient_has_terminal` were removed because they answered "buffered" to a question about delivery. Keep these distinct in every client and in the tool descriptions — reporting `inbox_only` as success is how a reply to an agent with no PTY silently vanished.
 - `agent action=register` response includes **`terminal`** (bool): false means the identity resolves to no live PTY (`live_pty_for_peer` → `None`), so it can never be typed into or woken, and the peer must consume its own inbox via `wait`/`inbox`. Identities without a PTY arise from a bridge that sent no `x-tuic-session` header (agent launched outside a TUIC PTY) — the server then mints an MCP-scoped UUID.
 - `agent action=register` accepts **`orchestrator`** (bool) as the only role declaration seam; omission preserves the current role and child spawn never infers it. The `register` response surfaces `orchestrator` plus **`mail_wake`** (`managed_pty_lifecycle` or `none`); `list_peers` reports `orchestrator` but not `mail_wake`, which is a property of the caller's own identity rather than of every peer in a listing. External/headerless orchestrators are inbox/wait-only because MCP/SSE activity is not an authoritative idle or wake surface.
 
@@ -226,15 +230,17 @@ command ego runs, so the server-side synthesis in `granted` is what keeps it saf
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` it carries, and `mcp_stdio` in `capability_snapshot` |
-| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` and host-issued `TUIC_SESSION` it carries, and `mcp_stdio` in `capability_snapshot` |
+| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and the bridge; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp_commands.rs`, `src-tauri/src/config.rs` | Persist a root's ACP peer UUID beside its selected conversation and reuse it after reconnect or restart |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | Bind bridge mail, child parentage and blocked progress to the ACP peer without a PTY |
 | `src-tauri/src/mcp_http/mod.rs` | The bound socket is handed to `acp.set_socket_path` where it is recorded — the entry can only carry a path this process learned |
 | `src-tauri/src/agent_mcp.rs` | `locate_bridge_binary` — where the sidecar is looked for, shared with the agent config writers |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
 | `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
 | `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
-| `src/components/AIChatPanel/Interactions.tsx` | Permission options and the elicitation form. `form` is the only mode drawn |
-| `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, plus pause/resume/compact — each drawn only when ego advertised it |
+| `src/components/AIChatPanel/Interactions.tsx` | Permission options and elicitation forms; a single choice field with up to three values has direct buttons. `form` is the only mode drawn |
+| `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, pause/resume/compact, and readable labels for untitled conversations |
 | `src/components/AIChatPanel/Composer.tsx`, `draft.ts` | Where a turn is written; the draft is module-scoped so the context menu can seed it |
 | `src/components/AIChatPanel/contextMenuActions.ts` | "Explain with AI" / "Fix this error" on terminal right-click, registered through `contextMenuActionsStore` |
 | `src/services/acpClient.ts`, `src/services/acpStream.ts` | Every command the panel sends and the frame stream behind it. `adopt` commits to the store only after the pending fetch and the open succeed, and `reconnect` lets go of the id the backend replaced — the new one is a *different* connection |
@@ -286,8 +292,8 @@ engine. `pty.rs` reads them, so they kept the `ai_agent/` module path:
 | `src-tauri/src/pty.rs` | ChunkProcessor.record_osc133_outcomes + Inferred fallback in the silence timer |
 | `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
 | `src-tauri/src/lib.rs` | spawn_persist_task at boot |
-| `src-tauri/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
-| `src-tauri/src/terminal_grid.rs` | Grid reader methods: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `state.rs` |
+| `src-tauri/crates/tuic-core/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
+| `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` | Grid reader methods in `tuic-terminal`: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `vt_log.rs` |
 
 ### What #784-0aec removed, and where it comes back
 These areas had sections here and no longer have any code to sync. They are
@@ -352,7 +358,7 @@ When modifying remote connection config, storage, or transport routing:
 | `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status`. **`teardown()` is the one way a connection goes down** — poll, mirror task, mirrored rows, tunnel and token, in that order, idempotent and safe on an id nothing knows. Disconnect and delete both call it, over IPC and over HTTP alike; a second stop path is how the tunnel came to outlive the delete that removed its profile |
 | `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | On-connect deployment, cached release assets, and systemd/launchd install/uninstall |
 | `src-tauri/src/remote_lifetime.rs` | Ephemeral daemon idle expiry and `/health.survive_secs` |
-| `src-tauri/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
+| `src-tauri/crates/tuic-core/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
 | `src/stores/remoteConnections.ts` | Frontend remote connections store — a renderer of the backend status, plus the token it holds in memory for the transport |
 | `src/transportRuntime.ts` | `withRemoteToken` — the one place a credential is put on a URL; `resolveOwningConnection` — the one place a call's machine is decided |
 | `src/stores/repositories.ts` / `src/stores/terminals.ts` | the registered path→connection and session→connection lookups |
@@ -457,7 +463,8 @@ When modifying git operations, worktree logic, or GitHub API:
 | File | What to update |
 |------|----------------|
 | `docs/backend/git.md` | Git command lifecycle, diff parsing, **GitReads port (gix vs CLI op split)**, moka cache |
-| `src-tauri/src/git_reads.rs` | **GitReads port**: flipping an op to gix requires a green byte-parity shootout test first |
+| `src-tauri/crates/tuic-git/src/git_reads.rs` | **GitReads port**: flipping an op to gix requires a green byte-parity shootout test first |
+| `src-tauri/crates/tuic-git/src/{github,github_account,github_auth,github_poller,circleci,pr_review,changelog,github_debug}.rs` | Pure GitHub models, parsing, and decisions; keep network, credentials, scheduling, events, and commands in the root adapters |
 | `docs/backend/github.md` | PR fetching, CI checks, GraphQL |
 | `docs/user-guide/worktrees.md` | Worktree workflow, configuration |
 | `docs/user-guide/github-integration.md` | PR monitoring, CI rings |
@@ -465,7 +472,7 @@ When modifying git operations, worktree logic, or GitHub API:
 | `docs/api/tauri-commands.md` | Git/worktree commands |
 
 ### Voice dictation, spoken replies and hands-free
-When modifying `src-tauri/src/dictation/**` or the Voice settings page (`DictationSettings.tsx`):
+When modifying `src-tauri/src/dictation/**`, `src-tauri/crates/tuic-dictation/**`, or the Voice settings page (`DictationSettings.tsx`):
 
 | File | What to update |
 |------|----------------|

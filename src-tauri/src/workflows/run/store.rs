@@ -1367,7 +1367,10 @@ fn choose_event(
             if canonical.to_string_lossy() != path || path == snapshot.project {
                 return Err("story worktree must be a canonical isolated path".into());
             }
-            crate::worktree::validate_worktree_path(&snapshot.project, &path)?;
+            let registered = crate::worktree::get_worktree_paths_raw(&snapshot.project)?;
+            if !registered.values().any(|worktree| worktree.path == path) {
+                return Err("story worktree is not a registered checkout".into());
+            }
             Ok(RunEventKind::WorktreeAssigned { story_id, path })
         }
         RunCommand::StartPlanAgent { node_id } => {

@@ -46,6 +46,7 @@ type StatusPayload = {
 	base_url?: string;
 	token?: string;
 	protocol_version?: number;
+	out_of_date?: boolean;
 	error?: string;
 	step?: string;
 };
@@ -152,6 +153,28 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(store.getConnectionState("c1")).toMatchObject({
 				status: "deploying",
 				deployStep: "starting daemon",
+			});
+		});
+
+		it("shows the backend's out-of-date result and clears it when the connection drops", () => {
+			push({ ...connected, out_of_date: true });
+			expect(store.getConnectionState("c1")?.outOfDate).toBe(true);
+			push({ id: "c1", status: "disconnected" });
+			expect(store.getConnectionState("c1")?.outOfDate).toBeUndefined();
+		});
+
+		it("sends the confirmed count and selected hash to the backend", async () => {
+			const preview = {
+				session_count: 3,
+				desktop_build: { version: "1.2.3", target: "aarch64-apple-darwin", sha256: "fixture-hash" },
+			};
+			invokeMock.mockResolvedValueOnce(preview);
+			await expect(store.prepareUpdate("c1")).resolves.toEqual(preview);
+			await store.updateAndRestart("c1", 3, "fixture-hash");
+			expect(invokeMock).toHaveBeenCalledWith("update_and_restart_remote", {
+				id: "c1",
+				confirmedSessions: 3,
+				expectedSha256: "fixture-hash",
 			});
 		});
 

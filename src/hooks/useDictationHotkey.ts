@@ -3,6 +3,7 @@ import { listen } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { dictationStore } from "../stores/dictation";
 import { isTauri } from "../transport";
+import { parseHotkey } from "../utils";
 import { createLongPressHandlerFromHotkey } from "./useLongPressHotkey";
 
 interface DictationHotkeyOptions {
@@ -55,11 +56,23 @@ export function useDictationHotkey(options: DictationHotkeyOptions): void {
 			const onKeyUp = (event: KeyboardEvent) => {
 				handler.handleEvent({ eventType: "KeyRelease", key: event.code });
 			};
+			// Window key events stop at focus loss, so a key released in another app
+			// never reaches us: treat the blur as that release. Fn is global and
+			// reports its own key-up, so it keeps recording across focus changes.
+			const primaryKey = parseHotkey(hotkey)?.key;
+			const onBlur = () => {
+				if (primaryKey) handler.handleEvent({ eventType: "KeyRelease", key: primaryKey });
+				for (const key of ["MetaLeft", "ShiftLeft", "AltLeft", "ControlLeft"]) {
+					handler.handleEvent({ eventType: "KeyRelease", key });
+				}
+			};
 			window.addEventListener("keydown", onKeyDown);
 			window.addEventListener("keyup", onKeyUp);
+			window.addEventListener("blur", onBlur);
 			cleanupListeners = () => {
 				window.removeEventListener("keydown", onKeyDown);
 				window.removeEventListener("keyup", onKeyUp);
+				window.removeEventListener("blur", onBlur);
 			};
 		}
 

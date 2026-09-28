@@ -23,9 +23,10 @@ import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
+import { classifyFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
-import { unregisteredRepoRootFor } from "../utils/repoOwnership";
+import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -102,6 +103,7 @@ export interface AppInitDeps {
 				display_name?: string | null;
 				pty_description?: string | null;
 				alias?: string | null;
+				tuic_session?: string | null;
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
@@ -115,6 +117,7 @@ export interface AppInitDeps {
 					agent_intent?: string | null;
 					last_prompt?: string | null;
 					background_work?: boolean;
+					last_activity_ms?: number;
 				} | null;
 			}>
 		>;
@@ -200,6 +203,7 @@ function assignSessionToRepoBranch(
 	terminalId: string,
 	cwd: string | null,
 	registerRepo: AppInitDeps["registerRepo"],
+	refreshAllBranchStats: AppInitDeps["refreshAllBranchStats"],
 ): void {
 	const owner = resolveRepoOwner(cwd);
 
@@ -242,6 +246,17 @@ function assignSessionToRepoBranch(
 	// Which repo the user would have to register to fix this. Without it the
 	// warning named only the symptom.
 	const unregisteredRoot = unregisteredRepoRootFor(cwd);
+	const registeredRoot = unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
+	if (registeredRoot) {
+		// A just-created sibling worktree can arrive before the repo's worktree
+		// list does. Refresh the registered repo and move this parked tab home
+		// once the new workspace is known; registration cannot help here.
+		void Promise.resolve()
+			.then(() => refreshAllBranchStats(registeredRoot))
+			.then(() => reconcileTerminalOwnership(terminalId))
+			.catch((err) => appLogger.warn("app", `Failed to refresh worktrees for ${registeredRoot}`, err));
+		return;
+	}
 	appLogger.warn(
 		"app",
 		`Session ${sessionId}: cwd "${cwd ?? "(null)"}" is owned by no registered repo${
@@ -281,6 +296,11 @@ function assignSessionToRepoBranch(
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+	appLogger.info(
+		"app",
+		`WebView document navigation=${navigation?.type ?? "unknown"} documentStart=${performance.timeOrigin}`,
+	);
 	appLogger.info("app", `initApp called — existing terminals: [${terminalsStore.getIds().join(", ")}]`);
 	appLogger.debug("app", "SolidJS App mounted");
 	const preInitTerminalIds = terminalsStore.getIds();
@@ -508,6 +528,25 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register repo-changed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
+	// The native navigation guard cannot tell a real iframe click from a script.
+	// Give users a visible fallback while keeping the actual browser open behind
+	// the tab menu's explicit action. Browser mode has no Tauri navigation guard.
+	if (isTauri()) {
+		void listen<string>("navigation-blocked", () => {
+			toastsStore.add(
+				"External link blocked",
+				"This embedded page cannot open external links here. Use Open in Browser from its tab menu.",
+				"warn",
+				false,
+				undefined,
+				10000,
+				undefined,
+				undefined,
+				false,
+			);
+		}).catch((err) => appLogger.error("app", "Failed to register navigation guard listener", err));
+	}
+
 	replaceMcpToastListener((event) => {
 		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
@@ -570,7 +609,7 @@ export async function initApp(deps: AppInitDeps) {
 		});
 		remoteSessionTabs.set(session_id, id);
 
-		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
+		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo, deps.refreshAllBranchStats);
 
 		// Dock agent-spawned tabs so swarm workers show up in the tab strip.
 		// Only for agent_type (MCP agent spawn), not for manually created
@@ -643,16 +682,17 @@ export async function initApp(deps: AppInitDeps) {
 				if (!filePath && cmd !== "terminal") return;
 
 				const activeRepoPath = repositoriesStore.state.activeRepoPath;
-				// Resolve: absolute path → the repo that owns it, relative → active repo
-				// (a relative path typed into a tuic:// link means "here", so focus IS
-				// the right answer for that case and only that case).
+				const callerRepoPath = resolveRepoForCwd(origin_repo_path);
+				const fallbackRepoPath = callerRepoPath ?? activeRepoPath;
+				// Registered file ownership wins; otherwise keep the tab with the
+				// calling session's repo even when another one is visible.
 				let repoPath: string | null = null;
 				let relPath = filePath;
 				if (isAbsolutePath(filePath)) {
 					repoPath = resolveRepoPathFor(filePath);
 					if (repoPath) relPath = pathStripPrefix(filePath, repoPath)!;
 				} else {
-					repoPath = activeRepoPath ?? null;
+					repoPath = fallbackRepoPath ?? null;
 				}
 
 				// A focused native file tab must be visible in the tab bar. File tabs
@@ -660,8 +700,9 @@ export async function initApp(deps: AppInitDeps) {
 				// without switching context creates a ghost: its content is active but
 				// its tab is filtered out by the current repo. Keep background opens in
 				// their repo, but move focused opens to their owning repo first.
-				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
-					repositoriesStore.setActive(repoPath);
+				const tabRepoPath = repoPath ?? (isAbsolutePath(filePath) ? fallbackRepoPath : null);
+				if (focus !== false && tabRepoPath && tabRepoPath !== activeRepoPath) {
+					repositoriesStore.setActive(tabRepoPath);
 				}
 
 				// A background open must also stay in the background. Activating it
@@ -671,16 +712,35 @@ export async function initApp(deps: AppInitDeps) {
 				const background = focus === false;
 
 				if (cmd === "open" && repoPath) {
-					if (background) mdTabsStore.addFileBackground(repoPath, relPath);
-					else mdTabsStore.add(repoPath, relPath);
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {
-					editorTabsStore.add("__external__", filePath, undefined, { externalEditable: false, background });
+					if (classifyFile(filePath) === "markdown") {
+						editorTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						mdTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, pinned, background);
+					} else {
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
+					}
 				} else if (cmd === "edit") {
 					const line = parseInt(parsed.searchParams.get("line") || "0", 10);
 					if (repoPath) {
-						editorTabsStore.add(repoPath, relPath, line || undefined, { background });
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, repoPath, relPath, line || undefined, pinned, {
+							externalEditable: false,
+							background,
+						});
 					} else if (isAbsolutePath(filePath)) {
-						editorTabsStore.add("__external__", filePath, line || undefined, {
+						mdTabsStore.closeMcpFile(id);
+						mdTabsStore.closeUiTab(id);
+						editorTabsStore.addMcpFile(id, fallbackRepoPath ?? "", filePath, line || undefined, pinned, {
 							externalEditable: true,
 							background,
 						});
@@ -696,6 +756,8 @@ export async function initApp(deps: AppInitDeps) {
 			return;
 		}
 
+		mdTabsStore.closeMcpFile(id);
+		editorTabsStore.closeMcpFile(id);
 		mdTabsStore.openUiTab(id, title, html, pinned, url, focus ?? true, origin_repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register ui-tab listener", err));
 
@@ -846,6 +908,7 @@ export async function initApp(deps: AppInitDeps) {
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
+				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
 				// lifecycle sync shows it after the terminal has measured, and the
@@ -859,10 +922,11 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 				awaitingInputConfident: session.state?.question_confident === true,
 				backgroundWork: session.state?.background_work ?? false,
+				lastActivityAt: session.state?.last_activity_ms ?? null,
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo);
+			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}

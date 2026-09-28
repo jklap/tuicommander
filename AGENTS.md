@@ -6,11 +6,15 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 
 ## Tests
 
+- Run standalone Rust, Vitest, and plugin test commands through `scripts/with-test-tmp.sh`; `make check`, `make test-shell`, `make cov`, and `make mutants` set their own repository-local test temp root. This does not apply to `make dev` or `cargo run`.
+- Bare `cargo test` Rust test binaries initialize `TMPDIR`, `TMP`, and `TEMP` from `TUIC_TEST_TMP_ROOT` or this checkout's `.tmp/tuic-tests` before libtest starts; Nextest does the same for every test binary through `.config/nextest.toml` setup scripts. New Rust tests must use `test_temp_root()` or assert their scratch paths stay inside it. Neither mechanism changes `make dev` or `cargo run`.
+
 - **Test only the changed behavior.** Routine validation MUST use the narrowest test filters that cover the production code, protocol surface, fixtures, or test support changed by the task. Do not run full-crate, full-app, full-tree, or unrelated suites merely for reassurance; they waste shared build time and obscure relevant evidence. Expand beyond targeted tests only when a documented gate explicitly requires it, targeted evidence proves a cross-cutting risk, or Boss explicitly asks for the broader run.
 - Tests are the spec. When a test fails after a code change, investigate BOTH sides before deciding which to fix.
 - **Finding a story partially implemented does NOT mean it's done.** When you pick up a story and discover the feature already exists, verify EVERY part of the story is honored — each acceptance criterion, edge case, and requirement — before marking it complete. Never assume the whole story is satisfied just because one part is implemented. Check each criterion against the code and prove it, or the story isn't done.
 - `to-test.md` tracks features awaiting manual testing — add items there for minor features.
 - **Mutation testing is per change, never per tree.** `make mutants RANGE=<base>` (default `HEAD~1`) runs cargo-mutants `--in-diff` over the Rust lines the range touched, `--in-place` in a disposable `git archive` export under `.tmp/` (not a worktree: a detached worktree is an orphan to the running app, which removes it), one job, through mbx. Every viable mutant costs one incremental build of the lib crate plus one test run, so the orchestrator runs it once per batch on the final HEAD — agents do not. A surviving mutant is a missing test: add the test, or `#[mutants::skip]` with the reason on the line. **Measured 2026-09-06:** baseline 197 s build + 224 s test with warm deps; each mutant ~3 min incremental build of the lib crate plus 0.5–3.5 min of tests, so ~5 min each and a 38-mutant story diff is ~3 h. During the day pass a function filter through the script (`scripts/mutants.sh HEAD~1 --re <function>`); the whole diff is an overnight or CI job. Config in `src-tauri/.cargo/mutants.toml`, mechanics in `scripts/mutants.sh`.
+- Function-filtered mutation runs through make can use `make mutants RANGE=<base> -- --re <function>`; use `MUTANTS_ARGS='--re <function>'` for filters containing spaces or other complex arguments.
 - **`[HUMAN]` is a last resort.** Before marking a to-test item `[HUMAN]`, you MUST attempt verification through this escalation ladder:
   1. **Code inspection** — read the source, confirm the logic exists at file:line
   2. **Test execution** — `cargo nextest run` (doctests: `cargo test --doc`), `vitest run` with relevant filter
@@ -238,9 +242,9 @@ So when you add a discovery-based agent, look for a pid registry *first*. Codex 
 
 When adding a new agent: choose discovery-based if the agent writes session files to disk (add `sessionDiscovery` to `agents.ts` and a Rust `discover_*_session` to `agent_session.rs`). Choose forced injection only when discovery is impossible (e.g., SQLite-only storage).
 
-All of the above describes the **PTY** transport. `ego` does not use it — it runs over ACP and is deliberately not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring any assistant that speaks a protocol instead of a terminal: the hybrid PTY/ACP route, and every fallback between the two, are rejected by contract rather than merely unimplemented.
+All of the above describes the **PTY** transport. The AI Chat `ego` uses ACP and is not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring either transport: a session has exactly one transport, with no fallback.
 
-**And `ego` is the engine behind the AI Chat panel — not a tab, not an agent, not a terminal.** The sentence above says which transport it uses; this one says what it is allowed to be. It has no tab, no `AgentType`, no PTY, and no place in tab routing, split panes, or agent-state detection. It reaches terminals and repositories the same way Claude Code does, by calling TUICommander's own MCP server from outside — never by being one of the things that server drives. A change that makes `ego` look like an agent tab is wrong even when it compiles and even when it would be convenient.
+`ego` has three distinct faces: standalone CLI outside TUIC; AI Chat over ACP as an orchestration peer with a host-issued, durable `TUIC_SESSION` but **no** tab, PTY or terminal parser; and a separately launched terminal CLI over PTY, which may have an `AgentType`. The ACP peer reaches terminals and repositories through TUIC's MCP bridge. Its peer identity permits mail and child-parent routing, but does not turn the AI Chat conversation into a terminal or place it in tab routing, split panes or PTY agent-state detection.
 
 ## Logging
 
@@ -399,8 +403,8 @@ TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify
 | Signal | Source | Applies to |
 |---|---|---|
 | OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
-| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
-| `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
+| OSC 777 `notify` | agent's own desktop notification | unambiguous `needs your permission` / `approval required` wording only; Claude's generic `is waiting for your input` also follows an ordinary completed turn and never sets awaiting |
+| `Enter to select` footer | rendered screen | Ink dialogs, including hook-instrumented sessions through the full-screen presence recovery; the changed-row parser's heuristic copy is suppressed for hooked agents |
 
 Busy/idle evidence is ranked within one submitted-turn epoch. Lower-ranked
 evidence never closes a turn held busy by a protocol signal, and the same rule
@@ -445,11 +449,11 @@ that pastes a screen it just read marks *itself* awaiting, confidently, with
 nothing to retract it.
 
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan
-pickers, skill menus, anything with `Type something` / `Chat about this`) reports
-through OSC 777; an open Ink footer also supplies the presence-recovery backstop.
-Prefer protocol signals over screen scraping,
-and parse them off the **raw** stream — the VT parser consumes escape sequences,
-so they never reach the clean rows.
+pickers, skill menus, anything with `Type something` / `Chat about this`) uses
+the open Ink footer's full-screen presence recovery. The generic OSC 777
+notification is insufficient evidence: it also arrives after normal prose at
+the ready composer. Unambiguous permission notifications remain raw-stream
+signals because the VT parser consumes escape sequences before clean-row parsing.
 
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
@@ -523,7 +527,7 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 
 - **CSP is intentionally wide open.** TUIC is a local dev tool, not a SaaS. The user IS the trust boundary. The CSP uses a single permissive `default-src` that allows `https:`, `http:`, `data:`, `blob:`, `unsafe-inline`, etc. **NEVER tighten the CSP.** Every time we've had per-directive restrictions, some iframe content (reveal.js slides, plugin panels, dashboards) broke. The only specific directive kept is `frame-src` (for localhost wildcard ports). If you feel the urge to add CSP restrictions, don't — read this bullet point again.
 - **`dangerousDisableAssetCspModification: ["style-src", "script-src"]`** in `tauri.conf.json` — **DO NOT REMOVE.** Tauri auto-injects sha256 hashes for inline `<script>` tags. Per CSP3, hashes silently disable `'unsafe-inline'`. This kills all JS in srcdoc iframes (plugins, HTML previews). The override prevents Tauri from injecting those hashes.
-- **`lazy_static` in `output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. The remaining direct users are `output_parser.rs`, `pty.rs`, `state.rs` and `error_classification.rs`; they migrate opportunistically. (This used to say "modules outside `ai_agent/`", which stopped parsing when #784-0aec deleted all but two files there.)
+- **`lazy_static` in `tuic-terminal/src/output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. The remaining direct users are `tuic-terminal/src/output_parser.rs`, `pty.rs`, `state.rs` and `tuic-core/src/error_classification.rs`; they migrate opportunistically. (This used to say "modules outside `ai_agent/`", which stopped parsing when #784-0aec deleted all but two files there.)
 - **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.

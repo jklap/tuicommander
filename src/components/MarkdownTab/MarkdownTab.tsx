@@ -11,9 +11,10 @@ import { type FileTab, type MdTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
-import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
+import { isAbsolutePath, joinPath, normalizeSep, pathDirname } from "../../utils/pathUtils";
 import {
 	insertTweakBlockComment,
 	insertTweakComment,
@@ -37,6 +38,8 @@ import s from "./MarkdownTab.module.css";
 export interface MarkdownTabProps {
 	tab: MdTabData;
 	onClose?: () => void;
+	reloadToken?: () => number;
+	onOpenFileLink?: (target: MarkdownFileLink) => void;
 }
 
 /** Public handle exposed via ref for external callers (e.g. App.tsx keybinding) */
@@ -49,6 +52,33 @@ export interface MarkdownTabHandle {
  *  for a deleted file — an expected, non-warn-worthy state for a stale tab. */
 function isMissingFileError(msg: string): boolean {
 	return msg.includes("No such file") || msg.includes("os error 2");
+}
+
+/** Anchor requested for a Markdown tab that has not finished loading yet. */
+const pendingHeadings = new Map<string, string>();
+
+type MarkdownLinkTarget =
+	| { kind: "heading"; anchor: string }
+	| {
+			kind: "file";
+			absolute_path: string;
+			open_path: string;
+			is_directory: boolean;
+			same_document: boolean;
+			anchor?: string;
+			line?: number;
+	  }
+	| { kind: "missing"; path: string }
+	| { kind: "blocked"; reason: string };
+
+export type MarkdownFileLink = Extract<MarkdownLinkTarget, { kind: "file" }>;
+
+function headingSlug(text: string): string {
+	return text
+		.trim()
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s-]/gu, "")
+		.replace(/\s+/g, "-");
 }
 
 export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
@@ -203,6 +233,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	createEffect(() => {
 		const isActive = mdTabsStore.state.activeId === props.tab.id;
 		if (!isActive) return;
+		props.reloadToken?.();
 		const tab = props.tab;
 		if (tab.type !== "file" || !tab.filePath) return;
 		const { filePath, fsRoot, repoPath } = tab as FileTab;
@@ -283,34 +314,97 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		focusWrapper();
 	};
 
-	const handleMdLink = (href: string) => {
-		const tab = props.tab;
-		if (tab.type !== "file") return;
-		const ft = tab as FileTab;
-		const currentDir = ft.filePath.includes("/") ? ft.filePath.slice(0, ft.filePath.lastIndexOf("/")) : "";
-		const resolved = currentDir ? `${currentDir}/${href}` : href;
-		openFileAction(resolved, ft.repoPath, ft.fsRoot);
+	const scrollToHeading = (anchor: string) => {
+		const wanted = anchor.toLowerCase();
+		const heading = Array.from(contentRef?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6") ?? []).find(
+			(el) => el.id.toLowerCase() === wanted || headingSlug(el.textContent ?? "") === wanted,
+		);
+		heading?.scrollIntoView({ block: "start" });
 	};
 
-	/** Write the updated markdown source back to disk and refresh displayed content. */
-	const writeTweakedSource = async (updatedContent: string) => {
+	createEffect(() => {
+		const tab = props.tab;
+		const body = content();
+		if (tab.type !== "file" || !body || loading() || mdTabsStore.state.activeId !== tab.id) return;
+		const root = tab.fsRoot || tab.repoPath;
+		const absolute = normalizeSep(isAbsolutePath(tab.filePath) ? tab.filePath : joinPath(root, tab.filePath));
+		const anchor = pendingHeadings.get(absolute);
+		if (!anchor) return;
+		pendingHeadings.delete(absolute);
+		requestAnimationFrame(() => scrollToHeading(anchor));
+	});
+
+	const handleMdLink = async (href: string) => {
 		const tab = props.tab;
 		if (tab.type !== "file") return;
 		const ft = tab as FileTab;
 		const root = ft.fsRoot || ft.repoPath;
-
 		try {
-			if (root) {
-				await invoke<void>("write_file", { repoPath: root, file: ft.filePath, content: updatedContent });
-			} else if (isAbsolutePath(ft.filePath)) {
-				await invoke<void>("write_external_file", { path: ft.filePath, content: updatedContent });
-			} else {
-				appLogger.error("app", "writeTweakedSource: cannot resolve write target", { filePath: ft.filePath });
+			const resolved = await invoke<MarkdownLinkTarget>("resolve_markdown_link", {
+				root,
+				currentFile: ft.filePath,
+				href,
+			});
+			if (resolved.kind === "heading") {
+				scrollToHeading(resolved.anchor);
 				return;
 			}
+			if (resolved.kind === "missing") {
+				toastsStore.add("File not found", `File not found: ${resolved.path}`, "error");
+				return;
+			}
+			if (resolved.kind === "blocked") {
+				appLogger.debug("app", "Blocked Markdown link", { href, reason: resolved.reason });
+				toastsStore.add("Could not open link", resolved.reason, "error");
+				return;
+			}
+			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
+				scrollToHeading(resolved.anchor);
+				return;
+			}
+			if (props.onOpenFileLink) {
+				props.onOpenFileLink(resolved);
+				return;
+			}
+			if (resolved.is_directory) {
+				uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
+				uiStore.setFileBrowserPanelVisible(true);
+				return;
+			}
+			if (resolved.anchor && /\.mdx?$/i.test(resolved.open_path)) {
+				const tabPath = isAbsolutePath(resolved.open_path) ? resolved.open_path : joinPath(root, resolved.open_path);
+				pendingHeadings.set(normalizeSep(tabPath), resolved.anchor);
+			}
+			openFileAction(resolved.open_path, ft.repoPath, ft.fsRoot, resolved.line);
+		} catch (err) {
+			appLogger.error("app", "Markdown link target lookup failed", { href, error: String(err) });
+			toastsStore.add("Could not open link", href, "error");
+		}
+	};
+
+	/** Write the updated markdown source back to disk and refresh displayed content. */
+	const writeTweakedSource = async (updatedContent: string): Promise<boolean> => {
+		const tab = props.tab;
+		if (tab.type !== "file") return false;
+		const ft = tab as FileTab;
+		const root = ft.fsRoot || ft.repoPath;
+
+		try {
+			if (isAbsolutePath(ft.filePath)) {
+				await invoke<void>("write_external_file", { path: ft.filePath, content: updatedContent });
+			} else if (root) {
+				await invoke<void>("write_file", { repoPath: root, file: ft.filePath, content: updatedContent });
+			} else {
+				appLogger.error("app", "writeTweakedSource: cannot resolve write target", { filePath: ft.filePath });
+				toastsStore.add("Couldn't save Markdown file", "The file path could not be resolved.", "error");
+				return false;
+			}
 			setContent(updatedContent);
+			return true;
 		} catch (err) {
 			appLogger.error("app", "writeTweakedSource: write failed", err);
+			toastsStore.add("Couldn't save Markdown file", err instanceof Error ? err.message : String(err), "error");
+			return false;
 		}
 	};
 
@@ -318,12 +412,14 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const current = content();
 		// If the id already exists in the source, it's an edit; otherwise it's a new insert.
 		const isExisting =
-			current.includes(`<!--tweak:begin:${comment.id}-->`) || current.includes(`<!--tweak:block:${comment.id} `);
+			current.includes(`<!--tweak:begin:${comment.id}-->`) ||
+			current.includes(`<!--tweak:block:${comment.id} `) ||
+			current.includes(`<!--tweak:item:${comment.id} `);
 		try {
 			const updated = isExisting
 				? updateTweakComment(current, comment.id, comment.comment)
 				: insertTweakComment(current, comment, occurrenceIndex);
-			await writeTweakedSource(updated);
+			return await writeTweakedSource(updated);
 		} catch (err) {
 			appLogger.error("app", `handleTweakSave failed: ${err instanceof Error ? err.message : String(err)}`);
 			if (err instanceof OverlappingCommentError) {
@@ -345,6 +441,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					"error",
 				);
 			}
+			return false;
 		}
 	};
 
@@ -353,7 +450,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 			// `comment.highlighted` is the block source when the popover opened; the
 			// insert refuses the range if the file changed under it since then.
 			const updated = insertTweakBlockComment(content(), comment, range);
-			await writeTweakedSource(updated);
+			return await writeTweakedSource(updated);
 		} catch (err) {
 			appLogger.error("app", `handleTweakBlockSave failed: ${err instanceof Error ? err.message : String(err)}`);
 			toastsStore.add(
@@ -361,6 +458,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				t("markdownTab.commentBlockChanged", "The Markdown block changed before the comment was saved. Try again."),
 				"error",
 			);
+			return false;
 		}
 	};
 
@@ -372,9 +470,11 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const handleTweakDelete = async (id: string) => {
 		try {
 			const updated = removeTweakComment(content(), id);
-			await writeTweakedSource(updated);
+			return await writeTweakedSource(updated);
 		} catch (err) {
 			appLogger.error("app", "handleTweakDelete failed", err);
+			toastsStore.add("Couldn't delete comment", err instanceof Error ? err.message : String(err), "error");
+			return false;
 		}
 	};
 
@@ -562,7 +662,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					content={content()}
 					commentableBlocks={props.tab.type === "file"}
 					baseDir={baseDir()}
-					onLinkClick={handleMdLink}
+					onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
 					onCheckboxToggle={(idx, mark, col) => {
 						void handleCheckboxToggle(idx, mark, col);
 					}}
@@ -588,16 +688,10 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}
-						onSave={(c, occ) => {
-							void handleTweakSave(c, occ);
-						}}
-						onSaveBlock={(comment, range) => {
-							void handleTweakBlockSave(comment, range);
-						}}
+						onSave={handleTweakSave}
+						onSaveBlock={handleTweakBlockSave}
 						blockSource={(range) => content().slice(range.start, range.end)}
-						onDelete={(id) => {
-							void handleTweakDelete(id);
-						}}
+						onDelete={handleTweakDelete}
 					/>
 				)}
 			</Show>

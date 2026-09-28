@@ -87,25 +87,27 @@ src-tauri/src/
 ├── lib.rs                # App setup, plugin init, command registration
 ├── main.rs               # Entry point
 ├── pty.rs                # PTY session lifecycle
-├── git.rs                # Git operations
-├── github.rs             # GitHub API integration
+├── git.rs                # Git cache and Tauri command adapters
+├── github.rs             # GitHub API and state adapters
 ├── config.rs             # Configuration management
 ├── state.rs              # Global state (sessions, buffers, metrics)
 ├── agent.rs              # Agent binary detection and spawning
-├── worktree.rs           # Git worktree management
-├── output_parser.rs      # Terminal output parsing
+├── worktree.rs           # Worktree config, events, and Tauri command adapters
 ├── prompt.rs             # Prompt template processing
-├── error_classification.rs # Error classification and backoff
 ├── menu.rs               # Native menu bar
 ├── mcp_http/             # HTTP/WebSocket + MCP server (routes split per area)
-└── dictation/            # Voice dictation (Whisper)
-    ├── mod.rs            # State management
-    ├── audio.rs          # Audio capture (CPAL)
-    ├── commands.rs       # Tauri commands
-    ├── model.rs          # Whisper model management
-    ├── transcribe.rs     # Whisper transcription
-    └── corrections.rs    # Post-processing corrections
+└── dictation/            # Voice application adapters
+    ├── mod.rs            # DictationState and domain re-exports
+    ├── commands.rs       # Tauri commands and event emission
+    ├── browser.rs        # Browser audio transport
+    ├── adapters.rs       # PTY delivery ports
+    ├── model_download.rs # Whisper HTTP download
+    └── asset_download.rs # Speech asset HTTP download
+
+src-tauri/crates/tuic-dictation/src/  # Audio, hands-free and speech domain
 ```
+
+`src-tauri/crates/` is a sibling of `src-tauri/src/`. `tuic-core` owns shared configuration and path utilities; `tuic-terminal` owns terminal parsing and buffers; `tuic-git` owns blocking Git reads, subprocesses, branch and worktree operations, artifact warming, and pure GitHub models and parsing. Root Git and GitHub adapters own Tokio scheduling, API clients, state, event emission, and Tauri commands.
 
 ## Application Startup Flow
 

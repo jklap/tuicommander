@@ -403,21 +403,17 @@ mod tests {
     #[test]
     fn resolve_binary_rejects_untrusted_symlink() {
         // Create a temp dir outside trusted dirs with a symlink to /bin/echo
-        let tmp = std::env::temp_dir().join("plugin_exec_test_symlink");
-        let _ = std::fs::create_dir_all(&tmp);
-        let link = tmp.join("mdkb");
-        let _ = std::fs::remove_file(&link);
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let link = tmp.path().join("mdkb");
         #[cfg(unix)]
         {
             let _ = std::os::unix::fs::symlink("/bin/echo", &link);
             // /bin/echo is not in a trusted dir, so even if the symlink exists
             // in a location we check, the canonical path should be rejected.
-            // Since /tmp is not a trusted dir, this symlink won't be found at all.
+            // The test scratch root is not trusted, so this symlink is not found.
             // The point is: resolve_binary only looks in trusted_dirs().
             assert!(resolve_binary("nonexistent-binary-12345").is_none());
         }
-        let _ = std::fs::remove_file(&link);
-        let _ = std::fs::remove_dir(&tmp);
     }
 
     #[test]

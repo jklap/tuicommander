@@ -1,96 +1,208 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+#[cfg(feature = "desktop")]
+mod dictation_config {
+    use super::*;
+
+    /// Dictation configuration persisted to <config_dir>/dictation-config.json
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DictationConfig {
+        pub enabled: bool,
+        pub hotkey: String,
+        pub language: String,
+        /// Selected whisper model name (e.g. "large-v3-turbo", "small")
+        #[serde(default = "default_model")]
+        pub model: String,
+        /// Selected audio input device name. None or empty = system default.
+        #[serde(default)]
+        pub device: Option<String>,
+        /// Long-press threshold in milliseconds for push-to-talk activation.
+        /// A short press (below this duration) passes through as normal input.
+        #[serde(default = "default_long_press_ms")]
+        pub long_press_ms: u32,
+        /// Automatically send (press Enter) after injecting transcribed text.
+        /// On by default; a stored `false` is kept.
+        #[serde(default = "default_auto_send")]
+        pub auto_send: bool,
+        /// Minimum RMS before audio is sent to Whisper. See [`VoiceGates`].
+        #[serde(default = "default_rms_threshold")]
+        pub rms_threshold: f32,
+        /// Maximum `no_speech_probability` accepted for a segment. See [`VoiceGates`].
+        #[serde(default = "default_no_speech_threshold")]
+        pub no_speech_threshold: f32,
+        /// Visible hold-back between a hands-free transcript and its enqueue, in
+        /// milliseconds. Zero would send every utterance the instant it lands, so a
+        /// config written before hands-free existed takes the default instead.
+        #[serde(default = "default_hold_back_ms")]
+        pub hands_free_hold_back_ms: u32,
+        /// Optional activation phrase for hands-free dictation. Empty means every
+        /// recognised utterance is a turn. Set, it must open each new turn: the
+        /// match runs locally on the whisper transcript and the phrase is removed
+        /// before anything is submitted, so a model never reads it and unrelated
+        /// speech never leaves the machine.
+        #[serde(default)]
+        pub hands_free_activation_phrase: String,
+        /// Tell the bound model when hands-free starts and when it stops.
+        ///
+        /// On by default: the `voice` tool is listed whether or not this is set,
+        /// and a model with no reason to speak writes text — so an unset default
+        /// would ship a voice nobody ever hears. Turning it off silences both
+        /// notices and nothing else; disarming still revokes speech, because that
+        /// is a fact about this machine rather than a message to a model.
+        #[serde(default = "default_notify_model")]
+        pub hands_free_notify_model: bool,
+        /// The start notice sent when `hands_free_notify_model` is on. Empty means
+        /// the built-in text, which [`get_hands_free_default_notice`] returns so a
+        /// settings surface can show it and reset to it. Folded to one line before
+        /// it is sent — see [`continuous::entry_hint_text`].
+        #[serde(default)]
+        pub hands_free_start_notice: String,
+        /// Play a short sound on the owning client when a spoken turn reaches the
+        /// agent, and a softer one when the activation phrase drops it. On by
+        /// default. Read by the frontend only; the backend reports the turns
+        /// either way (`HandsFreeStatus::delivered_turns`).
+        #[serde(default = "default_earcons")]
+        pub hands_free_earcons: bool,
+        /// A speech engine the user supplies, as argv rather than a shell line.
+        /// Empty means the bundled engine. See
+        /// [`crate::dictation::speech::external`](crate::dictation::speech::external) for the
+        /// markers and for what it means that this runs as the user.
+        #[serde(default)]
+        pub speech_command: Vec<String>,
+        /// Which of the language's voices to speak with. Empty means the first one
+        /// it ships, which is what a configuration written before this setting
+        /// existed says. Ignored by a user-supplied engine, which names its own
+        /// voices inside its command template. See [`choose_voice`].
+        #[serde(default)]
+        pub speech_voice: String,
+        /// The speech level every reply is brought to, in dBFS (-30..=-12). See
+        /// [`crate::dictation::loudness`](crate::dictation::loudness).
+        #[serde(default = "default_speech_volume_db")]
+        pub speech_volume_db: f32,
+        /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
+        #[serde(default = "default_speech_levelling")]
+        pub speech_levelling: f32,
+        /// Set only on a read response when malformed fields were replaced by
+        /// defaults. It is cleared before persistence.
+        #[serde(default)]
+        pub recovered_from_corruption: bool,
+    }
+
+    pub(crate) fn default_model() -> String {
+        "large-v3-turbo".to_string()
+    }
+
+    pub(crate) fn default_long_press_ms() -> u32 {
+        400
+    }
+
+    pub(crate) fn default_rms_threshold() -> f32 {
+        crate::dictation::transcribe::DEFAULT_RMS_THRESHOLD
+    }
+
+    pub(crate) fn default_no_speech_threshold() -> f32 {
+        crate::dictation::transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+    }
+
+    /// Long enough to read a transcript and stop it, short enough not to feel like
+    /// a delay. The number is a setting; this is only where it starts.
+    pub(crate) fn default_hold_back_ms() -> u32 {
+        1_500
+    }
+
+    /// See [`DictationConfig::hands_free_notify_model`].
+    pub(crate) fn default_auto_send() -> bool {
+        true
+    }
+
+    pub(crate) fn default_notify_model() -> bool {
+        true
+    }
+
+    /// See [`DictationConfig::hands_free_earcons`].
+    pub(crate) fn default_earcons() -> bool {
+        true
+    }
+
+    /// See [`DictationConfig::speech_volume_db`].
+    pub(crate) fn default_speech_volume_db() -> f32 {
+        -18.0
+    }
+
+    /// See [`DictationConfig::speech_levelling`].
+    pub(crate) fn default_speech_levelling() -> f32 {
+        0.67
+    }
+
+    impl DictationConfig {
+        /// The speech gates this configuration asks for.
+        pub fn gates(&self) -> crate::dictation::transcribe::VoiceGates {
+            crate::dictation::transcribe::VoiceGates {
+                rms_threshold: self.rms_threshold,
+                no_speech_threshold: self.no_speech_threshold,
+            }
+        }
+
+        /// The level replies are brought to.
+        pub fn loudness(&self) -> crate::dictation::loudness::Loudness {
+            crate::dictation::loudness::Loudness {
+                // A hand-edited config may hold anything: keep the documented range.
+                volume_db: if self.speech_volume_db.is_finite() {
+                    self.speech_volume_db.clamp(-30.0, -12.0)
+                } else {
+                    default_speech_volume_db()
+                },
+                levelling: self.speech_levelling,
+            }
+        }
+    }
+
+    impl Default for DictationConfig {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                hotkey: "F5".to_string(),
+                language: "auto".to_string(),
+                model: default_model(),
+                device: None,
+                long_press_ms: default_long_press_ms(),
+                auto_send: default_auto_send(),
+                rms_threshold: default_rms_threshold(),
+                no_speech_threshold: default_no_speech_threshold(),
+                hands_free_hold_back_ms: default_hold_back_ms(),
+                hands_free_activation_phrase: String::new(),
+                hands_free_notify_model: default_notify_model(),
+                hands_free_start_notice: String::new(),
+                hands_free_earcons: default_earcons(),
+                speech_command: Vec::new(),
+                speech_voice: String::new(),
+                speech_volume_db: default_speech_volume_db(),
+                speech_levelling: default_speech_levelling(),
+                recovered_from_corruption: false,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+pub use dictation_config::DictationConfig;
+#[cfg(feature = "desktop")]
+pub(crate) use dictation_config::default_hold_back_ms;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Test-only override for the config directory.
 #[cfg(test)]
-static CONFIG_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+pub(crate) use tuic_core::config_dir::{
+    set_override as set_config_dir_override, without_override as without_config_dir_override,
+};
 
-/// Global serialization lock for tests that call `set_config_dir_override`.
-/// Held for the lifetime of the returned guard so tests in different modules
-/// do not race on the shared `CONFIG_DIR_OVERRIDE` global.
-#[cfg(test)]
-static CONFIG_DIR_EXCLUSIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Override the config directory for testing. Returns a guard that holds the
-/// global `CONFIG_DIR_EXCLUSIVE` lock and restores the original value on drop.
-/// All callers across all test modules are automatically serialized.
-#[cfg(test)]
-pub(crate) fn set_config_dir_override(dir: PathBuf) -> impl Drop {
-    let lock = CONFIG_DIR_EXCLUSIVE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *lock_config_dir_override() = Some(dir);
-    ConfigDirGuard { _lock: lock }
-}
-
-/// `CONFIG_DIR_OVERRIDE.lock()`, tolerating poison. The mutex guards nothing
-/// but an `Option<PathBuf>` swap — there is no half-written invariant a panic
-/// mid-write could leave behind — so recovering is strictly safer than a
-/// second `.unwrap()` panicking on top of the first.
-///
-/// That second panic is not hypothetical: `config_dir_in_a_test_refuses_the_real_user_directory`
-/// deliberately panics while `CONFIG_DIR_OVERRIDE.lock().unwrap()`'s temporary
-/// guard is still alive (chained into `.clone().expect(...)`), which poisons
-/// the mutex as the guard drops during unwind. `ConfigDirGuard::drop` then ran
-/// on the way out and called `.lock().unwrap()` on that now-poisoned mutex —
-/// a panic inside a `Drop` impl that is *itself* running because of an
-/// earlier panic, which Rust treats as unrecoverable and aborts the whole
-/// process (SIGABRT) rather than unwinding. One `#[should_panic]` test that
-/// exercises the panic path this way was enough to take down the entire test
-/// binary and every test still in flight in it — not a handful of
-/// assertions, the process itself.
-#[cfg(test)]
-fn lock_config_dir_override() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
-    CONFIG_DIR_OVERRIDE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-/// Take the same exclusive lock `set_config_dir_override` takes, but leave the
-/// override unset — the only way to observe the no-override branch of
-/// `config_dir` without racing a test that did set one.
-#[cfg(test)]
-pub(crate) fn without_config_dir_override() -> impl Drop {
-    let lock = CONFIG_DIR_EXCLUSIVE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *lock_config_dir_override() = None;
-    ConfigDirGuard { _lock: lock }
-}
-
-#[cfg(test)]
-struct ConfigDirGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-impl Drop for ConfigDirGuard {
-    fn drop(&mut self) {
-        *lock_config_dir_override() = None;
-    }
-}
-
-/// Get the config directory using platform-appropriate location.
-///
-/// - macOS: `~/Library/Application Support/com.tuic.commander/`
-/// - Linux: `~/.config/com.tuic.commander/` (or `$XDG_CONFIG_HOME`)
-/// - Windows: `%APPDATA%/com.tuic.commander/`
-///
-/// Matches Tauri's `$APPCONFIG` path (derived from the bundle identifier).
-/// Falls back to `~/.tuicommander/` if platform dir is unavailable.
-/// On first call, migrates from legacy locations if the new dir doesn't exist:
-///   1. `{platform_config}/tuicommander/` (previous custom name)
-///   2. `{platform_config}/tui-commander/` (older name)
-///   3. `~/.tuicommander/` (legacy dotdir)
+/// Resolve the config directory for production or the isolated test support feature.
 pub(crate) fn config_dir() -> PathBuf {
     #[cfg(test)]
     {
-        if let Some(dir) = lock_config_dir_override().clone() {
-            return dir;
-        }
-        test_fallback_config_dir().clone()
+        tuic_core::config_dir::config_dir()
     }
     #[cfg(not(test))]
     {
@@ -98,54 +210,14 @@ pub(crate) fn config_dir() -> PathBuf {
     }
 }
 
-/// A test build never gets to name the user's real config directory, with or
-/// without an explicit [`set_config_dir_override`]. It used to: the override
-/// was optional and a test that forgot it read and wrote Boss's live
-/// `config.json`/`repositories.json` in silence — which is how fifteen
-/// `tempfile` roots became permanent repository rows (#763-d219).
-///
-/// This is deliberately a silent, process-wide fallback rather than a panic.
-/// A panic was tried first and reproducibly deadlocked or aborted the full
-/// `cargo nextest run --lib` suite: any test whose call chain reaches
-/// `config_dir()` without having set its own override — dozens across
-/// `state.rs`/`worktree.rs`, most not touching `repositories.json` at all and
-/// having no reason to care where it lives — either failed outright, or (for
-/// the handful that ALSO call an `isolated_config()`-style helper on the same
-/// thread first) self-deadlocked on `CONFIG_DIR_EXCLUSIVE`, which is not
-/// reentrant. A test author who genuinely needs an isolated, known directory
-/// still gets one via `set_config_dir_override`, unaffected by this fallback;
-/// this path exists only for the call chains that never asked and never
-/// checked. `fallback_config_dir_is_never_the_real_directory` proves the two
-/// can never coincide.
-///
-/// One directory per PROCESS, not per test or per thread: `cargo nextest`
-/// already runs one test per process, and `cargo test`'s in-process threads
-/// sharing this path is a test-vs-test file collision at worst — the same
-/// class of risk `make_test_app_state`'s own per-call `data_dir` comment
-/// already accepts for its SQLite file, and strictly safer than any test
-/// reaching real user data. A thread-local fallback was considered and
-/// rejected: code under test that offloads work to `spawn_blocking` (e.g.
-/// `finalize_merged_worktree`, `merge_and_archive_worktree`) runs on a
-/// different OS thread than the test itself, and a thread-local override set
-/// on the test's own thread would not be visible there — reintroducing the
-/// exact "forgot to set it" gap on a thread the test can't reach to fix.
-#[cfg(test)]
-fn test_fallback_config_dir() -> &'static PathBuf {
-    static FALLBACK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    FALLBACK.get_or_init(|| {
-        std::env::temp_dir().join(format!("tuic-test-fallback-{}", std::process::id()))
-    })
-}
-
-/// The real, platform-derived config directory. Unreachable in a test build —
-/// `config_dir` panics before it gets here — but kept compiled so the migration
-/// it performs cannot rot behind a `cfg`.
+/// The real, platform-derived config directory and its legacy migration.
+/// Test builds use tuic-core's safe test-support resolver instead.
 #[cfg_attr(test, allow(dead_code))]
 fn resolve_real_config_dir() -> PathBuf {
     let platform_dir = dirs::config_dir();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let instance = crate::app_instance::current_app_instance();
-    let new_dir = instance.config_dir_from(platform_dir.as_deref(), &home);
+    let new_dir = tuic_core::config_dir::production_path(platform_dir.as_deref(), &home, &instance);
 
     // Migrate if our config file is missing (the dir may already exist from Tauri's window-state plugin)
     if instance.is_default() && !new_dir.join(APP_CONFIG_FILE).exists() {
@@ -708,6 +780,15 @@ pub(crate) struct AppConfig {
     /// connect is refused.
     #[serde(default)]
     pub(crate) ego_executable: String,
+    /// Optional user-config profile passed to ego at ACP launch.
+    #[serde(default)]
+    pub(crate) ego_profile: String,
+    /// Last selected ego conversation for each repository root.
+    #[serde(default)]
+    pub(crate) ai_chat_sessions: HashMap<String, String>,
+    /// Host-issued peer UUID for the AI Chat conversation at each root.
+    #[serde(default)]
+    pub(crate) ai_chat_peer_ids: HashMap<String, String>,
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
@@ -966,6 +1047,9 @@ impl Default for AppConfig {
             mcp_config_installed: false,
             ide: String::new(),
             ego_executable: String::new(),
+            ego_profile: String::new(),
+            ai_chat_sessions: HashMap::new(),
+            ai_chat_peer_ids: HashMap::new(),
             default_font_size: 13,
             services: ServicesConfig::default(),
             confirm_before_quit: true,
@@ -1455,6 +1539,8 @@ pub(crate) struct AgentRunConfig {
     pub(crate) command: String,
     #[serde(default)]
     pub(crate) args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
     #[serde(default)]
     pub(crate) env: HashMap<String, String>,
     #[serde(default)]
@@ -1493,6 +1579,13 @@ pub(crate) struct AgentSettings {
     /// Launch-scoped native status signals. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_status_signals: Option<bool>,
+    /// Prefer native terminal scrollback for supported agent CLIs. Missing means enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prevent_alt_screen: Option<bool>,
+    /// Accept the agent's workspace trust dialog on MCP-managed spawns only.
+    /// Missing means enabled; user-opened terminals retain the CLI's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skip_trust_dialog: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -3625,7 +3718,7 @@ pub(crate) struct ConfigDefaults {
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "desktop")]
-    pub(crate) dictation: crate::dictation::commands::DictationConfig,
+    pub(crate) dictation: DictationConfig,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -3638,7 +3731,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         agents: AgentsConfig::default(),
         github_accounts: crate::github_account::GitHubAccountRegistry::default(),
         #[cfg(feature = "desktop")]
-        dictation: crate::dictation::commands::DictationConfig::default(),
+        dictation: DictationConfig::default(),
     }
 }
 
@@ -3804,8 +3897,8 @@ mod tests {
         let _exclusive = without_config_dir_override();
         let resolved = config_dir();
         assert!(
-            resolved.starts_with(std::env::temp_dir()),
-            "with no override in scope, config_dir() must resolve under the OS temp \
+            resolved.starts_with(crate::test_support::test_temp_root()),
+            "with no override in scope, config_dir() must resolve under the checkout's test temp \
              directory, never the platform config directory: got {}",
             resolved.display()
         );
@@ -4186,6 +4279,15 @@ mod tests {
             mcp_config_installed: false,
             ide: "cursor".to_string(),
             ego_executable: "/opt/ego/bin/ego".to_string(),
+            ego_profile: "coordinator".to_string(),
+            ai_chat_sessions: HashMap::from([(
+                "/repo/project".to_string(),
+                "session-42".to_string(),
+            )]),
+            ai_chat_peer_ids: HashMap::from([(
+                "/repo/project".to_string(),
+                "550e8400-e29b-41d4-a716-446655440a01".to_string(),
+            )]),
             default_font_size: 18,
             services: ServicesConfig {
                 server: ServerConfig {
@@ -4254,6 +4356,15 @@ mod tests {
         assert_eq!(loaded.font_size, 16);
         assert_eq!(loaded.ide, "cursor");
         assert_eq!(loaded.ego_executable, "/opt/ego/bin/ego");
+        assert_eq!(loaded.ego_profile, "coordinator");
+        assert_eq!(
+            loaded.ai_chat_sessions.get("/repo/project"),
+            Some(&"session-42".to_string())
+        );
+        assert_eq!(
+            loaded.ai_chat_peer_ids.get("/repo/project"),
+            Some(&"550e8400-e29b-41d4-a716-446655440a01".to_string())
+        );
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);
@@ -5152,6 +5263,7 @@ mod tests {
                         name: "Default".to_string(),
                         command: "claude".to_string(),
                         args: vec![],
+                        model: None,
                         env: HashMap::new(),
                         is_default: true,
                     },
@@ -5163,6 +5275,7 @@ mod tests {
                             "sonnet".to_string(),
                             "--print".to_string(),
                         ],
+                        model: None,
                         env,
                         is_default: false,
                     },
@@ -5174,12 +5287,15 @@ mod tests {
                 suggest_followups: None,
                 hook_instrumentation: None,
                 native_status_signals: None,
+                prevent_alt_screen: None,
+                skip_trust_dialog: Some(false),
                 progress_tracking: Some(false),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
         assert_eq!(loaded.agents.len(), 1);
         let claude = loaded.agents.get("claude").unwrap();
+        assert_eq!(claude.skip_trust_dialog, Some(false));
         assert_eq!(claude.run_configs.len(), 2);
         assert_eq!(claude.run_configs[0].name, "Default");
         assert!(claude.run_configs[0].is_default);
@@ -5196,6 +5312,21 @@ mod tests {
         assert_eq!(claude.intent_tab_title, Some(false));
         assert_eq!(claude.suggest_followups, None);
         assert_eq!(claude.progress_tracking, Some(false));
+    }
+
+    #[test]
+    fn run_config_model_survives_config_round_trip_without_rewriting_legacy_args() {
+        let original = serde_json::json!({
+            "agents": {"claude": {"run_configs": [
+                {"name": "Structured", "command": "claude", "args": [], "model": "sonnet"},
+                {"name": "Legacy", "command": "claude", "args": ["--model", "opus"]}
+            ]}}
+        });
+        let parsed: AgentsConfig = serde_json::from_value(original).unwrap();
+        let saved = serde_json::to_value(parsed).unwrap();
+        let configs = &saved["agents"]["claude"]["run_configs"];
+        assert_eq!(configs[0]["model"], "sonnet");
+        assert_eq!(configs[1]["args"], serde_json::json!(["--model", "opus"]));
     }
 
     #[test]
@@ -7989,6 +8120,17 @@ mod tests {
     #[test]
     fn agent_settings_field_defaults_match_default_impl() {
         assert_no_field_default_drift(&AgentSettings::default());
+    }
+
+    #[test]
+    fn agent_settings_round_trip_native_scrollback_opt_out() {
+        let settings: AgentSettings =
+            serde_json::from_value(serde_json::json!({"prevent_alt_screen": false})).unwrap();
+        let saved = serde_json::to_value(settings).unwrap();
+        assert_eq!(saved["prevent_alt_screen"], false);
+        assert!(
+            serde_json::to_value(AgentSettings::default()).unwrap()["prevent_alt_screen"].is_null()
+        );
     }
 
     #[test]

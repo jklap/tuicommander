@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
+import { progressStore } from "../../stores/progress";
+import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { makeTerminal } from "../helpers/store";
@@ -138,6 +140,19 @@ describe("useKeyboardShortcuts", () => {
 			fireKeydown("0", { metaKey: true });
 			expect(handlers.zoomReset).toHaveBeenCalled();
 		});
+	});
+
+	it("Cmd+Shift+P opens Progress for the active repository", () => {
+		progressStore.resetForTests();
+		repositoriesStore.add({ path: "/repo/progress", displayName: "Progress Repo" });
+		repositoriesStore.setActive("/repo/progress");
+		const event = fireKeydown("P", { metaKey: true, shiftKey: true });
+		expect(event.defaultPrevented).toBe(true);
+		expect(progressStore.dialogVisible()).toBe(true);
+		expect(progressStore.requestedProject()).toBe("/repo/progress");
+		progressStore.resetForTests();
+		repositoriesStore.remove("/repo/progress");
+		repositoriesStore._testCancelPendingSave();
 	});
 
 	describe("smart prompt shortcuts", () => {

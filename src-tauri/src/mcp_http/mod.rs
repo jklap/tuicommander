@@ -14,6 +14,7 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_session_proxy;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
 mod static_files;
@@ -395,7 +396,54 @@ async fn post_progress_report(
         None,
         None,
         None,
+        None,
     ))
+}
+
+#[derive(serde::Deserialize)]
+struct SubmitAgentReplyRequest {
+    input: String,
+}
+
+/// Browser counterpart of the managed session `submit` action. Both transports
+/// use the same validation, atomic PTY write and bounded receipt path.
+async fn submit_agent_reply(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    AxumPath(session_id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SubmitAgentReplyRequest>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if body.input.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "submitted": false,
+                "reason": "empty_input",
+                "error": "Reply text must not be empty"
+            })),
+        )
+            .into_response();
+    }
+    let result = mcp_transport::handle_session_submit(
+        &state,
+        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        true,
+    )
+    .await;
+    let status = if result["reason"] == "session_not_found" {
+        StatusCode::NOT_FOUND
+    } else if result.get("error").is_some() {
+        StatusCode::BAD_REQUEST
+    } else if result["submitted"] == false {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::OK
+    };
+    (status, Json(result)).into_response()
 }
 
 /// Returns the rejection response, or `None` when the caller may proceed.
@@ -419,6 +467,16 @@ async fn post_progress_list(
         return r;
     }
     json_result(crate::progress::progress_list(&q.path, input))
+}
+
+async fn get_progress_projects(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+) -> Response {
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    json_result(crate::progress::progress_projects())
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -656,6 +714,26 @@ async fn push_test(
         return (StatusCode::NOT_FOUND, "No push subscriptions registered").into_response();
     }
     let config = state.config.read().clone();
+    if !config.services.push.enabled {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "sent": 0,
+                "error": "Push notifications are disabled"
+            })),
+        )
+            .into_response();
+    }
+    if config.services.push.vapid_private_key.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "sent": 0,
+                "error": "VAPID private key is unavailable"
+            })),
+        )
+            .into_response();
+    }
     let title = body
         .as_ref()
         .and_then(|b| b.get("title"))
@@ -666,20 +744,18 @@ async fn push_test(
         .and_then(|b| b.get("body"))
         .and_then(|v| v.as_str())
         .unwrap_or("Test push notification");
-    let stale = crate::push::send_push_batch(
-        subs.clone(),
-        &config,
-        &state.http_client,
-        title,
-        msg,
-        "/mobile",
-    )
-    .await;
-    for endpoint in &stale {
+    let result =
+        crate::push::send_push_batch(subs, &config, &state.http_client, title, msg, "/mobile")
+            .await;
+    for endpoint in &result.stale_endpoints {
         state.push_store.remove(endpoint);
     }
-    let sent = subs.len() - stale.len();
-    Json(serde_json::json!({ "sent": sent, "stale_removed": stale.len() })).into_response()
+    Json(serde_json::json!({
+        "sent": result.sent,
+        "failed": result.failed,
+        "stale_removed": result.stale_endpoints.len()
+    }))
+    .into_response()
 }
 
 /// Middleware that injects a synthetic `ConnectInfo<SocketAddr>` for IPC
@@ -738,6 +814,7 @@ const API_PREFIXES: &[&str] = &[
     "progress",
     "prompt",
     "registry",
+    "remote",
     "repo",
     "sessions",
     "stats",
@@ -840,6 +917,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // inserts `Authenticated` before the handler runs.
         .route("/progress/report", post(post_progress_report))
         .route("/progress/list", post(post_progress_list))
+        .route("/progress/projects", get(get_progress_projects))
         .route("/progress/delete", post(post_progress_delete))
         .route("/progress/viewed", post(post_progress_viewed))
         .route("/progress/flow", post(post_progress_flow))
@@ -857,6 +935,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::list_sessions).post(session::create_session),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
+        .route("/sessions/{id}/submit", post(submit_agent_reply))
         // The N-ary sibling: one round trip, but the per-input bookkeeping still
         // runs once per part. Concatenating into `/write` is NOT equivalent —
         // `apply_input_bookkeeping` reads the whole payload as one keystroke.
@@ -1115,6 +1194,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(agent_routes::detect_agent_binary_http),
         )
         .route(
+            "/agents/launch-args",
+            post(agent_routes::prepare_agent_launch_args_http),
+        )
+        .route(
             "/agents/ides",
             get(agent_routes::detect_installed_ides_http),
         )
@@ -1146,6 +1229,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/fs/resolve-terminal-paths",
             post(fs_routes::resolve_terminal_paths_http),
+        )
+        .route(
+            "/fs/resolve-markdown-link",
+            post(fs_routes::resolve_markdown_link_http),
         )
         .route("/fs/stat", get(fs_routes::stat_path_http))
         .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
@@ -1247,6 +1334,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // System info
         .route("/system/local-ips", get(git_routes::get_local_ips_http))
         .route("/system/local-ip", get(git_routes::get_local_ip_http))
+        .route(
+            "/system/home-directory",
+            get(fs_routes::home_directory_http),
+        )
         // Server-Sent Events
         .route("/events", get(sse_routes::sse_events))
         .route("/events/types", post(sse_routes::sse_update_types))
@@ -1329,13 +1420,15 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// The one route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// The one buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
 /// voice file, which travels whole as base64 in JSON so the payload is the same
 /// over IPC and HTTP. The cap is what the largest accepted voice
 /// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
 /// it; the handler refuses anything longer before decoding it. A layer on the
 /// route overrides the router-wide `DefaultBodyLimit`, and only for this path —
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
+/// The remote binary upload reads the raw Body as a stream, so its separate
+/// 512 MiB limit is enforced while copying chunks rather than by this layer.
 #[cfg(feature = "desktop")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
@@ -1656,6 +1749,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/remote-connections/status",
             get(config_routes::get_remote_connection_statuses),
+        )
+        .route(
+            "/config/remote-connections/{id}/update",
+            get(config_routes::get_remote_update_preview).post(config_routes::post_remote_update),
         )
         .route(
             "/config/remote-connections/{id}/connect",
@@ -2011,6 +2108,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     let routes = routes
         .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            remote_session_proxy::proxy_http,
+        ))
         .layer(cors)
         // DefaultPredicate auto-excludes SSE (text/event-stream) and WebSocket upgrades.
         // Do NOT replace with a bare SizeAbove — it would break streaming endpoints.
@@ -2056,6 +2157,7 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
     let routes = Router::new()
         // Routes common to the desktop/loopback router live in shared_routes().
         .merge(shared_routes())
+        .route("/remote/update", post(crate::remote_update::upload))
         // SECURITY: remote clients get the standard (10 MB) cap, NOT the large
         // editor cap. The 250 MB editor read is a desktop-local feature; serving
         // it over a (possibly metered/slow) remote link risks OOM/latency since
@@ -2641,6 +2743,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn push_test_does_not_claim_delivery_when_push_is_disabled() {
+        let state = test_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state.config.write().services.push.enabled = false;
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post("/api/push/test", &serde_json::json!({})))
+            .await
+            .expect("push test response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("push test body");
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sent"], 0);
+        assert_eq!(body["error"], "Push notifications are disabled");
+    }
+
+    #[tokio::test]
+    async fn push_test_does_not_count_an_invalid_subscription_as_sent() {
+        let state = test_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "invalid".to_string(),
+                auth: "invalid".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post("/api/push/test", &serde_json::json!({})))
+            .await
+            .expect("push test response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("push test body");
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sent"], 0);
+        assert_eq!(body["failed"], 1);
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_to_a_closed_session_returns_a_structured_rejection() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "yes" }),
+            ))
+            .await
+            .expect("reply response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("reply body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON rejection");
+        assert_eq!(body["submitted"], false);
+        assert_eq!(body["reason"], "session_not_found");
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_rejects_an_unauthenticated_remote_caller() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post_from(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "yes" }),
+                remote,
+            ))
+            .await
+            .expect("remote reply response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mobile_reply_rejects_empty_input_without_a_submission() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/sessions/closed-session/submit",
+                &serde_json::json!({ "input": "" }),
+            ))
+            .await
+            .expect("empty reply response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("empty reply body");
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["submitted"], false);
+    }
+
+    #[tokio::test]
     async fn test_health() {
         let state = test_state();
         let app = build_router(state, false, true);
@@ -2654,6 +2863,332 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
+        assert_eq!(json["build"]["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["build"]["target"], env!("TUIC_TARGET_TRIPLE"));
+        assert_eq!(json["build"]["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[tokio::test]
+    async fn remote_update_rejects_a_missing_session_token() {
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        let mut request = Request::post("/remote/update")
+            .body(Body::from("not a binary"))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn remote_update_requires_the_pty_token_even_with_valid_basic_auth() {
+        use base64::Engine;
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        {
+            let mut config = state.config.write();
+            config.services.auth.lan_auth_bypass = false;
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("known-password", 4).unwrap();
+        }
+        let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
+        let mut request = Request::post("/remote/update")
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Basic {credentials}"),
+            )
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let response = build_remote_router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn remote_update_rejects_invalid_metadata_before_writing() {
+        let state = test_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (target, sha256, sessions, content_length, expected) in [
+            (
+                "wrong-target",
+                "a".repeat(64),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "not-a-digest".to_string(),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(64),
+                "1",
+                "1",
+                StatusCode::CONFLICT,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(64),
+                "0",
+                "536870913",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let mut request = Request::post("/remote/update?token=update-secret")
+                .header("x-tuic-target", target)
+                .header("x-tuic-sha256", sha256)
+                .header("x-tuic-confirmed-sessions", sessions)
+                .header("content-length", content_length)
+                .body(Body::from("x"))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_update_preserves_the_old_executable_on_bad_digest_then_promotes() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"old executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = build_remote_router(Arc::new(state));
+        let bytes = b"replacement executable";
+        // Independent fixture digest, computed outside the implementation.
+        let good_hash = "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16";
+        for (hash, expected, contents) in [
+            (
+                "0".repeat(64),
+                StatusCode::BAD_REQUEST,
+                b"old executable".as_slice(),
+            ),
+            (
+                good_hash.to_string(),
+                StatusCode::ACCEPTED,
+                bytes.as_slice(),
+            ),
+        ] {
+            let mut request = Request::post("/remote/update?token=update-secret")
+                .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+                .header("x-tuic-sha256", hash)
+                .header("x-tuic-confirmed-sessions", "0")
+                .body(Body::from(bytes.to_vec()))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(std::fs::read(&executable).unwrap(), contents);
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+        let mut duplicate = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header("x-tuic-sha256", good_hash)
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from(bytes.to_vec()))
+            .unwrap();
+        duplicate
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        assert_eq!(
+            app.oneshot(duplicate).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    // Catches: overlapping valid uploads both promote a binary or leave staging files behind.
+    #[tokio::test]
+    async fn concurrent_remote_updates_reject_the_second_upload_without_leaking_staging() {
+        use futures_util::StreamExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"old executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "update-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = build_remote_router(Arc::new(state));
+
+        let (first_chunk_sent, first_chunk_received) = tokio::sync::oneshot::channel();
+        let (release_first, first_released) = tokio::sync::oneshot::channel();
+        let first_body = futures_util::stream::once(async move {
+            let _ = first_chunk_sent.send(());
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"first "))
+        })
+        .chain(futures_util::stream::once(async move {
+            first_released.await.unwrap();
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
+        }));
+        let mut first = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "07c360a6be1a9a97d1dfd58d0066dda36be2c80f70a229446401b5c69273af2c",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from_stream(first_body))
+            .unwrap();
+        first
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let first_task = tokio::spawn(app.clone().oneshot(first));
+        first_chunk_received.await.unwrap();
+
+        let mut second = Request::post("/remote/update?token=update-secret")
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "a21e1650d755eeec3aa7b80224c1513cd4b0bae02776a4b9931432b52b42d385",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(Body::from("second replacement"))
+            .unwrap();
+        second
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5556,
+            ))));
+        let response = app.oneshot(second).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(std::fs::read(&executable).unwrap(), b"old executable");
+
+        release_first.send(()).unwrap();
+        assert_eq!(
+            first_task.await.unwrap().unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(std::fs::read(&executable).unwrap(), b"first replacement");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn two_local_remote_routers_isolate_update_and_restart_signal() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first-tuic-remote");
+        let second = directory.path().join("second-tuic-remote");
+        std::fs::write(&first, b"first old binary").unwrap();
+        std::fs::write(&second, b"second old binary").unwrap();
+        let mut first_state = crate::state::tests_support::make_test_app_state();
+        let mut second_state = crate::state::tests_support::make_test_app_state();
+        let restarted = Arc::new(tokio::sync::Notify::new());
+        let untouched = Arc::new(tokio::sync::Notify::new());
+        for (state, executable, signal, token) in [
+            (&mut first_state, &first, &restarted, "first-secret"),
+            (&mut second_state, &second, &untouched, "second-secret"),
+        ] {
+            *state.session_token.write() = token.to_string();
+            state.config.write().services.auth.lan_auth_bypass = false;
+            state.remote_update = Some(crate::remote_update::RemoteUpdateState {
+                executable: executable.to_path_buf(),
+                restart: signal.clone(),
+                in_progress: tokio::sync::Mutex::new(()),
+                installed: std::sync::atomic::AtomicBool::new(false),
+            });
+        }
+        let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_url = format!("http://{}", first_listener.local_addr().unwrap());
+        let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_url = format!("http://{}", second_listener.local_addr().unwrap());
+        let first_server = tokio::spawn(async move {
+            axum::serve(
+                first_listener,
+                build_remote_router(Arc::new(first_state))
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+        let second_server = tokio::spawn(async move {
+            axum::serve(
+                second_listener,
+                build_remote_router(Arc::new(second_state))
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{first_url}/remote/update?token=first-secret"))
+            .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
+            .header(
+                "x-tuic-sha256",
+                "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16",
+            )
+            .header("x-tuic-confirmed-sessions", "0")
+            .body("replacement executable")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        tokio::time::timeout(std::time::Duration::from_secs(3), restarted.notified())
+            .await
+            .expect("first daemon signalled restart");
+        assert_eq!(std::fs::read(&first).unwrap(), b"replacement executable");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second old binary");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), untouched.notified())
+                .await
+                .is_err()
+        );
+        let second_health: serde_json::Value = client
+            .get(format!("{second_url}/health"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(second_health["ok"], true);
+        first_server.abort();
+        second_server.abort();
     }
 
     #[tokio::test]
@@ -2671,6 +3206,45 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["survive_secs"], 1_800);
+    }
+
+    #[tokio::test]
+    async fn verify_agent_session_http_uses_the_requested_claude_profile() {
+        let profile = tempfile::tempdir().unwrap();
+        let other_profile = tempfile::tempdir().unwrap();
+        let session_id = "af467730-5e79-49d9-8a17-ebd94c99f262";
+        let project_dir = profile.path().join("projects/-work-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join(format!("{session_id}.jsonl")), "{}").unwrap();
+
+        let app = build_router(test_state(), false, true);
+        for (profile_root, requested_id, expected) in [
+            (profile.path(), session_id, true),
+            (other_profile.path(), session_id, false),
+            (profile.path(), "not-a-session-id", false),
+        ] {
+            let body = serde_json::json!({
+                "agentType": "claude",
+                "sessionId": requested_id,
+                "cwd": "/work/project",
+                "agentPid": null,
+                "envOverrides": { "CLAUDE_CONFIG_DIR": profile_root.to_str().unwrap() },
+            });
+            let response = app
+                .clone()
+                .oneshot(mcp_post("/agents/verify-session", &body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let found: bool = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                found, expected,
+                "profile={profile_root:?}, session={requested_id}"
+            );
+        }
     }
 
     /// The node-tree call map was removed on 2026-09-23; the Progress Flow
@@ -2824,10 +3398,14 @@ mod tests {
         let response = app.oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
         }), local)).await.unwrap();
-        assert!(!response.status().is_success());
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             store.get_story(&story.id).unwrap().status,
-            StoryStatus::Review
+            StoryStatus::Done
+        );
+        assert_eq!(
+            store.transition_history(&story.id).unwrap().last().unwrap().actor,
+            StoryTransitionActor::LocalApi
         );
     }
 
@@ -2937,6 +3515,43 @@ mod tests {
         assert_eq!(stored.entries[0].text, "HTTP transport is equivalent.");
     }
 
+    /// A phone has no desktop active repository. The journal itself must name
+    /// projects with entries, newest activity first, so an empty mobile tab
+    /// cannot mistake "no selected project" for "no progress".
+    #[tokio::test]
+    async fn mobile_progress_lists_projects_with_recent_entries_first() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let store = crate::progress::ProgressStore::open().unwrap();
+        for (project, text) in [("/older", "first done"), ("/newer", "later blocked")] {
+            store
+                .record(
+                    project,
+                    &crate::progress::NewProgressEntry {
+                        kind: if project == "/older" {
+                            crate::progress::ProgressKind::Done
+                        } else {
+                            crate::progress::ProgressKind::Blocked
+                        },
+                        text: text.into(),
+                        step: None,
+                        agent_name: None,
+                    },
+                )
+                .unwrap();
+        }
+        let response = build_router(test_state(), false, true)
+            .oneshot(get_localhost("/progress/projects"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let projects: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(projects, serde_json::json!(["/newer", "/older"]));
+    }
+
     #[tokio::test]
     async fn shared_routes_surface_is_locked_and_desktop_only_excluded() {
         // Drift guard (#094-ec55): shared_routes() is the single source both build_router
@@ -2957,6 +3572,7 @@ mod tests {
             "/api/auth/session-token",
             "/sessions",
             "/sessions/x/write",
+            "/sessions/x/submit",
             "/sessions/x/output",
             "/sessions/x/terminal/scroll",
             "/sessions/x/terminal/lines",
@@ -2993,6 +3609,7 @@ mod tests {
             "/grok/usage",
             "/terminal/theme-colors",
             "/system/local-ip",
+            "/system/home-directory",
             "/acp/connections",
             "/acp/connections/x",
             "/acp/connections/x/reconnect",
@@ -3012,6 +3629,7 @@ mod tests {
             // unguarded — so pin every route, not a representative one.
             "/progress/report",
             "/progress/list",
+            "/progress/projects",
             "/progress/delete",
             "/progress/viewed",
             "/progress/flow",
@@ -3080,6 +3698,27 @@ mod tests {
                 "desktop-only/router-specific path leaked into shared_routes(): {p}"
             );
         }
+    }
+
+    /// Catches: the shared route exists but answers with a client-side or fixed root path.
+    #[tokio::test]
+    async fn home_directory_route_reports_serving_hosts_home() {
+        let app = build_router(test_state(), false, true);
+        let response = app
+            .oneshot(
+                Request::get("/system/home-directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let reported: String = serde_json::from_slice(&bytes).unwrap();
+        let host_home = dirs::home_dir().expect("test host has a home directory");
+        assert_eq!(reported, host_home.to_string_lossy());
     }
 
     /// Half two of the COMMAND_TABLE → router gate (story 643).
@@ -3236,6 +3875,203 @@ mod tests {
         assert_eq!(json[0]["session_id"], "vps-sess");
         assert_eq!(json[0]["connection_id"], "vps");
         assert_eq!(json[0]["display_name"], "claude on the vps");
+    }
+
+    /// A mirror row is a real session on its owner daemon, even though it has
+    /// no local PTY. The phone's same-origin output request must reach that
+    /// daemon, using the owner's credential rather than the caller's token.
+    #[tokio::test]
+    async fn mirrored_session_output_reaches_its_owner_without_forwarding_the_phone_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let remote = Router::new().route(
+            "/sessions/remote-phone/output",
+            get(|Query(query): Query<std::collections::HashMap<String, String>>| async move {
+                if query.get("token").map(String::as_str) != Some("owner-secret") {
+                    return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"bad token"})));
+                }
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"lines":[{"spans":[{"text":"remote line"}]}],"total_lines":1})),
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, remote).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{addr}"),
+            Some("owner-secret"),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(
+                "/sessions/remote-phone/output?format=log&token=phone-secret",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let output: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(output["lines"][0]["spans"][0]["text"], "remote line");
+        server.abort();
+    }
+
+    /// The kill button must terminate the mirrored session on its owner once.
+    /// A local 404 leaves the remote process alive, which is Boss's symptom.
+    #[tokio::test]
+    async fn mirrored_session_close_reaches_owner_once() {
+        let closes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::clone(&closes);
+        let remote = Router::new().route(
+            "/sessions/remote-phone",
+            delete(move || {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Json(serde_json::json!({"ok":true}))
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, remote).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{addr}"),
+            Some("owner-secret"),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::delete("/sessions/remote-phone")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(closes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn disconnected_mirrored_session_reports_unavailable_instead_of_local_not_found() {
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost("/sessions/remote-phone/output?format=log"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn mirrored_session_websocket_streams_owner_log_frames() {
+        use axum::extract::ws::{Message, WebSocketUpgrade};
+        use futures_util::{SinkExt, StreamExt};
+
+        let owner_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let owner_addr = owner_listener.local_addr().unwrap();
+        let (input_sender, input_receiver) = tokio::sync::oneshot::channel();
+        let input_sender = Arc::new(std::sync::Mutex::new(Some(input_sender)));
+        let owner = Router::new().route(
+            "/sessions/remote-phone/stream",
+            get(move |Query(query): Query<std::collections::HashMap<String, String>>, ws: WebSocketUpgrade| {
+                let input_sender = Arc::clone(&input_sender);
+                async move {
+                    if query.get("token").map(String::as_str) != Some("owner-secret") {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    ws.on_upgrade(move |mut socket| async move {
+                        let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
+                            if let Some(sender) = input_sender.lock().unwrap().take() {
+                                let _ = sender.send(input.to_string());
+                            }
+                        }
+                    }).into_response()
+                }
+            }),
+        );
+        let owner_task =
+            tokio::spawn(async move { axum::serve(owner_listener, owner).await.unwrap() });
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "owner",
+            vec![types::SessionInfo {
+                session_id: "remote-phone".into(),
+                ..Default::default()
+            }],
+        );
+        state.remote.force_connected_for_test(
+            "owner",
+            &format!("http://{owner_addr}"),
+            Some("owner-secret"),
+        );
+        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_listener.local_addr().unwrap();
+        let local = tokio::spawn(async move {
+            axum::serve(
+                local_listener,
+                build_router(state, false, true)
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap()
+        });
+        let (mut stream, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{local_addr}/sessions/remote-phone/stream?format=log"
+        ))
+        .await
+        .expect("mirrored session must accept the phone WebSocket");
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(frame.into_text().unwrap().contains("live remote line"));
+        stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "phone input".into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), input_receiver)
+                .await
+                .unwrap()
+                .unwrap(),
+            "phone input"
+        );
+        let _ = stream.close(None).await;
+        local.abort();
+        owner_task.abort();
     }
 
     #[tokio::test]
@@ -3629,6 +4465,7 @@ mod tests {
     #[test]
     fn test_validate_repo_path_rejects_relative() {
         assert!(validate_repo_path("relative/path").is_err());
+        assert!(validate_repo_path("C:relative/path").is_err());
     }
 
     #[test]
@@ -3639,6 +4476,8 @@ mod tests {
     #[test]
     fn test_validate_repo_path_accepts_absolute_windows() {
         assert!(validate_repo_path("C:\\Users\\test\\repos").is_ok());
+        assert!(validate_repo_path("C:/Users/test/repos").is_ok());
+        assert!(validate_repo_path("c:/Users/test/repos").is_ok());
         assert!(validate_repo_path("\\\\server\\share").is_ok());
     }
 
@@ -4788,7 +5627,7 @@ mod tests {
         // Whatever is installed on this machine must be reported; the reverse
         // (asserting a fixed list) would fail on a machine without them.
         for binary in crate::agent::KNOWN_AGENT_BINARIES {
-            if crate::agent::detect_agent_binary(binary.to_string())
+            if crate::agent::detect_agent_binary_sync(binary.to_string())
                 .path
                 .is_some()
             {
@@ -6305,6 +7144,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    fn short_socket_test_dir() -> tempfile::TempDir {
+        let dir = tempfile::Builder::new()
+            .prefix("s")
+            .tempdir_in(crate::test_support::short_socket_test_temp_root())
+            .expect("create repository-local socket test dir");
+        assert!(
+            dir.path().join("mcp-4294967295.sock").as_os_str().len() < 104,
+            "socket test path exceeds macOS SUN_LEN: {}",
+            dir.path().display()
+        );
+        dir
+    }
+
     /// Unix socket listener: binds, serves health check, cleans up socket file on drop.
     #[cfg(unix)]
     #[tokio::test]
@@ -6312,18 +7165,8 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let state = test_state();
-        // Use /tmp directly — macOS $TMPDIR can exceed SUN_LEN (104 bytes)
-        let tmp_dir = std::path::PathBuf::from("/tmp")
-            .join(format!("tuic-{}", &uuid::Uuid::new_v4().to_string()[..8]));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-        let sock_path = tmp_dir.join("s");
+        let tmp_dir = short_socket_test_dir();
+        let sock_path = tmp_dir.path().join("s");
 
         // Bind Unix socket and serve the router (no auth, MCP enabled)
         let app = build_router(state.clone(), false, true);
@@ -6355,7 +7198,6 @@ mod tests {
 
         server.abort();
         let _ = std::fs::remove_file(&sock_path);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     /// Regression test: aborting the first server task must NOT remove the socket file
@@ -6364,19 +7206,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_unix_socket_rebind_no_race() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-race-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-        let sock_path = tmp_dir.join("s");
+        let tmp_dir = short_socket_test_dir();
+        let sock_path = tmp_dir.path().join("s");
 
         // First instance: bind and spawn server
         let _ = std::fs::remove_file(&sock_path);
@@ -6412,27 +7243,14 @@ mod tests {
 
         server2.abort();
         let _ = std::fs::remove_file(&sock_path);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     /// When a live socket exists, resolve_socket_path-style logic should pick an alternative.
     #[cfg(unix)]
     #[tokio::test]
     async fn test_multi_instance_socket_coexistence() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-multi-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-
-        let primary = tmp_dir.join("mcp.sock");
+        let tmp_dir = short_socket_test_dir();
+        let primary = tmp_dir.path().join("mcp.sock");
 
         // First instance: bind primary socket and start serving
         let _ = std::fs::remove_file(&primary);
@@ -6457,7 +7275,9 @@ mod tests {
         let primary_live = std::os::unix::net::UnixStream::connect(&primary).is_ok();
         assert!(primary_live, "primary should be detected as live");
 
-        let alt = tmp_dir.join(format!("mcp-{}.sock", std::process::id()));
+        let alt = tmp_dir
+            .path()
+            .join(format!("mcp-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&alt);
         let uds2 = tokio::net::UnixListener::bind(&alt).unwrap();
         let app2 = build_router(state.clone(), false, true)
@@ -6482,7 +7302,6 @@ mod tests {
         server2.abort();
         let _ = std::fs::remove_file(&primary);
         let _ = std::fs::remove_file(&alt);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     #[cfg(unix)]
@@ -6509,31 +7328,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_cleanup_stale_sockets() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-stale-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
+        let tmp_dir = short_socket_test_dir();
 
         // Create a socket file for a PID that definitely doesn't exist (PID 1 is launchd, skip it)
         let dead_pid = 99999;
-        let stale = tmp_dir.join(format!("mcp-{dead_pid}.sock"));
+        let stale = tmp_dir.path().join(format!("mcp-{dead_pid}.sock"));
         std::fs::write(&stale, "").unwrap();
         assert!(stale.exists());
 
         // Create a socket file for our own PID (alive)
-        let alive = tmp_dir.join(format!("mcp-{}.sock", std::process::id()));
+        let alive = tmp_dir
+            .path()
+            .join(format!("mcp-{}.sock", std::process::id()));
         std::fs::write(&alive, "").unwrap();
 
         // Run cleanup logic inline (can't call cleanup_stale_sockets directly as it uses config_dir)
-        for entry in std::fs::read_dir(&tmp_dir).unwrap().flatten() {
+        for entry in std::fs::read_dir(tmp_dir.path()).unwrap().flatten() {
             let name = entry.file_name();
             let Some(name_str) = name.to_str() else {
                 continue;
@@ -6559,7 +7369,6 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&alive);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     // ---- VtLogBuffer HTTP integration tests ----

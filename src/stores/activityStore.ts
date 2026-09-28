@@ -45,9 +45,12 @@ function createActivityStore() {
 
 	async function hydrate(): Promise<void> {
 		try {
-			const loaded = await invoke<{ items?: PersistedActivityItem[] }>("load_activity");
-			if (loaded?.items && Array.isArray(loaded.items)) {
-				const migrated = loaded.items.map((item) => ({
+			const loaded = await invoke<PersistedActivityItem[] | { items?: PersistedActivityItem[] } | null>(
+				"load_activity",
+			);
+			const items = Array.isArray(loaded) ? loaded : loaded?.items;
+			if (Array.isArray(items)) {
+				const migrated = items.map((item) => ({
 					...item,
 					dismissed: item.dismissed ?? false,
 				}));

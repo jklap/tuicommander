@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildHttpUrl,
@@ -21,40 +22,50 @@ function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
 }
 
-function extractBalancedObject(source: string, marker: string): string {
-	const markerIndex = source.indexOf(marker);
-	if (markerIndex < 0) {
-		throw new Error(`Marker not found: ${marker}`);
-	}
-	const start = source.indexOf("{", markerIndex);
-	if (start < 0) {
-		throw new Error(`Object start not found after marker: ${marker}`);
-	}
-
-	let depth = 0;
-	for (let index = start; index < source.length; index += 1) {
-		const char = source[index];
-		if (char === "{") depth += 1;
-		if (char === "}") {
-			depth -= 1;
-			if (depth === 0) return source.slice(start, index + 1);
-		}
-	}
-
-	throw new Error(`Object end not found after marker: ${marker}`);
+function findNodes<T extends ts.Node>(root: ts.Node, guard: (node: ts.Node) => node is T): T[] {
+	const found: T[] = [];
+	const visit = (node: ts.Node) => {
+		if (guard(node)) found.push(node);
+		ts.forEachChild(node, visit);
+	};
+	visit(root);
+	return found;
 }
 
-function extractCommandTableCommands(): Set<string> {
-	const transportSource = readRepoFile("src/transport.ts");
-	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
-	// Anchor on the single tab of a top-level key. `\s*` also matched nested
-	// `body: {` lines, which put a phantom "body" command in the set.
+function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
+	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
+	const declaration = sourceFile.statements
+		.filter(ts.isVariableStatement)
+		.flatMap((statement) => [...statement.declarationList.declarations])
+		.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === "COMMAND_TABLE");
+	let value = declaration?.initializer;
+	while (value && !ts.isObjectLiteralExpression(value)) {
+		if (ts.isParenthesizedExpression(value)) value = value.expression;
+		else if (ts.isConditionalExpression(value)) value = value.whenFalse;
+		else if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.CommaToken) value = value.right;
+		else throw new Error("COMMAND_TABLE initializer is not an object");
+	}
+	if (!value) throw new Error("COMMAND_TABLE initializer not found");
 	return new Set(
-		Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (match) => match[1]).filter(
-			(command) => command !== undefined,
-		),
+		value.properties
+			.filter(ts.isPropertyAssignment)
+			.map((property) => property.name)
+			.filter(ts.isIdentifier)
+			.map((name) => name.text),
 	);
 }
+
+describe("COMMAND_TABLE source scan", () => {
+	it("finds space-indented commands without treating a nested object key as a command", () => {
+		const source = `const COMMAND_TABLE = {
+  first_command: { map: () => ({ body: {
+    nested_key: {}
+  } }) },
+  second_command: { map: () => ({ method: "GET" }) },
+};`;
+		expect(extractCommandTableCommands(source)).toEqual(new Set(["first_command", "second_command"]));
+	});
+});
 
 function extractRegisteredTauriCommands(): Set<string> {
 	const libSource = readRepoFile("src-tauri/src/lib.rs");
@@ -114,23 +125,40 @@ function collectFrontendSources(): { path: string; source: string }[] {
  *   - `transport.onEvent("foo")`, which TauriTransport expands to
  *     `pty-foo-${sessionId}` (canvasTerminalTransport.ts)
  */
-function extractSubscribedPtyEvents(): Map<string, string[]> {
+function extractSubscribedPtyEvents(sources = collectFrontendSources()): Map<string, string[]> {
 	const subscribed = new Map<string, string[]>();
 	const add = (name: string, path: string) => {
 		const where = subscribed.get(name) ?? [];
 		where.push(path.replace(`${process.cwd()}/`, ""));
 		subscribed.set(name, where);
 	};
-	for (const { path, source } of collectFrontendSources()) {
-		for (const match of source.matchAll(/listen(?:<[^>]*>)?\(\s*`(pty-[a-z0-9-]+?)-\$\{/g)) {
-			add(match[1], path);
-		}
-		for (const match of source.matchAll(/\.onEvent\(\s*"([a-z0-9-]+)"/g)) {
-			add(`pty-${match[1]}`, path);
+	for (const { path, source } of sources) {
+		const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+		for (const call of findNodes(file, ts.isCallExpression)) {
+			const argument = call.arguments[0];
+			if (argument && ts.isIdentifier(call.expression) && call.expression.text === "listen") {
+				for (const template of findNodes(argument, ts.isTemplateExpression)) {
+					const eventName = /^(pty-[a-z0-9-]+)-$/.exec(template.head.text)?.[1];
+					if (eventName) add(eventName, path);
+				}
+			}
+			if (argument && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "onEvent") {
+				for (const name of findNodes(argument, ts.isStringLiteral)) {
+					if (/^[a-z0-9-]+$/.test(name.text)) add(`pty-${name.text}`, path);
+				}
+			}
 		}
 	}
 	return subscribed;
 }
+
+describe("PTY event source scan", () => {
+	it("finds the activity listener when instrumentation wraps its template argument", () => {
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: The placeholder is source text for the parser.
+		const source = "listen(mutant ? `` : (coverage(), `pty-activity-${sessionId}`), () => {});";
+		expect(extractSubscribedPtyEvents([{ path: "src/transport.ts", source }]).has("pty-activity")).toBe(true);
+	});
+});
 
 describe("transport", () => {
 	/**
@@ -146,7 +174,11 @@ describe("transport", () => {
 	 */
 	describe("per-session Tauri event parity", () => {
 		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
-			const rustSources = ["src-tauri/src/pty.rs", "src-tauri/src/state.rs", "src-tauri/src/terminal_grid.rs"]
+			const rustSources = [
+				"src-tauri/src/pty.rs",
+				"src-tauri/src/state.rs",
+				"src-tauri/crates/tuic-terminal/src/terminal_grid.rs",
+			]
 				.map((relative) => readRepoFile(relative))
 				.join("\n");
 
@@ -236,6 +268,13 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps one complete managed reply to the atomic session route", () => {
+			expect(mapCommandToHttp("submit_agent_reply", { sessionId: "s1", input: "answer" })).toEqual({
+				method: "POST",
+				path: "/sessions/s1/submit",
+				body: { input: "answer" },
+			});
+		});
 		it("maps every Design Mode command with matching IPC request fields", () => {
 			expect(mapCommandToHttp("start_design_mode", { sessionId: "agent-1" })).toEqual({
 				method: "POST",
@@ -259,6 +298,13 @@ describe("transport", () => {
 				method: "POST",
 				path: "/progress/report?path=%2Frepo%20with%20space",
 				body: report,
+			});
+		});
+
+		it("maps mobile Progress project discovery to its authenticated HTTP route", () => {
+			expect(mapCommandToHttp("progress_projects", {})).toEqual({
+				method: "GET",
+				path: "/progress/projects",
 			});
 		});
 
@@ -307,7 +353,8 @@ describe("transport", () => {
 			// Every control the rejected design added — status, pause, resume,
 			// clear, update, read, export — is gone from both transports.
 			for (const command of ["progress_list", "progress_delete"]) {
-				const input = command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a" } : { ids: [1] };
+				const input =
+					command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
 				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
 					method: "POST",
 					path: `/progress/${command.slice(9)}?path=%2Frepo%20a`,
@@ -521,9 +568,10 @@ describe("transport", () => {
 		});
 
 		it("maps previously browser-unsupported commands to HTTP", () => {
-			const dictation = mapCommandToHttp("start_dictation", {});
+			const dictation = mapCommandToHttp("start_dictation", { source: "fn" });
 			expect(dictation.method).toBe("POST");
 			expect(dictation.path).toBe("/dictation/start");
+			expect(dictation.body).toEqual({ source: "fn" });
 
 			const openInApp = mapCommandToHttp("open_in_app", { path: "/tmp/x", app: "vscode" });
 			expect(openInApp.method).toBe("POST");
@@ -978,6 +1026,19 @@ describe("transport", () => {
 			expect(result.body).toEqual({ cwd: "/repo", candidates: ["src/x.ts", "missing.ts"] });
 		});
 
+		it("maps Markdown link resolution to the shared HTTP endpoint", () => {
+			const result = mapCommandToHttp("resolve_markdown_link", {
+				root: "/repo",
+				currentFile: "docs/review.md",
+				href: "../guide.md#intro",
+			});
+			expect(result).toMatchObject({
+				method: "POST",
+				path: "/fs/resolve-markdown-link",
+				body: { root: "/repo", currentFile: "docs/review.md", href: "../guide.md#intro" },
+			});
+		});
+
 		it("maps stat_path to GET /fs/stat?path=", () => {
 			const result = mapCommandToHttp("stat_path", { path: "/repo/file.md" });
 			expect(result.method).toBe("GET");
@@ -1117,6 +1178,12 @@ describe("transport", () => {
 			expect(result.path).toBe("/claude/usage");
 		});
 
+		it("routes a Claude session usage request to its owning backend", () => {
+			const result = mapCommandToHttp("get_claude_usage_api", { sessionId: "private/session" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/claude/usage?sessionId=private%2Fsession");
+		});
+
 		it("maps get_claude_project_list to GET /claude/projects", () => {
 			const result = mapCommandToHttp("get_claude_project_list", {});
 			expect(result.method).toBe("GET");
@@ -1188,6 +1255,50 @@ describe("transport", () => {
 			});
 			expect(result.method).toBe("DELETE");
 			expect(result.path).toBe("/worktrees/feat~a1b2c3d4?repoPath=%2Fr&deleteBranch=true");
+		});
+
+		it("forwards an explicit lock override separately from dirty-file force", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "locked",
+				deleteBranch: true,
+				force: true,
+				overrideLock: true,
+			});
+			expect(result.path).toBe("/worktrees/locked?repoPath=%2Fr&deleteBranch=true&force=true&overrideLock=true");
+		});
+
+		it("forwards the confirmed worktree fingerprint to the HTTP removal route", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "dirty",
+				force: true,
+				expectedFingerprint: "abc123",
+			});
+			expect(result.path).toBe(
+				"/worktrees/dirty?repoPath=%2Fr&deleteBranch=false&force=true&expectedFingerprint=abc123",
+			);
+		});
+
+		it("forwards missing-checkout confirmation without a fingerprint", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "missing",
+				force: true,
+				confirmMissingCheckout: true,
+			});
+			expect(result.path).toBe(
+				"/worktrees/missing?repoPath=%2Fr&deleteBranch=false&force=true&confirmMissingCheckout=true",
+			);
+		});
+
+		it("keeps the branch by default when force only discards checkout files", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "dirty",
+				force: true,
+			});
+			expect(result.path).toBe("/worktrees/dirty?repoPath=%2Fr&deleteBranch=false&force=true");
 		});
 
 		// Creation is the one command that takes a branch and no id — the id does
@@ -1776,27 +1887,87 @@ describe("transport", () => {
 			expect(readme.transform?.(null)).toBeNull();
 		});
 
+		it("maps the remote home lookup to the machine serving the file browser", () => {
+			expect(mapCommandToHttp("get_home_directory", {})).toEqual({
+				method: "GET",
+				path: "/system/home-directory",
+			});
+		});
+
 		it("maps agent detection and spawn aliases to HTTP", () => {
+			const launchArgs = mapCommandToHttp("prepare_agent_launch_args", {
+				agentType: "codex",
+				binaryPath: "/opt/bin/codex",
+				args: ["resume"],
+			});
+			expect(launchArgs.method).toBe("POST");
+			expect(launchArgs.path).toBe("/agents/launch-args");
+			expect(launchArgs.body).toEqual({
+				agentType: "codex",
+				binaryPath: "/opt/bin/codex",
+				args: ["resume"],
+			});
 			const detectClaude = mapCommandToHttp("detect_claude_binary", {});
 			expect(detectClaude.method).toBe("GET");
 			expect(detectClaude.path).toBe("/agents/detect?binary=claude");
 			expect(detectClaude.transform?.({ path: "/usr/local/bin/claude" })).toBe("/usr/local/bin/claude");
 
 			const spawn = mapCommandToHttp("spawn_agent", {
-				pty_config: { rows: 30, cols: 100, cwd: "/repo" },
-				agent_config: { prompt: "fix it", agent_type: "codex", model: "gpt-5" },
+				pty_config: {
+					rows: 30,
+					cols: 100,
+					shell: null,
+					cwd: "/repo",
+					tuic_session: null,
+					env: { PROFILE: "work" },
+					agent_type: "codex",
+					alias: null,
+				},
+				agent_config: {
+					prompt: "fix it",
+					cwd: "/agent",
+					agent_type: "codex",
+					model: "gpt-5",
+					print_mode: false,
+					output_format: null,
+					binary_path: null,
+					args: null,
+				},
 			});
 			expect(spawn.method).toBe("POST");
 			expect(spawn.path).toBe("/sessions/agent");
-			expect(spawn.body).toEqual({
-				rows: 30,
-				cols: 100,
-				cwd: "/repo",
-				prompt: "fix it",
-				agent_type: "codex",
-				model: "gpt-5",
-			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual(
+				JSON.parse(readRepoFile("src-tauri/tests/fixtures/spawn_agent_http_body.json")),
+			);
 			expect(spawn.transform?.({ session_id: "s1" })).toBe("s1");
+		});
+
+		it("uses PTY cwd when agent cwd is null", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: { rows: 24, cols: 80, cwd: "/repo", shell: null, tuic_session: null, alias: null },
+				agent_config: { prompt: "inspect", cwd: null, print_mode: false },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({
+				rows: 24,
+				cols: 80,
+				cwd: "/repo",
+				prompt: "inspect",
+				print_mode: false,
+			});
+		});
+
+		it("omits desktop-only PTY identity fields when populated", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: {
+					rows: 24,
+					cols: 80,
+					shell: "/bin/zsh",
+					tuic_session: "persistent-session",
+					alias: "tu-7",
+				},
+				agent_config: { prompt: "inspect" },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({ rows: 24, cols: 80, prompt: "inspect" });
 		});
 	});
 
@@ -1885,6 +2056,13 @@ describe("transport", () => {
 				{ connectionId: CONNECTION, sessionId: SESSION },
 				"POST",
 				`/acp/connections/${CONNECTION}/sessions/${SESSION}/cancel`,
+				undefined,
+			],
+			[
+				"acp_queued_prompt_cancel",
+				{ connectionId: CONNECTION, sessionId: SESSION, turnId: "01932d5e-0000-7000-8000-0000000000b1" },
+				"DELETE",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/queue/01932d5e-0000-7000-8000-0000000000b1`,
 				undefined,
 			],
 			[
@@ -2198,6 +2376,64 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		it("sends the selected Claude profile root when verifying a browser resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("true"));
+
+			await rpc("verify_agent_session", {
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+
+			const [url, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(url).toContain("/agents/verify-session");
+			expect(JSON.parse(request.body)).toEqual({
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+		});
+
+		it("sends a live agent PID and Codex home when verifying through HTTP", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "codex",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+		});
+
+		it("preserves an empty override map for a default-profile resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "gemini",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: {},
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({ agentPid: null, envOverrides: {} });
 		});
 
 		// The defect this story fixes: rpcImpl used to fetch a remote baseUrl with
@@ -2619,29 +2855,71 @@ describe("transport", () => {
 	 * source instead — same rationale as `canvasTerminalMountGuards.test.ts`.
 	 */
 	describe("rpc() desktop short-circuit", () => {
-		const source = readRepoFile("src/transport.ts");
+		const source = ts.createSourceFile("transport.ts", readRepoFile("src/transport.ts"), ts.ScriptTarget.Latest, true);
+		const functionNamed = (name: string) =>
+			findNodes(source, ts.isFunctionDeclaration).find((node) => node.name?.text === name);
+		const callNamed = (node: ts.Node, name: string) =>
+			findNodes(node, ts.isCallExpression).some(
+				(call) => ts.isIdentifier(call.expression) && call.expression.text === name,
+			);
 
 		it("returns to rpcImpl before reaching isIdempotentRpc's HTTP-table lookup", () => {
-			const start = source.indexOf("export function rpc<T>(");
-			expect(start).toBeGreaterThan(-1);
-			const end = source.indexOf("/** Cached after the first resolution", start);
-			expect(end).toBeGreaterThan(start);
-			const body = source.slice(start, end);
-			const shortCircuit = body.indexOf("!connectionId && isTauri()");
-			const idempotentCheck = body.indexOf("isIdempotentRpc(command, args)");
-			expect(shortCircuit).toBeGreaterThan(-1);
-			expect(idempotentCheck).toBeGreaterThan(-1);
-			expect(shortCircuit).toBeLessThan(idempotentCheck);
+			const rpc = functionNamed("rpc");
+			expect(rpc?.body).toBeDefined();
+			const shortCircuit = findNodes(rpc!.body!, ts.isIfStatement).find(
+				(statement) =>
+					findNodes(statement.expression, ts.isBinaryExpression).some(
+						(expression) =>
+							expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+							findNodes(expression.left, ts.isPrefixUnaryExpression).some(
+								(prefix) =>
+									prefix.operator === ts.SyntaxKind.ExclamationToken &&
+									ts.isIdentifier(prefix.operand) &&
+									prefix.operand.text === "connectionId",
+							) &&
+							callNamed(expression.right, "isTauri"),
+					) &&
+					findNodes(statement.thenStatement, ts.isReturnStatement).some(
+						(statement) => statement.expression && callNamed(statement.expression, "rpcImpl"),
+					),
+			);
+			const idempotentCheck = findNodes(rpc!.body!, ts.isCallExpression).find(
+				(call) => ts.isIdentifier(call.expression) && call.expression.text === "isIdempotentRpc",
+			);
+			expect(shortCircuit).toBeDefined();
+			expect(idempotentCheck).toBeDefined();
+			expect(shortCircuit!.getEnd()).toBeLessThan(idempotentCheck!.getStart(source));
 		});
 
 		it("caches the @tauri-apps/api/core import instead of re-importing it on every call", () => {
-			const start = source.indexOf("async function rpcImpl<T>(");
-			expect(start).toBeGreaterThan(-1);
-			const end = source.indexOf("const mapping = mapCommandToHttp(command, args);", start);
-			expect(end).toBeGreaterThan(start);
-			const body = source.slice(start, end);
-			expect(body).toMatch(/if \(!cachedTauriInvoke\)/);
-			expect(body).toMatch(/cachedTauriInvoke<T>\(command, args\)/);
+			const rpcImpl = functionNamed("rpcImpl");
+			expect(rpcImpl?.body).toBeDefined();
+			const cacheGuard = findNodes(rpcImpl!.body!, ts.isIfStatement).find(
+				(statement) =>
+					findNodes(statement.expression, ts.isPrefixUnaryExpression).some(
+						(prefix) =>
+							prefix.operator === ts.SyntaxKind.ExclamationToken &&
+							ts.isIdentifier(prefix.operand) &&
+							prefix.operand.text === "cachedTauriInvoke",
+					) &&
+					findNodes(statement.thenStatement, ts.isCallExpression).some(
+						(call) =>
+							call.expression.kind === ts.SyntaxKind.ImportKeyword &&
+							call.arguments[0] &&
+							ts.isStringLiteral(call.arguments[0]) &&
+							call.arguments[0].text === "@tauri-apps/api/core",
+					),
+			);
+			const cachedInvoke = findNodes(rpcImpl!.body!, ts.isCallExpression).find(
+				(call) =>
+					ts.isIdentifier(call.expression) &&
+					call.expression.text === "cachedTauriInvoke" &&
+					call.typeArguments?.[0]?.getText(source) === "T" &&
+					call.arguments[0]?.getText(source) === "command" &&
+					call.arguments[1]?.getText(source) === "args",
+			);
+			expect(cacheGuard).toBeDefined();
+			expect(cachedInvoke).toBeDefined();
 		});
 
 		it("still resolves desktop RPCs via the cached invoke reference (regression)", async () => {

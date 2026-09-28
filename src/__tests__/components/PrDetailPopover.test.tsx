@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 import "../mocks/tauri";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { agentConfigsStore } from "../../stores/agentConfigs";
 import { repoSettingsStore } from "../../stores/repoSettings";
+import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 
 const { mockGetBranchPrData, mockGetCheckSummary, mockGetCheckDetails } = vi.hoisted(() => ({
 	mockGetBranchPrData: vi.fn<() => unknown>(() => null),
@@ -38,7 +41,35 @@ describe("PrDetailPopover", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it.each([
+		{ env: {}, expected: "codex --no-alt-screen" },
+		{ env: { PROFILE: "work" }, expected: "codex --no-alt-screen" },
+	])("launches the PR review agent with the configured screen mode ($expected)", async ({ env, expected }) => {
+		vi.useRealTimers();
+		mockGetBranchPrData.mockReturnValue({
+			number: 42,
+			title: "Change",
+			state: "OPEN",
+			url: "https://github.com/o/r/pull/42",
+			checks: { passed: 0, failed: 0, pending: 0, total: 0 },
+		});
+		vi.spyOn(repositoriesStore, "get").mockReturnValue({ workspaces: { feature: { terminals: ["term-1"] } } } as never);
+		vi.spyOn(repositoriesStore, "workspaceIdOnBranch").mockReturnValue("feature");
+		vi.spyOn(terminalsStore, "get").mockReturnValue({ agentType: "codex" } as never);
+		vi.spyOn(agentConfigsStore, "getRunConfigs").mockReturnValue([
+			{ name: "Review", command: "codex", args: [], env },
+		] as never);
+		mockInvoke.mockImplementation(async (command: string) =>
+			command === "prepare_agent_launch_args" ? ["--no-alt-screen"] : null,
+		);
+		const onReview = vi.fn();
+		const { getByText } = render(() => <PrDetailPopover {...defaultProps} onReview={onReview} />);
+		fireEvent.click(getByText("Review"));
+		await waitFor(() => expect(onReview).toHaveBeenCalledWith("/repo", "feature/x", expected));
 	});
 
 	it("renders PR metadata correctly", () => {

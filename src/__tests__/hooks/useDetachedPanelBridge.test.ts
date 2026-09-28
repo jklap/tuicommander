@@ -16,8 +16,10 @@ vi.mock("../../utils/panelSync", () => ({
 }));
 
 import { useDetachedPanelBridge } from "../../hooks/useDetachedPanelBridge";
+import { createMarkdownDocumentPanelAdapter } from "../../panelAdapters/markdownDocument";
 import type { PanelAdapter } from "../../panelRouter";
 import { panelRegistry, registerPanel } from "../../panelRouter";
+import { mdTabsStore } from "../../stores/mdTabs";
 import { uiStore } from "../../stores/ui";
 
 type EventHandler = (event: { payload: unknown }) => void;
@@ -45,6 +47,7 @@ describe("useDetachedPanelBridge", () => {
 	};
 
 	beforeEach(() => {
+		mdTabsStore.clearAll();
 		for (const key of Object.keys(panelRegistry)) delete panelRegistry[key];
 		for (const key of Object.keys(uiStore.state.detachedPanels)) uiStore.clearDetached(key);
 		uiStore._testCancelPendingSave();
@@ -62,9 +65,46 @@ describe("useDetachedPanelBridge", () => {
 		mockCreateProvider.mockReset().mockReturnValue({ start: mockProviderStart, stop: mockProviderStop });
 	});
 
+	it("returns a detached Markdown document to its existing tab when its window closes", async () => {
+		const tabId = mdTabsStore.add("/repo", "notes.md");
+		const onSelect = vi.fn();
+		const adapter = createMarkdownDocumentPanelAdapter(tabId, onSelect);
+		registerPanel(adapter);
+		uiStore.setDetached(adapter.id, `panel-${adapter.id}`);
+		await startBridge();
+		handlers.get("panel-window-closed")?.({ payload: adapter.id });
+		expect(uiStore.isDetached(adapter.id)).toBe(false);
+		expect(mdTabsStore.get(tabId)).toMatchObject({ type: "file", filePath: "notes.md" });
+		expect(onSelect).toHaveBeenCalledExactlyOnceWith(tabId);
+	});
+
 	afterEach(() => {
 		dispose?.();
 		dispose = undefined;
+		uiStore._testCancelPendingSave();
+	});
+
+	it("opens a linked Markdown file from a detached document in the main tab store", async () => {
+		const tabId = mdTabsStore.add("/repo", "notes.md");
+		const adapter = createMarkdownDocumentPanelAdapter(tabId);
+		registerPanel(adapter);
+		await startBridge();
+		handlers.get("panel-action")?.({
+			payload: {
+				panelId: adapter.id,
+				action: "open-link",
+				data: {
+					kind: "file",
+					absolute_path: "/repo/next.md",
+					open_path: "next.md",
+					is_directory: false,
+					same_document: false,
+				},
+			},
+		});
+		expect(mdTabsStore.getIds().map((id) => mdTabsStore.get(id))).toEqual(
+			expect.arrayContaining([expect.objectContaining({ type: "file", filePath: "next.md" })]),
+		);
 	});
 
 	// Both paths mean the same thing to a panel: the detached copy is gone and

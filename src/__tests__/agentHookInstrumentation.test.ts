@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type AgentType, HOOK_SUPPORT } from "../agents";
+import { AGENT_TYPES, type AgentType, HOOK_SUPPORT } from "../agents";
 import { createAgentConfigsStore } from "../stores/agentConfigs";
 
 describe("agent hook instrumentation toggle", () => {
@@ -70,5 +70,19 @@ describe("agent hook instrumentation toggle", () => {
 		store.syncNativeStatusSignals("claude", false);
 		expect(store.state.agents.gemini.hook_instrumentation).toBe(true);
 		expect(store.state.agents.claude.native_status_signals).toBe(false);
+	});
+
+	it("defaults native scrollback prevention on for every agent and persists opt-out", async () => {
+		const save = vi.fn();
+		const store = createAgentConfigsStore({ load: async () => ({ agents: {} }), save });
+		await store.hydrate();
+		for (const agent of AGENT_TYPES) {
+			expect(store.getPreventAltScreen(agent)).toBe(true);
+		}
+		await store.setPreventAltScreen("codex", false);
+		expect(store.getPreventAltScreen("codex")).toBe(false);
+		expect(save.mock.lastCall?.[0].agents.codex.prevent_alt_screen).toBe(false);
+		await store.setPreventAltScreen("codex", true);
+		expect(save.mock.lastCall?.[0].agents.codex).not.toHaveProperty("prevent_alt_screen");
 	});
 });

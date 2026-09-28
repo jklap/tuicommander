@@ -49,6 +49,10 @@ runs exactly once: invalid binaries, cwd, and permission failures return
 immediately. Async Tauri and HTTP entry points run allocation and backoff on
 Tokio's blocking pool; synchronous internal callers retain the same bounded
 policy. Each site still owns its justified command/env/dimension assembly.
+The HTTP session spawn checks a supplied `cwd` before PTY allocation: on some
+platforms the PTY library returns a session even when the child later fails to
+enter the directory, leaving a blank terminal. A missing or non-directory cwd
+returns `400` and does not enter the session map.
 
 ### Session Control
 
@@ -90,7 +94,14 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 6. Write to `OutputRingBuffer` (2 MB circular buffer for MCP access — `OUTPUT_RING_BUFFER_CAPACITY`)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
-9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
+9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`crates/tuic-terminal/src/output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
+
+The intent path reconstructs soft-wrapped grid rows up to the parser's
+character budget, then reads hard-wrap continuations only above the input-box
+chrome cutoff. A capped history scroll keeps the open intent's anchor stable;
+repainting its unchanged anchor does not close it as replaced prose.
+
+For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected. Only then does the reader send Up followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
@@ -112,6 +123,9 @@ main thread. Each frontend pushes its whole watcher set through
 8, least recently synced evicted). A stale `seq` answers `applied: false` and changes
 nothing — including for a client whose current set is empty, whose record is *parked*
 rather than removed so that a delayed older sync cannot resurrect a disposed set.
+Tauri IPC registrations also carry their WebView label. A document navigation or
+window destruction removes that WebView's sets before a replacement document
+registers; browser clients remain independent and use the bounded eviction path.
 
 **The frontend re-syncs every 30 s while it holds any watcher.** Rust is the only source
 of lines, so a client the backend does not know about is blind with no local symptom, and
@@ -185,7 +199,7 @@ the fixed cell core stays 11 bytes. The fork's existing nine-mark bound remains.
 Search matches exact stored codepoints; buffer-search results use UTF-16 string
 offsets, while terminal highlight coordinates remain grid columns.
 
-**Delivery gate (`grid_gate.rs`).** A frame is a *delta*, so a dropped one strands
+**Delivery gate (`grid_gate.rs` and `grid_watch.rs`).** A frame is a *delta*, so a dropped one strands
 rows that exist nowhere else. Both transports are guarded, and both count rather
 than flag:
 
@@ -202,6 +216,11 @@ than flag:
   dead instance's calls against the new gate: without the epoch its late ack
   credits frames the new terminal never received, and its late unsubscribe
   deletes the live channel and leaves a mounted terminal blank.
+  Each channel records the subscribing WebView label and epoch. On navigation or
+  window destruction, only that WebView's channels and matching gates are
+  removed. A main-window reload therefore leaves a floating terminal's channel
+  live. The frame ticker sees no desktop subscriber for an unmounted terminal;
+  a newly mounted terminal installs a fresh channel and gate.
 - **Browser/WS.** The `watch` channel keeps only the newest value, so a slow
   client silently skips frames. Frames carry a Rust-internal `seq`
   (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid
@@ -248,6 +267,10 @@ The ticker therefore checks the deadline **before** the non-dirty early return, 
 Without this enforcement a single BSU whose ESU is delayed or lost freezes the tab **indefinitely**: content buffers invisibly and only a later ESU releases it. That was the cause of Codex streaming appearing to eat text and then dump it all at once, and it made any binary containing the BSU bytes a permanent tab wedge.
 
 ### Headless Reader Thread
+
+The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
+
+PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and subcommand exclusions into its environment. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
 
@@ -387,6 +410,8 @@ Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current wo
 
 Additionally, `CLAUDECODE` is removed from the environment (`env_remove`) to prevent nested-session detection when TUICommander itself runs inside a Claude Code session. `NO_COLOR` is also removed from every PTY command immediately after construction because it may belong to a Codex parent that launched TUICommander, not to the independent child session. This does not force application color or override explicit command flags; a deliberate per-agent environment may restore `NO_COLOR` after sanitization.
 
+The same PTY command sanitizer removes Cargo package and executable metadata (`CARGO`, `CARGO_MANIFEST_*`, `CARGO_PKG_*`, `CARGO_BIN_NAME`, `CARGO_BIN_EXE_*`, `CARGO_CRATE_NAME`, `CARGO_PRIMARY_PACKAGE`, `CARGO_FEATURE_*`, `CARGO_CFG_*`), build paths and jobserver state (`CARGO_TARGET_DIR`, `CARGO_TARGET_TMPDIR`, `OUT_DIR`, `CARGO_MAKEFLAGS`), build settings (`CARGO_INCREMENTAL`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `RUSTC`, `RUSTC_LINKER`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`, `HOST_CC`, `HOST_CXX`, `HOST`, `TARGET`, `PROFILE`, `NUM_JOBS`, `OPT_LEVEL`, `DEBUG`), build-script dependency metadata (`DEP_*`), and all `MBX_*` keys inherited from TUICommander's Cargo/mbx development launch. Those values describe the TUIC build, not the repository opened in the PTY. User preferences such as `CARGO_HOME` and `CARGO_TERM_COLOR` remain inherited; explicit per-agent or run-config environment values applied after sanitization can restore any removed key when requested.
+
 ## Child Process Priority
 
 Each spawned shell is given a lower scheduling priority right after spawn
@@ -430,7 +455,7 @@ A debounce (`last_session_conflict_mark`) prevents creating multiple flag files 
 Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U, text and `\r` are three writes 50 ms apart (Claude Code strips a Ctrl-U inside a long pasted text and refuses the Enter).
+- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U precedes text by 50 ms. Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Claude Code strips a Ctrl-U inside a long pasted text; Codex suppresses Enter for 120 ms after a paste burst.
 - `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
 
 Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
@@ -473,7 +498,9 @@ enum TerminalMode {
 
 The reader thread tracks output silence to detect unanswered agent prompts. When the terminal stops producing output for 10 seconds after a line ending with `?` is detected, the session is treated as waiting for input. This complements the instant pattern-based detection in the output parser and catches generic questions that would cause too many false positives if detected immediately (e.g., streaming fragments like "ad?", "swap?").
 
-**Question extraction:** `extract_question_line()` scans changed rows for a candidate, but a visible input-box anchor makes chat order authoritative: only the latest chat content above the current prompt may become a question. The changed-row fallback is used only when no prompt anchor is available. This prevents scroll/repaint from resurrecting a question retained above a later answer or completion. Question events carry the input `turn_epoch`, and the state accumulator rejects an event produced by an older turn.
+**Question extraction:** `extract_question_line()` scans changed rows for a candidate, excluding `suggest: [ … ]` protocol rows and their wrapped continuations even when an item ends in `?`. A visible input-box anchor makes chat order authoritative: only the latest chat content above the current prompt may become a question. The changed-row fallback is used only when no prompt anchor is available. This prevents scroll/repaint from resurrecting a question retained above a later answer or completion. Question events carry the input `turn_epoch`, and the state accumulator rejects an event produced by an older turn.
+
+**Codex approval cancellation:** An `Action Required` title raises a confident question. If Codex then paints `You canceled the request` after that approval, shows its ready or interrupted composer, and drops the title, the PTY reader clears the matching question. The clear carries the originating question text and turn epoch; an older cancellation in scrollback or a newer, different question cannot clear the current wait.
 
 **Echo suppression:** When the user submits a line — including bare Enter — the shared desktop/HTTP bookkeeping advances the turn, clears the current wait, and activates a 500ms suppression window (`suppress_user_input`). During this window, matching PTY echo is ignored for question detection.
 
@@ -494,8 +521,8 @@ strand the sticky awaiting/idle state.
 
 **Transitions:**
 - **Completed turns:** A protocol idle marker survives ordinary output, decorative animation, and subsequent ready-screen timer ticks. Activity metadata must not clear idle evidence before `record_busy` compares ranks. New submitted input or accepted semantic working evidence can reopen the turn.
-- **Explicit markers:** OSC 133 shell markers and OSC 7770 agent hooks transition immediately. Output silence cannot override an observed hook `busy`; it ends on hook `idle`, a confirmed interruption, process exit, or a stable ready composer after the submitted turn produced real activity. The last path recovers safely when an idle hook is missed without letting the previous turn's composer cancel a fresh submission.
-- **→ busy:** A submitted agent prompt, real output, an animated spinner, or an agent-specific `Working` screen transitions via atomic CAS (`try_shell_transition`). Positive screen evidence is evaluated even while the stored state is idle, so false-idle is self-healing.
+- **Explicit markers:** OSC 133 shell markers and OSC 7770 agent hooks transition immediately. Output silence cannot override an observed hook `busy`; it ends on hook `idle`, a confirmed interruption, process exit, or a stable ready composer after the submitted turn produced real activity. The last path recovers safely when an idle hook is missed without letting the previous turn's composer cancel a fresh submission. A Claude submission following a hook idle also returns to idle after five minutes with no output or subsequent busy hook when a transcript view hides the composer.
+- **→ busy:** A submitted agent prompt, real output, an animated spinner, or an agent-specific `Working` screen transitions via atomic CAS (`try_shell_transition`). Every successful CAS writes a `Shell state →` trace, including injection claims and rollbacks. Positive screen evidence is evaluated even while the stored state is idle, so false-idle is self-healing.
 - **→ idle:** The 1s silence timer is the sole heuristic idle path. Plain shells use 500ms; agents use 2.5s and must have no active sub-tasks. Agents with ready-screen adapters require the ready prompt to remain stable for 1.5s.
 - **Interrupts:** Ctrl-C and bare Escape record `interrupt pending` but never force idle. Idle follows only after an interrupted/ready screen, explicit Stop, or process exit.
 - **Nested prompts (plain shells only):** an interactive subshell — `sh`, `bash -l`, `su`, `sudo su` — is one OSC 133 command that never ends, because the inner shell has no integration of its own and so never emits the closing marker. The outer shell stayed latched `busy` for the subshell's whole life while the user looked at an idle prompt. A plain shell (no `agent_type`) that has been silent for 3s therefore has its foreground process group inspected: if that group and everything under it are shells and privilege wrappers, the explicit busy marker is overruled and the silence path may idle it. Any non-shell descendant (`dd` under `sudo`, a `-c` script) keeps it busy, and the reader still relatches busy on the next byte of output, so this only ever moves an idle prompt. Agents are excluded — their ready-screen adapters already own this. The probe reads the app-wide process snapshot, whose 1s refresher now counts these sessions as demand.
@@ -506,9 +533,9 @@ strand the sticky awaiting/idle state.
 
 **Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
-**OSC 777 notification classification:** OSC 777 `notify` is a desktop-notification transport, not an awaiting-state protocol. Raw-stream parsing promotes only response-required wording (`needs your permission`, `approval required`, or `is waiting for your input`) to a confident question. This preserves plan/skill picker detection for hook-instrumented Claude sessions while ignoring the observed generic `Claude Code needs your attention` notification, which can announce completion and otherwise latches awaiting indefinitely.
+**OSC 777 notification classification:** OSC 777 `notify` is a desktop-notification transport, not an awaiting-state protocol. Raw-stream parsing promotes only unambiguous permission or approval wording (`needs your permission`, `approval required`) to a confident question. Claude's `is waiting for your input` body also arrives after a normal reply at the ready composer; promoting it flashed Waiting input until the silence timer retracted it. Ink pickers use their visible footer and full-screen presence recovery, including hook-instrumented sessions. A debug trace at the session-state setter records the confidence, turn epoch, hook configuration and whether a generic Claude notification reached it, without logging the question text.
 
-**State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.tcap` file into `src-tauri/src/fixtures/agent_prompts/`. `GET /diagnostics/capture` reports the directory and bytes written. The desktop equivalents are the `get_pty_capture` / `set_pty_capture` commands, surfaced as **Capture Session** in the tab context menu whenever `isPerfDebug()` is on (dev by default). TUICCAP2 records the initial terminal rows/columns and preserves input/output ordering, original chunk boundaries, and monotonic timestamps. The decoder still accepts geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; replay code must provide independently observed dimensions for those files. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8.
+**State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.tcap` file into `src-tauri/src/fixtures/agent_prompts/`. Set `TUIC_CAPTURE_DIR` to an absolute path before launch when captures must go elsewhere; a relative value rejects activation. `GET /diagnostics/capture` reports the selected directory and bytes written. The desktop equivalents are the `get_pty_capture` / `set_pty_capture` commands, surfaced as **Capture Session** in the tab context menu whenever `isPerfDebug()` is on (dev by default). TUICCAP2 records the initial terminal rows/columns and preserves input/output ordering, original chunk boundaries, and monotonic timestamps. The decoder still accepts geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; replay code must provide independently observed dimensions for those files. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8.
 
 **Reading a corpus back:** `detection_over_capture_corpus` (ignored test in `pty.rs`) replays every capture in a directory through the production composition and reports, per file, the event kinds produced, whether an awaiting badge was left set at the end, and how often `find_chrome_cutoff` found no anchor — the fail-open branch, where no trim happens and every status-line row reaches every parser.
 
@@ -592,9 +619,13 @@ requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
 spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
-50 ms gap, and CR, so
+gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
+
+Foreground detection warns once per session when a non-shell process has no
+recognized agent type or run-config fallback. Such a session retains the safe
+200 ms Enter gap during managed injection.
 
 After a complete write, the existing input bookkeeping records the original
 text and CR, clears slash mode, and advances `turn_epoch` once. The MCP handler
@@ -618,6 +649,17 @@ idle window in global acceptance order. `state.queued_commands`,
 peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
+
+Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
+the session id, agent and shell states at the attempt, queued counts before and
+after, whether text reached the composer, whether submission completed, and
+whether Enter was sent separately. An uncertain write reports uncertain fields
+rather than claiming a completed submission; command text is never logged.
+Deferred attempts include `defer_reason` (unavailable agent, shell busy,
+unconfirmed idle, confident question, partial composer, or a lost claim). If a
+Ready screen becomes confirmed after silence already marked the shell idle, the
+timer retries this same guarded flush without waiting for another shell
+transition; a debug record names that ordering and the pending queue depth.
 
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 

@@ -7,10 +7,12 @@
 //! When invoked as `tmux` (via symlink), enters tmux-compatibility mode
 //! and translates tmux commands to TUIC equivalents.
 
+mod bg;
 mod ipc;
 mod mcp;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -30,6 +32,28 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a command detached and queue a completion wake to this TUIC session
+    Bg {
+        /// Append command output here; write the exit code to <log>.exit
+        log: String,
+        /// Command and arguments after --
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
+    #[command(name = "__bg-runner", hide = true)]
+    BgRunner {
+        log: String,
+        caller: String,
+        #[arg(required = true, last = true)]
+        command: Vec<String>,
+    },
+    /// Call a server-owned MCP tool with JSON arguments
+    Mcp {
+        /// MCP tool name (for example agent or session)
+        tool: String,
+        /// JSON object, or - to read it from stdin (defaults to {})
+        arguments: Option<String>,
+    },
     /// Open a file or directory in TUICommander
     Open {
         /// Path to open (file or directory)
@@ -166,44 +190,7 @@ enum Command {
 #[derive(Subcommand)]
 enum AgentAction {
     /// Spawn a new agent
-    Spawn {
-        /// Agent type (claude, codex, etc.)
-        agent_type: String,
-        /// Initial prompt for the agent (required by the server)
-        prompt: String,
-        /// Repository path (defaults to the current directory)
-        #[arg(long)]
-        repo: Option<String>,
-        /// Agent display name
-        #[arg(long)]
-        name: Option<String>,
-        /// Model routing value passed to the agent launcher
-        #[arg(long)]
-        model: Option<String>,
-        /// Explicit launcher argument (repeat for multiple arguments)
-        #[arg(long, allow_hyphen_values = true)]
-        args: Vec<String>,
-        /// Working directory (overrides --repo)
-        #[arg(long, conflicts_with = "repo")]
-        cwd: Option<String>,
-        /// Enable print mode for agents that support it
-        #[arg(long)]
-        print_mode: bool,
-        /// PTY description shown by TUICommander
-        #[arg(long)]
-        pty_description: Option<String>,
-        #[arg(long)]
-        rows: Option<u16>,
-        #[arg(long)]
-        cols: Option<u16>,
-        #[arg(long)]
-        output_format: Option<String>,
-        #[arg(long)]
-        binary_path: Option<String>,
-        /// Print the raw server payload
-        #[arg(long)]
-        json: bool,
-    },
+    Spawn(Box<AgentSpawnArgs>),
     /// List running agents
     Ls,
     /// Send a message to a registered peer's inbox (peer registry, not the PTY).
@@ -249,7 +236,7 @@ enum AgentAction {
     /// List registered peers
     ListPeers {
         #[arg(long)]
-        project: Option<String>,
+        path: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -258,6 +245,46 @@ enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Args)]
+struct AgentSpawnArgs {
+    /// Agent type (claude, codex, etc.)
+    agent_type: String,
+    /// Initial prompt for the agent (required by the server)
+    prompt: String,
+    /// Repository path (defaults to the current directory)
+    #[arg(long)]
+    repo: Option<String>,
+    /// Agent display name
+    #[arg(long)]
+    name: Option<String>,
+    /// Model routing value passed to the agent launcher
+    #[arg(long)]
+    model: Option<String>,
+    /// Explicit launcher argument (repeat for multiple arguments)
+    #[arg(long, allow_hyphen_values = true)]
+    args: Vec<String>,
+    /// Working directory (overrides --repo)
+    #[arg(long, conflicts_with = "repo")]
+    cwd: Option<String>,
+    /// Enable print mode for agents that support it
+    #[arg(long)]
+    print_mode: bool,
+    /// PTY description shown by TUICommander
+    #[arg(long)]
+    pty_description: Option<String>,
+    #[arg(long)]
+    rows: Option<u16>,
+    #[arg(long)]
+    cols: Option<u16>,
+    #[arg(long)]
+    output_format: Option<String>,
+    #[arg(long)]
+    binary_path: Option<String>,
+    /// Print the raw server payload
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -291,12 +318,14 @@ enum McpSessionAction {
 
 #[derive(Subcommand)]
 enum RepoAction {
-    WorktreeList {
+    #[command(name = "worktree-list")]
+    List {
         path: String,
         #[arg(long)]
         json: bool,
     },
-    WorktreeCreate {
+    #[command(name = "worktree-create")]
+    Create {
         path: String,
         #[arg(long)]
         branch: Option<String>,
@@ -307,9 +336,10 @@ enum RepoAction {
         #[arg(long)]
         json: bool,
     },
-    WorktreeRemove {
+    #[command(name = "worktree-remove")]
+    Remove {
         path: String,
-        workspace_id: String,
+        branch: String,
         #[arg(long)]
         force: bool,
         #[arg(long)]
@@ -359,6 +389,13 @@ fn main() {
 fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
+        Command::Bg { log, command } => bg::launch(&log, &command),
+        Command::BgRunner {
+            log,
+            caller,
+            command,
+        } => bg::run(&log, &caller, &command),
+        Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
         Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()).map(|_| ()),
@@ -394,6 +431,33 @@ fn dispatch(cmd: Command) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+fn cmd_mcp(tool: &str, arguments: Option<&str>) -> Result<(), String> {
+    let mut stdin_text = String::new();
+    let text = if arguments == Some("-") {
+        std::io::stdin()
+            .read_to_string(&mut stdin_text)
+            .unwrap_or_else(|e| {
+                mcp_usage_error(&format!("Cannot read MCP arguments from stdin: {e}"))
+            });
+        stdin_text.as_str()
+    } else {
+        arguments.unwrap_or("{}")
+    };
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .unwrap_or_else(|e| mcp_usage_error(&format!("MCP arguments must be a JSON object: {e}")));
+    if !parsed.is_object() {
+        mcp_usage_error("MCP arguments must be a JSON object");
+    }
+    let result = mcp::McpClient::connect_for_orchestration()?.call_text(tool, parsed)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn mcp_usage_error(message: &str) -> ! {
+    eprintln!("tuic: {message}");
+    std::process::exit(2)
+}
 
 fn cmd_story(action: &str, project: Option<&str>, session_id: Option<&str>) -> Result<(), String> {
     let action: serde_json::Value = serde_json::from_str(action)
@@ -695,22 +759,23 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
     ipc::ensure_running().map_err(|e| e.to_string())?;
 
     match action {
-        AgentAction::Spawn {
-            agent_type,
-            prompt,
-            repo,
-            name,
-            model,
-            args,
-            cwd,
-            print_mode,
-            pty_description,
-            rows,
-            cols,
-            output_format,
-            binary_path,
-            json,
-        } => {
+        AgentAction::Spawn(args) => {
+            let AgentSpawnArgs {
+                agent_type,
+                prompt,
+                repo,
+                name,
+                model,
+                args,
+                cwd,
+                print_mode,
+                pty_description,
+                rows,
+                cols,
+                output_format,
+                binary_path,
+                json,
+            } = *args;
             let cwd = match cwd.or(repo) {
                 Some(r) => resolve_path(&r),
                 None => std::env::current_dir()
@@ -820,19 +885,19 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 json,
             );
         }
-        AgentAction::ListPeers { project, json } => {
+        AgentAction::ListPeers { path, json } => {
             let payload = optional_fields(
                 serde_json::json!({"action": "list_peers"}),
-                [("project", project.map(serde_json::Value::from))],
+                [("path", path.map(serde_json::Value::from))],
             );
             print_mcp_payload(&mcp::McpClient::connect()?.call("agent", payload)?, json);
         }
         AgentAction::Stats { json } => {
-            print_mcp_payload(
-                &mcp::McpClient::connect()?
-                    .call("agent", serde_json::json!({"action": "stats"}))?,
-                json,
-            );
+            let response = ipc::get("/stats").map_err(|e| e.to_string())?;
+            if !response.is_success() {
+                return Err(format!("Server error: {}", response.status));
+            }
+            print_mcp_payload(&response.json().map_err(|e| e.to_string())?, json);
         }
     }
 
@@ -993,11 +1058,11 @@ fn cmd_mcp_session(action: McpSessionAction) -> Result<(), String> {
 fn cmd_repo(action: RepoAction) -> Result<(), String> {
     ipc::ensure_running().map_err(|e| e.to_string())?;
     let (payload, json) = match action {
-        RepoAction::WorktreeList { path, json } => (
+        RepoAction::List { path, json } => (
             serde_json::json!({"action": "worktree_list", "path": resolve_path(&path)}),
             json,
         ),
-        RepoAction::WorktreeCreate {
+        RepoAction::Create {
             path,
             branch,
             base_ref,
@@ -1013,13 +1078,13 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
             ),
             json,
         ),
-        RepoAction::WorktreeRemove {
+        RepoAction::Remove {
             path,
-            workspace_id,
+            branch,
             force,
             json,
         } => (
-            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "workspace_id": workspace_id, "force": force}),
+            serde_json::json!({"action": "worktree_remove", "path": resolve_path(&path), "branch": branch, "force": force}),
             json,
         ),
     };
@@ -1422,9 +1487,8 @@ fn resolve_path(path: &str) -> String {
 /// Rust suites) is caught. The app process has a different `TMPDIR` and cannot
 /// see it.
 fn disposable_roots() -> Vec<PathBuf> {
-    let mut roots = vec![std::env::temp_dir()];
-    #[cfg(unix)]
-    roots.push(PathBuf::from("/tmp"));
+    let roots =
+        std::iter::once(std::env::temp_dir()).chain(cfg!(unix).then_some(PathBuf::from("/tmp")));
     roots
         .into_iter()
         .flat_map(|root| {
@@ -1695,6 +1759,96 @@ mod tests {
             cli.command,
             Some(Command::Story { action, project: Some(project), session_id: None })
                 if action == "{\"action\":\"list_plans\"}" && project == "/repo"
+        ));
+    }
+
+    #[test]
+    fn agent_peer_filter_uses_path_name() {
+        let parsed = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"]);
+        assert!(parsed.is_ok(), "{}", parsed.err().unwrap());
+    }
+
+    #[test]
+    fn agent_spawn_keeps_positional_prompt_and_launcher_flags() {
+        let cli = Cli::try_parse_from([
+            "tuic",
+            "agent",
+            "spawn",
+            "codex",
+            "do work",
+            "--cwd",
+            "/repo",
+            "--model",
+            "gpt-5",
+            "--json",
+            "--args=--full-auto",
+        ])
+        .expect("parse agent spawn");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Agent {
+                action: super::AgentAction::Spawn(args)
+            }) if args.agent_type == "codex"
+                && args.prompt == "do work"
+                && args.cwd.as_deref() == Some("/repo")
+                && args.model.as_deref() == Some("gpt-5")
+                && args.args == ["--full-auto"]
+                && args.json
+        ));
+    }
+
+    #[test]
+    fn repo_worktree_list_keeps_its_command_spelling() {
+        let cli = Cli::try_parse_from(["tuic", "repo", "worktree-list", "/repo", "--json"])
+            .expect("parse worktree-list");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Repo { action: super::RepoAction::List { path, json } })
+                if path == "/repo" && json
+        ));
+    }
+
+    #[test]
+    fn repo_worktree_create_keeps_branch_and_base_flags() {
+        let cli = Cli::try_parse_from([
+            "tuic",
+            "repo",
+            "worktree-create",
+            "/repo",
+            "--branch",
+            "feature",
+            "--base-ref",
+            "main",
+            "--spawn-session",
+        ])
+        .expect("parse worktree-create");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Repo {
+                action: super::RepoAction::Create { path, branch, base_ref, spawn_session, .. }
+            }) if path == "/repo"
+                && branch.as_deref() == Some("feature")
+                && base_ref.as_deref() == Some("main")
+                && spawn_session
+        ));
+    }
+
+    #[test]
+    fn repo_worktree_remove_keeps_force_flag() {
+        let cli = Cli::try_parse_from([
+            "tuic",
+            "repo",
+            "worktree-remove",
+            "/repo",
+            "feature",
+            "--force",
+        ])
+        .expect("parse worktree-remove");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Repo {
+                action: super::RepoAction::Remove { path, branch, force, .. }
+            }) if path == "/repo" && branch == "feature" && force
         ));
     }
 

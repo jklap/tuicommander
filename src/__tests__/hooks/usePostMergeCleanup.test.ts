@@ -307,15 +307,85 @@ describe("executeCleanup", () => {
 		});
 		await executeCleanup(config);
 
-		// `force: true` — this dialog IS the confirmation. It renders the
-		// uncommitted-work warning under the worktree step, so the backend guard
-		// must not ask a second time and fail the step.
+		// A clean checkout does not need permission to discard dirty files.
 		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
 			repoPath: "/repo",
 			workspaceId: "feature/login",
 			action: "archive",
-			force: true,
+			force: false,
 		});
+	});
+
+	it("passes force only when the worktree has dirty files", async () => {
+		const config = makeConfig({
+			steps: [{ id: "worktree", checked: true }],
+			worktreeAction: "delete",
+		});
+		(config as CleanupConfig & { worktreeDirty: boolean }).worktreeDirty = true;
+		(config as CleanupConfig & { worktreeFingerprint: string }).worktreeFingerprint = "confirmed-worktree";
+		await executeCleanup(config);
+
+		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
+			repoPath: "/repo",
+			workspaceId: "feature/login",
+			action: "delete",
+			force: true,
+			expectedFingerprint: "confirmed-worktree",
+		});
+	});
+
+	it("shows the branch-retained warning from forced cleanup", async () => {
+		mockInvoke.mockResolvedValueOnce({
+			action: "deleted",
+			branch_delete_warning: "branch has unmerged commits",
+		});
+		const onStepNote = vi.fn();
+		await executeCleanup(
+			makeConfig({
+				steps: [{ id: "worktree", checked: true }],
+				worktreeAction: "delete",
+				onStepNote,
+			}),
+		);
+
+		expect(onStepNote).toHaveBeenCalledWith("worktree", expect.stringContaining("unmerged commits"));
+	});
+
+	it("does not delete a branch that worktree cleanup kept after proof failed", async () => {
+		mockInvoke.mockResolvedValueOnce({ action: "deleted", branch_delete_warning: "branch has unmerged commits" });
+		const onStepNote = vi.fn();
+		const onStepDone = vi.fn();
+		await executeCleanup(
+			makeConfig({
+				steps: [
+					{ id: "worktree", checked: true },
+					{ id: "delete-local", checked: true },
+				],
+				worktreeAction: "delete",
+				onStepNote,
+				onStepDone,
+			}),
+		);
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+		expect(onStepNote).toHaveBeenCalledWith("delete-local", expect.stringContaining("Branch kept"));
+		expect(onStepDone).toHaveBeenCalledWith("delete-local", "error", expect.stringContaining("Branch kept"));
+	});
+
+	it("stops cleanup when worktree state changes after confirmation", async () => {
+		mockInvoke.mockResolvedValueOnce({ action: "needs_confirmation" });
+		const onStepDone = vi.fn();
+		await executeCleanup(
+			makeConfig({
+				steps: [
+					{ id: "worktree", checked: true },
+					{ id: "delete-local", checked: true },
+				],
+				worktreeAction: "delete",
+				onStepDone,
+			}),
+		);
+		expect(onStepDone).toHaveBeenCalledWith("worktree", "error", expect.stringContaining("changed"));
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
 	});
 
 	it("calls finalize_merged_worktree with 'delete' action", async () => {
@@ -335,7 +405,7 @@ describe("executeCleanup", () => {
 			repoPath: "/repo",
 			workspaceId: "feature/login",
 			action: "delete",
-			force: true,
+			force: false,
 		});
 	});
 

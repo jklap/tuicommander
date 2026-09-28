@@ -2,7 +2,7 @@ import { createStore, produce } from "solid-js/store";
 import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType, type HeadlessAgentChoice } from "../agents";
 import { invoke } from "../invoke";
 import { rpc } from "../transport";
-import { getRepoConnection } from "../transportRuntime";
+import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
 import { buildEnvFromEntries, type EnvVarEntry } from "../utils/envVars";
 import { appLogger } from "./appLogger";
 
@@ -24,7 +24,14 @@ const defaultIO: AgentConfigIO = {
  */
 function remoteIO(connectionId: string): AgentConfigIO {
 	return {
-		load: () => rpc<AgentsConfig>("load_agents_config", {}, connectionId),
+		load: async () => {
+			try {
+				return await rpc<AgentsConfig>("load_agents_config", {}, connectionId);
+			} catch (err) {
+				const endpoint = `${getRemoteBaseUrl(connectionId) ?? "disconnected"}/config/agents`;
+				throw new Error(`${connectionId} (${endpoint}): ${err instanceof Error ? err.message : String(err)}`);
+			}
+		},
 		save: (config) => rpc<void>("save_agents_config", { config }, connectionId),
 	};
 }
@@ -42,11 +49,14 @@ interface AgentConfigsState {
 			suggest_followups?: boolean;
 			hook_instrumentation?: boolean;
 			native_status_signals?: boolean;
+			prevent_alt_screen?: boolean;
+			skip_trust_dialog?: boolean;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
 	headless_agent: HeadlessAgentChoice | null;
 	loaded: boolean;
+	loadError: string | null;
 }
 
 /** Deep-clone a plain object to break SolidJS proxy references.
@@ -60,11 +70,13 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		agents: {},
 		headless_agent: null,
 		loaded: false,
+		loadError: null,
 	});
 
 	/** Save full config to Rust. Logs and rethrows on failure so callers can surface errors. */
 	async function saveToDisk(): Promise<void> {
 		try {
+			if (!state.loaded) throw new Error("Agent config has not loaded; save refused");
 			const full: AgentsConfig = {
 				agents: clone(state.agents),
 				headless_agent: state.headless_agent ?? undefined,
@@ -86,11 +98,13 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 						s.agents = config.agents ?? {};
 						s.headless_agent = config.headless_agent ?? null;
 						s.loaded = true;
+						s.loadError = null;
 					}),
 				);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate agent configs", err);
-				setState("loaded", true);
+				setState({ loaded: false, loadError: err instanceof Error ? err.message : String(err) });
+				throw err;
 			}
 		},
 
@@ -367,6 +381,36 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 					else s.agents[type].native_status_signals = false;
 				}),
 			);
+		},
+
+		getPreventAltScreen(type: AgentType): boolean {
+			return state.agents[type]?.prevent_alt_screen ?? true;
+		},
+
+		async setPreventAltScreen(type: AgentType, enabled: boolean): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					if (enabled) delete s.agents[type].prevent_alt_screen;
+					else s.agents[type].prevent_alt_screen = false;
+				}),
+			);
+			await saveToDisk();
+		},
+
+		getSkipTrustDialog(type: AgentType): boolean {
+			return state.agents[type]?.skip_trust_dialog ?? true;
+		},
+
+		async setSkipTrustDialog(type: AgentType, enabled: boolean): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					if (enabled) delete s.agents[type].skip_trust_dialog;
+					else s.agents[type].skip_trust_dialog = false;
+				}),
+			);
+			await saveToDisk();
 		},
 
 		/** Get all env flags for an agent */

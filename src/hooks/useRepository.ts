@@ -106,12 +106,18 @@ export function useRepository() {
 		workspaceId: string,
 		deleteBranch: boolean,
 		force?: boolean,
+		overrideLock?: boolean,
+		expectedFingerprint?: string,
+		confirmMissingCheckout?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
 			workspaceId,
 			deleteBranch,
 			force: force ?? false,
+			...(overrideLock ? { overrideLock: true } : {}),
+			...(expectedFingerprint ? { expectedFingerprint } : {}),
+			...(confirmMissingCheckout ? { confirmMissingCheckout: true } : {}),
 		});
 	}
 
@@ -137,12 +143,18 @@ export function useRepository() {
 	async function getWorkspaceLifecycle(repoPath: string, workspaceId: string): Promise<WorkspaceLifecycleStatus> {
 		const status = await invoke<{
 			dirty_files: number | null;
+			missing_checkout: boolean;
+			dirty_fingerprint?: string;
+			submodule_unpushed_commits?: Array<{ path: string; count: number }>;
 			commit_status: WorkspaceLifecycleStatus["commitStatus"];
 			removal_safety: WorkspaceLifecycleStatus["removalSafety"];
 			error?: string;
 		}>("get_workspace_lifecycle", { repoPath, workspaceId });
 		return {
 			dirtyFiles: status.dirty_files,
+			missingCheckout: status.missing_checkout,
+			dirtyFingerprint: status.dirty_fingerprint,
+			submoduleUnpushedCommits: status.submodule_unpushed_commits,
 			commitStatus: status.commit_status,
 			removalSafety: status.removal_safety,
 			error: status.error,
@@ -258,6 +270,7 @@ export function useRepository() {
 		targetBranch: string,
 		afterMerge: string,
 		force = false,
+		expectedFingerprint?: string,
 	): Promise<MergeArchiveResult> {
 		return await invoke<MergeArchiveResult>("merge_and_archive_worktree", {
 			repoPath,
@@ -266,6 +279,7 @@ export function useRepository() {
 			targetBranch,
 			afterMerge,
 			force,
+			...(expectedFingerprint ? { expectedFingerprint } : {}),
 		});
 	}
 
@@ -278,12 +292,14 @@ export function useRepository() {
 		workspaceId: string,
 		action: "archive" | "delete",
 		force = false,
+		expectedFingerprint?: string,
 	): Promise<MergeArchiveResult> {
 		return await invoke<MergeArchiveResult>("finalize_merged_worktree", {
 			repoPath,
 			workspaceId,
 			action,
 			force,
+			...(expectedFingerprint ? { expectedFingerprint } : {}),
 		});
 	}
 

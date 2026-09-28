@@ -27,57 +27,9 @@ where
         .map_err(|e| format!("fs task failed: {e}"))?
 }
 
-/// Is this string an absolute path on *any* platform TUIC runs on?
-///
-/// `Path::is_absolute` answers for the host only, and the validators that call
-/// this decide whether a path may escape a boundary. Judging a foreign shape
-/// as relative is the dangerous half of that: on Windows `Path::join` replaces
-/// the root when the joined path has one, so a repo path joined with
-/// `/etc/passwd` lands at the root of the repo's drive rather than inside the
-/// repo. So each shape the other platform uses gets an explicit string check —
-/// `C:\…` and `\\…` do not parse as absolute on unix, and a leading `/` does
-/// not parse as absolute on Windows, where a path without a drive letter is
-/// merely rooted.
-pub(crate) fn is_absolute_on_any_platform(path: &str) -> bool {
-    std::path::Path::new(path).is_absolute()
-        || path.get(1..3) == Some(":\\")
-        || path.starts_with("\\\\")
-        || path.starts_with('/')
-}
-
-/// Rewrite a host path string the way everything outside the Windows API
-/// spells one: no `\\?\` prefix, `/` separators.
-///
-/// Two consumers need it and they need the same answer. `git` is one — the gix
-/// and CLI adapters behind `GitReads` have to return identical bytes, and on
-/// Windows `fs::canonicalize` does not oblige: it returns a verbatim `\\?\`
-/// path with `\`, while `git worktree list` prints `C:/Users/…`, so a consumer
-/// comparing the two finds no match at all. A git *config value* is the other:
-/// there `\` starts an escape sequence, so a Windows path written verbatim
-/// reaches git mangled. `/` is also the separator the rest of TUIC carries in a
-/// path string (see [`DirEntry::path`]).
-///
-/// Only Windows paths are rewritten: `\` is a legal character in a unix file
-/// name, so the same rewrite there would corrupt paths rather than normalise
-/// them. The rewrite itself is in [`windows_portable_spelling`], which is
-/// compiled and tested on every platform.
-pub(crate) fn portable_spelling(path: &str) -> String {
-    if cfg!(windows) {
-        windows_portable_spelling(path)
-    } else {
-        path.to_string()
-    }
-}
-
-fn windows_portable_spelling(path: &str) -> String {
-    // `\\?\UNC\host\share` is `\\host\share` written verbatim, so the prefix
-    // cannot simply be cut off that one.
-    let simplified = match path.strip_prefix(r"\\?\UNC\") {
-        Some(rest) => format!(r"\\{rest}"),
-        None => path.strip_prefix(r"\\?\").unwrap_or(path).to_string(),
-    };
-    simplified.replace('\\', "/")
-}
+#[cfg(test)]
+use tuic_core::path_spelling::windows_portable_spelling;
+pub(crate) use tuic_core::path_spelling::{is_absolute_on_any_platform, portable_spelling};
 
 /// The same directory, named the way the filesystem stores it.
 ///
@@ -472,6 +424,16 @@ pub(crate) fn stat_path_impl(path: String) -> PathStat {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stat_path(path: String) -> PathStat {
     stat_path_impl(path)
+}
+
+/// Return the home directory of the machine serving this request.
+/// The remote repository picker must not infer it from the client's platform.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn get_home_directory() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("Home directory is unavailable")?;
+    home.into_os_string()
+        .into_string()
+        .map_err(|_| "Home directory is not valid UTF-8".to_string())
 }
 
 /// List entries in a directory within a repository.
@@ -1945,10 +1907,22 @@ fn is_tcc_protected_path(path: &std::path::Path) -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    if !path.starts_with(&home) {
+    // Resolve parent components without touching disk: even checking existence
+    // on a path that reaches ~/Library through `..` can trigger TCC.
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    if !normalized.starts_with(&home) {
         return false;
     }
-    if let Ok(rel) = path.strip_prefix(&home)
+    if let Ok(rel) = normalized.strip_prefix(&home)
         && let Some(first) = rel.components().next()
     {
         let name = first.as_os_str().to_string_lossy();
@@ -2000,6 +1974,156 @@ pub fn resolve_terminal_path(cwd: String, candidate: String) -> Option<ResolvedF
         }),
         Err(_) => None,
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MarkdownLinkTarget {
+    Heading {
+        anchor: String,
+    },
+    File {
+        absolute_path: String,
+        open_path: String,
+        is_directory: bool,
+        same_document: bool,
+        anchor: Option<String>,
+        line: Option<usize>,
+    },
+    Missing {
+        path: String,
+    },
+    Blocked {
+        reason: String,
+    },
+}
+
+fn decode_markdown_link_part(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = |b: u8| (b as char).to_digit(16).map(|n| n as u8);
+            let hi = hex(*bytes.get(i + 1)?)?;
+            let lo = hex(*bytes.get(i + 2)?)?;
+            decoded.push(hi << 4 | lo);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn is_unc_markdown_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if path.starts_with(r"\\?\")
+        && bytes.len() >= 7
+        && bytes[4].is_ascii_alphabetic()
+        && bytes[5] == b':'
+        && matches!(bytes[6], b'/' | b'\\')
+    {
+        return false;
+    }
+    bytes.len() >= 2 && matches!(bytes[0], b'/' | b'\\') && matches!(bytes[1], b'/' | b'\\')
+}
+
+fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> MarkdownLinkTarget {
+    let (raw_path, raw_anchor) = href.split_once('#').unwrap_or((href, ""));
+    let raw_path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
+    let Some(mut path) = decode_markdown_link_part(raw_path) else {
+        return MarkdownLinkTarget::Blocked {
+            reason: "Invalid link encoding".into(),
+        };
+    };
+    let Some(mut anchor) = decode_markdown_link_part(raw_anchor) else {
+        return MarkdownLinkTarget::Blocked {
+            reason: "Invalid anchor encoding".into(),
+        };
+    };
+    if is_unc_markdown_path(&path) {
+        return MarkdownLinkTarget::Blocked {
+            reason: "Network paths are not supported in Markdown links".into(),
+        };
+    }
+    let mut line = anchor
+        .strip_prefix('L')
+        .or_else(|| anchor.strip_prefix('l'))
+        .and_then(|number| number.parse::<usize>().ok())
+        .filter(|number| *number > 0);
+    if line.is_some() {
+        anchor.clear();
+    } else if anchor.is_empty() {
+        let without_suffix = strip_line_col_suffix(&path);
+        if without_suffix != path
+            && let Some(number) = path[without_suffix.len() + 1..].split(':').next()
+            && let Ok(parsed) = number.parse::<usize>()
+            && parsed > 0
+        {
+            path = without_suffix.to_string();
+            line = Some(parsed);
+        }
+    }
+    if path.is_empty() && !anchor.is_empty() {
+        return MarkdownLinkTarget::Heading { anchor };
+    }
+
+    let root_path = PathBuf::from(root);
+    let current = if PathBuf::from(current_file).is_absolute() {
+        PathBuf::from(current_file)
+    } else {
+        root_path.join(current_file)
+    };
+    // Relative links use the opened file's location, even when that file is a
+    // symlink. Canonicalize separately for same-document comparison only.
+    let canonical_current = current.canonicalize().unwrap_or_else(|_| current.clone());
+    let target = if path.is_empty() {
+        current.clone()
+    } else if PathBuf::from(&path).is_absolute() {
+        PathBuf::from(&path)
+    } else {
+        current.parent().unwrap_or(&root_path).join(&path)
+    };
+    if is_tcc_protected_path(&target) {
+        return MarkdownLinkTarget::Blocked {
+            reason: "Protected path".into(),
+        };
+    }
+    let Ok(target) = target.canonicalize() else {
+        return MarkdownLinkTarget::Missing {
+            path: if path.is_empty() {
+                current_file.into()
+            } else {
+                path
+            },
+        };
+    };
+    let absolute_path = portable_spelling(&target.to_string_lossy());
+    let canonical_root = root_path.canonicalize().unwrap_or(root_path);
+    let open_path = target
+        .strip_prefix(&canonical_root)
+        .map(|relative| portable_spelling(&relative.to_string_lossy()))
+        .unwrap_or_else(|_| absolute_path.clone());
+    MarkdownLinkTarget::File {
+        absolute_path,
+        open_path,
+        is_directory: target.is_dir(),
+        same_document: target == canonical_current,
+        anchor: (!anchor.is_empty()).then_some(anchor),
+        line,
+    }
+}
+
+/// Resolve a rendered Markdown link on the filesystem without probing UNC hosts.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn resolve_markdown_link(
+    root: String,
+    current_file: String,
+    href: String,
+) -> Result<MarkdownLinkTarget, String> {
+    spawn_blocking_fs(move || Ok(resolve_markdown_link_impl(&root, &current_file, &href))).await
 }
 
 /// Validate many path candidates from one screen in a single call.
@@ -3277,6 +3401,186 @@ mod tests {
 
     // --- resolve_terminal_path tests ---
 
+    #[test]
+    fn tcc_guard_rejects_parent_traversal_into_protected_home_directories() {
+        let home = dirs::home_dir().unwrap();
+        for candidate in [
+            home.join("Projects/repo/../../Library/Mail"),
+            home.join("Projects/../Documents/report.md"),
+            home.join("Downloads/inside.txt"),
+        ] {
+            assert!(is_tcc_protected_path(&candidate), "{candidate:?}");
+        }
+        assert!(!is_tcc_protected_path(&home.join("Downloads/../Projects/readme.md")));
+    }
+
+    #[test]
+    fn markdown_links_open_files_with_line_and_column_suffixes() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("review.md"), "").unwrap();
+        fs::write(dir.path().join("file.rs"), "").unwrap();
+        fs::write(dir.path().join("Makefile"), "").unwrap();
+        let root = dir.path().to_string_lossy();
+        for (href, file, line) in [
+            ("file.rs:42:7", "file.rs", 42),
+            ("Makefile:42:7", "Makefile", 42),
+            ("file.rs:42", "file.rs", 42),
+        ] {
+            assert!(matches!(
+                resolve_markdown_link_impl(&root, "review.md", href),
+                MarkdownLinkTarget::File { open_path, line: Some(actual), .. }
+                    if open_path == file && actual == line
+            ), "{href}");
+        }
+    }
+
+    #[test]
+    fn markdown_link_resolution_decodes_paths_and_keeps_encoded_hashes() {
+        let dir = TempDir::new().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir(&docs).unwrap();
+        fs::write(docs.join("review.md"), "").unwrap();
+        fs::write(docs.join("a#b.md"), "").unwrap();
+        fs::write(docs.join("Makefile"), "").unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let result = resolve_markdown_link_impl(&root, "docs/review.md", "a%23b.md?view=1#section");
+        assert!(
+            matches!(result, MarkdownLinkTarget::File { open_path, anchor: Some(anchor), .. }
+            if open_path == "docs/a#b.md" && anchor == "section")
+        );
+        assert_eq!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "#target-heading"),
+            MarkdownLinkTarget::Heading {
+                anchor: "target-heading".into()
+            }
+        );
+        assert!(matches!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "missing.rs"),
+            MarkdownLinkTarget::Missing { .. }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "#L42"),
+            MarkdownLinkTarget::File {
+                same_document: true,
+                line: Some(42),
+                ..
+            }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "Makefile:42"),
+            MarkdownLinkTarget::File {
+                open_path,
+                line: Some(42),
+                ..
+            } if open_path == "docs/Makefile"
+        ));
+        assert!(matches!(
+            resolve_markdown_link_impl(&root, "docs/review.md", "./"),
+            MarkdownLinkTarget::File {
+                is_directory: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn markdown_link_resolution_blocks_invalid_percent_encoding() {
+        for href in ["file%ZZ.md", "file.md#%ZZ", "file%E0.md"] {
+            assert!(matches!(
+                resolve_markdown_link_impl("/repo", "README.md", href),
+                MarkdownLinkTarget::Blocked { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn markdown_link_resolution_allows_parent_and_symlink_targets() {
+        let dir = TempDir::new().unwrap();
+        let root_dir = dir.path().join("repo");
+        fs::create_dir(&root_dir).unwrap();
+        fs::write(root_dir.join("review.md"), "").unwrap();
+        fs::write(dir.path().join("shared.rs"), "").unwrap();
+        let root = root_dir.to_string_lossy().to_string();
+        let parent = resolve_markdown_link_impl(&root, "review.md", "../shared.rs:42");
+        assert!(matches!(
+            parent,
+            MarkdownLinkTarget::File { line: Some(42), .. }
+        ));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("shared.rs"), root_dir.join("linked.rs"))
+                .unwrap();
+            let linked = resolve_markdown_link_impl(&root, "review.md", "linked.rs");
+            assert!(matches!(linked, MarkdownLinkTarget::File { .. }));
+
+            fs::create_dir(root_dir.join("docs")).unwrap();
+            fs::write(root_dir.join("docs/guide.md"), "").unwrap();
+            std::os::unix::fs::symlink(root_dir.join("review.md"), root_dir.join("docs/linked.md"))
+                .unwrap();
+            let from_link = resolve_markdown_link_impl(&root, "docs/linked.md", "guide.md");
+            assert!(
+                matches!(from_link, MarkdownLinkTarget::File { open_path, .. }
+                if open_path == "docs/guide.md")
+            );
+
+            std::os::unix::fs::symlink(&root_dir, dir.path().join("repo-alias")).unwrap();
+            let alias = dir.path().join("repo-alias").to_string_lossy().to_string();
+            let aliased = resolve_markdown_link_impl(&alias, "review.md", "review.md#section");
+            assert!(
+                matches!(aliased, MarkdownLinkTarget::File { open_path, same_document: true, .. }
+                if open_path == "review.md")
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn markdown_link_resolution_returns_portable_windows_paths() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("readme.md"), "").unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let result = resolve_markdown_link_impl(&root, "readme.md", "readme.md");
+        assert!(
+            matches!(result, MarkdownLinkTarget::File { absolute_path, open_path, .. }
+            if !absolute_path.starts_with(r"\\?\") && open_path == "readme.md")
+        );
+    }
+
+    #[test]
+    fn markdown_link_resolution_rejects_unc_before_touching_filesystem() {
+        assert!(!is_unc_markdown_path(r"\\?\C:\repo\README.md"));
+        let result =
+            resolve_markdown_link_impl("/repo", "README.md", "//attacker.example/share/x.md");
+        assert!(matches!(result, MarkdownLinkTarget::Blocked { .. }));
+        let result =
+            resolve_markdown_link_impl("/repo", "README.md", r"\\attacker.example\share\x.md");
+        assert!(matches!(result, MarkdownLinkTarget::Blocked { .. }));
+        let encoded =
+            resolve_markdown_link_impl("/repo", "README.md", "%5C%5Cattacker.example/share/x.md");
+        assert!(matches!(encoded, MarkdownLinkTarget::Blocked { .. }));
+        let encoded_slashes =
+            resolve_markdown_link_impl("/repo", "README.md", "%2F%2Fattacker.example/share/x.md");
+        assert!(matches!(
+            encoded_slashes,
+            MarkdownLinkTarget::Blocked { .. }
+        ));
+        for mixed in [
+            r"\/attacker.example\share\x.md",
+            r"/\attacker.example\share\x.md",
+        ] {
+            assert!(matches!(
+                resolve_markdown_link_impl("/repo", "README.md", mixed),
+                MarkdownLinkTarget::Blocked { .. }
+            ));
+        }
+        let verbatim = resolve_markdown_link_impl(
+            "/repo",
+            "README.md",
+            r"\\?\UNC\attacker.example\share\x.md",
+        );
+        assert!(matches!(verbatim, MarkdownLinkTarget::Blocked { .. }));
+    }
+
     /// The link verifier issued one IPC per candidate per row and awaited each
     /// row before starting the next, so a screen with links on many rows cost one
     /// round trip per link, serially. Batching removes the round trips, not the
@@ -4226,33 +4530,6 @@ mod tests {
         assert!(
             err.contains("outside repository") || err.contains("Access denied"),
             "expected the validation error, got: {err}"
-        );
-    }
-
-    /// The spelling half of the parity the `git_reads` shootout asserts, where
-    /// it can be checked on every platform rather than only on the one that
-    /// breaks.
-    #[test]
-    fn windows_paths_are_rewritten_the_way_git_prints_them() {
-        // What `fs::canonicalize` hands back on Windows.
-        assert_eq!(
-            windows_portable_spelling(r"\\?\C:\Users\me\repo"),
-            "C:/Users/me/repo"
-        );
-        // A plain host path: separators only.
-        assert_eq!(
-            windows_portable_spelling(r"C:\Users\me\repo"),
-            "C:/Users/me/repo"
-        );
-        // The verbatim UNC form is `\\host\share`, not `UNC\host\share`.
-        assert_eq!(
-            windows_portable_spelling(r"\\?\UNC\host\share\repo"),
-            "//host/share/repo"
-        );
-        // Already in the portable spelling: unchanged.
-        assert_eq!(
-            windows_portable_spelling("C:/Users/me/repo"),
-            "C:/Users/me/repo"
         );
     }
 }

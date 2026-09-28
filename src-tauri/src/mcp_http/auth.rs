@@ -182,7 +182,11 @@ fn has_valid_session_cookie(req: &Request<axum::body::Body>, session_token: &str
 /// This is the primary auth method for remote devices: the QR code URL includes the token,
 /// and scanning it authenticates the device (a session cookie is then set for subsequent calls).
 fn has_valid_url_token(req: &Request<axum::body::Body>, session_token: &str) -> bool {
-    let query = req.uri().query().unwrap_or("");
+    has_valid_token_query(req.uri(), session_token)
+}
+
+pub(crate) fn has_valid_token_query(uri: &axum::http::Uri, session_token: &str) -> bool {
+    let query = uri.query().unwrap_or("");
     let expected = format!("token={session_token}");
     query
         .split('&')
@@ -1103,7 +1107,10 @@ mod tests {
             if verifying {
                 break;
             }
-            assert!(std::time::Instant::now() < setup_deadline, "first request never reached bcrypt");
+            assert!(
+                std::time::Instant::now() < setup_deadline,
+                "first request never reached bcrypt"
+            );
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         first.abort();

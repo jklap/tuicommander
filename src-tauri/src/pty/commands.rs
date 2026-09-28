@@ -56,6 +56,7 @@ pub(crate) async fn create_pty(
                 &session_id_for_env,
                 spawn_config.tuic_session.as_deref(),
             );
+            apply_agent_screen_env(&mut cmd, &spawn_config.env);
 
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_config.env {
@@ -115,7 +116,7 @@ pub(crate) async fn create_pty(
         .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
+    let grid_watch_tx = crate::grid_watch::new_grid_watch();
     state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
         .session_maps
@@ -208,6 +209,7 @@ pub(crate) async fn create_pty_with_worktree(
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
             );
+            apply_agent_screen_env(&mut cmd, &spawn_env);
             for (key, value) in &spawn_env {
                 cmd.env(key, value);
             }
@@ -280,7 +282,7 @@ pub(crate) async fn create_pty_with_worktree(
         .grid
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
+    let grid_watch_tx = crate::grid_watch::new_grid_watch();
     state.grid.watch.insert(session_id.clone(), grid_watch_tx);
     state
         .session_maps
@@ -575,7 +577,7 @@ pub(crate) fn get_session_foreground_process(
         "cmd",
     ];
 
-    let (detected, fg_is_shell) = {
+    let (detected, fg_is_shell, fg_name) = {
         let entry = state.session_maps.sessions.get(&session_id)?;
         let session = entry.value().lock();
         #[cfg(not(windows))]
@@ -583,7 +585,7 @@ pub(crate) fn get_session_foreground_process(
             let pgid = session.master.process_group_leader()?;
             let name = process_name_from_pid(pgid as u32)?;
             let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell)
+            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
         }
         #[cfg(windows)]
         {
@@ -591,7 +593,7 @@ pub(crate) fn get_session_foreground_process(
             let leaf = deepest_descendant_pid(child_pid)?;
             let name = process_name_from_pid(leaf)?;
             let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell)
+            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
         }
     };
 
@@ -607,6 +609,16 @@ pub(crate) fn get_session_foreground_process(
             .get(&session_id)
             .and_then(|s| s.agent_type.clone())
     });
+
+    if detected.is_none()
+        && !fg_is_shell
+        && effective.is_none()
+        && let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
+        && !entry.unknown_foreground_warned
+    {
+        entry.unknown_foreground_warned = true;
+        tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
+    }
 
     // Mirror the detected agent type into session_states so the PTY reader's
     // `agent_active_for_parse` check flips on and plain-prefix structured
@@ -919,13 +931,21 @@ pub(crate) fn subscribe_terminal_grid(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     channel: tauri::ipc::Channel<tauri::ipc::Response>,
+    webview: tauri::Webview,
 ) -> u64 {
     // A fresh gate, counting from zero — the frontend resets its receipt counter
     // on the same call.
     let gate = Arc::new(crate::grid_gate::GridGate::new());
     let epoch = gate.epoch();
     state.grid.gates.insert(session_id.clone(), gate);
-    state.grid.channels.insert(session_id, channel);
+    state.grid.channels.insert(
+        session_id,
+        crate::state::DesktopGridChannel {
+            channel,
+            webview_label: webview.label().to_string(),
+            epoch,
+        },
+    );
     epoch
 }
 

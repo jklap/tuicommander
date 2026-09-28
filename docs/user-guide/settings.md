@@ -16,15 +16,19 @@ The **AI Chat** page is shown only while **Experimental Features** is on (see
 
 ## Search
 
-A search box sits at the top of the page list. Typing filters every setting across
+A search box sits at the top of the page list. Typing filters settings across
 every page at once, so you do not have to know which page owns the one you want.
 Each result shows the setting name and the `Page › Section` trail it lives under;
 selecting one opens that page and scrolls to the field.
 
-Two limits are deliberate:
+Three limits are deliberate:
 
 - **Repository pages are not searched.** A repository page belongs to one specific
   repository, and a global box has no way to know which one you mean.
+- **Per-agent controls in expandable cards are not searched.** Search cannot
+  select a specific agent card or scroll to a control inside it. For managed
+  workspace trust, open **Settings → Agents**, expand **Claude** or **Codex**,
+  then use **Accept workspace trust for managed spawns** in Expert Mode.
 - **Settings the current build does not render are not listed.** The same rule
   hides the AI Chat page while Experimental Features is off, so a search does
   not open a page that is not in the navigation.
@@ -64,7 +68,7 @@ never all expert: in basic mode it would show an empty page.
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
-| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
@@ -87,6 +91,7 @@ never all expert: in basic mode it would show an empty page.
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
 | **Code Intelligence** | Install and manage MDKB, which gives the editor go-to-definition, find references, and symbol outline, and serves as a memory manager for AI agents. Desktop app only. |
 | **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP (**ego** section, directly after Code Intelligence). Always shown, also while Experimental Features is off. On the desktop it is laid out like the TUIC CLI section: a status line ("Configured at …") with **Select…** (native file picker) and **Clear**. A browser client, which has no native picker, gets a text field. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |
+| **ego profile** | Optional name of a profile in ego's user configuration for the AI Chat panel. Leave empty to use ego's normal profile selection. Names with whitespace or a leading dash are rejected. TUICommander passes the name to `ego acp`; the profile's rules remain in ego's configuration. |
 | **Default IDE** | IDE for "Open in..." actions (**IDE** section). Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
 | **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
 | **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and **SSH Tunnels**. It also shows the **AI Chat** settings page. The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
@@ -208,6 +213,8 @@ Each supported agent has an expandable row showing detection status, version, an
 | **Run Configurations** | Custom launch configs (binary path, args, model, prompt) per agent. Add, set default, edit, or delete configurations (Edit / Delete live under the `···` menu on each row). A config named **"review"** enables the Review button in the PR Detail Popover — its args are interpolated with `{pr_number}`, `{branch}`, `{base_branch}`, `{repo}`, `{pr_url}`. The agent's **default run config** also drives resume: launching / resuming the agent swaps the agent's default binary (e.g. `claude`) for `command` and appends `args` after the resume flag. |
 | **MCP Integration** | Install/remove TUICommander as MCP server for supported agents. Shows install status with a dot indicator. |
 | **Native status signals** | Claude and Codex only. Enabled by default; injects process-scoped status configuration at launch without changing global agent files. The **Signals: at launch** badge identifies this mode. |
+| **Prevent alternate screen** | Enabled by default for every agent. TUIC applies a verified native-scrollback control when the installed CLI supports one. Turning it off leaves new launches without TUIC's screen control. Existing shells need to be reopened to receive the changed policy. |
+| **Accept workspace trust for managed spawns** | Claude and Codex only. In Expert Mode, expand the agent's card to change whether agent-to-agent spawns skip that agent's workspace trust question in a new folder. |
 | **Install hooks globally** | Gemini, Grok, and OpenCode only. Explicitly installs/removes sentinel-owned lifecycle hooks in the agent's global configuration. Off by default. |
 | **Show agent intent as tab title** | When agents declare their current work phase, update the tab name with a short title |
 | **Show suggested follow-up actions** | Display actionable suggestions from agents after completing a task |

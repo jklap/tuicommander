@@ -49,6 +49,13 @@ IPC but not over HTTP.
 
 ## Audit (2026-08-18)
 
+### Remote update (2026-09-26)
+
+`prepare_remote_update` and `update_and_restart_remote` are async commands.
+Their HTTP routes call the same `remote_update` service. Binary reads and writes
+use Tokio files and bounded streaming; network probes, asset retrieval, upload
+and restart verification await without blocking the IPC main thread.
+
 ### Native stories (2026-09-25)
 
 `story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
@@ -130,12 +137,22 @@ pool. Its HTTP route now awaits the command directly, so both transports share
 the placement. The startup CLI version probes and atomic replacement also run in
 a detached blocking task instead of inside Tauri `setup`.
 
+Agent binary detection and terminal launch-argument preparation also use async
+commands that offload CLI lookup, version and bounded `--help` probes to the
+blocking pool. Their HTTP counterparts await the same commands, leaving Tokio
+workers free while a configured CLI takes time to answer.
+Each `--help` probe owns a process group on Unix or a Job Object on Windows,
+so timeout cleanup includes descendants of a launcher script. A timeout is
+cached as unsupported for that binary's path, size and modification time;
+quick inconclusive exits remain retryable after a short cooldown.
+
 ### Known gaps, with reasons
 
 | Command | Why it is still where it is |
 |---|---|
 | `fs_transfer_paths` (`fs.rs`) | Still sync, so its recursive directory copy runs on the main thread. It is the backend of a drag-drop, and the D&D surface needs Boss's approval before it is touched. Conversion is mechanical when that comes — see the `DEFERRED` note at the site. |
 | `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. Its batched sibling `resolve_terminal_paths` — the one a terminal screen actually calls, with tens of candidates — **is** on the blocking pool, so the risk that scaled with candidate count is gone. |
+| `resolve_markdown_link` (`fs.rs`) | `async fn` using `spawn_blocking_fs` for canonicalization of the source, target and root. UNC paths are rejected before any filesystem probe. |
 | `warm_content_index` (`fs.rs`) | `warm_index` is an in-memory config read plus a map entry plus a spawn — the build itself already runs in the background. It fires on every repo switch, so it stays cheap by design: the `index_strategy` gate and `ensure_index`'s dedup both short-circuit before any work. |
 | `set_ansi_colors` (`pty.rs`) | Locks *every* vt buffer in a loop on the IPC thread, so the stall grows with session count. Same reordering objection as the row below, and it fires once, when the user picks a theme. |
 | Terminal grid *mutations* (`pty.rs`) | `terminal_scroll`, `terminal_scroll_to`, `terminal_request_frame`, `terminal_exit_alt_screen` still take the vt lock inline. Same stall as the reads, but not the same safety: two `spawn_blocking` hops for one session can run in either order, and `terminal_scroll_to(line)` is absolute, so reordering lands the viewport on the wrong line. They need the coalescing `terminal_scroll_to_offset` already has — which is also why they are the cold path, since the wheel and the scrollbar drag go through the offset command and never touch this lock. |

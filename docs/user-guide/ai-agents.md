@@ -18,6 +18,20 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
 
+### Native scrollback on launch
+
+**Prevent alternate screen** in Settings → AI → Agents is enabled by default for every agent. TUIC applies Claude Code's `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` environment control when enabled. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. On Windows, the probe selects an executable `.exe` or `.cmd` launcher ahead of an extensionless npm shell shim. TUICommander checks the executable with a two-second deadline and shares concurrent checks. A timed-out check is not retried until that binary changes; a quick inconclusive exit is retried after a short cooldown. Older versions still start without an unsupported option. Existing flags are not duplicated. Rust applies the same policy to structured IPC, HTTP and MCP launches and exports it to new TUIC shells, where zsh, bash and fish wrappers apply it to commands typed manually. `command <agent>` bypasses those wrappers. Reopen an existing shell after changing the setting.
+
+Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`), Cursor enables fullscreen only when requested, and pi defaults to regular TUI mode. Other agents without a documented alternate-screen control keep their own defaults. If an agent enters the alternate screen despite these defaults, TUICommander records one warning for that session with the agent name and detected version.
+
+To allow alternate screen, turn off **Prevent alternate screen** for that agent. The preference applies to new TUIC agent launches and new shells. An explicit `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` value in a Claude command's environment retains precedence.
+
+### Workspace trust for managed spawns
+
+**Accept workspace trust for managed spawns** is on by default for Claude Code and Codex in Settings → AI → Agents. When an agent starts another agent through TUICommander's `agent spawn` action in a new folder, the child starts without waiting for a workspace trust answer. Codex receives a trust setting for that one launch and folder, including when a custom launcher forwards its arguments to Codex. TUICommander answers Claude Code's initial trust picker only when it shows the expected question with **No, exit** selected. Neither path edits the CLI's saved trust configuration.
+
+Turn this setting off for an agent if you want to answer its normal trust question during managed spawns. Terminals that you open yourself always use the agent's normal trust behavior.
+
 ## Agent Detection
 
 TUICommander auto-detects which agent is running in each terminal by matching output patterns. Detection uses agent-specific status line markers:
@@ -99,6 +113,8 @@ For Claude Code, TUICommander detects weekly and session usage limit messages fr
   - Red (pulsing): >= 90%
 - Clicking the badge opens the Claude Usage Dashboard.
 
+The API quota follows the focused Claude session's `CLAUDE_CONFIG_DIR`. Switching between Claude sessions using different accounts updates the badge. If the session's profile or its credentials cannot be read, the badge shows unknown rather than the default account's quota.
+
 This helps you pace your usage across the week.
 
 ## Claude Usage Dashboard
@@ -115,6 +131,7 @@ When enabled, TUICommander polls the Claude API every 5 minutes and shows:
 - **Per-project breakdown** — All projects ranked by token usage. Click a project to filter the dashboard to that project.
 
 The dashboard opens as a tab in the Activity Center. You can also reach it by clicking the Claude usage badge in the status bar.
+When opened from the badge, its rate-limit data uses that session's credential profile. The transcript-based charts and project statistics currently scan the default Claude projects directory.
 
 ## Agent Teams
 
@@ -222,6 +239,8 @@ The resume command honours the agent's **default run config**: TUICommander swap
 ### UI Agent Spawn
 
 When you spawn an agent via the context menu or command palette, TUICommander automatically uses the tab's `TUIC_SESSION` as the `--session-id`. This ensures the spawned session is bound to the tab and will resume correctly on restart.
+
+The active-terminal and sidebar agent menus apply the selected run configuration's environment to that agent launch. The values do not persist in the tab's shell for later commands. `TUIC_SESSION` and `TUIC_PARENT` remain controlled by TUICommander, including differently cased names on Windows. Windows menu launches preserve Unicode characters in environment values and commands.
 
 When the run config's command is a custom alias, symlink, or wrapper (e.g. `c2`, `c`), the foreground-process name no longer matches `"claude"` in `classify_agent`. TUICommander compensates by pre-seeding the session's `agent_type` from the run config at PTY creation time, so intent/suggest parsing and tab-title binding work from the first output line. The foreground-process detector also falls back to the pre-seeded type whenever it sees a non-shell process it doesn't recognise, which covers aliases and wrapper scripts without requiring every name to be hardcoded.
 

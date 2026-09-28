@@ -5,8 +5,12 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store";
  */
 export interface BaseTab {
 	id: string;
+	/** MCP ui action=tab identity; distinct ids must never deduplicate by file path. */
+	mcpUiId?: string;
 	/** When true, tab is visible across all branches (within the same repo if repoPath is set) */
 	pinned?: boolean;
+	/** MCP UI tabs may use pinning across repositories while retaining their opening repo. */
+	pinAcrossRepos?: boolean;
 	/** Scope key: "repoPath|branchName" — tab only visible in this branch unless pinned */
 	branchKey?: string;
 	/** Repo scope — when set, tab is only visible when the active branchKey belongs to this repo */
@@ -263,12 +267,15 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 		},
 
 		/** Toggle pinned state for a tab */
-		setPinned(id: string, pinned: boolean): void {
+		setPinned(id: string, pinned: boolean, pinAcrossRepos = false): void {
 			if (state.tabs[id]) {
 				setState(
 					"tabs",
 					produce((tabs: Record<string, T>) => {
-						if (tabs[id]) tabs[id].pinned = pinned;
+						if (tabs[id]) {
+							tabs[id].pinned = pinned;
+							if (pinAcrossRepos) tabs[id].pinAcrossRepos = true;
+						}
 					}),
 				);
 			}
@@ -276,7 +283,7 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 
 		/** Get tab IDs visible for the given branch key (pinned + matching branch + unscoped).
 		 *  Respects user-defined drag order (_order array) when present. */
-		getVisibleIds(currentBranchKey: string | null): string[] {
+		getVisibleIds(currentBranchKey: string | null, includeActive = true): string[] {
 			const isVisible = (id: string): boolean => {
 				const tab = state.tabs[id];
 				if (!tab) return false;
@@ -288,7 +295,8 @@ export function createTabManager<T extends BaseTab>(storeName: string = "unknown
 				// correctly filed under the repo that owns the file, and the repo gate
 				// below then hid it. Exempt only the active tab — exempting foreign
 				// tabs generally would leak every repo's tabs into every tab bar.
-				if (id === state.activeId) return true;
+				if (includeActive && id === state.activeId) return true;
+				if (tab.pinned && tab.pinAcrossRepos) return true;
 				if (tab.repoPath) {
 					if (!currentBranchKey?.startsWith(tab.repoPath + "|")) return false;
 				}

@@ -34,6 +34,12 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  __tuic_screen_arg() {
+    local flag="$1" skip="$2" a; shift 2
+    [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
+    for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
+    printf '%s' "$flag"
+  }
   claude() {
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
@@ -41,11 +47,21 @@ if [[ -n "$TUIC_SESSION" ]]; then
     if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude --settings "$TUIC_CLAUDE_SETTINGS" "$@"; else command claude "$@"; fi
   }
   codex() {
-    local a prev; for a in "$@"; do
-      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex "$@"; return; fi
+    local a prev screen
+    screen=$(__tuic_screen_arg "$TUIC_CODEX_SCREEN_FLAG" "$TUIC_CODEX_SCREEN_SKIP" "$@")
+    for a in "$@"; do
+      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex ${screen:+"$screen"} "$@"; return; fi
       prev="$a"
     done
-    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex "$@"; fi
+    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex ${screen:+"$screen"} "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex ${screen:+"$screen"} "$@"; fi
+  }
+  grok() {
+    local screen=$(__tuic_screen_arg "$TUIC_GROK_SCREEN_FLAG" "$TUIC_GROK_SCREEN_SKIP" "$@")
+    command grok ${screen:+"$screen"} "$@"
+  }
+  opencode() {
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
@@ -87,6 +103,12 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  __tuic_screen_arg() {
+    local flag="$1" skip="$2" a; shift 2
+    [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
+    for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
+    printf '%s' "$flag"
+  }
   claude() {
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
@@ -94,11 +116,21 @@ if [[ -n "$TUIC_SESSION" ]]; then
     if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude --settings "$TUIC_CLAUDE_SETTINGS" "$@"; else command claude "$@"; fi
   }
   codex() {
-    local a prev; for a in "$@"; do
-      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex "$@"; return; fi
+    local a prev screen
+    screen=$(__tuic_screen_arg "$TUIC_CODEX_SCREEN_FLAG" "$TUIC_CODEX_SCREEN_SKIP" "$@")
+    for a in "$@"; do
+      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex ${screen:+"$screen"} "$@"; return; fi
       prev="$a"
     done
-    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex "$@"; fi
+    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex ${screen:+"$screen"} "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex ${screen:+"$screen"} "$@"; fi
+  }
+  grok() {
+    local screen=$(__tuic_screen_arg "$TUIC_GROK_SCREEN_FLAG" "$TUIC_GROK_SCREEN_SKIP" "$@")
+    command grok ${screen:+"$screen"} "$@"
+  }
+  opencode() {
+    local screen=$(__tuic_screen_arg "$TUIC_OPENCODE_SCREEN_FLAG" "$TUIC_OPENCODE_SCREEN_SKIP" "$@")
+    command opencode ${screen:+"$screen"} "$@"
   }
   goose() {
     local a; for a in "$@"; do
@@ -132,6 +164,23 @@ function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); en
 function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
+  function __tuic_screen_arg
+    set -l flag $argv[1]
+    set -l skip $argv[2]
+    set -l args $argv[3..]
+    if test -z "$flag"
+      return
+    end
+    if test -n "$skip"; and test "$args[1]" = "$skip"
+      return
+    end
+    for a in $args
+      if test "$a" = "$flag"
+        return
+      end
+    end
+    printf '%s' "$flag"
+  end
   function claude --wraps claude
     for a in $argv
       switch $a
@@ -146,21 +195,40 @@ if set -q TUIC_SESSION
     end
   end
   function codex --wraps codex
+    set -l flag ''
+    set -l skip ''
+    if set -q TUIC_CODEX_SCREEN_FLAG; set flag $TUIC_CODEX_SCREEN_FLAG; end
+    if set -q TUIC_CODEX_SCREEN_SKIP; set skip $TUIC_CODEX_SCREEN_SKIP; end
+    set -l screen (__tuic_screen_arg "$flag" "$skip" $argv)
     set -l prev
     for a in $argv
       if test "$prev" = -c; and string match -q 'notify=*' -- $a
-        command codex $argv; return
+        command codex $screen $argv; return
       end
       if string match -q -- '-cnotify=*' $a; or string match -q -- '--config=notify=*' $a
-        command codex $argv; return
+        command codex $screen $argv; return
       end
       set prev $a
     end
     if set -q TUIC_CODEX_NOTIFY
-      command codex $argv -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"
+      command codex $screen $argv -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"
     else
-      command codex $argv
+      command codex $screen $argv
     end
+  end
+  function grok --wraps grok
+    set -l flag ''
+    if set -q TUIC_GROK_SCREEN_FLAG; set flag $TUIC_GROK_SCREEN_FLAG; end
+    set -l screen (__tuic_screen_arg "$flag" '' $argv)
+    command grok $screen $argv
+  end
+  function opencode --wraps opencode
+    set -l flag ''
+    set -l skip ''
+    if set -q TUIC_OPENCODE_SCREEN_FLAG; set flag $TUIC_OPENCODE_SCREEN_FLAG; end
+    if set -q TUIC_OPENCODE_SCREEN_SKIP; set skip $TUIC_OPENCODE_SCREEN_SKIP; end
+    set -l screen (__tuic_screen_arg "$flag" "$skip" $argv)
+    command opencode $screen $argv
   end
   function goose --wraps goose
     for a in $argv
@@ -214,6 +282,10 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
             app_data_dir.join("agent-hooks/codex-notify.sh"),
         );
     }
+    let agents_config = crate::config::load_agents_config();
+    for (agent, _, _) in crate::agent_hook_launch::SCREEN_POLICIES {
+        inject_screen_policy(cmd, &agents_config, agent, agent);
+    }
 
     if crate::pty::is_wsl_shell(shell) {
         // WSL default shell is bash. Inject bash integration with
@@ -225,6 +297,35 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
         inject_bash(&base, cmd);
     } else if shell.contains("fish") {
         inject_fish(&base, cmd);
+    }
+}
+
+fn inject_screen_policy(
+    cmd: &mut portable_pty::CommandBuilder,
+    config: &crate::config::AgentsConfig,
+    agent_type: &str,
+    binary_path: &str,
+) {
+    let prefix = format!(
+        "TUIC_{}_SCREEN",
+        agent_type.to_ascii_uppercase().replace('-', "_")
+    );
+    let flag_key = format!("{prefix}_FLAG");
+    let skip_key = format!("{prefix}_SKIP");
+    cmd.env_remove(&flag_key);
+    cmd.env_remove(&skip_key);
+    if !crate::agent_hook_launch::prevents_alt_screen_in(config, agent_type) {
+        return;
+    }
+    let Some((flag, skipped_command)) = crate::agent_hook_launch::screen_policy(agent_type) else {
+        return;
+    };
+    if !crate::agent::supports_no_alt_screen(agent_type, binary_path) {
+        return;
+    }
+    cmd.env(flag_key, flag);
+    if let Some(command) = skipped_command {
+        cmd.env(skip_key, command);
     }
 }
 
@@ -323,6 +424,88 @@ fn script_path_str(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn injected_shell_uses_agent_settings_and_clears_stale_screen_environment() {
+        use std::ffi::OsStr;
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let mut config = crate::config::AgentsConfig::default();
+        for agent in ["codex", "grok", "opencode"] {
+            config.agents.insert(
+                agent.into(),
+                crate::config::AgentSettings {
+                    prevent_alt_screen: Some(false),
+                    ..Default::default()
+                },
+            );
+        }
+        crate::config::save_agents_config(config).unwrap();
+        let mut cmd = portable_pty::CommandBuilder::new("bash");
+        cmd.env("TUIC_CODEX_SCREEN_FLAG", "stale");
+        inject(dir.path(), "bash", &mut cmd);
+        assert_eq!(cmd.get_env("TUIC_CODEX_SCREEN_FLAG"), None);
+        assert_eq!(cmd.get_env("TUIC_GROK_SCREEN_FLAG"), None);
+        assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"), None);
+        assert!(cmd.get_env("TUIC_CLAUDE_SETTINGS").is_some());
+        assert!(cmd.get_env("TUIC_CODEX_NOTIFY").is_some());
+        assert_eq!(
+            cmd.get_env("TUIC_SHELL_INTEGRATION"),
+            Some(OsStr::new(
+                &dir.path().join("shell-integration/tuic-integration.bash")
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_environment_exports_only_supported_enabled_screen_policies() {
+        use std::ffi::OsStr;
+        let supported = crate::test_support::fake_ssh_script(
+            "shell-screen-supported",
+            "printf '%s\\n' '--no-alt-screen --mini'",
+            "echo --no-alt-screen --mini",
+        );
+        let unsupported = crate::test_support::fake_ssh_script(
+            "shell-screen-unsupported",
+            "printf '%s\\n' 'old help'",
+            "echo old help",
+        );
+        let mut config = crate::config::AgentsConfig::default();
+        let mut cmd = portable_pty::CommandBuilder::new("bash");
+        inject_screen_policy(&mut cmd, &config, "codex", &supported.to_string_lossy());
+        assert_eq!(
+            cmd.get_env("TUIC_CODEX_SCREEN_FLAG"),
+            Some(OsStr::new("--no-alt-screen"))
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_CODEX_SCREEN_SKIP"),
+            Some(OsStr::new("exec"))
+        );
+        inject_screen_policy(&mut cmd, &config, "opencode", &supported.to_string_lossy());
+        assert_eq!(
+            cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"),
+            Some(OsStr::new("--mini"))
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"),
+            Some(OsStr::new("run"))
+        );
+
+        inject_screen_policy(&mut cmd, &config, "codex", &unsupported.to_string_lossy());
+        assert_eq!(cmd.get_env("TUIC_CODEX_SCREEN_FLAG"), None);
+        assert_eq!(cmd.get_env("TUIC_CODEX_SCREEN_SKIP"), None);
+        config.agents.insert(
+            "opencode".into(),
+            crate::config::AgentSettings {
+                prevent_alt_screen: Some(false),
+                ..Default::default()
+            },
+        );
+        inject_screen_policy(&mut cmd, &config, "opencode", &supported.to_string_lossy());
+        assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_FLAG"), None);
+        assert_eq!(cmd.get_env("TUIC_OPENCODE_SCREEN_SKIP"), None);
+    }
 
     fn assert_wrapper_paths(shell: &str, script: &str) {
         let claude_inject = script
@@ -440,10 +623,14 @@ mod tests {
                 "{REAL_ECHO} is missing; the wrapper launch harness needs it"
             );
             // Under `target/`, so it is gitignored and survives between runs.
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-bin");
+            let dir = std::env::var_os("TUIC_SHELL_TEST_BIN_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-agent-bin")
+                });
             std::fs::create_dir_all(&dir).expect("create fake agent bin dir");
 
-            for agent in ["claude", "codex"] {
+            for agent in ["claude", "codex", "grok", "opencode"] {
                 let link = dir.join(agent);
                 if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(REAL_ECHO)) {
                     continue;
@@ -553,7 +740,10 @@ mod tests {
                 // Start from setting-off, so a case that wants injection has to
                 // ask for it and the off case cannot pass on an inherited value.
                 .env_remove("TUIC_CLAUDE_SETTINGS")
-                .env_remove("TUIC_CODEX_NOTIFY");
+                .env_remove("TUIC_CODEX_NOTIFY")
+                .env_remove("TUIC_CODEX_SCREEN_FLAG")
+                .env_remove("TUIC_GROK_SCREEN_FLAG")
+                .env_remove("TUIC_OPENCODE_SCREEN_FLAG");
             for (key, value) in tuic_env {
                 cmd.env(key, value);
             }
@@ -615,7 +805,43 @@ mod tests {
             setting_on_prepends_launch_scoped_status_flags,
             an_explicit_user_flag_suppresses_injection,
             setting_off_leaves_the_command_line_untouched,
+            screen_flags_follow_manual_agent_commands,
         );
+
+        fn screen_flags_follow_manual_agent_commands(shell: &str) {
+            let flags = [
+                ("TUIC_CODEX_SCREEN_FLAG", "--no-alt-screen"),
+                ("TUIC_CODEX_SCREEN_SKIP", "exec"),
+                ("TUIC_GROK_SCREEN_FLAG", "--no-alt-screen"),
+                ("TUIC_OPENCODE_SCREEN_FLAG", "--mini"),
+                ("TUIC_OPENCODE_SCREEN_SKIP", "run"),
+            ];
+            assert_in_shell(
+                shell,
+                "manual agents use the exported screen policy without changing explicit choices",
+                &flags,
+                "codex --model o3\n\
+                 codex exec --full-auto\n\
+                 codex --no-alt-screen --model o3\n\
+                 grok --model fast\n\
+                 grok --fullscreen --model fast\n\
+                 opencode --model fast\n\
+                 opencode run task\n\
+                 opencode --mini --model fast\n\
+                 command codex --model o3",
+                &[
+                    "--no-alt-screen --model o3",
+                    "exec --full-auto",
+                    "--no-alt-screen --model o3",
+                    "--no-alt-screen --model fast",
+                    "--no-alt-screen --fullscreen --model fast",
+                    "--mini --model fast",
+                    "run task",
+                    "--mini --model fast",
+                    "--model o3",
+                ],
+            );
+        }
 
         const CLAUDE_SETTINGS: &str = "/tuic/agent-hooks/claude.json";
         const CODEX_NOTIFY: &str = "/tuic/agent-hooks/codex-notify.sh";
@@ -698,6 +924,15 @@ mod tests {
                 &[],
                 "codex exec --full-auto",
                 &["exec --full-auto"],
+            );
+            assert_in_shell(
+                shell,
+                "Unsupported or disabled screen policies leave agent arguments unchanged",
+                &[],
+                "codex --model o3\n\
+                 grok --model fast\n\
+                 opencode --model fast",
+                &["--model o3", "--model fast", "--model fast"],
             );
         }
     }

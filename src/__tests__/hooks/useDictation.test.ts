@@ -90,10 +90,10 @@ describe("useDictation", () => {
 
 	describe("handleDictationStart", () => {
 		it("starts recording when enabled and ready", async () => {
-			await dictation.handleDictationStart();
+			await dictation.handleDictationStart("fn");
 
 			expect(mockDictationStore.refreshStatus).toHaveBeenCalled();
-			expect(mockDictationStore.startRecording).toHaveBeenCalled();
+			expect(mockDictationStore.startRecording).toHaveBeenCalledWith("fn");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Dictation: recording…");
 		});
 
@@ -238,7 +238,7 @@ describe("useDictation", () => {
 			// The text still lands — it is the part that was transcribed.
 			expect(mockPty.write).toHaveBeenCalledWith("sess-trunc", "tail of a long recording");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(
-				"Dictation: recording too long — the first 42s were not transcribed",
+				"Dictation: 42s of audio were lost before transcription",
 			);
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith("Ready");
 		});

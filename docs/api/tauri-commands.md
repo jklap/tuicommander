@@ -16,7 +16,7 @@
 
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
+| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, transitions, or removes a cancelled dependency from native stories. `list_plan_sources` discovers project Markdown plans and `add_plan_source` records one with its document title; both are also available through HTTP and MCP. `plan_view` returns a Rust-derived plan summary and transitive `abandoned` indicators; `transition_history` returns actor provenance. Removal requires a human caller, a Backlog dependent, a direct WontFix prerequisite, and the current revision. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
 | `story_capabilities` | none | `true` | Infallible capability probe used before loading the dialog. Its absence means the running desktop backend predates native stories. |
 
 ## Project Progress
@@ -24,7 +24,8 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
-| `progress_list` | `project, input.blockedOnly?, input.ptyId?` | `ProgressList` | The selected PTY's or project's newest 500 entries, available PTY IDs, and the stored last-visit mark. |
+| `progress_list` | `project, input.blockedOnly?, input.ptyId?, input.limit?, input.cursor?` | `ProgressList` | A newest-first page (default 10, maximum 100), matching total, next cursor, available PTY IDs, and stored last-visit mark. |
+| `progress_projects` | none | `string[]` | Journal projects ordered by their most recent entry, for clients without an active desktop repository. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
 | `progress_flow` | `project, input.ptyId?` | `ProgressFlow` | The journal as a delegation sequence: participants and ordered hand-off events (see `docs/api/http-api.md` → Project Progress). |
 | `progress_flow_detail` | `input.ptyId, input.agentId, input.part` | `{text}` | Full redacted prompt or report of one subagent arrow, fetched on demand. |
@@ -33,6 +34,8 @@
 The journal is append-only. There is no pause, clear, correction or export
 command: an entry is written once and either kept or deleted. `intent` entries
 are written by TUIC from the agent's `intent:` marker and cannot be reported.
+Every stored entry has secret-shaped text and step values redacted; agent and
+target names are redacted and capped at 80 characters.
 
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 
@@ -61,7 +64,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `can_spawn_session` | -- | `bool` | Check session limit |
 | `get_orchestrator_stats` | -- | `OrchestratorStats` | Active/max/available |
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
-| `list_active_sessions` | -- | `Vec<SessionInfo>` | List all sessions with `display_name_is_custom`, `display_name_from_spawn`, `is_remote`, the optional resolved `parent_session`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` — one builder serves both. Sessions running on a connected remote machine are in the list too, each carrying `connection_id`; a local row has none (#791-055e) |
+| `list_active_sessions` | -- | `Vec<SessionInfo>` | List all sessions with `display_name_is_custom`, `display_name_from_spawn`, `is_remote`, optional live `tuic_session`, the optional resolved `parent_session`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` — one builder serves both. Sessions running on a connected remote machine are in the list too, each carrying `connection_id`; a local row has none (#791-055e) |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
@@ -70,12 +73,12 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
 | `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `get_pty_capture` | -- | `JSON` | Raw PTY capture tap state: enabled, session filter, directory, bytes per session. Browser parity: `GET /diagnostics/capture`. |
-| `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap`; starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
+| `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap` or the absolute `TUIC_CAPTURE_DIR` override; a relative override returns an error and leaves recording disabled. Starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
 | `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col, history_base?` | `Result<String, String>` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Optional frame `history_base` rebases grid-relative rows atomically against history eviction; evicted endpoints are rejected. Browser parity: `GET /sessions/:id/terminal/selection-text` (`historyBase` query parameter). |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
-| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel and install a fresh delivery gate (counting from zero). Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
+| `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
@@ -216,21 +219,21 @@ reached is an error carrying ego's own sentence, never an empty result.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and best-effort warm its Git-ignored directories with copy-on-write copies. Parent tracked changes are not carried over. `instructions.warm_artifacts.warmed_directories` reports the number warmed, and `instructions.isolation` states that refs and objects are shared with the parent. |
-| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?` | `{ branch_delete_warning?: string, branch: string }` | Remove a linked worktree through `git worktree remove`, addressed by `workspace_id`. `force` permits discarding dirty files; `delete_branch` defaults true. Without force, an unmerged branch blocks the combined operation before the worktree is removed. If safe branch deletion still fails after removal, `branch_delete_warning` reports that the branch was kept. |
+| `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and start warming in the background. `instructions.warm_artifacts.status` is `pending`, matching HTTP/MCP. Parent tracked changes are not carried over. |
+| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion accepts ancestry in the default or checked-out integration branch, patch equivalence, or a merged GitHub PR whose verified head contains the local tip; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. `removal_rule` names the matching rule. |
 | `delete_local_branch` | `repo_path, branch_name, workspace_id, keep_worktree?` | `()` | Delete a local branch and dispose of the workspace `workspace_id` names. Two identifiers because there are two objects: `branch_name` is the ref to delete, `workspace_id` the checkout holding it. Refuses to delete the default branch, and refuses when the resolved workspace is on a different branch than the one asked for. Uses safe `git branch -d` |
 | `check_worktree_dirty` | `repo_path, workspace_id` | `bool` | Check if the workspace `workspace_id` names has uncommitted changes. Addressed by id because the answer gates an irreversible cleanup — a sibling on the same branch being clean must never authorise destroying this one. Returns false if the id resolves to no checkout. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
-| `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree" }>` | Every linked worktree of a repo, keyed by workspace id with branch and path as explicit fields. |
+| `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree", warm_artifacts }>` | Every linked worktree of a repo, keyed by workspace id. `warm_artifacts.status` is `pending`, `done`, or `failed`. |
 | `get_worktrees_dir` | -- | `String` | Worktrees base directory |
 | `generate_worktree_name_cmd` | `existing_names` | `String` | Generate unique name |
 | `list_local_branches` | `path` | `Vec<String>` | List local branches |
 | `checkout_remote_branch` | `repo_path, branch_name` | `()` | Check out a remote-only branch as a new local tracking branch |
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
-| `remove_orphan_worktree` | `repo_path, worktree_path` | `()` | Remove an orphan worktree by filesystem path (validated against repo) |
+| `remove_orphan_worktree` | `repo_path, worktree_path` | `()` | Remove a registered detached orphan by filesystem path. Refuses an in-progress Git operation or detached HEAD commit unreachable from durable refs. |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
-| `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When `after_merge` is `archive` or `delete` and the worktree is **not known to be clean**, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` to proceed. The commit count does not enter that decision: both cleanups end in `git worktree remove --force`, which destroys uncommitted work whether or not the branch carries commits. A dirty check that fails also blocks (`worktree_dirty` stays `false` because git never said "dirty"). If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
-| `finalize_merged_worktree` | `repo_path, workspace_id, action, force?` | `MergeArchiveResult` | Clean up a merged worktree. Passes the **same** dirty-worktree gate as `merge_and_archive_worktree`: without `force` a worktree that is not known to be clean comes back as `action: "needs_confirmation"` instead of being wiped (`merged: true` — only the cleanup stopped, the merge already landed). Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
-| `get_workspace_lifecycle` | `repo_path, workspace_id` | `{ dirty_files, commit_status, removal_safety, error? }` | Fresh workspace-id-addressed removal preflight. `dirty_files` counts the files a removal discards (`null` when the inspection failed — not `0`); `commit_status` is `unmerged`, `in_sync`, `merged`, or `unknown`; `removal_safety` is `safe`, `requires_force`, or `unknown`. Exact `HEAD` ancestry decides merged state, and `in_sync` separates HEAD standing on the default tip — which passes that same check having merged nothing — from a branch whose commits were integrated. Unknown never authorizes removal. HTTP twin: `GET /worktrees/lifecycle`. |
+| `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When `after_merge` is `archive` or `delete` and the worktree is **not known to be clean**, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` and the lifecycle `expected_fingerprint` to proceed. The backend rejects a changed fingerprint before cleanup. The commit count does not enter that decision: delete removes the checkout, while archive moves and repairs the linked Git checkout with its files intact. A locked checkout is not archived. A dirty check that fails also blocks (`worktree_dirty` stays `false` because git never said "dirty"). If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
+| `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up a merged worktree. Passes the **same** dirty-worktree gate as `merge_and_archive_worktree`: without `force` a worktree that is not known to be clean comes back as `action: "needs_confirmation"` instead of being wiped (`merged: true` — only the cleanup stopped, the merge already landed). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. Archive moves and repairs the linked checkout without pruning it; a lock stops archiving. Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
+| `get_workspace_lifecycle` | `repo_path, workspace_id` | `{ dirty_files, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` | Fresh workspace-id-addressed removal preflight. `missing_checkout: true` identifies a registered checkout whose directory is gone; it has no dirty fingerprint and requires force confirmation. `dirty_files` counts files a removal discards (`null` when unavailable — not `0`); `commit_status` is `unmerged`, `in_sync`, `merged`, or `unknown`; `removal_safety` is `safe`, `requires_force`, or `unknown`. Unknown never authorizes removal. HTTP twin: `GET /worktrees/lifecycle`. |
 | `list_base_ref_options` | `repo_path` | `Vec<String>` | List valid base refs for worktree creation |
 | `run_setup_script` | `script, cwd` | `JSON` | Run a setup script through `sh -c` / `cmd /C` in `cwd`; returns exit code and captured output |
 | `generate_clone_branch_name_cmd` | `base_name, existing_names` | `String` | Generate hybrid branch name for clone worktree |
@@ -264,8 +267,8 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
 | `save_keybindings` | `config` | `()` | Save keybinding overrides |
-| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs |
-| `save_agents_config` | `config` | `()` | Save per-agent run configs |
+| `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
+| `save_agents_config` | `config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
 | `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |
@@ -314,13 +317,16 @@ remote daemon.
 | `connect_remote_connection` | `id` | `()` | Bring a connection up. SSH connections may deploy a matching loopback-only daemon first, then authenticate with the vault pairing token; direct and unmanaged connections use the stored password exchange. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
 | `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
 | `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected — a connection that is not connected has no route to hand out |
+| `prepare_remote_update` | `id` | `UpdatePreview` | Select the release or matching local daemon binary and report both build identities and the live session count |
+| `update_and_restart_remote` | `id, confirmedSessions, expectedSha256` | `UpdatePreview` | Check the confirmation, update by Direct upload or SSH deployment, and verify the new build after reconnect |
 
 ## Agent Detection (`agent.rs`)
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary in PATH |
-| `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version lookup) |
+| `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary name in PATH or an exact absolute path, version, and cached `supports_no_alt_screen` help probe |
+| `prepare_agent_launch_args` | `agent_type, binary_path, args` | `Vec<String>` | Add a supported native-scrollback flag according to the agent setting; probes in a blocking worker with a deadline. HTTP parity: `POST /agents/launch-args` |
+| `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |
 | `open_in_app` | `path, app, line?, col?` | `()` | Open path in application; `line`/`col` are used only by editors that support them |
@@ -331,7 +337,7 @@ remote daemon.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
-| `verify_agent_session` | `agent_type, session_id, cwd` | `bool` | Verify if a specific agent session file exists on disk (for TUIC_SESSION resume) |
+| `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
 
@@ -455,7 +461,7 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `get_claude_usage_api` | -- | `UsageApiResponse` | Fetch rate-limit usage from Anthropic OAuth API |
+| `get_claude_usage_api` | `sessionId?` | `UsageApiResponse` | Fetch rate-limit usage for the Claude session's credential profile; omitted session selects the default profile |
 | `get_claude_usage_timeline` | `scope, days?` | `Vec<TimelinePoint>` | Hourly token usage from session transcripts |
 | `get_claude_session_stats` | `scope` | `SessionStats` | Aggregated token/session stats from JSONL transcripts |
 | `get_claude_project_list` | -- | `Vec<ProjectEntry>` | List project slugs with session counts |
@@ -470,10 +476,12 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 
 ## Voice Dictation (`dictation/`)
 
+These commands stay in the root `dictation/commands.rs` adapter; their audio and speech operations use `tuic-dictation`. The command names and payloads are unchanged by the crate split.
+
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `start_dictation` | -- | `()` | Start recording |
-| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s}` |
+| `start_dictation` | `source?` (`"fn"`, `"hotkey"`, `"ui"`) | `()` | Start recording; Fn starts are refused after native key release |
+| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s, truncated_s}`; `truncated_s` counts captured audio lost before transcription |
 | `inject_text` | `text` | `String` | Apply corrections |
 | `get_dictation_status` | -- | `DictationStatus` | Model/recording status plus normalized `audio_level` (0–1) |
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |
@@ -524,7 +532,9 @@ are unaffected (they build `NSAlert`) and stay as they are.
 |---------|------|---------|-------------|
 | `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
 | `resolve_terminal_paths` | `cwd, candidates` | `Vec<Option<ResolvedFilePath>>` | Batched form, answered **positionally**: entry `i` is the result for `candidates[i]`. One IPC round-trip per terminal screen instead of one per candidate |
+| `resolve_markdown_link` | `root, currentFile, href` | `MarkdownLinkTarget` | Decode and resolve a rendered Markdown link relative to its file; return a heading, file, missing path, or blocked network path. Runs filesystem work on the blocking pool |
 | `list_directory` | `path` | `Vec<DirEntry>` | List directory contents |
+| `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
 | `create_directory` | `path` | `()` | Create directory |
@@ -566,7 +576,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | `install_plugin_from_folder` | `path` | `PluginManifest` | Install from local folder |
 | `register_loaded_plugin` | `plugin_id` | `()` | Register a plugin as loaded (for lifecycle tracking) |
 | `unregister_loaded_plugin` | `plugin_id` | `()` | Unregister a plugin (on unload/disable) |
-| `set_plugin_output_watchers` | `client_id`, `seq`, `watchers: [{ id, pattern, flags }]` | `{ applied, rejected }` | Replace the OutputWatcher set of one frontend — the patterns the PTY reader thread matches lines against. The frontend pushes its whole set on every add or remove; sets are per `client_id`, and `seq` orders the mutations so a stale sync answers `applied: false` and changes nothing. The frontend re-sends the same set every 30 s while it holds any watcher — the backend has no disconnect signal, so that heartbeat is what keeps a live set from being evicted and what recovers one that already was. `rejected` lists the ids the Rust `regex` crate cannot compile (lookaround, backreferences, a negated class escape inside a character class); those watchers keep matching in the WebView, which then receives every line. |
+| `set_plugin_output_watchers` | `client_id`, `seq`, `watchers: [{ id, pattern, flags }]` | `{ applied, rejected }` | Replace the OutputWatcher set of one frontend — the patterns the PTY reader thread matches lines against. The frontend pushes its whole set on every add or remove; sets are per `client_id`, and `seq` orders the mutations so a stale sync answers `applied: false` and changes nothing. Tauri IPC sets are released when their WebView navigates or closes. Browser clients have no reliable disconnect signal, so they re-send every 30 s to recover from bounded eviction and keep live sets recent. `rejected` lists the ids the Rust `regex` crate cannot compile (lookaround, backreferences, a negated class escape inside a character class); those watchers keep matching in the WebView, which then receives every line. |
 
 ## Plugin Filesystem (`plugin_fs.rs`)
 
@@ -701,6 +711,8 @@ Drives an [ego](https://github.com/sstraus/ego) agent over the Agent Client
 Protocol. Every command is a one-line pass-through to `AcpClientManager`; each
 has an identical HTTP route (see `docs/api/http-api.md`) so a browser or the
 PWA gets the same answers, including the same error bodies.
+The shared event stream sends `turnFailed {message, state}` when an accepted
+prompt later fails; the event envelope identifies its session and turn.
 
 The binary this launches is **not** an argument. It comes from the
 `ego_executable` setting, read at each connect, so no caller over IPC or HTTP
@@ -721,8 +733,9 @@ can choose what the host runs.
 | `acp_session_fork` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/fork` |
 | `acp_session_delete` | `connectionId, sessionId` | `()` | `session/delete` — the session is gone for good |
 | `acp_session_close` | `connectionId, sessionId` | `()` | Detach without deleting |
-| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn; its updates arrive on the stream |
+| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn or accept it into the server-owned FIFO when one is running |
 | `acp_session_cancel` | `connectionId, sessionId` | `()` | Cancel the running turn |
+| `acp_queued_prompt_cancel` | `connectionId, sessionId, turnId` | `()` | Remove one queued prompt before it reaches ego |
 | `acp_session_set_config_option` | `connectionId, sessionId, configId, value` | `Vec<SessionConfigOption>` | Set one option; the agent returns the whole resulting set |
 | `acp_turn_pause` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/pause`. `state` may be `pending` — the hold has not landed yet |
 | `acp_turn_resume` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/resume` |

@@ -146,18 +146,43 @@ export function buildAgentLaunchCommand(
 	agentSessionId?: string | null,
 	agentType?: AgentType | null,
 ): string {
-	if (!agentSessionId) return command;
+	let result = command;
+	if (agentSessionId) {
+		const parts = command.split(" ");
+		const binary = parts[0];
+		const binaryName = pathBasename(binary) ?? "";
 
-	const parts = command.split(" ");
-	const binary = parts[0];
-	const binaryName = pathBasename(binary) ?? "";
+		const isClaude = agentType === "claude" || binaryName.startsWith("claude");
+		if (isClaude) result = [binary, "--session-id", agentSessionId, ...parts.slice(1)].join(" ");
+	}
 
-	const isClaude = agentType === "claude" || binaryName.startsWith("claude");
-	if (!isClaude) return command;
+	return result;
+}
 
-	// Insert --session-id right after the binary
-	const rest = parts.slice(1);
-	return [binary, "--session-id", agentSessionId, ...rest].join(" ");
+/** Rust owns flag selection, capability probing and subcommand exemptions. */
+export async function prepareAgentLaunchCommand(
+	command: string,
+	agentSessionId: string | null | undefined,
+	agentType: AgentType,
+	cwd?: string | null,
+): Promise<string> {
+	const base = buildAgentLaunchCommand(command, agentSessionId, agentType);
+	const parts = splitEnvPrefix(base);
+	const [binary, ...args] = parts.argv;
+	if (!binary) return base;
+	try {
+		const prepared = await rpc<string[]>("prepare_agent_launch_args", {
+			agentType,
+			binaryPath: binary,
+			args,
+			repoPath: cwd,
+		});
+		if (!Array.isArray(prepared) || !prepared.every((arg) => typeof arg === "string")) return base;
+		return [...parts.env, binary, ...prepared].join(" ");
+	} catch {
+		// If the backend is unavailable, launch without an unverified CLI flag.
+		return base;
+	}
 }
 
 /**
@@ -179,7 +204,7 @@ export function buildResumeCommand(
 	}
 	if (base === null) base = AGENTS[agentType].resumeCommand;
 	if (base === null) return null;
-	return applyDefaultRunConfig(agentType, base, launchCommand, cwd);
+	return buildAgentLaunchCommand(applyDefaultRunConfig(agentType, base, launchCommand, cwd), null, agentType);
 }
 
 /**
@@ -219,7 +244,12 @@ export async function verifyAndBuildResumeCommand(
 			});
 			if (exists) {
 				const cmd = disc.resumeWithId(sessionId);
-				return applyDefaultRunConfig(agentType, cmd, launchCommand, cwd);
+				return prepareAgentLaunchCommand(
+					applyDefaultRunConfig(agentType, cmd, launchCommand, cwd),
+					null,
+					agentType,
+					cwd,
+				);
 			}
 			return null;
 		} catch {
@@ -228,5 +258,13 @@ export async function verifyAndBuildResumeCommand(
 	}
 
 	// No verified session — fall back to static resumeCommand
-	return buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
+	const resumed = buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
+	return resumed
+		? prepareAgentLaunchCommand(
+				resumed,
+				null,
+				agentType,
+				cwd,
+			)
+		: null;
 }

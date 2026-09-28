@@ -1,4 +1,6 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
@@ -11,10 +13,169 @@ const TARGETS: &[(&str, &str)] = &[
 ];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BuildIdentity {
+    pub(crate) version: String,
+    pub(crate) target: String,
+    pub(crate) sha256: String,
+}
+
+/// Keep the digest of the executable that started this process. Reading the
+/// path again after an update would describe the replacement, not this daemon.
+pub(crate) fn running_build_identity() -> Result<&'static BuildIdentity, String> {
+    static RUNNING: OnceLock<Result<BuildIdentity, String>> = OnceLock::new();
+    RUNNING
+        .get_or_init(|| {
+            let path = std::env::current_exe()
+                .map_err(|error| format!("could not locate running executable: {error}"))?;
+            let mut file = std::fs::File::open(&path)
+                .map_err(|error| format!("could not open running executable: {error}"))?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file
+                    .read(&mut buffer)
+                    .map_err(|error| format!("could not hash running executable: {error}"))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            Ok(BuildIdentity {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                target: env!("TUIC_TARGET_TRIPLE").to_string(),
+                sha256: hex_digest(&hasher.finalize()),
+            })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalAsset {
     pub(crate) path: PathBuf,
     pub(crate) sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UpdateAsset {
+    pub(crate) binary: LocalAsset,
+    pub(crate) source: &'static str,
+    pub(crate) target: String,
+    pub(crate) version: String,
+}
+
+/// Prefer the desktop release asset. Development builds can use a sibling
+/// tuic-remote binary, but only when the daemon target equals this build target.
+pub(crate) async fn resolve_update_asset(target: &str) -> Result<UpdateAsset, String> {
+    let executable =
+        std::env::current_exe().map_err(|e| format!("could not locate desktop binary: {e}"))?;
+    let sibling = executable
+        .parent()
+        .ok_or_else(|| "desktop executable has no directory".to_string())?
+        .join(if cfg!(windows) {
+            "tuic-remote.exe"
+        } else {
+            "tuic-remote"
+        });
+    resolve_update_asset_from_url(
+        target,
+        &asset_url(env!("CARGO_PKG_VERSION"), target),
+        &sibling,
+        None,
+    )
+    .await
+}
+
+async fn resolve_update_asset_from_url(
+    target: &str,
+    url: &str,
+    local_path: &Path,
+    known_local_target: Option<&str>,
+) -> Result<UpdateAsset, String> {
+    match ensure_local_from_url(env!("CARGO_PKG_VERSION"), target, url).await {
+        Ok(binary) => Ok(UpdateAsset {
+            binary,
+            source: "release",
+            target: target.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }),
+        Err(error) if error.starts_with("no tuic-remote release asset") => {
+            let local_identity = if known_local_target.is_none() {
+                Some(probe_local_binary(local_path).await?)
+            } else {
+                None
+            };
+            let local_target = known_local_target
+                .or_else(|| {
+                    local_identity
+                        .as_ref()
+                        .map(|identity| identity.target.as_str())
+                })
+                .ok_or_else(|| "local daemon did not report its target".to_string())?;
+            if target != local_target {
+                return Err(format!(
+                    "release asset unavailable for remote target {target}; local tuic-remote target is {local_target}"
+                ));
+            }
+            if !local_path.is_file() {
+                return Err(format!(
+                    "release asset unavailable; locally built tuic-remote for {local_target} not found at {}",
+                    local_path.display()
+                ));
+            }
+            let binary = local_asset(local_path.to_path_buf()).await?;
+            if local_identity
+                .as_ref()
+                .is_some_and(|identity| identity.sha256 != binary.sha256)
+            {
+                return Err("local daemon binary changed after build identity probe".to_string());
+            }
+            Ok(UpdateAsset {
+                binary,
+                source: "local",
+                target: target.to_string(),
+                version: local_identity.map_or_else(
+                    || env!("CARGO_PKG_VERSION").to_string(),
+                    |identity| identity.version,
+                ),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn probe_local_binary(path: &Path) -> Result<BuildIdentity, String> {
+    if !path.is_file() {
+        return Err(format!(
+            "locally built tuic-remote not found at {}",
+            path.display()
+        ));
+    }
+    let mut command = tokio::process::Command::new(path);
+    command.arg("--build-info").kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(300), command.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "local tuic-remote build probe timed out at {}",
+                path.display()
+            )
+        })?
+        .map_err(|error| {
+            format!(
+                "could not run local tuic-remote at {}: {error}",
+                path.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "local tuic-remote did not report build identity at {}",
+            path.display()
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid local tuic-remote build identity: {error}"))
 }
 
 pub(crate) fn target_for(uname: &str) -> Option<&'static str> {
@@ -31,11 +192,6 @@ pub(crate) fn asset_url(version: &str, target: &str) -> String {
     format!(
         "https://github.com/sstraus/tuicommander/releases/download/v{version}/tuic-remote-{target}"
     )
-}
-
-pub(crate) async fn ensure_local(version: &str, target: &str) -> Result<LocalAsset, String> {
-    let url = asset_url(version, target);
-    ensure_local_from_url(version, target, &url).await
 }
 
 async fn ensure_local_from_url(
@@ -275,6 +431,75 @@ mod tests {
         assert_eq!(
             error,
             "no tuic-remote release asset for x86_64-unknown-linux-gnu at v9.8.7"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_source_falls_back_only_for_a_matching_local_target() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let local = config.path().join("tuic-remote");
+        std::fs::write(&local, b"replacement executable").unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .expect(2)
+            .create_async()
+            .await;
+        let url = format!("{}/missing", server.url());
+
+        let selected = resolve_update_asset_from_url(
+            "aarch64-apple-darwin",
+            &url,
+            &local,
+            Some("aarch64-apple-darwin"),
+        )
+        .await
+        .expect("matching local binary");
+        assert_eq!(selected.source, "local");
+        assert_eq!(
+            selected.binary.sha256,
+            "74faa3811f5e551111ed370650ae6d6acf14f8f7141bc5c4f653eb52bf57bf16"
+        );
+
+        let error = resolve_update_asset_from_url(
+            "x86_64-unknown-linux-gnu",
+            &url,
+            &local,
+            Some("aarch64-apple-darwin"),
+        )
+        .await
+        .expect_err("cross-target binary must be refused");
+        assert!(error.contains("remote target x86_64-unknown-linux-gnu"));
+        assert!(error.contains("local tuic-remote target is aarch64-apple-darwin"));
+    }
+
+    #[tokio::test]
+    async fn update_source_prefers_the_matching_release_asset() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let local = config.path().join("tuic-remote");
+        std::fs::write(&local, b"replacement executable").unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/release")
+            .with_status(200)
+            .with_body(b"remote binary".as_slice())
+            .create_async()
+            .await;
+        let selected = resolve_update_asset_from_url(
+            "aarch64-apple-darwin",
+            &format!("{}/release", server.url()),
+            &local,
+            Some("aarch64-apple-darwin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected.source, "release");
+        assert_eq!(
+            selected.binary.sha256,
+            "7dee7cc2fcb3d9ee8394182fe8d23a1a3d7e5c80b869b281269df9215a5abf2f"
         );
     }
 }

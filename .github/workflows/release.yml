@@ -429,14 +429,15 @@ jobs:
           TAG="v${VERSION}"
 
           # Extract changelog section for this version
-          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found" CHANGELOG.md > /tmp/changelog-section.md
+          mkdir -p .tmp/tuic-tests
+          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found" CHANGELOG.md > .tmp/tuic-tests/changelog-section.md
 
           # Build release body: changelog + download legend
           {
             echo "## What's Changed"
             echo ""
-            if [ -s /tmp/changelog-section.md ]; then
-              cat /tmp/changelog-section.md
+            if [ -s .tmp/tuic-tests/changelog-section.md ]; then
+              cat .tmp/tuic-tests/changelog-section.md
             else
               echo "See [CHANGELOG.md](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md) for details."
             fi
@@ -489,6 +490,6 @@ jobs:
           irm https://tuicommander.com/install.ps1 | iex
           ```
           FOOTER
-          } > /tmp/release-body.md
+          } > .tmp/tuic-tests/release-body.md
 
-          gh release edit "${TAG}" --notes-file /tmp/release-body.md --draft=false
+          gh release edit "${TAG}" --notes-file .tmp/tuic-tests/release-body.md --draft=false
