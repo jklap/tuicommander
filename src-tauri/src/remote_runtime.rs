@@ -1844,9 +1844,10 @@ mod tests {
                 "/remote/update",
                 axum::routing::post({
                     let uploaded = uploaded.clone();
-                    move || {
+                    move |body: axum::body::Bytes| {
                         let uploaded = uploaded.clone();
                         async move {
+                            assert_eq!(body.as_ref(), b"remote binary");
                             uploaded.fetch_add(1, Ordering::SeqCst);
                             StatusCode::ACCEPTED
                         }
@@ -2050,9 +2051,10 @@ mod tests {
                 "/remote/update",
                 axum::routing::post({
                     let uploads = uploads.clone();
-                    move || {
+                    move |body: axum::body::Bytes| {
                         let uploads = uploads.clone();
                         async move {
+                            assert_eq!(body.as_ref(), b"remote binary");
                             uploads.fetch_add(1, Ordering::SeqCst);
                             StatusCode::ACCEPTED
                         }
