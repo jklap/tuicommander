@@ -398,6 +398,7 @@ fn report_progress_event(
         None,
         None,
         None,
+        None,
     )
 }
 

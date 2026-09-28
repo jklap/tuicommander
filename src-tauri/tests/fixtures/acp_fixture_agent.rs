@@ -19,6 +19,7 @@
 //! | Step | Meaning |
 //! | --- | --- |
 //! | `expect` | Read the next client frame. Assert `method`; subset-match `params` when given; remember its `id` under `capture`. |
+//! | `expect_env` | Assert a variable in the launched ACP agent's environment. |
 //! | `expect_response` | Read the next client frame. Assert it answers `id`; subset-match `result`, or assert `errorCode`. |
 //! | `respond` | Write a result for a captured request id. `result_file` reads the result from a file in the root instead, so one recording can serve every scenario that needs it. |
 //! | `error` | Write a JSON-RPC error for a captured request id. |
@@ -114,6 +115,11 @@ impl Agent {
 
     fn run(&mut self, step: &Value, line: usize) {
         match step.get("step").and_then(Value::as_str) {
+            Some("expect_env") => {
+                let name = required_str(step, "name", line);
+                let expected = required_str(step, "value", line);
+                assert_eq!(std::env::var(name).ok().as_deref(), Some(expected), "scenario line {line}: {name}");
+            }
             Some("expect") => self.expect(step, line),
             Some("expect_response") => self.expect_response(step, line),
             Some("respond") => {

@@ -46,29 +46,106 @@ pub(crate) fn ego_config(state: &AppState) -> Result<EgoAcpConfig, AcpClientErro
 }
 
 pub(crate) async fn connect(
-    state: &AppState,
+    state: &Arc<AppState>,
     root: PathBuf,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
     let config = ego_config(state)?;
-    state.acp.connect(&config, AcpConnectRequest { root }).await
+    let peer_id = peer_id_for_root(state, &root).await?;
+    let snapshot = state
+        .acp
+        .connect_with_peer(&config, AcpConnectRequest { root }, peer_id.clone())
+        .await?;
+    label_peer(state, &peer_id);
+    Ok(snapshot)
 }
 
 pub(crate) async fn reconnect(
-    state: &AppState,
+    state: &Arc<AppState>,
     connection_id: AcpConnectionId,
     root: PathBuf,
 ) -> Result<AcpConnectionSnapshot, AcpClientError> {
     let config = ego_config(state)?;
-    state
+    let peer_id = peer_id_for_root(state, &root).await?;
+    let snapshot = state
         .acp
-        .reconnect(
+        .reconnect_with_peer(
             &config,
             AcpReconnectRequest {
                 connection_id,
                 root,
             },
+            Some(peer_id.clone()),
         )
+        .await?;
+    label_peer(state, &peer_id);
+    Ok(snapshot)
+}
+
+fn label_peer(state: &AppState, peer_id: &str) {
+    if let Some(mut peer) = state.peer_agents.get_mut(peer_id) {
+        peer.name = "ego".to_string();
+        peer.project = state
+            .acp
+            .peer_root(peer_id)
+            .map(|root| root.to_string_lossy().into_owned());
+    }
+}
+
+/// Persist the host-issued peer address before ego starts, so reconnect and an
+/// app restart hand the same address to both ego and its MCP bridge.
+async fn peer_id_for_root(
+    state: &Arc<AppState>,
+    root: &std::path::Path,
+) -> Result<String, AcpClientError> {
+    let root = tokio::fs::canonicalize(root)
         .await
+        .map_err(|error| AcpClientError::invalid_input(format!("invalid ACP root: {error}")))?;
+    if !tokio::fs::metadata(&root)
+        .await
+        .map_err(|error| AcpClientError::invalid_input(format!("invalid ACP root: {error}")))?
+        .is_dir()
+    {
+        return Err(AcpClientError::invalid_input(
+            "ACP root must be a directory",
+        ));
+    }
+    let root = root
+        .to_str()
+        .ok_or_else(|| AcpClientError::invalid_input("ACP root must be valid UTF-8"))?
+        .to_string();
+    if let Some(id) = state
+        .config
+        .read()
+        .ai_chat_peer_ids
+        .get(&root)
+        .filter(|id| crate::acp::valid_peer_id(id))
+        .cloned()
+    {
+        return Ok(id);
+    }
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        let mut selected = String::new();
+        crate::config::commit_config_change(&state, |current| {
+            let mut next = current.clone();
+            selected = next
+                .ai_chat_peer_ids
+                .get(&root)
+                .filter(|id| crate::acp::valid_peer_id(id))
+                .cloned()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            next.ai_chat_peer_ids.insert(root, selected.clone());
+            Ok(next)
+        })
+        .map_err(|error| {
+            AcpClientError::invalid_input(format!("cannot persist ACP peer identity: {error}"))
+        })?;
+        Ok(selected)
+    })
+    .await
+    .map_err(|error| {
+        AcpClientError::invalid_input(format!("cannot prepare ACP peer identity: {error}"))
+    })?
 }
 
 /// Forward one connection's events as frames until the stream ends.
@@ -429,6 +506,38 @@ mod tests {
 
     use super::*;
     use crate::acp::{AcpClientEvent, AcpEventJournal};
+
+    #[tokio::test]
+    async fn a_conversation_peer_survives_reconnect_and_app_restart() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let root = tempfile::tempdir().unwrap();
+        let other_root = tempfile::tempdir().unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let first = peer_id_for_root(&state, root.path()).await.unwrap();
+        assert!(uuid::Uuid::parse_str(&first).is_ok());
+        assert_eq!(peer_id_for_root(&state, root.path()).await.unwrap(), first);
+        assert_ne!(
+            peer_id_for_root(&state, other_root.path()).await.unwrap(),
+            first
+        );
+
+        let persisted = crate::config::load_app_config();
+        let restarted = Arc::new(crate::state::tests_support::make_test_app_state());
+        *restarted.config.write() = persisted;
+        assert_eq!(
+            peer_id_for_root(&restarted, root.path()).await.unwrap(),
+            first
+        );
+        restarted.config.write().ai_chat_peer_ids.insert(
+            root.path().to_string_lossy().into_owned(),
+            uuid::Uuid::parse_str(&first).unwrap().simple().to_string(),
+        );
+        let repaired = peer_id_for_root(&restarted, root.path()).await.unwrap();
+        assert_eq!(repaired.len(), 36, "bridge headers require canonical UUIDs");
+        assert_ne!(repaired, first);
+    }
 
     /// `acp_subscribe` is a sync command, so Tauri runs it on the main thread,
     /// which has no Tokio runtime. A plain `#[test]` is that thread: spawning

@@ -222,7 +222,7 @@ pub(crate) fn emit_close_html_tabs(state: &AppState, session_id: &str) {
 /// `$TUIC_SESSION` is always written canonical, and narrowing the accepted
 /// surface keeps the injection guard tight.
 fn is_valid_uuid(s: &str) -> bool {
-    s.len() == 36 && Uuid::parse_str(s).is_ok()
+    crate::acp::valid_peer_id(s)
 }
 
 /// Current unix time in milliseconds. Centralizes the `SystemTime` boilerplate
@@ -392,12 +392,11 @@ fn link_pending_children_to_parent(
     children.len()
 }
 
-/// HTTP header the bridge asserts to declare which PTY session it belongs to.
-/// The value is the agent's `$TUIC_SESSION` (the PTY tab UUID), which the bridge
-/// inherits from its parent agent process's environment.
+/// HTTP header the bridge asserts to declare its TUIC peer identity. A PTY
+/// agent inherits it from its tab; ACP-hosted ego receives a host-issued UUID.
 const TUIC_SESSION_HEADER: &str = "x-tuic-session";
 
-/// Bind an MCP session to a PTY (tuic) session identity: upsert `peer_agents`
+/// Bind an MCP session to a TUIC peer identity: upsert `peer_agents`
 /// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
 /// `PEER_IDENTITY_BIND_LOCK` after applying the shared live-owner policy below.
 fn bind_peer_identity_locked(
@@ -687,8 +686,9 @@ fn register_peer_identity(
     }
 }
 
-/// Auto-bind an MCP session to its PTY identity from the `x-tuic-session` header
-/// that tuic-bridge asserts (it inherits `TUIC_SESSION` from the agent PTY).
+/// Auto-bind an MCP session to the `x-tuic-session` identity asserted by the
+/// bridge. PTY agents inherit it from the terminal; ACP ego receives it from
+/// the host's durable conversation binding.
 /// Makes managed-peer identity automatic — no explicit `agent register` needed, which
 /// matters for clients that never surface initialize `instructions` (e.g. Codex).
 /// Ignored unless the header is a well-formed UUID. Preserves an existing peer's
@@ -734,22 +734,27 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
             existing.project.clone(),
             existing.registered_at,
         ),
-        // A managed peer IS the terminal it runs in, so its address is the name
-        // worth showing. Defaulting every one of them to "agent" made list_peers a
-        // list of identical rows nobody could pick a recipient from. "agent"
-        // survives only for an identity with no live PTY to be named after.
+        // PTY peers take a terminal alias; the ACP peer is named ego and has
+        // a repository root but no terminal. Other external peers stay agent.
         None => (
             state
-                .live_pty_for_peer(tuic)
-                .and_then(|session_id| {
-                    state
-                        .session_maps
-                        .term_aliases
-                        .get(&session_id)
-                        .map(|alias| alias.value().clone())
+                .acp
+                .peer_root(tuic)
+                .map(|_| "ego".to_string())
+                .or_else(|| {
+                    state.live_pty_for_peer(tuic).and_then(|session_id| {
+                        state
+                            .session_maps
+                            .term_aliases
+                            .get(&session_id)
+                            .map(|alias| alias.value().clone())
+                    })
                 })
                 .unwrap_or_else(|| "agent".to_string()),
-            None,
+            state
+                .acp
+                .peer_root(tuic)
+                .map(|root| root.to_string_lossy().into_owned()),
             now_unix_ms(),
         ),
     };
@@ -5842,6 +5847,9 @@ async fn handle_progress(
     let agent_type = resolve_mcp_origin_agent_type(state, mcp_session_id);
     let workspace_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
     let pty_id = resolve_mcp_origin_pty(state, mcp_session_id);
+    let acp_session_id = resolve_mcp_origin_session(state, mcp_session_id)
+        .and_then(|peer| state.acp.peer_conversation(&peer))
+        .map(|(_, session)| session.to_string());
     let state = state.clone();
     run_blocking_handler(move || {
         match report_progress(
@@ -5851,6 +5859,7 @@ async fn handle_progress(
             agent_name,
             agent_type.as_deref(),
             pty_id.as_deref(),
+            acp_session_id.as_deref(),
         ) {
             Ok(receipt) => to_json_or_error(receipt),
             Err(error) => serde_json::json!({"error": error}),
@@ -5869,6 +5878,7 @@ pub(crate) fn report_progress(
     agent_name: Option<String>,
     agent_type: Option<&str>,
     pty_id: Option<&str>,
+    acp_session_id: Option<&str>,
 ) -> Result<crate::progress::ProgressReceipt, String> {
     let submitted = crate::progress::submit_progress_report(
         state.as_ref(),
@@ -5880,14 +5890,14 @@ pub(crate) fn report_progress(
     )?;
     let blocked_question = (submitted.kind == crate::progress::ProgressKind::Blocked)
         .then(|| (submitted.pty_id.clone(), submitted.text.clone()));
-    let receipt = emit_progress_entry(state, submitted);
-    if let Some((Some(session_id), text)) = blocked_question
-        && state.session_maps.sessions.contains_key(&session_id)
+    let receipt = emit_progress_entry_with_acp(state, submitted, acp_session_id);
+    if let Some((Some(session_id), text)) = blocked_question.as_ref()
+        && state.session_maps.sessions.contains_key(session_id)
     {
         // Reuse the authoritative session-state lane. It owns awaiting state,
         // parent routing, mobile deep links, and the per-session push limit.
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-            session_id,
+            session_id: session_id.clone(),
             parsed: serde_json::json!({
                 "type": "question",
                 "prompt_text": text,
@@ -5896,6 +5906,35 @@ pub(crate) fn report_progress(
             })
             .into(),
         });
+    }
+    if let (Some(session_id), Some((_, text))) = (acp_session_id, blocked_question.as_ref()) {
+        let config = state.config.read();
+        let push_ready = config.services.push.enabled
+            && !config.services.push.vapid_private_key.is_empty()
+            && !state.push_store.is_empty();
+        drop(config);
+        let window_focused = state
+            .desktop_window_focused
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if push_ready
+            && crate::state::mobile_push_away(
+                window_focused,
+                if window_focused {
+                    crate::state::hid_idle_seconds()
+                } else {
+                    None
+                },
+            )
+        {
+            crate::state::AppState::send_mobile_push_url(
+                state,
+                format!(
+                    "/mobile?acpSessionId={}",
+                    url::form_urlencoded::byte_serialize(session_id.as_bytes()).collect::<String>()
+                ),
+                text,
+            );
+        }
     }
     Ok(receipt)
 }
@@ -5907,8 +5946,19 @@ pub(crate) fn emit_progress_entry(
     state: &AppState,
     entry: crate::progress::ProgressEntry,
 ) -> crate::progress::ProgressReceipt {
+    emit_progress_entry_with_acp(state, entry, None)
+}
+
+fn emit_progress_entry_with_acp(
+    state: &AppState,
+    entry: crate::progress::ProgressEntry,
+    acp_session_id: Option<&str>,
+) -> crate::progress::ProgressReceipt {
     let receipt = crate::progress::ProgressReceipt { id: entry.id };
-    let payload = serde_json::json!({ "entry": &entry });
+    let mut payload = serde_json::json!({ "entry": &entry });
+    if let Some(session_id) = acp_session_id {
+        payload["acpSessionId"] = serde_json::json!(session_id);
+    }
     let repo_path = entry.project.clone();
     // There is no bus→window forwarder: producers dual-emit (AGENTS.md).
     #[cfg(feature = "desktop")]
@@ -9657,6 +9707,59 @@ mod tests {
                 .unwrap_or(false),
             "reverse map must contain the mcp session for O(1) cleanup"
         );
+    }
+
+    #[tokio::test]
+    async fn an_acp_peer_receives_mail_without_a_terminal() {
+        let state = test_state();
+        let peer = "550e8400-e29b-41d4-a716-446655440a01";
+        let mcp = "mcp-acp-peer";
+        assert!(apply_initialize_identity(&state, mcp, Some(peer)));
+        assert!(state.live_pty_for_peer(peer).is_none());
+        register_peer(&state, TEST_UUID_B, "sender", "mcp-acp-sender");
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "Please review the plan"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "inbox_only", "{sent}");
+        let received = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1000}),
+            Some(mcp),
+        )
+        .await;
+        assert_eq!(received["messages"][0]["content"], "Please review the plan");
+        assert!(state.live_pty_for_peer(peer).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_acp_peer_is_the_parent_of_a_child_it_spawns() {
+        let state = test_state();
+        let peer = "550e8400-e29b-41d4-a716-446655440a01";
+        let mcp = "mcp-acp-parent";
+        assert!(apply_initialize_identity(&state, mcp, Some(peer)));
+        assert!(state.live_pty_for_peer(peer).is_none());
+
+        let spawned = handle_agent(
+            &state,
+            loopback_addr(),
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "Report the result",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
+                "cwd": TEST_SPAWN_CWD,
+            }),
+            Some(mcp),
+        );
+        if spawned.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+        assert_eq!(spawned["parent_session_id"], peer, "{spawned}");
+        assert!(state.live_pty_for_peer(peer).is_none());
     }
 
     /// A client that comes back holding a reaped session id used to be
@@ -15454,6 +15557,7 @@ mod tests {
             Some("worker".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -15491,6 +15595,7 @@ mod tests {
             Some("worker".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
         assert_ne!(second.id, first.id);
@@ -15524,6 +15629,7 @@ mod tests {
             Some("worker".to_string()),
             Some("codex"),
             Some("asking-pty"),
+            None,
         )
         .unwrap();
 
@@ -15562,9 +15668,45 @@ mod tests {
             None,
             Some("codex"),
             Some("asking-pty"),
+            None,
         );
         assert_eq!(result.unwrap_err(), "text must not be empty");
         assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn blocked_acp_progress_reaches_the_conversation_without_a_pty_event() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let session_id = "01932d5e-0000-7000-8000-0000000000aa";
+
+        report_progress(
+            &state,
+            Some(&project.path().to_string_lossy()),
+            crate::progress::ProgressReportInput {
+                kind: crate::progress::ProgressKind::Blocked,
+                text: "Need approval for the next step".to_string(),
+                step: None,
+            },
+            Some("ego".to_string()),
+            None,
+            None,
+            Some(session_id),
+        )
+        .unwrap();
+
+        match events.try_recv() {
+            Ok(crate::state::AppEvent::ProgressRecorded { payload, .. }) => {
+                assert_eq!(payload["acpSessionId"], session_id);
+                assert_eq!(payload["entry"]["type"], "blocked");
+                assert!(payload["entry"].get("ptyId").is_none());
+            }
+            other => panic!("expected conversation-scoped progress push, got {other:?}"),
+        }
+        assert!(events.try_recv().is_err(), "an ACP peer has no PTY to wake");
     }
 
     #[tokio::test]
