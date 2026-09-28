@@ -128,7 +128,7 @@ export const RemoteServersTab: Component = () => {
 
 			<div class={s.group} style={{ display: "flex", "justify-content": "flex-end" }}>
 				<Show when={!editorTarget()}>
-					<button class={s.copyBtn} onClick={openAdd}>
+					<button class={s.testBtn} onClick={openAdd}>
 						Add Connection
 					</button>
 				</Show>
@@ -158,7 +158,7 @@ export const RemoteServersTab: Component = () => {
 				    label for any single input, and settingsSearchIndex.test.ts's
 				    extractTab treats every such element as an indexable "setting",
 				    which this sub-heading isn't. */}
-				<div style={{ "font-weight": 500, "font-size": "13px" }}>SSH Tunnels</div>
+				<div style={{ "font-weight": 500, "font-size": "13px" }}>SSH Port-Forwarding Tunnels</div>
 				<TunnelProfileList onEdit={openEditTunnel} />
 			</div>
 
@@ -229,8 +229,8 @@ export const RemoteServersTab: Component = () => {
 												<span>{connState.versionWarning}</span>
 												<Show when={conn().transport.type === "Ssh"}>
 													<button
-														class={s.copyBtn}
-														style={{ "flex-shrink": 0, "font-size": "11px", padding: "1px 6px" }}
+														class={s.testBtn}
+														style={{ "flex-shrink": 0 }}
 														disabled={updating() === conn().id}
 														onClick={() => updateSshBinary(conn().id)}
 													>
@@ -241,7 +241,7 @@ export const RemoteServersTab: Component = () => {
 										</Show>
 									</div>
 									<button
-										class={s.copyBtn}
+										class={s.testBtn}
 										style={{ "flex-shrink": 0, "white-space": "nowrap" }}
 										onClick={() => {
 											if (connState.status === "connected" || connState.status === "connecting") {
@@ -253,11 +253,11 @@ export const RemoteServersTab: Component = () => {
 									>
 										{connState.status === "connected" || connState.status === "connecting" ? "Disconnect" : "Connect"}
 									</button>
-									<button class={s.copyBtn} style={{ "flex-shrink": 0 }} onClick={() => openEditConnection(conn())}>
+									<button class={s.testBtn} style={{ "flex-shrink": 0 }} onClick={() => openEditConnection(conn())}>
 										Edit
 									</button>
 									<button
-										class={s.copyBtn}
+										class={s.testBtn}
 										onClick={() => removeConnection(conn().id, conn().name)}
 										disabled={deleting() === conn().id}
 										style={{ color: "var(--error, #e06c75)", "flex-shrink": 0 }}
