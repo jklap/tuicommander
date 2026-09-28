@@ -2211,7 +2211,7 @@ use the returned id for later calls.
 GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
 ```
 
-Returns a fresh `{ dirty_files, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
+Returns a fresh `{ dirty_files, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
 for one exact workspace. `dirty_files` counts the staged, unstaged and untracked
 files a removal would discard; `null` means the inspection failed and is not the
 same answer as `0`. `dirty_fingerprint` identifies checkout status, HEAD, and submodule refs for
@@ -2221,7 +2221,7 @@ for commits absent from its remote-tracking branches. `commit_status` is
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -2273,7 +2273,8 @@ Query parameters:
 - `deleteBranch` (optional, default `true`, or `false` when `force=true`) -- when `true`, also requests deletion of the local git branch
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
-- `expectedFingerprint` (required with `force=true`) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

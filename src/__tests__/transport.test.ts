@@ -1236,6 +1236,18 @@ describe("transport", () => {
 			);
 		});
 
+		it("forwards missing-checkout confirmation without a fingerprint", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "missing",
+				force: true,
+				confirmMissingCheckout: true,
+			});
+			expect(result.path).toBe(
+				"/worktrees/missing?repoPath=%2Fr&deleteBranch=false&force=true&confirmMissingCheckout=true",
+			);
+		});
+
 		it("keeps the branch by default when force only discards checkout files", () => {
 			const result = mapCommandToHttp("remove_worktree", {
 				repoPath: "/r",
