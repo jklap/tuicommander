@@ -8335,9 +8335,10 @@ pub(crate) fn prefill_agent_input(
 /// coalesced into one read and the CR is swallowed as part of the typed buffer,
 /// so the message just sits at the prompt unsubmitted (verified live against
 /// Codex: back-to-back hangs, CR after a gap submits).
-/// 50ms clears the child's read-scheduling latency for other agents. Codex
+/// 50ms clears the child's read-scheduling latency for known non-Codex agents. Codex
 /// suppresses Enter for 120ms after rapid payload characters, so it needs a
-/// 200ms post-payload gap. Ctrl-U is a control key before those characters.
+/// 200ms post-payload gap. An undetected agent uses the same safe 200ms gap.
+/// Ctrl-U is a control key before those characters.
 /// See https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs.
 ///
 /// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
@@ -8351,11 +8352,17 @@ const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(5
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 
 fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
-    if agent_type == Some("codex") {
-        CODEX_ENTER_GAP
-    } else {
-        INJECT_ENTER_GAP
+    match agent_type {
+        Some(
+            "claude" | "gemini" | "opencode" | "aider" | "amp" | "cursor" | "goose" | "grok"
+            | "droid" | "pi",
+        ) => INJECT_ENTER_GAP,
+        _ => CODEX_ENTER_GAP,
     }
+}
+
+pub(crate) fn sleep_agent_enter_gap(agent_type: Option<&str>) {
+    std::thread::sleep(injection_enter_gap(agent_type));
 }
 
 /// One piece of injection work, handed off by a caller that must not block.
@@ -8521,13 +8528,12 @@ fn write_agent_command_with_boundary(
     // sequence this guard protects. A caller that must not block therefore does
     // not shorten the gap — it stops being the thread that waits, by handing the
     // whole sequence to `INJECTION_QUEUE`.
-    let enter_gap = state
+    let agent_type = state
         .session_maps
         .session_states
         .get(session_id)
-        .map(|session| injection_enter_gap(session.agent_type.as_deref()))
-        .unwrap_or(INJECT_ENTER_GAP);
-    std::thread::sleep(enter_gap);
+        .and_then(|session| session.agent_type.clone());
+    sleep_agent_enter_gap(agent_type.as_deref());
 
     // Exclude payload echo already observable before Enter. The async handler
     // checks this boundary only after the complete Enter write returns; movement

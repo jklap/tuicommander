@@ -191,6 +191,51 @@ describe("usePty", () => {
 	});
 
 	describe("sendCommand()", () => {
+		it("keeps a Codex-safe Enter gap when an unrecognized foreground process owns the shell", async () => {
+			const writes: Array<{ data: string; at: number }> = [];
+			mockInvoke.mockImplementation(async (command: string, args?: { data?: string }) => {
+				if (command === "get_session_shell_family") return "posix";
+				if (command === "has_foreground_process") return "C2";
+				if (command === "write_pty") writes.push({ data: args?.data ?? "", at: performance.now() });
+				return undefined;
+			});
+
+			await pty.sendCommand("wrapped-codex", "review this", null);
+
+			expect(writes.map(({ data }) => data)).toEqual(["\x15", "review this", "\r"]);
+			expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(45);
+			expect(writes[2].at - writes[1].at).toBeGreaterThanOrEqual(195);
+		});
+
+		it("keeps a free shell on its ordinary text and Enter path", async () => {
+			const writes: string[] = [];
+			mockInvoke.mockImplementation(async (command: string, args?: { data?: string }) => {
+				if (command === "get_session_shell_family") return "posix";
+				if (command === "has_foreground_process") return null;
+				if (command === "write_pty") writes.push(args?.data ?? "");
+				return undefined;
+			});
+
+			await pty.sendCommand("free-shell", "echo ready", null);
+
+			expect(writes).toEqual(["\x15echo ready", "\r"]);
+		});
+
+		it("delays Enter after a failed foreground probe without changing shell input bytes", async () => {
+			const writes: Array<{ data: string; at: number }> = [];
+			mockInvoke.mockImplementation(async (command: string, args?: { data?: string }) => {
+				if (command === "get_session_shell_family") return "posix";
+				if (command === "has_foreground_process") throw new Error("process exited during probe");
+				if (command === "write_pty") writes.push({ data: args?.data ?? "", at: performance.now() });
+				return undefined;
+			});
+
+			await pty.sendCommand("uncertain-shell", "echo ready", null);
+
+			expect(writes.map(({ data }) => data)).toEqual(["\x15echo ready", "\r"]);
+			expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(195);
+		});
+
 		it("uses the central command helper to insert reviewable text without Enter", async () => {
 			mockInvoke.mockImplementation(async (command: string) => {
 				if (command === "get_session_shell_family") return "posix";

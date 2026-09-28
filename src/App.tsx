@@ -546,7 +546,7 @@ const App: Component = () => {
 		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
 		const shellFamily = await getShellFamily(sessionId);
 		try {
-			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily);
+			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily, true, sessionId);
 			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
 		} catch (err) {
 			appLogger.error(

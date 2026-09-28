@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use portable_pty::PtySize;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -256,13 +257,42 @@ pub(crate) fn write_pty_input_parts(
 /// order. Closes the interleave window a concurrent writer (peer injection,
 /// desktop `write_pty`) could otherwise land in between the text write and
 /// the Enter keystroke when the two writes took the PTY mutex separately.
+/// Agent Enter flushes the text and shares the injection scheduling gap;
+/// shell input and other keys remain raw atomic pairs.
 pub(crate) fn write_pty_input_pair(
     state: &Arc<AppState>,
     session_id: &str,
     text: &str,
     key: &str,
+    agent_type: Option<&str>,
 ) -> Result<(), String> {
-    write_pty_input_parts(state, session_id, &[text, key])
+    if key != "\r" || agent_type.is_none() {
+        return write_pty_input_parts(state, session_id, &[text, key]);
+    }
+
+    let writer = state
+        .pty_writer(session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let mut writer = writer.lock();
+    writer
+        .write_all(text.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    crate::pty::sleep_agent_enter_gap(agent_type);
+    writer
+        .write_all(key.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    drop(writer);
+    crate::pty_capture::record_input(session_id, text.as_bytes());
+    crate::pty_capture::record_input(session_id, key.as_bytes());
+    apply_input_bookkeeping(state, session_id, text);
+    apply_input_bookkeeping(state, session_id, key);
+    Ok(())
 }
 
 fn write_pty_input_bytes(
