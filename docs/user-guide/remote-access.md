@@ -165,7 +165,7 @@ keep compressing.
 
 Tunnel profiles are stored as TOML files. **Global profiles** live in `<config_dir>/tunnels/` and are available across all repos. **Per-repo profiles** are stored in `<repo>/.tuic/tunnels/` and override global profiles with the same ID.
 
-A tunnel with local forwards shows **Connected** after every local port accepts a TCP connection. If SSH exits first or a port does not start listening within 30 seconds, the tunnel reports the failure instead.
+A tunnel shows **Connected** only after SSH survives its initial 500 ms. With local forwards, every local port must also accept a TCP connection. If SSH exits first or a port does not start listening within 30 seconds, the tunnel reports the failure instead.
 
 ### Auto-Connect
 
