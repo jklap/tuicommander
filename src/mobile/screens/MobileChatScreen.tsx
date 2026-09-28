@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Composer } from "../../components/AIChatPanel/Composer";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
@@ -11,11 +11,21 @@ import type { AcpHostRequestId } from "../../types/acp";
 import styles from "./MobileChatScreen.module.css";
 
 export function MobileChatScreen() {
+	const linkedRepository = new URLSearchParams(location.search).get("repo");
+	const linkedSession = new URLSearchParams(location.search).get("session");
 	const [repositories, setRepositories] = createSignal<string[]>([]);
 	const [root, setRoot] = createSignal<string | null>(null);
 	const [repositoryError, setRepositoryError] = createSignal<string | null>(null);
 	const chat = createAcpChat(root, () => true);
 	const answering = new Set<AcpHostRequestId>();
+	let linkHandled = false;
+
+	createEffect(() => {
+		if (linkHandled || !linkedRepository || !linkedSession || root() !== linkedRepository) return;
+		if (chat.phase() !== "live" || !chat.sessions().some((session) => session.sessionId === linkedSession)) return;
+		linkHandled = true;
+		if (chat.sessionId() !== linkedSession) void chat.selectSession(linkedSession);
+	});
 
 	onMount(() => {
 		void settingsStore.hydrate();
@@ -23,7 +33,10 @@ export function MobileChatScreen() {
 			.then((config) => {
 				const paths = Object.keys(config.repos ?? {});
 				setRepositories(paths);
-				setRoot((current) => current ?? paths[0] ?? null);
+				setRoot(
+					(current) =>
+						current ?? (linkedRepository && paths.includes(linkedRepository) ? linkedRepository : paths[0]) ?? null,
+				);
 			})
 			.catch((error: unknown) => {
 				setRepositoryError("Could not load repositories.");

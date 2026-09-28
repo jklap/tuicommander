@@ -166,6 +166,19 @@ pub(crate) struct PushBatchResult {
     pub stale_endpoints: Vec<String>,
 }
 
+/// Reserve the shared 30-second mobile alert window for one session.
+pub(crate) fn reserve_push_slot(
+    last_push_ms: &mut Option<u64>,
+    now_ms: u64,
+    eligible: bool,
+) -> bool {
+    if !eligible || last_push_ms.is_some_and(|last| now_ms.saturating_sub(last) < 30_000) {
+        return false;
+    }
+    *last_push_ms = Some(now_ms);
+    true
+}
+
 /// Send a push notification to a list of subscriptions. `sent` counts accepted
 /// push-service requests, not notifications displayed by a phone.
 pub(crate) async fn send_push_batch(

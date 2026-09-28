@@ -31,6 +31,12 @@ activity and pending permission or form cards use the same ACP stream as desktop
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 
+When ego requests permission or a form response, a subscribed phone receives
+one push linking to that conversation in mobile Chat if the desktop is unfocused or idle. Answering
+on desktop before the notice is delivered suppresses the alert. Repeated
+requests in one conversation share a 30-second push limit. Activity updates
+do not alert the phone.
+
 ## What it is bound to
 
 **A repository and a session, never a terminal.** A turn ego runs outlives any
