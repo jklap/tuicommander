@@ -1907,10 +1907,22 @@ fn is_tcc_protected_path(path: &std::path::Path) -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    if !path.starts_with(&home) {
+    // Resolve parent components without touching disk: even checking existence
+    // on a path that reaches ~/Library through `..` can trigger TCC.
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    if !normalized.starts_with(&home) {
         return false;
     }
-    if let Ok(rel) = path.strip_prefix(&home)
+    if let Ok(rel) = normalized.strip_prefix(&home)
         && let Some(first) = rel.components().next()
     {
         let name = first.as_os_str().to_string_lossy();
@@ -3386,6 +3398,19 @@ mod tests {
     }
 
     // --- resolve_terminal_path tests ---
+
+    #[test]
+    fn tcc_guard_rejects_parent_traversal_into_protected_home_directories() {
+        let home = dirs::home_dir().unwrap();
+        for candidate in [
+            home.join("Projects/repo/../../Library/Mail"),
+            home.join("Projects/../Documents/report.md"),
+            home.join("Downloads/inside.txt"),
+        ] {
+            assert!(is_tcc_protected_path(&candidate), "{candidate:?}");
+        }
+        assert!(!is_tcc_protected_path(&home.join("Downloads/../Projects/readme.md")));
+    }
 
     #[test]
     fn markdown_link_resolution_decodes_paths_and_keeps_encoded_hashes() {
