@@ -49,7 +49,6 @@ export interface RemoveWorktreeResult {
 	/** Branch the removed workspace was on, read off the record before removal. */
 	branch: string;
 	removal_rule: string;
-	warnings: string[];
 }
 
 /** One workspace's checkout. Keyed by workspace id; the branch is a field on the

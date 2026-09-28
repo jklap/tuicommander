@@ -855,22 +855,40 @@ fn classify_branch_merge(
 ) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
     let default_tip = rev_at(repo, default_branch)?;
     let merged = is_ancestor(repo, tip, &default_tip)?;
-    // An ancestor tip alone cannot tell a branch that produced merged commits
-    // from a branch created at an older default tip and never advanced.
-    let creation_tip = git_cmd(repo)
+    // Ancestry alone cannot distinguish own commits from a branch that merely
+    // followed the default branch. The branch reflog records both its source
+    // and how its ref moved after creation.
+    let reflog = git_cmd(repo)
         .args([
             "reflog",
             "show",
-            "--format=%H",
+            "--format=%H%x09%gs",
             &format!("refs/heads/{branch}"),
         ])
         .run()
-        .map_err(|error| format!("could not inspect branch creation: {error}"))?
-        .stdout
-        .lines()
-        .last()
-        .map(str::to_owned);
-    if merged && creation_tip.as_deref() == Some(tip) {
+        .map_err(|error| format!("could not inspect branch history: {error}"))?
+        .stdout;
+    let mut entries = reflog.lines().collect::<Vec<_>>();
+    let creation = entries
+        .pop()
+        .ok_or("branch creation is absent from reflog")?;
+    let (_, creation_message) = creation
+        .split_once('\t')
+        .ok_or("branch creation has no reflog message")?;
+    let source = creation_message.strip_prefix("branch: Created from ");
+    let from_default = source.is_some_and(|source| {
+        source == "HEAD"
+            || source == default_branch
+            || source == format!("refs/heads/{default_branch}")
+    });
+    let follows_default = entries.iter().all(|entry| {
+        let message = entry.split_once('\t').map(|(_, message)| message);
+        message.is_some_and(|message| {
+            message == format!("merge {default_branch}: Fast-forward")
+                || message == format!("reset: moving to {default_branch}")
+        })
+    });
+    if merged && from_default && follows_default {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
         Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
@@ -1777,8 +1795,6 @@ pub fn ipc_worktree_response(workspace: &CreatedWorkspace, base_repo: &str) -> s
 pub struct RemoveWorktreeOutcome {
     pub branch_delete_warning: Option<String>,
     pub removal_rule: String,
-    /// App adapters fill this from the same preview shown before confirmation.
-    pub warnings: Vec<String>,
     /// Branch the removed workspace was on, read off the record before removal.
     /// Callers need it for branch-keyed follow-up work (config labels, logs) and
     /// cannot re-resolve it: the id stops resolving the moment the worktree is
@@ -2053,7 +2069,6 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
         removal_rule: removal_rule.to_string(),
-        warnings: Vec::new(),
         branch: branch_name.to_string(),
     })
 }
@@ -6995,6 +7010,49 @@ branch refs/heads/feat
             .unwrap();
 
         let status = inspect_workspace_lifecycle(&repo, "fast-forwarded");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn branch_fast_forwarded_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "following-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args(["merge", "--ff-only", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "following-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_created_from_non_default_commits_is_merged_even_without_later_edits() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let source = add_worktree(&repo, "source-branch");
+        commit_file(&source, "source.txt", "source work\n");
+        let derived = workspaces.join("derived");
+        fs::create_dir_all(&workspaces).unwrap();
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "derived",
+                &derived.to_string_lossy(),
+                "source-branch",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "source-branch"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "derived");
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
     }

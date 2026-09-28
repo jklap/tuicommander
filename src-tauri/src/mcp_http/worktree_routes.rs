@@ -296,15 +296,16 @@ pub(super) async fn remove_worktree_http(
             .into_response();
     }
     let id_for_event = workspace_id.clone();
-    let warnings = crate::worktree::inspect_worktree_removal(
-        &state,
-        std::path::Path::new(&q.repo_path),
-        &workspace_id,
-    )
-    .warnings;
+    let preview_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
+        let warnings = crate::worktree::inspect_worktree_removal(
+            &preview_state,
+            std::path::Path::new(&repo_path),
+            &workspace_id,
+        )
+        .warnings;
         let archive = crate::worktree::resolve_archive_script(&repo_path);
-        crate::worktree::remove_worktree_with_presence_confirmation(
+        let outcome = crate::worktree::remove_worktree_with_presence_confirmation(
             &repo_path,
             &workspace_id,
             delete_branch,
@@ -313,12 +314,13 @@ pub(super) async fn remove_worktree_http(
             override_lock,
             expected_fingerprint.as_deref(),
             confirm_missing_checkout,
-        )
+        )?;
+        Ok::<_, String>((outcome, warnings))
     })
     .await;
     // The branch comes off the outcome: it was read from the record before the
     // checkout was removed, and nothing can resolve the id afterwards.
-    if let Ok(Ok(ref outcome)) = result {
+    if let Ok(Ok((ref outcome, _))) = result {
         state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
             repo_path: q.repo_path.clone(),
             workspace_id: id_for_event,
@@ -326,7 +328,7 @@ pub(super) async fn remove_worktree_http(
         });
     }
     match result {
-        Ok(Ok(outcome)) => (
+        Ok(Ok((outcome, warnings))) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ok": true,

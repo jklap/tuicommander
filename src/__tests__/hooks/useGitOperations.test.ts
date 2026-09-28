@@ -2083,9 +2083,7 @@ describe("useGitOperations", () => {
 
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith(
-				"/repo", "feature", true, true, true, undefined, true,
-			);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true, true, undefined, true);
 		});
 
 		it("shows confirmation dialog when worktree is locked by agent", async () => {
@@ -3257,6 +3255,56 @@ describe("useGitOperations", () => {
 
 			expect(mockRepo.finalizeMergedWorktree).toHaveBeenCalledWith("/repo", "feature/x", "archive");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Auto-archived 1 merged worktree(s)");
+		});
+
+		it("keeps an untouched worktree occupied by a live agent during automatic archive", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { autoArchiveMerged: true });
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "in_sync",
+				removalSafety: "safe",
+				liveSessions: [{ sessionId: "pty-active", name: "Codex: gate work" }],
+				warnings: ["This branch has nothing of its own, not merged work", "Live session: Codex: gate work"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.finalizeMergedWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Codex: gate work"));
+		});
+
+		it("keeps a merged clean worktree while an agent runs in it", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { autoArchiveMerged: true });
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "merged",
+				removalSafety: "safe",
+				liveSessions: [{ sessionId: "pty-active", name: "Codex: gate work" }],
+				warnings: ["Live session: Codex: gate work"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.finalizeMergedWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Codex: gate work"));
+		});
+
+		it("keeps an untouched clean worktree even when the old merged list includes it", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { autoArchiveMerged: true });
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "in_sync",
+				removalSafety: "safe",
+				liveSessions: [],
+				warnings: ["This branch has nothing of its own, not merged work"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.finalizeMergedWorktree).not.toHaveBeenCalled();
 		});
 
 		it("does nothing when autoArchiveMerged=false", async () => {
