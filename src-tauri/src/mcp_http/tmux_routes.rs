@@ -224,6 +224,21 @@ fn label_of(q: &LabelQuery) -> String {
     resolve_label(q.label.clone())
 }
 
+/// Whether a tmux server label identifies an automated multi-agent swarm
+/// rather than a human's own `tuic alias`-as-tmux daily-driver session.
+///
+/// Claude Code's Agent Teams feature always prefixes its swarm-path calls
+/// with `-L claude-swarm-<pid>` (see this module's doc comment and
+/// `tuic-cli/src/tmux/args.rs`'s `label()`) — a general-purpose `tuic alias`
+/// user who never passes `-L` gets the fixed `"default"` label instead.
+/// `materialize()` uses this to decide whether a freshly spawned pane should
+/// get `TUIC_NONINTERACTIVE_HINT`: a real human using this shim as their own
+/// interactive multiplexer must keep their normal prompt/plugin startup, so
+/// the hint must not go out unconditionally to every materialized pane.
+fn is_automated_swarm_label(label: &str) -> bool {
+    label.starts_with("claude-swarm")
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CreateTmuxSessionRequest {
     label: Option<String>,
@@ -532,16 +547,16 @@ async fn materialize(
     }
     let shell = resolve_shell(None);
     let state_clone = state.clone();
+    let requested = super::session::RequestedIdentity {
+        extra_env: if is_automated_swarm_label(label) {
+            vec![("TUIC_NONINTERACTIVE_HINT".to_string(), "1".to_string())]
+        } else {
+            Vec::new()
+        },
+        ..Default::default()
+    };
     let spawn = tokio::task::spawn_blocking(move || {
-        super::session::spawn_pty_session(
-            state_clone,
-            shell,
-            cwd,
-            24,
-            80,
-            None,
-            super::session::RequestedIdentity::default(),
-        )
+        super::session::spawn_pty_session(state_clone, shell, cwd, 24, 80, None, requested)
     })
     .await
     .unwrap_or_else(|error| {
@@ -814,6 +829,20 @@ pub(crate) async fn request_window_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Claude Code's swarm path always prefixes its label with
+    /// `claude-swarm` (see `tuic-cli/src/tmux/args.rs`'s `label()`); a
+    /// general-purpose `tuic alias` user who never passes `-L` gets the
+    /// fixed `"default"` label. `materialize()`'s `TUIC_NONINTERACTIVE_HINT`
+    /// must only go out for the former — a human using this shim as their
+    /// own interactive multiplexer must keep their normal startup.
+    #[test]
+    fn is_automated_swarm_label_matches_only_claude_swarm_labels() {
+        assert!(is_automated_swarm_label("claude-swarm-42"));
+        assert!(is_automated_swarm_label("claude-swarm"));
+        assert!(!is_automated_swarm_label("default"));
+        assert!(!is_automated_swarm_label("my-own-session"));
+    }
 
     fn sample() -> TmuxTopology {
         let mut t = TmuxTopology::default();
