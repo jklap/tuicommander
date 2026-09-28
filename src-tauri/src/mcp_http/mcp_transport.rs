@@ -4057,7 +4057,7 @@ fn handle_agent_with_parent_cwd(
                 .and_then(|agent_type| agents_cfg.agents.get(agent_type))
                 .and_then(|settings| settings.skip_trust_dialog)
                 .unwrap_or(true);
-            if skip_trust_dialog && is_direct_codex_executable(&binary_path) {
+            if skip_trust_dialog && effective_agent_type.as_deref() == Some("codex") {
                 let cwd = effective_cwd
                     .as_deref()
                     .map(crate::cli::expand_tilde)
@@ -20649,6 +20649,171 @@ mod tests {
         assert!(
             !actual.contains("trust_level"),
             "opt-out must preserve Codex trust behavior: {actual}"
+        );
+    }
+
+    /// A configured Codex launcher must pass the launch-only trust setting to
+    /// the child it starts. The child records its own argv, not TUIC's builder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_wrapper_trusts_only_its_spawn_cwd_and_submits_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-wrapper-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let other = root.path().join("other-project");
+        std::fs::create_dir(&other).unwrap();
+        let wrapper = root.path().join("custom-launcher");
+        let child = root.path().join("codex");
+        let argv = root.path().join("child-argv");
+        let submitted = root.path().join("submitted");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nexec '{}' \"$@\"\n",
+                child.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(&child, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncase \"$*\" in\n  *'trust_level=\"trusted\"'*) sleep 0.1; printf 'Starting Codex\\n› \\n' ;;\n  *) printf 'Do you trust this directory?\\n'; exec cat >/dev/null ;;\nesac\nstty -echo\nIFS= read -r text\nprintf '%s' \"$text\" > '{}'\nexec cat >/dev/null\n", argv.display(), submitted.display())).unwrap();
+        for path in [&wrapper, &child] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                run_configs: vec![crate::config::AgentRunConfig {
+                    name: "Custom Codex".into(),
+                    command: wrapper.to_string_lossy().into_owned(),
+                    args: vec![],
+                    model: None,
+                    env: Default::default(),
+                    is_default: true,
+                }],
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        crate::pty::spawn_process_snapshot_refresher(state.clone());
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"Custom Codex", "cwd":cwd, "prompt":"say READY", "args":["--no-alt-screen"]}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let prompt = std::fs::read_to_string(&submitted).unwrap_or_default();
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        let expected = format!(
+            "projects.{}.trust_level=\"trusted\"",
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        );
+        assert!(
+            actual
+                .lines()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-c", expected.as_str()]),
+            "child must receive cwd-scoped trust: {actual}"
+        );
+        assert!(
+            !actual.contains(&other.to_string_lossy().to_string()),
+            "other cwd must not be trusted: {actual}"
+        );
+        assert!(
+            prompt.contains("say READY"),
+            "wrapper child must receive initial task: {prompt:?}; argv={actual}"
+        );
+        assert!(!root.path().join("codex-config/config.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_wrapper_opt_out_leaves_trust_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-wrapper-opt-out-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let wrapper = root.path().join("custom-launcher");
+        let argv = root.path().join("child-argv");
+        std::fs::write(&wrapper, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nprintf 'Do you trust this directory?\\n'\nexec cat >/dev/null\n", argv.display())).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                skip_trust_dialog: Some(false),
+                run_configs: vec![crate::config::AgentRunConfig {
+                    name: "Custom Codex".into(),
+                    command: wrapper.to_string_lossy().into_owned(),
+                    args: vec![],
+                    model: None,
+                    env: Default::default(),
+                    is_default: true,
+                }],
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"Custom Codex", "cwd":cwd, "prompt":"say READY", "args":["--no-alt-screen"]}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !argv.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let output = loop {
+            let output = handle_session(
+                &state,
+                &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
+                None,
+            );
+            if output.to_string().contains("Do you trust this directory?")
+                || std::time::Instant::now() >= deadline
+            {
+                break output;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        assert!(
+            !actual.contains("trust_level"),
+            "opt-out must preserve wrapper argv: {actual}"
+        );
+        assert!(
+            output.to_string().contains("Do you trust this directory?"),
+            "normal trust prompt must remain: {output}"
         );
     }
 
