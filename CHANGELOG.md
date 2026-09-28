@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected.
+
 - **New worktree tabs** — A session spawned before its worktree appears in the repository list moves under the registered repository after a refresh, without a misleading Register toast.
 
 - **SSH remote readiness** — Tunnels become Connected after SSH survives startup and every local forward accepts connections. Installed remote daemons get a bounded health retry during startup.
