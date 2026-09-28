@@ -15,6 +15,7 @@
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
 - [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus.
+- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`.
 
 ## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
 

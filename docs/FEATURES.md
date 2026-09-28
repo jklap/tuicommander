@@ -876,7 +876,8 @@ one configured ego binary and speaks ACP to it, per
   forms. Each new question produces one desktop notification, cleared when the
   question settles
 - **Session settings** come from the options the session publishes through
-  `set_config_option`. The control bar summarizes model and mode; a dialog labels
+  `set_config_option`. The one-row control bar summarizes the model's short name
+  and mode; Pause, Resume, Compact and New use named icon buttons. A dialog labels
   every select option and shows its description and current choice. Errors from
   rejected changes appear in the dialog. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each
