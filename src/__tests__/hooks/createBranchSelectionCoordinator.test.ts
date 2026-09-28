@@ -267,6 +267,55 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
+	// Regression (2026-09-28): sidebar "Add Terminal" on a repo/branch that ISN'T the
+	// currently active one flips activeRepoPath/activeWorkspaceId directly, bypassing
+	// handleBranchSelectInner — the only place that used to reset/restore paneLayoutStore
+	// per branch. A real split left live on the outgoing branch stayed live under the new
+	// terminal, which was never docked into any pane group, rendering as an orphan on top
+	// of a still-split view that belonged to a different branch entirely.
+	describe("cross-branch Add Terminal and paneLayoutStore", () => {
+		it("does not leave the previous branch's split live under a terminal added to a different repo/branch", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActive("/Gits/alpha");
+				repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
+
+				const coordinator = makeCoordinator();
+				const t1 = await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main");
+				const t2 = await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main");
+
+				// Manually split alpha/main into two panes, one terminal per pane —
+				// this is what a real user-driven split looks like at rest.
+				const g1 = paneLayoutStore.createGroup();
+				paneLayoutStore.addTab(g1, { id: t1!, type: "terminal" });
+				const g2 = paneLayoutStore.split(g1, "vertical");
+				paneLayoutStore.addTab(g2!, { id: t2!, type: "terminal" });
+				expect(paneLayoutStore.isSplit()).toBe(true);
+
+				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
+				repositoriesStore.setWorkspace("/Gits/beta", "main", { worktreePath: "/Gits/beta" });
+
+				// Sidebar "Add Terminal" on beta/main, while alpha/main (a different
+				// repo/branch) is still active — the `needsSwitch` path.
+				const t3 = await coordinator.handleAddTerminalToWorkspace("/Gits/beta", "main");
+
+				expect(repositoriesStore.getActive()?.path).toBe("/Gits/beta");
+				// beta/main has no saved split of its own, so the new terminal must land
+				// in a flat, single-pane view — not inherit alpha's still-live split tree.
+				expect(paneLayoutStore.isSplit()).toBe(false);
+				expect(paneLayoutStore.getAllGroupIds()).toEqual([]);
+				expect(terminalsStore.state.activeId).toBe(t3);
+
+				// alpha's split must have been preserved (saved), not discarded, so
+				// switching back to it restores exactly what the user had.
+				await coordinator.handleBranchSelectInner("/Gits/alpha", "main");
+				expect(paneLayoutStore.isSplit()).toBe(true);
+				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([t1, t2]));
+			});
+		});
+	});
+
 	// --- Characterization tests for savedTerminals restore (createBranchSelectionCoordinator.ts:235-304) ---
 	// These pin down TODAY's behavior — agent-only restore — before a later change
 	// makes shell restoration configurable. Any intentional behavior change here
