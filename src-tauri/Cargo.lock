@@ -9493,6 +9493,8 @@ dependencies = [
  "clap",
  "dirs",
  "serde_json",
+ "tempfile",
+ "tuic-test-support",
 ]
 
 [[package]]
@@ -9590,6 +9592,7 @@ version = "1.7.7"
 dependencies = [
  "ctor",
  "portable-pty",
+ "tempfile",
 ]
 
 [[package]]
