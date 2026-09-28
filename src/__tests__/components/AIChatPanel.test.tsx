@@ -974,6 +974,27 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("removes the complete first-turn ack after ego streams it in tiny chunks", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		// Recorded AssistantDelta text from ego session 2080b5ad, events 13-47.
+		const chunks = [
+			"T", "UI", "Commander", " v", "1", ".", "7", ".", "7", " is", " connected", ".\n",
+			"intent", ":", " Ver", "ifico", " gli", " agent", "i", " att", "ivi", " e", " ti", " ri",
+			"porto", " lo", " stato", " att", "uale", " (", "Ag", "enti", " att", "ivi", ")",
+		];
+		for (const chunk of chunks) {
+			feed({
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } },
+			});
+			await settle();
+		}
+		const intent = container.querySelector('[aria-label="Agent intent"]');
+		expect(intent?.textContent).toContain("Verifico gli agenti attivi e ti riporto lo stato attuale");
+		expect(container.textContent).not.toContain(".7.7 is connected.");
+	});
+
 	it("keeps a long paste compact in the composer but sends every original word", async () => {
 		const { container } = await renderPanel();
 		await settle();

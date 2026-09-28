@@ -216,6 +216,11 @@ deliberately does not have:
   session id) so a storm of them can be attributed. The AI Chat panel keeps one
   replay per tab in flight and does not replay a tab whose load failed until a
   person selects it or presses Retry.
+- **A replay starts before the load response.** Ego may send `session/update`
+  chunks while `session/load` is pending. The requested session ID is already
+  known, so those updates enter the ordered journal before the attachment is
+  published. Updates for other unattached sessions are still discarded. Usage
+  received during the replay is included in the resulting attachment snapshot.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own

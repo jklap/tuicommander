@@ -1336,11 +1336,12 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, step? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
-connected, because they are the answer to "where do I send a call", and a
+connected; `update_in_progress` is present as `true` while an unattended update
+owns the connection. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
@@ -1904,6 +1905,9 @@ wire and identical on both transports:
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission
 dialog or a draft in the composer (phase `holding_back`) until it can be typed.
+With an activation phrase, `holdBackMs` reports the effective minimum of 5000
+ms, even when the saved hold-back setting is shorter. A continuation that
+starts before that deadline joins the same pending turn.
 
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
