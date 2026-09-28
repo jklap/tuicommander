@@ -1240,7 +1240,7 @@ For `agent action=spawn`, `prompt` is always delivered. The per-agent
 `prevent_alt_screen` setting controls the screen flag on every launch path,
 including MCP spawn; there is no per-spawn screen override. MCP spawn rejects
 the removed `allow_alt_screen` and `allowAltScreen` parameters.
-`skip_trust_dialog` defaults to true for Claude and direct Codex MCP children. It is a per-agent setting, not an MCP parameter. Direct Codex receives `-c projects."<canonical cwd>".trust_level="trusted"` for this launch; Claude's managed PTY answers only its exact startup trust question while **No, exit** remains selected. User-opened terminals and saved CLI trust files are unaffected.
+`skip_trust_dialog` defaults to true for Claude and Codex MCP children. It is a per-agent setting, not an MCP parameter. Codex receives `-c projects."<canonical cwd>".trust_level="trusted"` for this launch, including when a custom launcher forwards its arguments; Claude's managed PTY answers only its exact startup trust question while **No, exit** remains selected. User-opened terminals and saved CLI trust files are unaffected.
 
 Caller-supplied `args` that contain `{prompt}` remain authoritative and receive direct substitution.
 Flags-only `args` keep their order; normal CLIs receive the prompt as the final
