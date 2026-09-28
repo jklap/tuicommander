@@ -2126,6 +2126,8 @@ pub struct AppState {
     /// here — it is read from configuration at each connect, so a changed
     /// setting takes effect without a restart.
     pub(crate) acp: crate::acp::AcpClientManager,
+    /// Mobile alert windows for ACP conversations, separate from PTY state.
+    acp_push_last_ms: DashMap<String, Option<u64>>,
     /// When true, the desktop window is currently focused and the user is at
     /// their machine — suppress mobile push notifications to avoid duplicate
     /// alerts. Set to true on focus and at startup; set to false on blur or
@@ -3282,6 +3284,7 @@ impl AppState {
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
             acp: crate::acp::AcpClientManager::new(),
+            acp_push_last_ms: DashMap::new(),
             push_store,
             desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
             server_start_time: std::time::Instant::now(),
@@ -4062,9 +4065,9 @@ impl AppState {
     /// place that mirrors them onto both delivery routes — so a phone on
     /// `/events` and the desktop window are told the same thing at the same
     /// time. Call once at startup, after constructing AppState.
-    pub(crate) fn spawn_acp_notice_pump(state: Arc<AppState>) {
+    pub(crate) fn spawn_acp_notice_pump(state: Arc<AppState>) -> tokio::task::AbortHandle {
         let mut notices = state.acp.notices();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 match notices.recv().await {
                     Ok(notice) => {
@@ -4073,7 +4076,47 @@ impl AppState {
                             use tauri::Emitter;
                             let _ = app.emit("acp-notice", &notice);
                         }
-                        let _ = state.event_bus.send(AppEvent::AcpNotice(notice));
+                        let _ = state.event_bus.send(AppEvent::AcpNotice(notice.clone()));
+                        if notice.kind == crate::acp::AcpNoticeKind::InteractionPending {
+                            let pending = state
+                                .acp
+                                .pending_interactions(notice.connection_id)
+                                .await
+                                .ok()
+                                .and_then(|interactions| {
+                                    interactions.into_iter().find(|interaction| {
+                                        Some(interaction.request_id()) == notice.request_id
+                                            && Some(interaction.session_id())
+                                                == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|interaction| {
+                                    let snapshot = state.acp.snapshot(notice.connection_id).ok()?;
+                                    let attachment =
+                                        snapshot.attachments.into_iter().find(|attachment| {
+                                            attachment.session_id == *interaction.session_id()
+                                                && (attachment
+                                                    .pending_permission_ids
+                                                    .contains(&interaction.request_id())
+                                                    || attachment
+                                                        .pending_elicitation_ids
+                                                        .contains(&interaction.request_id()))
+                                        })?;
+                                    Some((
+                                        interaction.request_id(),
+                                        attachment.cwd.to_str()?.to_owned(),
+                                    ))
+                                });
+                            if let Some((url, body)) = Self::mobile_push_for_acp_notice(
+                                &state,
+                                &notice,
+                                pending
+                                    .as_ref()
+                                    .map(|(request_id, repo)| (*request_id, repo.as_str())),
+                            ) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
+                        }
                     }
                     // A notice carries nothing that cannot be re-read: a client
                     // that missed one still finds the truth in the connection
@@ -4085,6 +4128,54 @@ impl AppState {
                 }
             }
         });
+        task.abort_handle()
+    }
+
+    fn mobile_push_for_acp_notice(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        pending: Option<(crate::acp::AcpHostRequestId, &str)>,
+    ) -> Option<(String, String)> {
+        if notice.kind != crate::acp::AcpNoticeKind::InteractionPending
+            || notice.request_id.is_none()
+            || notice.request_id != pending.map(|(request_id, _)| request_id)
+        {
+            return None;
+        }
+        let (_, repo) = pending?;
+        let session_id = notice.session_id.as_ref()?;
+        let ready = {
+            let config = state.config.read();
+            config.services.push.enabled
+                && !config.services.push.vapid_private_key.is_empty()
+                && !state.push_store.is_empty()
+        };
+        let focused = state
+            .desktop_window_focused
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let away = mobile_push_away(focused, if focused { hid_idle_seconds() } else { None });
+        if !ready || !away {
+            return None;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut last = state
+            .acp_push_last_ms
+            .entry(session_id.to_string())
+            .or_default();
+        if !crate::push::reserve_push_slot(&mut last, now_ms, true) {
+            return None;
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("repo", repo)
+            .append_pair("session", &session_id.to_string())
+            .finish();
+        Some((
+            format!("/mobile?{query}"),
+            "AI Chat: response needed".to_string(),
+        ))
     }
 
     /// Spawn a background task that subscribes to the event bus and updates
@@ -4388,13 +4479,15 @@ impl AppState {
                             }
 
                             // Rate limit: skip if last push for this session was < 30s ago
-                            let should_push = push_ready
+                            let eligible = push_ready
                                 && desktop_away
-                                && s.question_text.as_deref().is_some_and(|text| !text.trim().is_empty())
-                                && s.last_push_ms
-                                    .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
+                                && s.question_text.as_deref().is_some_and(|text| !text.trim().is_empty());
+                            let should_push = crate::push::reserve_push_slot(
+                                &mut s.last_push_ms,
+                                now_ms,
+                                eligible,
+                            );
                             if should_push {
-                                s.last_push_ms = Some(now_ms);
                                 let prompt = s.question_text.clone().unwrap_or_default();
                                 push_data = Some((session_id.clone(), prompt));
                             }
@@ -4526,13 +4619,11 @@ impl AppState {
                         if let Some(title) = s.choice_prompt.as_ref().map(|choice| choice.title.clone()) {
                             s.question_text = Some(title.clone());
                             s.question_confident = true;
-                            if push_ready
-                                && desktop_away
-                                && !title.trim().is_empty()
-                                && s.last_push_ms
-                                    .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000)
-                            {
-                                s.last_push_ms = Some(now_ms);
+                            if crate::push::reserve_push_slot(
+                                &mut s.last_push_ms,
+                                now_ms,
+                                push_ready && desktop_away && !title.trim().is_empty(),
+                            ) {
                                 push_data = Some((session_id.clone(), title));
                             }
                         }
@@ -4665,13 +4756,11 @@ impl AppState {
                     entry.choice_prompt = None;
                     entry.last_activity_ms = now_ms;
                     // Completion and questions share the same per-session window.
-                    if push_ready
-                        && desktop_away
-                        && entry
-                            .last_push_ms
-                            .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000)
-                    {
-                        entry.last_push_ms = Some(now_ms);
+                    if crate::push::reserve_push_slot(
+                        &mut entry.last_push_ms,
+                        now_ms,
+                        push_ready && desktop_away,
+                    ) {
                         should_push = true;
                     }
                 }
@@ -7829,6 +7918,345 @@ mod tests {
             .silence_states
             .insert("s1".to_string(), Arc::new(parking_lot::Mutex::new(silence)));
         s
+    }
+
+    #[test]
+    fn pending_acp_question_alerts_the_chat_once_while_desktop_is_away() {
+        let state = fresh_state();
+        let (private, _) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+        }
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let request_id = crate::acp::AcpHostRequestId::new();
+        let notice = crate::acp::AcpNotice {
+            connection_id: crate::acp::AcpConnectionId::new(),
+            generation: 1,
+            session_id: Some(agent_client_protocol::schema::v1::SessionId::new(
+                "conversation-1",
+            )),
+            request_id: Some(request_id),
+            sequence: 7,
+            kind: crate::acp::AcpNoticeKind::InteractionPending,
+        };
+
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            Some((
+                "/mobile?repo=%2Frepo&session=conversation-1".to_string(),
+                "AI Chat: response needed".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "a repeated notice must not alert within 30 seconds"
+        );
+        let mut other_conversation = notice.clone();
+        other_conversation.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "conversation-2",
+        ));
+        assert!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &other_conversation,
+                Some((request_id, "/repo"))
+            )
+            .is_some(),
+            "one conversation must not spend another's push budget"
+        );
+        let mut special_conversation = notice.clone();
+        special_conversation.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "conversation-special",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &special_conversation,
+                Some((request_id, "/repo/a & b")),
+            ),
+            Some((
+                "/mobile?repo=%2Frepo%2Fa+%26+b&session=conversation-special".to_string(),
+                "AI Chat: response needed".to_string(),
+            )),
+            "repository paths must stay inside the deep-link query value"
+        );
+        let key = "conversation-1";
+        let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
+        *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));
+        assert!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo")))
+                .is_some()
+        );
+        state.acp_push_last_ms.remove(key);
+        let winners = std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        AppState::mobile_push_for_acp_notice(
+                            &state,
+                            &notice,
+                            Some((request_id, "/repo")),
+                        )
+                    })
+                })
+                .collect();
+            calls
+                .into_iter()
+                .map(|call| call.join().unwrap().is_some())
+                .filter(|sent| *sent)
+                .count()
+        });
+        assert_eq!(
+            winners, 1,
+            "concurrent notices may spend one slot only once"
+        );
+    }
+
+    #[test]
+    fn answered_or_unrelated_acp_notice_cannot_alert_the_phone() {
+        let state = fresh_state();
+        let (private, _) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+        }
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let request_id = crate::acp::AcpHostRequestId::new();
+        let mut notice = crate::acp::AcpNotice {
+            connection_id: crate::acp::AcpConnectionId::new(),
+            generation: 1,
+            session_id: Some(agent_client_protocol::schema::v1::SessionId::new(
+                "conversation-1",
+            )),
+            request_id: Some(request_id),
+            sequence: 7,
+            kind: crate::acp::AcpNoticeKind::InteractionPending,
+        };
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, None),
+            None
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &notice,
+                Some((crate::acp::AcpHostRequestId::new(), "/repo"))
+            ),
+            None
+        );
+        notice.kind = crate::acp::AcpNoticeKind::Ready;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None
+        );
+        notice.kind = crate::acp::AcpNoticeKind::InteractionSettled;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None
+        );
+        state
+            .push_store
+            .remove("https://fcm.googleapis.com/fcm/send/example");
+        notice.kind = crate::acp::AcpNoticeKind::InteractionPending;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "no subscribed phone must leave the budget free"
+        );
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state.config.write().services.push.enabled = false;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "disabled push must not alert or spend a slot"
+        );
+        assert!(state.acp_push_last_ms.get("conversation-1").is_none());
+    }
+
+    #[tokio::test]
+    async fn live_acp_permission_reaches_one_subscribed_push_service() {
+        use base64ct::Encoding;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/push",
+                    axum::routing::post(move || {
+                        let accepted_tx = accepted_tx.clone();
+                        async move {
+                            accepted_tx.send(()).unwrap();
+                            axum::http::StatusCode::CREATED
+                        }
+                    }),
+                ),
+            )
+            .await
+        });
+
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint,
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: base64ct::Base64UrlUnpadded::encode_string(
+                    client_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                ),
+                auth: base64ct::Base64UrlUnpadded::encode_string(&[7u8; 16]),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let pump = AppState::spawn_acp_notice_pump(state.clone());
+
+        let root = tempfile::Builder::new()
+            .prefix("acp-push-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        for (source, target) in [
+            ("permission-turn.jsonl", "scenario.jsonl"),
+            ("ego-initialize.json", "ego-initialize.json"),
+        ] {
+            std::fs::copy(
+                format!("tests/fixtures/acp/{source}"),
+                root.path().join(target),
+            )
+            .unwrap();
+        }
+        let executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(format!(
+                "tuic-acp-fixture-agent{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+        assert!(
+            executable.is_file(),
+            "fixture agent missing: {}",
+            executable.display()
+        );
+        let connection = state
+            .acp
+            .connect(
+                &crate::acp::EgoAcpConfig {
+                    executable,
+                    profile: String::new(),
+                },
+                crate::acp::AcpConnectRequest {
+                    root: root.path().to_path_buf(),
+                },
+            )
+            .await
+            .unwrap();
+        let session = state
+            .acp
+            .new_session(
+                connection.connection_id,
+                crate::acp::AcpSessionAuthority {
+                    cwd: root.path().to_path_buf(),
+                    additional_directories: Vec::new(),
+                    mcp_servers: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        state
+            .acp
+            .prompt(
+                connection.connection_id,
+                session.session_id.clone(),
+                vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new("hello"),
+                )],
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted_rx.recv())
+            .await
+            .expect("pending ACP permission did not reach push service")
+            .expect("push service stopped");
+        let pending = state
+            .acp
+            .pending_interactions(connection.connection_id)
+            .await
+            .unwrap();
+        let request_id = pending[0].request_id();
+        state
+            .acp
+            .respond_permission(
+                connection.connection_id,
+                request_id,
+                agent_client_protocol::schema::v1::RequestPermissionOutcome::Selected(
+                    agent_client_protocol::schema::v1::SelectedPermissionOutcome::new(
+                        agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
+                    ),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), accepted_rx.recv())
+                .await
+                .is_err(),
+            "settling a permission must not send another push"
+        );
+        state
+            .acp
+            .disconnect(connection.connection_id)
+            .await
+            .unwrap();
+        pump.abort();
+        service.abort();
     }
 
     #[test]

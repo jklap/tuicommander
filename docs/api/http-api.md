@@ -2410,7 +2410,9 @@ never puts two prompts in flight on that session. Each attachment snapshot has
 `queuedPrompts: [{turnId, summary}]`, and `promptQueueChanged` replaces that
 list on both streams. A `promptSent` event records the user-visible text when
 ego actually receives the prompt. Image data stays in the actor until dispatch,
-not in queue snapshots or journal events. Either transport can remove a queued
+not in queue snapshots or journal events. An accepted prompt that later fails
+publishes `turnFailed {message, state}` on the ACP stream with its session and
+turn in the frame. Either transport can remove a queued
 ID with the DELETE route; `cancel` stops the active turn for every view.
 
 ### One-shot (`POST /acp/one-shot`)

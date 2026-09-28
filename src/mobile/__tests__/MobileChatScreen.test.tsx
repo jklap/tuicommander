@@ -61,6 +61,7 @@ function chat() {
 }
 
 beforeEach(() => {
+	history.replaceState(null, "", "/mobile");
 	invoke.mockReset().mockImplementation(async (command: string) => {
 		if (command === "load_repositories") return { repos: { "/repo": {} } };
 		throw new Error(`unexpected ${command}`);
@@ -69,9 +70,30 @@ beforeEach(() => {
 	answerPermission.mockClear();
 	selectSession.mockClear();
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	history.replaceState(null, "", "/mobile");
+});
 
 describe("mobile ego chat", () => {
+	it("opens the repository and conversation named by a push link", async () => {
+		history.replaceState(null, "", "/mobile?repo=%2Frepo&session=previous");
+		invoke.mockImplementation(async (command: string) => {
+			if (command === "load_repositories") return { repos: { "/other": {}, "/repo": {} } };
+			throw new Error(`unexpected ${command}`);
+		});
+		render(() => <MobileChatScreen />);
+		await waitFor(() => expect(screen.getByRole("combobox", { name: "Repository" })).toHaveProperty("value", "/repo"));
+		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
+	});
+
+	it("ignores a push link to a repository this phone has not registered", async () => {
+		history.replaceState(null, "", "/mobile?repo=%2Funknown&session=previous");
+		render(() => <MobileChatScreen />);
+		await waitFor(() => expect(screen.getByRole("combobox", { name: "Repository" })).toHaveProperty("value", "/repo"));
+		expect(selectSession).not.toHaveBeenCalled();
+	});
+
 	it("shows the conversation, card and collapsed activity after selecting its repository", async () => {
 		const { container } = render(() => <MobileChatScreen />);
 		await waitFor(() => expect(screen.getByText("The build passed.")).toBeTruthy());

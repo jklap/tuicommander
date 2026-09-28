@@ -14,12 +14,7 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
-import {
-	isAbsolutePath,
-	joinPath,
-	normalizeSep,
-	pathDirname,
-} from "../../utils/pathUtils";
+import { isAbsolutePath, joinPath, normalizeSep, pathDirname } from "../../utils/pathUtils";
 import {
 	insertTweakBlockComment,
 	insertTweakComment,
@@ -43,6 +38,8 @@ import s from "./MarkdownTab.module.css";
 export interface MarkdownTabProps {
 	tab: MdTabData;
 	onClose?: () => void;
+	reloadToken?: () => number;
+	onOpenFileLink?: (target: MarkdownFileLink) => void;
 }
 
 /** Public handle exposed via ref for external callers (e.g. App.tsx keybinding) */
@@ -62,9 +59,19 @@ const pendingHeadings = new Map<string, string>();
 
 type MarkdownLinkTarget =
 	| { kind: "heading"; anchor: string }
-	| { kind: "file"; absolute_path: string; open_path: string; is_directory: boolean; same_document: boolean; anchor?: string; line?: number }
+	| {
+			kind: "file";
+			absolute_path: string;
+			open_path: string;
+			is_directory: boolean;
+			same_document: boolean;
+			anchor?: string;
+			line?: number;
+	  }
 	| { kind: "missing"; path: string }
 	| { kind: "blocked"; reason: string };
+
+export type MarkdownFileLink = Extract<MarkdownLinkTarget, { kind: "file" }>;
 
 function headingSlug(text: string): string {
 	return text
@@ -226,6 +233,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	createEffect(() => {
 		const isActive = mdTabsStore.state.activeId === props.tab.id;
 		if (!isActive) return;
+		props.reloadToken?.();
 		const tab = props.tab;
 		if (tab.type !== "file" || !tab.filePath) return;
 		const { filePath, fsRoot, repoPath } = tab as FileTab;
@@ -350,13 +358,17 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				toastsStore.add("Could not open link", resolved.reason, "error");
 				return;
 			}
+			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
+				scrollToHeading(resolved.anchor);
+				return;
+			}
+			if (props.onOpenFileLink) {
+				props.onOpenFileLink(resolved);
+				return;
+			}
 			if (resolved.is_directory) {
 				uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
 				uiStore.setFileBrowserPanelVisible(true);
-				return;
-			}
-			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
-				scrollToHeading(resolved.anchor);
 				return;
 			}
 			if (resolved.anchor && /\.mdx?$/i.test(resolved.open_path)) {

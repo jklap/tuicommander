@@ -12,6 +12,16 @@
 
 # To Test
 
+## AI Chat message Copy and trailing suggestions (story 1150-4042)
+
+- [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus.
+- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`.
+- [ ] Send a typed AI Chat message and choose a suggested reply; confirm each user bubble shows the text once after ego replies. Targeted reducer and panel tests cover both paths.
+
+## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open a disposable ego chat and send a prompt that fails before producing a reply. Confirm its diagnostic appears in the transcript and the composer returns to Send. Answer a two-choice trust elicitation using its direct button and confirm the turn then shows a reply or a failure. The live backend cannot load the ACP failure event until restart; targeted Rust and frontend tests cover the wire and rendering behavior.
+
 ## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths.
@@ -4088,6 +4098,7 @@ or credential is touched.
 ## PTY build environment — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart.
+- [ ] After restarting an isolated `make dev` build, open a new terminal and run `env | grep -E 'CARGO_INCREMENTAL|RUSTC_WRAPPER|^MBX_'`; expect no matches. In a managed agent PTY, check that `HOST_CC` and `HOST_CXX` are also unset. Confirm a configured per-agent `CARGO_INCREMENTAL=1` still reaches its PTY. The current Rust backend requires a restart before this can be checked.
 
 ## Peer mail wake after Rust restart
 
@@ -4130,3 +4141,19 @@ or credential is touched.
 ## Mobile ego chat (story 1077-0c08) — real phone after `make dev`
 
 - [ ] [HUMAN] After restarting the test instance with `make dev`, open its HTTPS `/mobile` URL on a real phone. In Chat, choose a disposable repository and send a prompt; confirm the answer and collapsed tool activity remain readable above the keyboard. Disconnect and reconnect the phone, then confirm the answer has no duplicate or missing lines. Start a permission request, tap one option twice, and confirm the desktop conversation records one answer. Start a second conversation, then use the titled picker to return to the first and confirm its history loads. This check requires real touch and mobile keyboard behavior; targeted Vitest covers the module behavior.
+
+## Detached Markdown document window
+
+- [ ] After restarting an isolated test build, open a Markdown file tab and a `tuic://open` Markdown tab. Detach each from its context menu, resize the document window, edit each file on disk, and confirm the detached content updates. Clicking either tab should focus its window; closing the window should restore the document in the tab. Check an inline comment and a relative Markdown link in the detached view.
+
+## ACP mobile interaction push (story 1078-05cf) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, subscribe a phone to push. With desktop unfocused, have ego ask permission or a form question and confirm one notification opens mobile Chat. Answer the next request on desktop before delivery and confirm no stale notification; ordinary activity must not notify. The running backend cannot load this Rust change until restart.
+
+## Push-to-talk Italian hallucination filter — Rust restart required
+
+- [ ] After restarting `make dev`, use a disposable terminal to verify that a bare “Grazie a tutti.” recognition does not reach the composer, while a genuine instruction containing those words does. The current backend cannot load the Rust change until restart. The sustained-speech activity gate remains pending real quiet-speech recordings (story 1135-b600).
+
+## MCP initialize storm — Rust restart required (#1148-c25f)
+
+- [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.

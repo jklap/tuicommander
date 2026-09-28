@@ -89,7 +89,20 @@ function reduceEvent(entry: AcpConnectionEntry, frame: Extract<AcpStreamFrame, {
 			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
 			if (attachment && attachment.activeTurn?.turnId === frame.turnId) {
 				attachment.state = "idle";
-				attachment.activeTurn = { turnId: frame.turnId, state: "settled", stopReason: event.stopReason, usage: event.usage };
+				attachment.activeTurn = {
+					turnId: frame.turnId,
+					state: "settled",
+					stopReason: event.stopReason,
+					usage: event.usage,
+				};
+			}
+			break;
+		}
+		case "turnFailed": {
+			const attachment = entry.snapshot.attachments.find((a) => a.sessionId === frame.sessionId);
+			if (attachment && attachment.activeTurn?.turnId === frame.turnId) {
+				attachment.state = event.state;
+				attachment.activeTurn = null;
 			}
 			break;
 		}

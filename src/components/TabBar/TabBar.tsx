@@ -29,9 +29,11 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
+import { markdownDocumentPanelId } from "../../utils/markdownDocumentPanelId";
 import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 // Named for its first caller; it is a plain `file://` → path parser and returns
 // null for every other scheme, which is exactly the guard needed here.
@@ -207,6 +209,19 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					action: () => mdTabsStore.setPinned(id, !isPinned),
 				},
 				{ label: t("tabBar.print", "Print…"), action: () => window.print() },
+				...(tab?.type === "file"
+					? [
+							uiStore.isDetached(markdownDocumentPanelId(id))
+								? {
+										label: t("tabBar.reattachTab", "Reattach to Main Window"),
+										action: () => props.onReattachTab?.(id),
+									}
+								: {
+										label: t("tabBar.detachToWindow", "Detach to Window"),
+										action: () => props.onDetachTab?.(id),
+									},
+						]
+					: []),
 				{ label: "", separator: true, action: () => {} },
 				{
 					label: t("tabBar.closeTab", "Close Tab"),
@@ -895,6 +910,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 									onPointerDown={handleMouseDrag}
 									showPinned={true}
 									richIcon={true}
+									onFocusDetached={props.onFocusDetachedTab}
 								/>
 							)}
 						</For>
@@ -976,6 +992,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												onPointerDown={handleMouseDrag}
 												showPinned={false}
 												richIcon={false}
+												onFocusDetached={props.onFocusDetachedTab}
 											/>
 										</Match>
 										<Match when={type() === "editor"}>

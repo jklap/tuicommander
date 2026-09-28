@@ -4344,6 +4344,7 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
 }
 
 #[test]
+// Catches: a reused ready probe or a missing second idle notice after same-epoch work.
 fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "background-same-epoch-ready";
@@ -4406,7 +4407,10 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         )
         .transitioned
     );
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+    let first_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(first_notice.len(), 1);
+    let first_notice_timestamp = first_notice.front().unwrap().timestamp;
+    drop(first_notice);
     assert_eq!(
         state
             .session_maps
@@ -4489,7 +4493,11 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let final_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(final_notice.len(), 1);
+    let final_notice_timestamp = final_notice.front().unwrap().timestamp;
+    assert!(final_notice_timestamp > first_notice_timestamp);
+    drop(final_notice);
     let content: serde_json::Value = serde_json::from_str(
         &state
             .agent_inbox
@@ -4513,7 +4521,12 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let retained_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(retained_notice.len(), 1);
+    assert_eq!(
+        retained_notice.front().unwrap().timestamp,
+        final_notice_timestamp
+    );
 }
 
 /// Build a codex agent session held BUSY by a Protocol-rank submitted line
@@ -8348,20 +8361,52 @@ fn pty_parent_env_sanitizer_removes_no_color_and_allows_override() {
 }
 
 #[test]
-fn pty_spawn_env_does_not_inherit_tuic_build_target() {
+fn pty_spawn_env_does_not_inherit_tuic_build_context() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "pty::tests::pty_spawn_env_child_checks_inherited_target",
+            "pty::tests::pty_spawn_env_child_checks_inherited_build_context",
         ])
         .env("TUIC_TEST_PTY_BUILD_ENV", "1")
         .env("CARGO_TARGET_DIR", "/tuic-dev-build-target")
         .env("CARGO_MANIFEST_DIR", "/tuic/src-tauri")
         .env("CARGO_MANIFEST_PATH", "/tuic/src-tauri/Cargo.toml")
+        .env("CARGO_MANIFEST_LINKS", "tuic-native")
         .env("CARGO_PKG_NAME", "tuicommander")
         .env("OUT_DIR", "/tuic-dev-build-target/debug/build/out")
         .env("RUSTDOC", "/tuic-dev-rustdoc")
+        .env("CARGO_INCREMENTAL", "0")
+        .env("RUSTC_WRAPPER", "/tuic-dev-mbx-shim")
+        .env("RUSTC_WORKSPACE_WRAPPER", "/tuic-dev-workspace-shim")
+        .env("HOST_CC", "/tuic-dev-cc")
+        .env("HOST_CXX", "/tuic-dev-cxx")
+        .env("MBX_SOCKET", "/tuic-dev-mbx.sock")
+        .env("MBX_FUTURE_BUILD_KEY", "tuic-only")
+        .env("CARGO", "/tuic-dev-cargo")
+        .env("CARGO_PRIMARY_PACKAGE", "1")
+        .env("CARGO_BIN_NAME", "tuicommander")
+        .env("CARGO_CRATE_NAME", "tuicommander")
+        .env("CARGO_MAKEFLAGS", "--jobserver-auth=3,4")
+        .env("CARGO_TARGET_TMPDIR", "/tuic-dev-target/tmp")
+        .env(
+            "CARGO_BIN_EXE_tuicommander",
+            "/tuic-dev-target/tuicommander",
+        )
+        .env("CARGO_FEATURE_DESKTOP", "1")
+        .env("CARGO_CFG_TARGET_OS", "macos")
+        .env("RUSTFLAGS", "-Ctarget-cpu=native")
+        .env("RUSTC", "/tuic-dev-rustc")
+        .env("RUSTC_LINKER", "/tuic-dev-linker")
+        .env("DEP_TUIC_NATIVE_PATH", "/tuic-dev-native")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-Ctarget-cpu=native")
+        .env("TARGET", "aarch64-apple-darwin")
+        .env("HOST", "aarch64-apple-darwin")
+        .env("PROFILE", "dev")
+        .env("NUM_JOBS", "12")
+        .env("OPT_LEVEL", "0")
+        .env("DEBUG", "true")
         .env("CARGO_HOME", "/user/cargo")
+        .env("CARGO_TERM_COLOR", "always")
         .env("TUIC_TEST_USER_ENV", "keep-me")
         .output()
         .unwrap();
@@ -8379,7 +8424,7 @@ fn pty_spawn_env_does_not_inherit_tuic_build_target() {
 }
 
 #[test]
-fn pty_spawn_env_child_checks_inherited_target() {
+fn pty_spawn_env_child_checks_inherited_build_context() {
     if std::env::var_os("TUIC_TEST_PTY_BUILD_ENV").is_none() {
         return;
     }
@@ -8399,9 +8444,37 @@ fn pty_spawn_env_child_checks_inherited_target() {
             "CARGO_TARGET_DIR",
             "CARGO_MANIFEST_DIR",
             "CARGO_MANIFEST_PATH",
+            "CARGO_MANIFEST_LINKS",
             "CARGO_PKG_NAME",
             "OUT_DIR",
             "RUSTDOC",
+            "CARGO_INCREMENTAL",
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "HOST_CC",
+            "HOST_CXX",
+            "MBX_SOCKET",
+            "MBX_FUTURE_BUILD_KEY",
+            "CARGO",
+            "CARGO_PRIMARY_PACKAGE",
+            "CARGO_BIN_NAME",
+            "CARGO_CRATE_NAME",
+            "CARGO_MAKEFLAGS",
+            "CARGO_TARGET_TMPDIR",
+            "CARGO_BIN_EXE_tuicommander",
+            "CARGO_FEATURE_DESKTOP",
+            "CARGO_CFG_TARGET_OS",
+            "RUSTFLAGS",
+            "RUSTC",
+            "RUSTC_LINKER",
+            "DEP_TUIC_NATIVE_PATH",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "TARGET",
+            "HOST",
+            "PROFILE",
+            "NUM_JOBS",
+            "OPT_LEVEL",
+            "DEBUG",
         ] {
             assert_eq!(cmd.get_env(key), None, "{key} leaked into a PTY");
         }
@@ -8410,14 +8483,33 @@ fn pty_spawn_env_child_checks_inherited_target() {
             Some(std::ffi::OsStr::new("/user/cargo"))
         );
         assert_eq!(
+            cmd.get_env("CARGO_TERM_COLOR"),
+            Some(std::ffi::OsStr::new("always"))
+        );
+        assert_eq!(
             cmd.get_env("TUIC_TEST_USER_ENV"),
             Some(std::ffi::OsStr::new("keep-me"))
         );
     }
     agent.env("CARGO_TARGET_DIR", "/intentional-agent-target");
+    agent.env("CARGO_INCREMENTAL", "1");
+    agent.env("RUSTC_WRAPPER", "/intentional-agent-wrapper");
+    agent.env("MBX_SOCKET", "/intentional-agent-mbx.sock");
     assert_eq!(
         agent.get_env("CARGO_TARGET_DIR"),
         Some(std::ffi::OsStr::new("/intentional-agent-target"))
+    );
+    assert_eq!(
+        agent.get_env("CARGO_INCREMENTAL"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    assert_eq!(
+        agent.get_env("RUSTC_WRAPPER"),
+        Some(std::ffi::OsStr::new("/intentional-agent-wrapper"))
+    );
+    assert_eq!(
+        agent.get_env("MBX_SOCKET"),
+        Some(std::ffi::OsStr::new("/intentional-agent-mbx.sock"))
     );
 }
 

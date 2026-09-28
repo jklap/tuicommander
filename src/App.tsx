@@ -74,8 +74,9 @@ import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { gitPanelAdapter } from "./panelAdapters/git";
 import { ideasPanelAdapter } from "./panelAdapters/ideas";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
+import { createMarkdownDocumentPanelAdapter } from "./panelAdapters/markdownDocument";
 import { outlinePanelAdapter } from "./panelAdapters/outline";
-import { registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
+import { detachPanel, reattachPanel, registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
 import { activityDashboardStore } from "./stores/activityDashboard";
 import { activityStore } from "./stores/activityStore";
 import { agentConfigsStore } from "./stores/agentConfigs";
@@ -107,6 +108,7 @@ import { userActivityStore } from "./stores/userActivity";
 import { worktreeManagerStore } from "./stores/worktreeManager";
 import { isTauri } from "./transport";
 import { openFileAction, openTerminalFilePath } from "./utils/filePreview";
+import { markdownDocumentPanelId } from "./utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
@@ -546,7 +548,14 @@ const App: Component = () => {
 		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
 		const shellFamily = await getShellFamily(sessionId);
 		try {
-			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily, true, sessionId);
+			await sendCommand(
+				(data) => invoke("write_pty", { sessionId, data }),
+				cmd,
+				agentType,
+				shellFamily,
+				true,
+				sessionId,
+			);
 			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
 		} catch (err) {
 			appLogger.error(
@@ -639,6 +648,13 @@ const App: Component = () => {
 	/** Detach a terminal tab to a floating OS window */
 	const handleDetachTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			if (mdTabsStore.get(tabId)?.type !== "file") return;
+			const adapter = createMarkdownDocumentPanelAdapter(tabId, terminalLifecycle.handleTerminalSelect);
+			registerPanel(adapter);
+			await detachPanel(adapter.id);
+			return;
+		}
 		const term = terminalsStore.get(tabId);
 		if (!term?.sessionId) return;
 
@@ -684,6 +700,10 @@ const App: Component = () => {
 	/** Focus a detached terminal's floating window */
 	const handleFocusDetachedTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			togglePanel(markdownDocumentPanelId(tabId));
+			return;
+		}
 		const windowLabel = terminalsStore.state.detachedWindows[tabId];
 		if (!windowLabel) return;
 		try {
@@ -704,6 +724,10 @@ const App: Component = () => {
 	/** Reattach a detached terminal by closing its floating window */
 	const handleReattachTab = async (tabId: string) => {
 		if (!isTauri()) return;
+		if (tabId.startsWith("md-")) {
+			await reattachPanel(markdownDocumentPanelId(tabId));
+			return;
+		}
 		const windowLabel = terminalsStore.state.detachedWindows[tabId];
 		if (!windowLabel) return;
 		try {
