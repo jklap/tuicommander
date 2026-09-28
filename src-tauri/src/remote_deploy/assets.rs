@@ -434,20 +434,17 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_release_download_times_out_without_caching_an_asset() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         let config = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let entered = Arc::new(AtomicBool::new(false));
+        let (entered_tx, mut entered_rx) = tokio::sync::mpsc::unbounded_channel();
         let router = axum::Router::new().route(
             "/asset",
             axum::routing::get({
-                let entered = entered.clone();
+                let entered_tx = entered_tx.clone();
                 move || {
-                    let entered = entered.clone();
+                    let entered_tx = entered_tx.clone();
                     async move {
-                        entered.store(true, Ordering::SeqCst);
+                        entered_tx.send(()).expect("record the stalled request");
                         std::future::pending::<axum::http::StatusCode>().await
                     }
                 }
@@ -457,29 +454,27 @@ mod tests {
         let url = format!("http://{}/asset", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
-        let error = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            ensure_local_from_url(
-                "1.2.3",
-                "test-target",
-                &url,
-                std::time::Duration::from_secs(5),
-            ),
-        )
-        .await
-        .expect("release download must have its own timeout")
-        .expect_err("stalled response must not be cached");
-        assert!(
-            entered.load(Ordering::SeqCst),
-            "request reached the stalled release endpoint"
-        );
+        let download = tokio::spawn(async move {
+            ensure_local_from_url("1.2.3", "test-target", &url, DOWNLOAD_TIMEOUT).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(60), entered_rx.recv())
+            .await
+            .expect("local request must reach the stalled endpoint")
+            .expect("server must report the stalled request");
+
+        tokio::time::pause();
+        tokio::time::advance(DOWNLOAD_TIMEOUT + std::time::Duration::from_secs(1)).await;
+        tokio::time::resume();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(15), download)
+            .await
+            .expect("release download must have its own timeout")
+            .expect("download task must finish")
+            .expect_err("stalled response must not be cached");
         assert!(error.contains("timed out"), "{error}");
-        assert!(
-            !config
-                .path()
-                .join("remote-bin/1.2.3/tuic-remote-test-target")
-                .exists()
-        );
+        assert!(!config
+            .path()
+            .join("remote-bin/1.2.3/tuic-remote-test-target")
+            .exists());
         server.abort();
     }
 
