@@ -802,15 +802,28 @@ pub(crate) mod tests {
             return;
         };
 
-        let tmp = tempfile::tempdir().expect("temp dir");
+        // mdkb binds daemon-hook.sock.<pid>.tmp before renaming it. The normal
+        // repository test root can exceed macOS SUN_LEN before that bind.
+        let tmp = tempfile::Builder::new()
+            .prefix("s")
+            .tempdir_in(crate::test_support::short_socket_test_temp_root())
+            .expect("short socket test dir");
         let home = tmp.path().join("home");
         let repo = tmp.path().join("repo");
+        assert!(
+            home.join(".mdkb/daemon-hook.sock.4294967295.tmp")
+                .as_os_str()
+                .len()
+                < 104,
+            "mdkb daemon socket path exceeds macOS SUN_LEN: {}",
+            home.display()
+        );
         std::fs::create_dir_all(home.join(".mdkb")).expect("home");
         std::fs::create_dir_all(repo.join("src")).expect("repo");
-        // Four comment lines, then the symbol. Human line 5, mdkb line 4.
+        // Symbols on human lines 1, 5, and 9 expose the base and any drift.
         std::fs::write(
             repo.join("src/lib.rs"),
-            "// 1\n// 2\n// 3\n// 4\npub fn zonk_harvest() {}\n",
+            "pub fn first_harvest() {}\n// 2\n// 3\n// 4\npub fn zonk_harvest() {}\n// 6\n// 7\n// 8\npub fn last_harvest() {}\n",
         )
         .expect("fixture");
         std::fs::write(
@@ -857,17 +870,20 @@ pub(crate) mod tests {
             .ok();
 
         let symbols = symbols.expect("symbols_in_file");
-        let found = symbols
-            .iter()
-            .find(|s| s.name == "zonk_harvest")
-            .unwrap_or_else(|| panic!("mdkb indexed no zonk_harvest: {symbols:?}"));
-        assert_eq!(
-            found.line_start, 4,
-            "mdkb must report `pub fn zonk_harvest` — written on human line 5 — \
-             as line_start 4. It said {}. If mdkb now counts from 1, \
-             `mdkb_commands::editor_line` must stop adding one, or every jump \
-             lands a line late.",
-            found.line_start
-        );
+        for (name, expected_line) in [
+            ("first_harvest", 0),
+            ("zonk_harvest", 4),
+            ("last_harvest", 8),
+        ] {
+            let found = symbols
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("mdkb indexed no {name}: {symbols:?}"));
+            assert_eq!(
+                found.line_start, expected_line,
+                "mdkb must report {name} as a 0-based line; \
+                 `mdkb_commands::editor_line` adds one for editor jumps"
+            );
+        }
     }
 }
