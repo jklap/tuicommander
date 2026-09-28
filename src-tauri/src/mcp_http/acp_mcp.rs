@@ -40,7 +40,16 @@ fn loopback() -> SocketAddr {
 pub(crate) struct AcpMcpHost {
     state: Weak<AppState>,
     connections: Mutex<HashMap<String, Link>>,
+    /// Wake an idle ego whose inbox has mail it has not read.
+    wake: Waker,
 }
+
+/// Given a peer id, start a turn in its conversation if nothing is running.
+type Waker = Arc<dyn Fn(String) + Send + Sync>;
+
+/// How long a burst of mail is gathered before an idle ego is woken, so ten
+/// messages cost one turn rather than ten.
+const WAKE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What one MCP connection holds beyond its protocol session.
 struct Link {
@@ -55,9 +64,34 @@ type Subscriptions = Arc<Mutex<HashSet<String>>>;
 
 impl AcpMcpHost {
     pub(crate) fn new(state: &Arc<AppState>) -> Self {
+        let weak = Arc::downgrade(state);
+        let wake: Waker = Arc::new(move |peer: String| {
+            let Some(state) = weak.upgrade() else { return };
+            tokio::spawn(async move {
+                match state
+                    .acp
+                    .wake_idle_peer(&peer, crate::pty::PEER_MAIL_WAKE)
+                    .await
+                {
+                    Ok(Some(turn)) => tracing::info!(
+                        source = "acp_mcp",
+                        tuic_session = %peer,
+                        turn = ?turn,
+                        "Woke idle ego for new mail"
+                    ),
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(
+                        source = "acp_mcp",
+                        tuic_session = %peer,
+                        "Waking ego for new mail failed: {error:?}"
+                    ),
+                }
+            });
+        });
         Self {
             state: Arc::downgrade(state),
             connections: Mutex::new(HashMap::new()),
+            wake,
         }
     }
 
@@ -118,12 +152,19 @@ impl McpOverAcpHost for AcpMcpHost {
             messages,
             events: state.event_bus.subscribe(),
             inbox: peer_id.map(|peer| state.subscribe_agent_inbox(peer)),
+            peer: peer_id.map(str::to_owned),
         };
+        let wake = peer_id.map(|peer| {
+            let wake = Arc::clone(&self.wake);
+            let peer = peer.to_owned();
+            Box::new(move || wake(peer.clone())) as Box<dyn Fn() + Send>
+        });
         let forwarder = tokio::spawn(forward(
             Arc::downgrade(&state),
             feeds,
             Arc::clone(&subscriptions),
             notify,
+            wake,
         ));
         self.connections.lock().insert(
             id.clone(),
@@ -398,6 +439,8 @@ struct Feeds {
     messages: broadcast::Receiver<String>,
     events: broadcast::Receiver<crate::state::AppEvent>,
     inbox: Option<tokio::sync::watch::Receiver<u64>>,
+    /// The peer whose inbox `inbox` watches.
+    peer: Option<String>,
 }
 
 /// Carry what GET `/mcp` would have streamed to ego, and announce subscribed
@@ -411,6 +454,7 @@ async fn forward(
     mut feeds: Feeds,
     subscriptions: Subscriptions,
     notify: McpNotify,
+    wake: Option<Box<dyn Fn() + Send>>,
 ) {
     use broadcast::error::RecvError;
     let updated = |uri: &str| {
@@ -421,6 +465,7 @@ async fn forward(
     let subscribed = |uri: &str| subscriptions.lock().contains(uri);
     let mut workspace_due: Option<tokio::time::Instant> = None;
     let mut inbox_due: Option<tokio::time::Instant> = None;
+    let mut wake_due: Option<tokio::time::Instant> = None;
     let mut last_workspace: Option<Value> = None;
     let arm = |due: &mut Option<tokio::time::Instant>| {
         due.get_or_insert_with(|| tokio::time::Instant::now() + COALESCE);
@@ -465,7 +510,14 @@ async fn forward(
                     None => std::future::pending().await,
                 }
             } => match changed {
-                Ok(()) => if subscribed(INBOX_URI) { arm(&mut inbox_due) },
+                Ok(()) => {
+                    if subscribed(INBOX_URI) {
+                        arm(&mut inbox_due);
+                    }
+                    // Armed whether or not ego subscribed: an idle ego is not
+                    // running, so it cannot read a notification.
+                    wake_due.get_or_insert_with(|| tokio::time::Instant::now() + WAKE_DEBOUNCE);
+                }
                 Err(_) => feeds.inbox = None,
             },
             () = until(workspace_due) => {
@@ -480,6 +532,18 @@ async fn forward(
             () = until(inbox_due) => {
                 inbox_due = None;
                 updated(INBOX_URI);
+            },
+            () = until(wake_due) => {
+                wake_due = None;
+                let Some(state) = state.upgrade() else { return };
+                let unread = feeds.peer.as_deref().is_some_and(|peer| {
+                    inbox_snapshot(&state, Some(peer))["messages"]
+                        .as_array()
+                        .is_some_and(|messages| !messages.is_empty())
+                });
+                if unread && let Some(wake) = &wake {
+                    wake();
+                }
             },
         }
     }
@@ -524,13 +588,13 @@ mod tests {
     }
 
     async fn eventually(what: &str, ready: impl Fn() -> bool) {
-        for _ in 0..200 {
+        for _ in 0..500 {
             if ready() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        panic!("{what} within 2s");
+        panic!("{what} within 5s");
     }
 
     /// One registry, one surface: what ego lists over ACP is what HTTP `/mcp`
@@ -858,5 +922,38 @@ mod tests {
             "a burst of changes is one update"
         );
         assert_eq!(updated(INBOX_URI), 1, "mail for another peer is not ego's");
+    }
+
+    /// A burst of mail wakes an idle ego once; mail it already read wakes
+    /// nothing.
+    #[tokio::test]
+    async fn mail_wakes_ego_once_per_burst_and_not_after_it_was_read() {
+        let state = test_state();
+        let woken: Arc<Mutex<Vec<String>>> = Arc::default();
+        let host = AcpMcpHost {
+            wake: {
+                let woken = Arc::clone(&woken);
+                Arc::new(move |peer| woken.lock().push(peer))
+            },
+            ..AcpMcpHost::new(&state)
+        };
+        let (notify, _) = listener();
+        let _id = host.connect(Some(PEER), notify).expect("mcp/connect");
+
+        for n in 0..3 {
+            state.push_agent_inbox(PEER, mail(&format!("m-{n}"), "burst"));
+        }
+        eventually("the wake", || !woken.lock().is_empty()).await;
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(
+            *woken.lock(),
+            vec![PEER.to_owned()],
+            "one wake for the burst"
+        );
+
+        let last = state.push_agent_inbox(PEER, mail("m-read", "read at once"));
+        state.agent_read_cursor.insert(PEER.to_owned(), last);
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(woken.lock().len(), 1, "mail already read wakes nothing");
     }
 }

@@ -23,13 +23,13 @@ use super::connection::{
 use super::events::{AcpEventJournal, AcpEventStream};
 use super::mcp_host::McpChannel;
 use super::{
-    AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpClientEvent,
-    AcpConnectRequest, AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason,
-    AcpConnectionSnapshot, AcpConnectionState, AcpDetachKind, AcpHostRequestId,
-    AcpInteractionSettlement, AcpNotice, AcpPendingInteraction, AcpReconnectRequest,
-    AcpSessionAuthority, AcpTurnId, EgoAcpConfig, EgoCompactRequest, EgoCompactResponse,
-    EgoHoldRequest, EgoHoldResponse, McpOverAcpHost, build_initialize_request, capability_snapshot,
-    launch_spec, tuicommander_acp_mcp_server,
+    AcpAttachKind, AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot,
+    AcpClientError, AcpClientEvent, AcpConnectRequest, AcpConnectionId, AcpConnectionSettlement,
+    AcpConnectionSettlementReason, AcpConnectionSnapshot, AcpConnectionState, AcpDetachKind,
+    AcpHostRequestId, AcpInteractionSettlement, AcpNotice, AcpPendingInteraction,
+    AcpReconnectRequest, AcpSessionAuthority, AcpTurnId, EgoAcpConfig, EgoCompactRequest,
+    EgoCompactResponse, EgoHoldRequest, EgoHoldResponse, McpOverAcpHost, build_initialize_request,
+    capability_snapshot, launch_spec, tuicommander_acp_mcp_server,
 };
 
 const INITIAL_GENERATION: u64 = 1;
@@ -705,6 +705,40 @@ impl AcpClientManager {
                     .or_else(|| connection.snapshot.attachments.last())
                     .map(|attachment| (connection.root.clone(), attachment.session_id.clone()))
             })
+    }
+
+    /// Start a turn carrying `notice` in the peer's conversation, only when no
+    /// turn is running on its connection. A busy ego hears about mail at its
+    /// next tool boundary instead, through `resources/updated`.
+    pub async fn wake_idle_peer(
+        &self,
+        peer_id: &str,
+        notice: &str,
+    ) -> Result<Option<AcpTurnId>, AcpClientError> {
+        let target = self
+            .connections
+            .lock()
+            .iter()
+            .filter(|(_, connection)| {
+                connection.peer_id.as_deref() == Some(peer_id)
+                    && connection.snapshot.settlement.is_none()
+            })
+            .max_by_key(|(_, connection)| connection.snapshot.generation)
+            .and_then(|(connection_id, connection)| {
+                let attachments = &connection.snapshot.attachments;
+                let busy = attachments.iter().any(|attachment| {
+                    attachment.active_turn.is_some() || attachment.state != AcpAttachmentState::Idle
+                });
+                let session = attachments.last()?.session_id.clone();
+                (!busy).then_some((*connection_id, session))
+            });
+        let Some((connection_id, session_id)) = target else {
+            return Ok(None);
+        };
+        let notice = v1::ContentBlock::Text(v1::TextContent::new(notice));
+        self.prompt(connection_id, session_id, vec![notice])
+            .await
+            .map(Some)
     }
 
     pub fn peer_root(&self, peer_id: &str) -> Option<PathBuf> {
