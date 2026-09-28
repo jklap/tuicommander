@@ -28,7 +28,7 @@ function basename(path: string): string {
 export interface AIChatPanelProps {
 	visible: boolean;
 	onClose: () => void;
-	/** The repository this conversation is about. */
+	/** The repository on screen: a hint sent with each prompt, not the chat's scope. */
 	repoPath: string | null;
 	/** Effective filesystem root — the worktree path when on a linked worktree. */
 	fsRoot?: string | null;
@@ -37,11 +37,12 @@ export interface AIChatPanelProps {
 /**
  * AI Chat, running on ego over ACP.
  *
- * The panel binds to a repository and a session. It does not bind to a
- * terminal, and there is no per-terminal lock: a turn ego runs outlives any tab,
- * may touch files no tab is showing, and is the same conversation for every
- * window looking at that repository. The panel is a control plane over an agent
- * that lives outside it — see `docs/user-guide/ai-chat.md`.
+ * One chat for the whole app, across repositories: switching repository keeps
+ * the same tabs and conversation and starts nothing, and ego is launched by the
+ * first message. It does not bind to a terminal, and there is no per-terminal
+ * lock: a turn ego runs outlives any tab and may touch files no tab is showing.
+ * The panel is a control plane over an agent that lives outside it — see
+ * `docs/user-guide/ai-chat.md`.
  *
  * Nothing in here interprets a frame or holds a cursor. `acpTranscript` folds
  * the stream into something a person reads, `acpStore` holds what is true about
@@ -49,10 +50,10 @@ export interface AIChatPanelProps {
  * at.
  */
 export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
-	// The worktree path where there is one: ego works on the files the user is
-	// looking at, not on the repository's main checkout.
-	const root = createMemo(() => props.fsRoot || props.repoPath || null);
-	const chat = createAcpChat(root, () => props.visible);
+	// The worktree path where there is one: the hint names the files the user is
+	// looking at, not the repository's main checkout.
+	const viewed = createMemo(() => props.fsRoot || props.repoPath || null);
+	const chat = createAcpChat(viewed, () => props.visible);
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
 	const keyDown = (event: KeyboardEvent) => {
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
@@ -68,7 +69,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		}
 	};
 	const openFile = async (href: string) => {
-		const cwd = root();
+		const cwd = chat.root() ?? viewed();
 		if (!cwd) return;
 		try {
 			const resolved = await invoke<{ absolute_path: string } | null>("resolve_terminal_path", {
@@ -98,12 +99,10 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		switch (chat.phase()) {
 			case "unconfigured":
 				return "ACP is not configured. Set the ego executable in Settings to start a conversation.";
-			case "no-repo":
-				return "Open a repository to start a conversation.";
 			case "starting":
 				return "Starting ego…";
 			default:
-				return "Ask ego about this repository.";
+				return "Ask ego about any repository. The one on screen is sent as context.";
 		}
 	};
 
@@ -128,7 +127,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						</svg>
 						AI Chat
 					</span>
-					<Show when={root()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
+					<Show when={viewed()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
 					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
 				</div>
 				<div class={s.headerActions}>
@@ -139,7 +138,8 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					/>
 				</div>
 			</div>
-			<Show when={chat.tabs().length > 0}>
+			{/* Shown before ego runs too: "+" is one of the two ways a chat starts. */}
+			<Show when={chat.phase() !== "unconfigured"}>
 				<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
 					<For each={chat.tabs()}>
 						{(session, index) => (
@@ -244,7 +244,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				/>
 			</Transcript>
 
-			<Show when={chat.phase() === "live"}>
+			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer chat={chat} />
 			</Show>
 			<Show when={chat.usage()}>

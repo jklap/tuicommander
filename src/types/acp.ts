@@ -97,10 +97,10 @@ export interface AcpConnectionSettlement {
 /**
  * What the agent said it can do, reduced to the operations this client offers.
  *
- * `mcpStdio` is always `false` — the client does not carry stdio servers, by
- * contract rather than by omission — and `clientBooleanConfig` is excluded the
- * same way, so a boolean config option is never rendered even though the wire
- * type allows one.
+ * `mcpStdio` is always `false` and `mcpAcp` always `true`: the client carries
+ * one MCP server, `tuicommander`, on the ACP transport, by contract rather than
+ * by omission. `clientBooleanConfig` is excluded the same way, so a boolean
+ * config option is never rendered even though the wire type allows one.
  */
 export interface AcpCapabilitySnapshot {
 	protocol: unknown;
@@ -117,6 +117,7 @@ export interface AcpCapabilitySnapshot {
 	mcpStdio: boolean;
 	mcpHttp: boolean;
 	mcpSse: boolean;
+	mcpAcp: boolean;
 	clientFormElicitation: boolean;
 	clientBooleanConfig: boolean;
 	/** Present only when ego advertised `_ego/pause` and `_ego/resume` as one pair. */
