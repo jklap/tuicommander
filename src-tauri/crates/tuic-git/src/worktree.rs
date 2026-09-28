@@ -7758,6 +7758,7 @@ branch refs/heads/feat
     #[test]
     fn resolving_a_workspace_preserves_git_failure() {
         let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(".git"), "gitdir: missing-git-dir\n").unwrap();
         let error = resolve_any_workspace(temp.path(), "missing").unwrap_err();
         assert!(error.contains("git worktree list failed"), "{error}");
         assert!(!error.contains("No workspace found"), "{error}");
