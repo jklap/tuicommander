@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, Index, Show } from "solid-js";
 import { DEFAULT_WORD_SEPARATORS, settingsStore } from "../../../stores/settings";
 import { toastsStore } from "../../../stores/toasts";
 import { onClickKeyDown } from "../../../utils/a11y";
@@ -65,16 +65,22 @@ function newAction(): SmartSelectionAction {
 
 /**
  * Single-line row for one rule that expands into the full editor on click —
- * mirrors `SmartPromptsTab`'s `PromptRow`. Unlike `PromptRow`, `expanded` is
- * NOT local `createSignal` state owned by this component instance: editing
- * any field on this same rule replaces its object in the store (Solid's
- * store setter only preserves reference identity for array elements that
- * are unchanged — the one actually being edited always gets a fresh proxy,
- * confirmed empirically against `solid-js/store`), which would make `<For>`
- * remount this component and reset a local signal on every keystroke,
- * collapsing the editor out from under the user typing into it. Owning
- * `expanded` in the parent instead, keyed by the rule's stable `id`, survives
- * that remount entirely.
+ * mirrors `SmartPromptsTab`'s `PromptRow`. Editing any field on this rule
+ * replaces its object in the store on every keystroke (Solid's store setter
+ * only preserves reference identity for array elements that are unchanged —
+ * the one actually being edited always gets a fresh proxy, confirmed
+ * empirically against `solid-js/store`). The parent renders the rule list
+ * with `<Index>`, not `<For>` (which is reference-keyed) — `<Index>` keeps
+ * one DOM/component instance per array *position* and only updates the
+ * per-slot signal when that position's value changes, so a keystroke's fresh
+ * object no longer disposes and recreates this row (and the focused `<input>`
+ * inside it) the way it used to. The action grid below does the identical
+ * thing one level down, via its own `<Index>` over `props.rule.actions`.
+ *
+ * `expanded` is still owned by the parent (keyed by the rule's stable `id`,
+ * not by array position) rather than as local state here — a rule can move
+ * position when an earlier rule is removed, and position-keyed state would
+ * follow the slot instead of the rule.
  */
 const RuleRow: Component<{
 	rule: SmartSelectionRule;
@@ -164,50 +170,50 @@ const RuleRow: Component<{
 							<span class={s.actionGridHeader}>Parameter</span>
 							<span class={s.actionGridHeader}>Default</span>
 							<span class={s.actionGridHeader} />
-							<For each={props.rule.actions}>
+							<Index each={props.rule.actions}>
 								{(action, index) => (
 									<>
 										<select
-											value={action.kind}
+											value={action().kind}
 											data-testid="smart-action-kind"
 											onChange={(e) =>
-												props.onUpdateAction(index(), { kind: e.currentTarget.value as SmartSelectionActionKind })
+												props.onUpdateAction(index, { kind: e.currentTarget.value as SmartSelectionActionKind })
 											}
 										>
 											<For each={ACTION_KIND_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
 										</select>
 										<input
 											type="text"
-											value={action.title}
+											value={action().title}
 											placeholder="Menu label"
-											onInput={(e) => props.onUpdateAction(index(), { title: e.currentTarget.value })}
+											onInput={(e) => props.onUpdateAction(index, { title: e.currentTarget.value })}
 										/>
 										<input
 											type="text"
 											class={s.actionParameter}
-											value={action.parameter}
+											value={action().parameter}
 											placeholder="\0"
-											onInput={(e) => props.onUpdateAction(index(), { parameter: e.currentTarget.value })}
+											onInput={(e) => props.onUpdateAction(index, { parameter: e.currentTarget.value })}
 										/>
 										<label class={s.actionDefault}>
 											<input
 												type="radio"
 												name={`default-action-${props.rule.id}`}
-												checked={action.isDefault}
-												onChange={() => props.onUpdateAction(index(), { isDefault: true })}
+												checked={action().isDefault}
+												onChange={() => props.onUpdateAction(index, { isDefault: true })}
 											/>
 											Default
 										</label>
 										<button
 											class={s.testBtn}
 											data-testid="smart-action-remove"
-											onClick={() => props.onRemoveAction(index())}
+											onClick={() => props.onRemoveAction(index)}
 										>
 											Remove
 										</button>
 									</>
 								)}
-							</For>
+							</Index>
 						</div>
 					</Show>
 
@@ -427,20 +433,20 @@ export const SelectionTab: Component = () => {
 				</button>
 			</div>
 
-			<For each={rules()}>
+			<Index each={rules()}>
 				{(rule) => (
 					<RuleRow
-						rule={rule}
-						expanded={expandedIds().has(rule.id)}
-						onToggleExpand={() => toggleExpanded(rule.id)}
-						onUpdate={(patch) => updateRule(rule.id, patch)}
-						onRemove={() => removeRule(rule.id)}
-						onUpdateAction={(index, patch) => updateAction(rule.id, index, patch)}
-						onAddAction={() => addAction(rule.id)}
-						onRemoveAction={(index) => removeAction(rule.id, index)}
+						rule={rule()}
+						expanded={expandedIds().has(rule().id)}
+						onToggleExpand={() => toggleExpanded(rule().id)}
+						onUpdate={(patch) => updateRule(rule().id, patch)}
+						onRemove={() => removeRule(rule().id)}
+						onUpdateAction={(index, patch) => updateAction(rule().id, index, patch)}
+						onAddAction={() => addAction(rule().id)}
+						onRemoveAction={(index) => removeAction(rule().id, index)}
 					/>
 				)}
-			</For>
+			</Index>
 			<div style={{ display: "flex", gap: "8px" }}>
 				<button class={s.testBtn} onClick={addRule}>
 					Add rule

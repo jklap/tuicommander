@@ -33,6 +33,7 @@ const CATEGORY_LABELS: Record<PromptCategory | "all", string> = {
 const BUILTIN_BY_ID = new Map(SMART_PROMPTS_BUILTIN.map((p) => [p.id, p]));
 
 export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
+	let searchInputRef: HTMLInputElement | undefined;
 	const [selectedIndex, setSelectedIndex] = createSignal(0);
 	const [showEditor, setShowEditor] = createSignal(false);
 	const [editingPrompt, setEditingPrompt] = createSignal<SavedPrompt | null>(null);
@@ -62,6 +63,18 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 
 	createEffect(() => {
 		if (!isOpen()) clearPendingPromptClick();
+	});
+
+	// `PromptDrawer` itself mounts once at app startup — only its content is
+	// gated by `isOpen()` — so `autofocus` on the search input (a plain HTML
+	// attribute Solid doesn't simulate, unlike React) never applies at all;
+	// the node was never freshly inserted. An explicit focus call on the
+	// isOpen() false→true edge is required, same reasoning as PromptEditor's
+	// Name field and the same pattern CreateWorktreeDialog already uses.
+	createEffect(() => {
+		if (!isOpen()) return;
+		const focusTimer = setTimeout(() => searchInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
 	});
 
 	// Keyboard navigation
@@ -241,7 +254,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 					<div class={s.drawer} onClick={(e) => e.stopPropagation()}>
 						{/* Header */}
 						<div class={s.header}>
-							<h3>{t("promptDrawer.title", "Smart Prompts Library")}</h3>
+							<h3>{t("promptDrawer.title", "Prompts Library")}</h3>
 							<Button variant="ghost" aria-label="Close" onClick={() => promptLibraryStore.closeDrawer()}>
 								&times;
 							</Button>
@@ -250,6 +263,7 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 						{/* Search */}
 						<div class={s.search}>
 							<Input
+								ref={searchInputRef}
 								type="text"
 								placeholder={t("promptDrawer.searchPlaceholder", "Search prompts... (type to filter)")}
 								value={promptLibraryStore.state.searchQuery}
@@ -257,7 +271,6 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 								autocomplete="off"
 								autocorrect="off"
 								spellcheck={false}
-								autofocus
 							/>
 						</div>
 
