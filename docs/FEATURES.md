@@ -850,11 +850,14 @@ one configured ego binary and speaks ACP to it, per
   replaced whole each time it changes
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
+- Untitled sessions show a readable prompt or activity-time label in the picker;
+  failed and empty turns show a message in the conversation
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
 - **Permission requests** are answered with one of the option ids ego published.
-  **Elicitations** are drawn as a form, and only in `form` mode — the client
+  Small single-choice **elicitations** use direct answer buttons; other elicitations
+  are drawn as a form, and only in `form` mode — the client
   declines every other mode before it reaches a person
 - While AI Chat is hidden, its status-bar toggle counts pending permissions and
   forms. Each new question produces one desktop notification, cleared when the

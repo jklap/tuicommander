@@ -531,6 +531,11 @@ pub enum AcpClientEvent {
         stop_reason: v1::StopReason,
         usage: Option<v1::Usage>,
     },
+    /// The prompt answered with an ACP error; preserve its diagnostic for every viewer.
+    TurnFailed {
+        message: String,
+        state: AcpAttachmentState,
+    },
     /// The agent is waiting on a person, and this is what it asked.
     ///
     /// It travels on the stream rather than being handed to whoever called
@@ -613,7 +618,8 @@ impl AcpNotice {
                 state:
                     AcpConnectionState::Closed | AcpConnectionState::Failed | AcpConnectionState::Killed,
             }
-            | AcpClientEvent::TurnSettled { .. } => (AcpNoticeKind::Settled, None),
+            | AcpClientEvent::TurnSettled { .. }
+            | AcpClientEvent::TurnFailed { .. } => (AcpNoticeKind::Settled, None),
             AcpClientEvent::PermissionRequested { request_id, .. }
             | AcpClientEvent::ElicitationRequested { request_id, .. } => {
                 (AcpNoticeKind::InteractionPending, Some(*request_id))

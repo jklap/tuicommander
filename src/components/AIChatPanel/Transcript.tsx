@@ -16,6 +16,7 @@ import s from "./AIChatPanel.module.css";
 
 /** Why a turn ended, for the turns that ended without an answer. */
 const SETTLEMENTS: Record<string, string> = {
+	empty: "Turn ended without a reply.",
 	cancelled: "Turn cancelled.",
 	refusal: "The agent refused this turn.",
 	max_tokens: "The turn stopped: the answer ran out of room.",
@@ -53,7 +54,8 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 	const status = () => {
 		const calls = props.calls();
 		if (calls.some((call) => call.status === "failed")) return "Failed";
-		if (calls.some((call) => call.status === "pending" || call.status === "in_progress" || !call.status)) return "Running";
+		if (calls.some((call) => call.status === "pending" || call.status === "in_progress" || !call.status))
+			return "Running";
 		return "Completed";
 	};
 	const duration = () => {
@@ -62,17 +64,34 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 			observedCount = calls.length;
 			finishedAt = undefined;
 		}
-		if (calls.every((call) => call.status === "completed" || call.status === "failed")) finishedAt ??= performance.now();
+		if (calls.every((call) => call.status === "completed" || call.status === "failed"))
+			finishedAt ??= performance.now();
 		const seconds = ((finishedAt ?? performance.now()) - startedAt) / 1000;
 		return `${seconds.toFixed(1)}s`;
 	};
 	return (
 		<details class={s.toolActivity}>
 			<summary class={s.toolActivitySummary}>
-				<span class={cx(s.toolCallStatusDot, status() === "Failed" ? s.toolCallFailure : status() === "Running" ? s.toolCallPending : s.toolCallSuccess)} />
-				<span>{props.calls().length} tool {props.calls().length === 1 ? "call" : "calls"}</span>
-				<span class={s.toolActivityTitles}>{props.calls().slice(0, 2).map((call) => call.title).join(" · ")}{props.calls().length > 2 ? " · …" : ""}</span>
-				<span class={s.toolCallDuration}>{duration()} observed · {status()}</span>
+				<span
+					class={cx(
+						s.toolCallStatusDot,
+						status() === "Failed" ? s.toolCallFailure : status() === "Running" ? s.toolCallPending : s.toolCallSuccess,
+					)}
+				/>
+				<span>
+					{props.calls().length} tool {props.calls().length === 1 ? "call" : "calls"}
+				</span>
+				<span class={s.toolActivityTitles}>
+					{props
+						.calls()
+						.slice(0, 2)
+						.map((call) => call.title)
+						.join(" · ")}
+					{props.calls().length > 2 ? " · …" : ""}
+				</span>
+				<span class={s.toolCallDuration}>
+					{duration()} observed · {status()}
+				</span>
 			</summary>
 			<div class={s.toolActivityCalls}>
 				<For each={props.calls()}>
@@ -81,7 +100,10 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 							<summary class={s.toolActivityCallSummary}>
 								<span class={cx(s.toolCallStatusDot, STATUS_CLASS[call.status ?? "pending"])} />
 								<span class={s.toolCallName}>{call.title}</span>
-								<span class={s.toolCallDuration}>{call.kind ?? "other"} · {call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}</span>
+								<span class={s.toolCallDuration}>
+									{call.kind ?? "other"} ·{" "}
+									{call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}
+								</span>
 							</summary>
 							<Show when={toolCallDetail(call)}>
 								<div class={s.toolCallBody}>{toolCallDetail(call)}</div>
@@ -95,12 +117,15 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 };
 
 /** Keep the first call as the stable row anchor; later calls belong to it. */
-function activityRows(entries: AcpTranscriptEntry[]): { visible: AcpTranscriptEntry[]; calls: Map<string, AcpToolCall[]> } {
+function activityRows(entries: AcpTranscriptEntry[]): {
+	visible: AcpTranscriptEntry[];
+	calls: Map<string, AcpToolCall[]>;
+} {
 	const visible: AcpTranscriptEntry[] = [];
 	const calls = new Map<string, AcpToolCall[]>();
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
-		if (entry.kind === "user" || entry.kind === "settled") current = undefined;
+		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") current = undefined;
 		if (entry.kind === "tool") {
 			if (!current) {
 				current = [];
@@ -153,7 +178,9 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 									</details>
 								)}
 							</Match>
-							<Match when={entry.kind === "tool" && entry}>{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}</Match>
+							<Match when={entry.kind === "tool" && entry}>
+								{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}
+							</Match>
 							<Match when={entry.kind === "plan" && entry}>
 								{(plan) => (
 									<div class={s.toolCallCard}>
@@ -181,6 +208,9 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 							</Match>
 							<Match when={entry.kind === "settled" && entry}>
 								{(ended) => <div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
+							</Match>
+							<Match when={entry.kind === "failed" && entry}>
+								{(failed) => <div class={s.settledNote}>{failed().message}</div>}
 							</Match>
 						</Switch>
 					)}

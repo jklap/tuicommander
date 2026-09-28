@@ -154,6 +154,15 @@ describe("acpTranscript: the plan", () => {
 });
 
 describe("acpTranscript: how a turn ended", () => {
+	it("does not treat a previous answer as a reply to the next empty turn", () => {
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "first" }));
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", content: text("done") }));
+		acpTranscript.applyFrame(frame({ kind: "turnSettled", stopReason: "end_turn", usage: null }));
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "second" }));
+		acpTranscript.applyFrame(frame({ kind: "turnSettled", stopReason: "end_turn", usage: null }));
+		expect(acpTranscript.entries(SESSION).at(-1)).toMatchObject({ kind: "settled", stopReason: "empty" });
+	});
+
 	// A finished answer needs no marker — the answer is the marker.
 	it("says nothing when a turn ended normally", () => {
 		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", content: text("done") }));

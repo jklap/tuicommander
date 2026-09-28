@@ -105,6 +105,7 @@ pub(crate) struct TurnCollector {
     text: String,
     declined: usize,
     stop_reason: Option<v1::StopReason>,
+    failure: Option<String>,
 }
 
 impl TurnCollector {
@@ -135,6 +136,10 @@ impl TurnCollector {
                 self.stop_reason = Some(*stop_reason);
                 Step::Done
             }
+            AcpClientEvent::TurnFailed { message, .. } => {
+                self.failure = Some(message.clone());
+                Step::Done
+            }
             // The process is gone. Reading on would wait for a turn that can no
             // longer end, so stop and let the driver report what it has.
             AcpClientEvent::ConnectionState {
@@ -156,6 +161,10 @@ impl TurnCollector {
             stop_reason: self.stop_reason?,
             declined: self.declined,
         })
+    }
+
+    pub(crate) fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 }
 
@@ -374,6 +383,12 @@ async fn drive(
     // this depth would bound the last step and leave the three before it free.
     let collected = collect(state, connection_id, &mut events, &session_id).await?;
 
+    if let Some(message) = collected.failure() {
+        return Err(
+            AcpClientError::agent_error(connection_id, None, message.to_owned())
+                .with_session_id(session_id),
+        );
+    }
     collected
         .finish()
         .ok_or_else(|| AcpClientError::transport_closed(connection_id).with_session_id(session_id))
@@ -471,6 +486,19 @@ mod tests {
             stop_reason,
             usage: None,
         }
+    }
+
+    #[test]
+    fn a_failed_prompt_ends_an_unattended_turn_with_its_diagnostic() {
+        let mut collector = TurnCollector::default();
+        assert_eq!(
+            collector.observe(&AcpClientEvent::TurnFailed {
+                message: "no capabilities are configured".to_string(),
+                state: crate::acp::AcpAttachmentState::Idle,
+            }),
+            Step::Done
+        );
+        assert_eq!(collector.failure(), Some("no capabilities are configured"));
     }
 
     fn permission_asked(request_id: AcpHostRequestId) -> AcpClientEvent {

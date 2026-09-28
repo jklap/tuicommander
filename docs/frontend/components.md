@@ -112,6 +112,10 @@ loads a picked session through ACP. `useAcpChat` restores the saved root-to-sess
 binding from app config after a fresh document opens.
 ACP session title updates rename the panel header and picker entry. The usage
 footer shows context-window occupancy and the reported cumulative cost.
+Untitled sessions use their first prompt or latest activity time in the picker,
+with the session ID in the option tooltip. Small single-choice elicitation
+forms use direct answer buttons and Cancel. Prompt failures and empty completed
+turns appear in the transcript.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image
