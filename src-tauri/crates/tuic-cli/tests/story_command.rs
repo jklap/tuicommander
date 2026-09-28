@@ -9,7 +9,7 @@ fn assert_repository_socket(socket: &std::path::Path) {
     let gits_scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(".tmp/tuic-tests"));
+        .map(|gits| gits.join(".tmp"));
     assert!(
         socket.starts_with(&requested) || gits_scratch.is_some_and(|root| socket.starts_with(root)),
         "socket escaped repository test scratch: {}",
