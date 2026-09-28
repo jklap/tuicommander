@@ -16,8 +16,8 @@ The **TunnelManager** orchestrates multiple **TunnelSupervisor** instances, one 
 1. Validate the profile (fields, port ranges, duplicate bind ports)
 2. Check local port availability for all `-L` forwards
 3. Spawn `ssh` with constructed arguments (including agent forwarding if `SSH_AUTH_SOCK` is found)
-4. Wait up to 30 seconds for every local `-L` forward to accept TCP connections; classify an SSH exit immediately
-5. Mark as **Connected** and reset the backoff counter only after those local forwards listen (profiles without local forwards are ready after spawn)
+4. Require SSH to survive 500 ms and wait up to 30 seconds for every local `-L` forward to accept TCP connections; classify an SSH exit immediately
+5. Mark as **Connected** and reset the backoff counter only after both checks pass (profiles without local forwards still require 500 ms survival)
 6. On process exit, classify the exit reason from stderr patterns and exit code
 7. If retryable, wait the backoff delay and loop; otherwise, stop
 
@@ -95,7 +95,7 @@ Stopped
 | State | Meaning |
 |-------|---------|
 | Starting | SSH process is being spawned |
-| Connected | Every local forward accepts TCP connections; the SSH process is still running |
+| Connected | SSH survived startup and every local forward accepts TCP connections |
 | Reconnecting { attempt, reason } | Process exited with retryable reason; waiting backoff before retry |
 | Stopped { reason } | Terminal state: user requested stop, max retries exceeded, or non-retryable exit |
 | Error { message } | Validation failure or spawn error; no process was created |
