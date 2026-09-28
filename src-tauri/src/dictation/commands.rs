@@ -2489,10 +2489,11 @@ pub fn get_dictation_config() -> DictationConfig {
 
 #[tauri::command]
 pub fn set_dictation_config(
+    base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
 ) -> Result<(), String> {
-    save_dictation_config(config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.
@@ -2502,6 +2503,7 @@ pub fn set_dictation_config(
 /// passes it so a language change takes effect on the voice that is speaking
 /// right now, rather than on the one after it.
 pub(crate) fn save_dictation_config(
+    base: DictationConfig,
     mut config: DictationConfig,
     dictation: Option<&DictationState>,
 ) -> Result<(), String> {
@@ -2513,7 +2515,15 @@ pub(crate) fn save_dictation_config(
     // Until then the mode keeps capturing from the device it armed with.
     let previous = get_dictation_config();
     config.recovered_from_corruption = false;
-    crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
+    let file = crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE);
+    if base.recovered_from_corruption {
+        // The read salvaged valid fields from a malformed document. Preserve the
+        // established repair write: a strict typed load cannot parse that file.
+        file.save(&config)?;
+    } else {
+        file.save_delta_strict(&base, &config)?;
+    }
+    let config = get_dictation_config();
     // The configured model is part of the cached status snapshot.
     invalidate_model_snapshot();
     // A voice belongs to a language and to an engine. Change either and every
@@ -2804,6 +2814,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 hands_free_hold_back_ms: 4_000,
                 ..Default::default()
@@ -3161,6 +3172,7 @@ mod tests {
     /// next read observes it.
     fn write_model_config(model: &str) {
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 model: model.to_string(),
                 ..Default::default()
@@ -3168,6 +3180,71 @@ mod tests {
             None,
         )
         .expect("config save");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_dictation_saves_preserve_distinct_fields() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let base = get_dictation_config();
+        let mut first = base.clone();
+        first.model = "small".to_string();
+        let mut second = base.clone();
+        second.speech_volume_db = -24.0;
+
+        save_dictation_config(base.clone(), first, None).unwrap();
+        save_dictation_config(base, second, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert_eq!(saved.model, "small");
+        assert_eq!(saved.speech_volume_db, -24.0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dictation_save_keeps_valid_fields_salvaged_from_malformed_config() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        std::fs::write(
+            dir.path().join(DICTATION_CONFIG_FILE),
+            r#"{"enabled":false,"hotkey":"F8","language":"it","speech_volume_db":"loud"}"#,
+        )
+        .unwrap();
+        let base = get_dictation_config();
+        assert!(base.recovered_from_corruption);
+        let mut desired = base.clone();
+        desired.model = "small".to_string();
+
+        save_dictation_config(base, desired, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert!(!saved.recovered_from_corruption);
+        assert_eq!(saved.hotkey, "F8");
+        assert_eq!(saved.language, "it");
+        assert_eq!(saved.model, "small");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dictation_save_accepts_older_document_without_required_fields() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        std::fs::write(
+            dir.path().join(DICTATION_CONFIG_FILE),
+            r#"{"model":"small"}"#,
+        )
+        .unwrap();
+        let base = get_dictation_config();
+        let mut desired = base.clone();
+        desired.speech_volume_db = -24.0;
+
+        save_dictation_config(base, desired, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert_eq!(saved.model, "small");
+        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.hotkey, "F5");
     }
 
     /// The old metric compared a common-prefix character count against a byte
@@ -3476,7 +3553,7 @@ mod tests {
     fn config_of_this_test(config: DictationConfig) -> (tempfile::TempDir, impl Drop) {
         let dir = tempfile::tempdir().expect("tempdir");
         let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        save_dictation_config(config, None).expect("config save");
+        save_dictation_config(get_dictation_config(), config, None).expect("config save");
         (dir, guard)
     }
 
@@ -3959,6 +4036,7 @@ mod tests {
         assert!(speech_status(&dictation, None).queued > 0 || dictation.speaker.lock().is_some());
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "en".to_string(),
                 ..Default::default()
@@ -4193,6 +4271,7 @@ mod tests {
         assert!(dictation.speaker.lock().is_some());
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
                 speech_voice: "giovanni".to_string(),
@@ -4217,6 +4296,7 @@ mod tests {
         let accepted = speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
                 rms_threshold: 0.05,
@@ -4297,7 +4377,8 @@ mod tests {
             speech_levelling: 0.2,
             ..Default::default()
         };
-        save_dictation_config(config.clone(), Some(&dictation)).expect("config save");
+        save_dictation_config(get_dictation_config(), config.clone(), Some(&dictation))
+            .expect("config save");
 
         let after = Arc::clone(
             &dictation

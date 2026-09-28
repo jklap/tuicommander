@@ -25,6 +25,10 @@ describe("updateAppConfig", () => {
 		]);
 
 		expect(current).toEqual({ theme: "light", server_enabled: true });
+		expect(mockInvoke.mock.calls.filter(([command]) => command === "save_config").map(([, args]) => args)).toEqual([
+			{ base: { theme: "dark", server_enabled: false }, config: { theme: "light", server_enabled: false } },
+			{ base: { theme: "light", server_enabled: false }, config: { theme: "light", server_enabled: true } },
+		]);
 		expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual([
 			"load_config",
 			"save_config",

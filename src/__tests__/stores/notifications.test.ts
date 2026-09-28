@@ -103,6 +103,8 @@ describe("notificationsStore", () => {
 		const notifMod = await import("../../notifications");
 		mockManager = notifMod.notificationManager as unknown as typeof mockManager;
 		store = (await import("../../stores/notifications")).notificationsStore;
+		await store.hydrate();
+		mockInvoke.mockClear();
 	});
 
 	describe("defaults", () => {

@@ -219,7 +219,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: () => ({ method: "POST", path: "/dictation/hands-free/disarm" }),
 	},
 	set_dictation_config: {
-		map: (args) => ({ method: "PUT", path: "/dictation/config", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/dictation/config", body: { base: args.base, config: args.config } }),
 	},
 	// --- OS integration ---
 	open_in_app: {
@@ -747,9 +747,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Config: app ---
 	load_config: { map: () => ({ method: "GET", path: "/config" }) },
-	save_config: { map: (args) => ({ method: "PUT", path: "/config", body: args.config }) },
+	save_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
 	load_app_config: { map: () => ({ method: "GET", path: "/config" }) },
-	save_app_config: { map: (args) => ({ method: "PUT", path: "/config", body: args.config }) },
+	save_app_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
 	hash_password: {
 		map: (args) => ({
 			method: "POST",
@@ -762,13 +762,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Config: notifications ---
 	load_notification_config: { map: () => ({ method: "GET", path: "/config/notifications" }) },
 	save_notification_config: {
-		map: (args) => ({ method: "PUT", path: "/config/notifications", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/notifications", body: { base: args.base, config: args.config } }),
 	},
 
 	// --- Config: UI prefs ---
 	load_ui_prefs: { map: () => ({ method: "GET", path: "/config/ui-prefs" }) },
 	save_ui_prefs: {
-		map: (args) => ({ method: "PUT", path: "/config/ui-prefs", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/ui-prefs", body: { base: args.base, config: args.config } }),
 	},
 
 	// --- Config: defaults (Settings "expert mode") ---
@@ -777,14 +777,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Config: repo settings ---
 	load_repo_settings: { map: () => ({ method: "GET", path: "/config/repo-settings" }) },
 	save_repo_settings: {
-		map: (args) => ({ method: "PUT", path: "/config/repo-settings", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/repo-settings", body: { base: args.base, config: args.config } }),
 	},
 	check_has_custom_settings: {
 		map: (_args, p) => ({ method: "GET", path: `/config/repo-settings/has-custom?path=${p("path")}` }),
 	},
 	load_repo_defaults: { map: () => ({ method: "GET", path: "/config/repo-defaults" }) },
 	save_repo_defaults: {
-		map: (args) => ({ method: "PUT", path: "/config/repo-defaults", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/repo-defaults", body: { base: args.base, config: args.config } }),
 	},
 
 	// --- Config: repositories ---
@@ -802,7 +802,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Config: pane layout ---
 	load_pane_layout: { map: () => ({ method: "GET", path: "/config/pane-layout" }) },
 	save_pane_layout: {
-		map: (args) => ({ method: "PUT", path: "/config/pane-layout", body: args.layout }),
+		map: (args) => ({ method: "PUT", path: "/config/pane-layout", body: { base: args.base, config: args.layout } }),
 	},
 
 	// --- Config: caches ---
@@ -855,25 +855,25 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Config: prompt library ---
 	load_prompt_library: { map: () => ({ method: "GET", path: "/config/prompt-library" }) },
 	save_prompt_library: {
-		map: (args) => ({ method: "PUT", path: "/config/prompt-library", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/prompt-library", body: { base: args.base, config: args.config } }),
 	},
 
 	// --- Config: activity ---
 	load_activity: { map: () => ({ method: "GET", path: "/config/activity" }) },
 	save_activity: {
-		map: (args) => ({ method: "PUT", path: "/config/activity", body: args.items ?? args }),
+		map: (args) => ({ method: "PUT", path: "/config/activity", body: { base: args.base, config: args.items } }),
 	},
 
 	// --- Config: keybindings ---
 	load_keybindings: { map: () => ({ method: "GET", path: "/config/keybindings" }) },
 	save_keybindings: {
-		map: (args) => ({ method: "PUT", path: "/config/keybindings", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/keybindings", body: { base: args.base, config: args.config } }),
 	},
 
 	// --- Config: agents ---
 	load_agents_config: { map: () => ({ method: "GET", path: "/config/agents" }) },
 	save_agents_config: {
-		map: (args) => ({ method: "PUT", path: "/config/agents", body: args.config }),
+		map: (args) => ({ method: "PUT", path: "/config/agents", body: { base: args.base, config: args.config } }),
 	},
 	// Hook instrumentation toggle: GET returns {state}, the Tauri command returns the
 	// bare AgentHookState string — unwrap it. PUT's {ok:true} is discarded by callers.
@@ -1918,7 +1918,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Notes ---
 	load_notes: { map: () => ({ method: "GET", path: "/config/notes" }) },
-	save_notes: { map: (args) => ({ method: "PUT", path: "/config/notes", body: args.config }) },
+	save_notes: { map: (args) => ({ method: "PUT", path: "/config/notes", body: { base: args.base, config: args.config } }) },
 
 	// --- Recent commits ---
 	get_recent_commits: {

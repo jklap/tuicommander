@@ -167,6 +167,8 @@ impl<T: Serialize + DeserializeOwned + Default> ConfigFile<T> {
     pub fn update_with<R, F>(&self, mutate: F) -> Result<R, String>
     pub fn update_with_strict<R, F>(&self, mutate: F) -> Result<R, String>
     pub fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError>
+    pub fn save_delta(&self, base: &T, desired: &T) -> Result<(), String>
+    pub fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String>
     pub fn save(&self, value: &T) -> Result<(), String>
 }
 ```
@@ -177,12 +179,14 @@ cross-process advisory file lock (`std::fs::File::lock()` on a sibling
 now share one config dir. `save_checked` additionally compares a `Stamp`
 (mtime+len, captured at `load()`) against the file's current on-disk state and
 returns `ConfigWriteError::Conflict` instead of overwriting a change it never
-saw — used by most whole-document per-domain files (`notifications.json`,
-`ui-prefs.json`, `repo-settings.json`, etc.). Those callers capture the
-stamp immediately before saving, so this narrows only the backend write race;
-it is not a user-session conflict protocol. `config.json` (`AppConfig`) and
-`mcp-upstreams.json` use delta-under-lock instead. `repositories.json` uses the
-ID-keyed optimistic delta protocol documented below. See
+saw. Interactive per-domain saves use `save_delta`: each request carries the
+snapshot loaded by that client (`base`) and its edited document (`config`). The
+server applies only the base-to-config changes to the latest locked file. Object
+keys merge recursively, arrays replace as a unit, and JSON null deletes a key.
+`save_delta_strict` uses the same rules but refuses to replace a corrupt notes
+file. `config.json` (`AppConfig`) and `mcp-upstreams.json` also merge deltas under
+the lock. `repositories.json` uses the ID-keyed optimistic delta protocol
+documented below. See
 [`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
 
 ### Corrupt Files Are Moved Aside, Never Overwritten
@@ -214,17 +218,16 @@ be intact and only the read failed.
 
 **Type:** `AppConfig`
 
-Frontend surfaces that update this full-document configuration use the shared
-`updateAppConfig()` queue. It serializes each fresh load → owned-field mutation
-→ save sequence so simultaneous General, Services, and plugin changes cannot
-overwrite one another with stale snapshots.
+Frontend surfaces use the shared `updateAppConfig()` queue. Each save sends the
+loaded snapshot and edited config; the queue keeps writes within one WebView in
+order.
 
 **Ordinary saves merge under the cross-process lock; they do not replace the
-document.** `PUT /config` and the MCP `config` tool (`action: "save"`) accept a
-body that mentions only the fields being changed. IPC `save_config` retains its
-typed full-config shape, but the backend derives the cache-to-request delta.
-`commit_config_change` locks `config.json`, reloads and hydrates the latest disk
-value, applies only the requested delta, persists it, and refreshes
+document.** IPC `save_config`/`save_app_config`, `PUT /config`, and MCP `config`
+with `action: "save"` require `{ "base": <loaded AppConfig>, "config": <edited
+AppConfig> }`. The backend computes that client's changes before taking the
+file lock. `commit_config_save` locks `config.json`, reloads and hydrates the
+latest disk value, applies only those changes, persists it, and refreshes
 `state.config` from the result. Objects merge key by key; arrays and scalars
 replace wholesale (so an empty array still clears a list, `null` clears an
 optional field, and `""` still blanks a string).
@@ -302,7 +305,7 @@ cleartext copy does not survive on disk.
 | `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |
 | `index_memory_budget_mb` | `usize` | `1024` | Total heap the resident content indices may hold before `content_index::enforce_memory_budget` drops the least recently used. An ordinary repo indexes to 60–100 MB, so 1 GB holds 10–15 resident and only evicts for an outlier. An evicted index is snapshotted to `<data_dir>/content-index/` and reloaded on return, so eviction costs a stat walk rather than a rebuild. Configurable rather than a constant because the Rust backend does not hot-reload |
 
-**Commands:** `load_app_config()`, `save_app_config(config)`
+**Commands:** `load_app_config()`, `save_app_config(base, config)`
 
 Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
 `config action=save`, session-token rotation, `set_global_hotkey`, the
@@ -491,7 +494,7 @@ work starts.
 | `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 
-**Commands:** `load_notification_config()`, `save_notification_config(config)`
+**Commands:** `load_notification_config()`, `save_notification_config(base, config)`
 
 ### Files the embedded AI engine owned (#784-0aec)
 
@@ -543,7 +546,7 @@ Every key the frontend sends must be declared here. Serde has no
 way in without an error and `load_ui_prefs` can never return it. The panel
 then looks like it saves and silently fails to survive a restart.
 
-**Commands:** `load_ui_prefs()`, `save_ui_prefs(config)`
+**Commands:** `load_ui_prefs()`, `save_ui_prefs(base, config)`
 
 ### Repository Settings (`repo-settings.json`)
 
@@ -565,7 +568,7 @@ Per-repository fields:
 | `archive_script` | `String` | `""` | Script to run before archive/delete (non-zero exit blocks) |
 | `dev_server_url` | `Option<String>` | `None` | URL opened by Design Mode for this repository; when unset, opens `about:blank`. Stored locally and excluded from `.tuic.json` and repository defaults |
 
-**Commands:** `load_repo_settings()`, `save_repo_settings(config)`, `check_has_custom_settings(path)`
+**Commands:** `load_repo_settings()`, `save_repo_settings(base, config)`, `check_has_custom_settings(path)`
 
 ### Repository Defaults (`repo-defaults.json`)
 
@@ -582,7 +585,7 @@ Default values applied to new repositories when no per-repo override exists.
 | `run_script` | `String` | `""` | Default run command |
 | `archive_script` | `String` | `""` | Default archive script |
 
-**Commands:** `load_repo_defaults()`, `save_repo_defaults(config)`
+**Commands:** `load_repo_defaults()`, `save_repo_defaults(base, config)`
 
 ### Repositories (`repositories.json`)
 
@@ -786,13 +789,13 @@ struct PromptEntry {
 }
 ```
 
-**Commands:** `load_prompt_library()`, `save_prompt_library(config)`
+**Commands:** `load_prompt_library()`, `save_prompt_library(base, config)`
 
 ### Notes (`notes.json`)
 
 **Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
 
-**Commands:** `load_notes()`, `save_notes(config)`
+**Commands:** `load_notes()`, `save_notes(base, config)`
 
 ### Keybindings (`keybindings.json`)
 
@@ -800,7 +803,7 @@ struct PromptEntry {
 
 Custom keyboard shortcut overrides.
 
-**Commands:** `load_keybindings()`, `save_keybindings(config)`
+**Commands:** `load_keybindings()`, `save_keybindings(base, config)`
 
 ### Agents Config (`agents.json`)
 
@@ -835,7 +838,7 @@ struct AgentsConfig {
 }
 ```
 
-**Commands:** `load_agents_config()`, `save_agents_config(config)`
+**Commands:** `load_agents_config()`, `save_agents_config(base, config)`
 
 The optional `model` field adds `--model <value>` when MCP `agent spawn`
 selects the run config. A model passed on the spawn call overrides it. Existing

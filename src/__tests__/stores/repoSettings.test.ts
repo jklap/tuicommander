@@ -61,6 +61,8 @@ describe("repoSettingsStore", () => {
 		}));
 
 		store = (await import("../../stores/repoSettings")).repoSettingsStore;
+		await store.hydrate();
+		mockInvoke.mockClear();
 	});
 
 	describe("get()", () => {
@@ -100,7 +102,7 @@ describe("repoSettingsStore", () => {
 		it("persists via invoke", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", { base: expect.anything(),
 					config: expect.objectContaining({
 						repos: expect.objectContaining({
 							"/repo": expect.objectContaining({ path: "/repo" }),
@@ -424,8 +426,8 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
-		it("saves every override under the name the backend reads", () => {
-			testInScope(() => {
+		it("saves every override under the name the backend reads", async () => {
+			await testInScopeAsync(async () => {
 				store.getOrCreate("/repo", "my-repo");
 				mockInvoke.mockClear();
 				store.update("/repo", {
@@ -435,6 +437,7 @@ describe("repoSettingsStore", () => {
 					devServerUrl: "http://localhost:5173",
 				});
 
+				await vi.waitFor(() => expect(lastSavedEntry("/repo")).toMatchObject({ prompt_on_create: false }));
 				const entry = lastSavedEntry("/repo");
 				expect(entry).toMatchObject({
 					path: "/repo",
@@ -455,6 +458,7 @@ describe("repoSettingsStore", () => {
 				mockInvoke.mockClear();
 				store.update("/repo", { promptOnCreate: false });
 			});
+			await vi.waitFor(() => expect(lastSavedEntry("/repo")).toMatchObject({ prompt_on_create: false }));
 			const saved = lastSavedEntry("/repo");
 
 			mockInvoke.mockResolvedValueOnce({ repos: { "/repo": saved } });
@@ -479,7 +483,7 @@ describe("repoSettingsStore", () => {
 				expect(localStorage.getItem("tui-commander-repo-settings")).toBeNull();
 				// The migration writes the wire shape too, or it hands the backend an
 				// entry it reads as empty and the old settings are gone for good.
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", { base: expect.anything(),
 					config: { repos: { "/repo": { path: "/repo", display_name: "my-repo", base_branch: "main" } } },
 				});
 			});
