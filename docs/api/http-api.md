@@ -1904,6 +1904,9 @@ wire and identical on both transports:
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission
 dialog or a draft in the composer (phase `holding_back`) until it can be typed.
+With an activation phrase, `holdBackMs` reports the effective minimum of 5000
+ms, even when the saved hold-back setting is shorter. A continuation that
+starts before that deadline joins the same pending turn.
 
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
