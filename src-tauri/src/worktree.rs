@@ -698,6 +698,31 @@ pub(crate) fn finalize_merged_worktree_impl(
     )
 }
 
+/// Both one-click merge cleanup and post-merge finalization use this review
+/// gate. Before the merge, an unmerged commit is expected; afterwards, only
+/// merged work may be cleaned up without an explicit confirmation.
+fn cleanup_needs_lifecycle_confirmation(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+    action: &str,
+    force: bool,
+    dirt: &WorktreeDirtiness,
+    require_merged: bool,
+) -> bool {
+    if cleanup_needs_confirmation(action, force, dirt) {
+        return true;
+    }
+    if force || (action != "archive" && action != "delete") {
+        return false;
+    }
+    let preview = inspect_worktree_removal(state, repo_path, workspace_id);
+    preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
+        || !preview.live_sessions.is_empty()
+        || preview.lifecycle.commit_status == WorkspaceCommitStatus::Unknown
+        || (require_merged && preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged)
+}
+
 pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -719,13 +744,15 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     }
 
     let dirt = worktree_dirtiness(&base_repo, &workspace_id);
-    let archive_needs_review = action == "archive" && !force && {
-        let preview = inspect_worktree_removal(state, &base_repo, &workspace_id);
-        preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged
-            || preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
-            || !preview.live_sessions.is_empty()
-    };
-    if cleanup_needs_confirmation(&action, force, &dirt) || archive_needs_review {
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &action,
+        force,
+        &dirt,
+        true,
+    ) {
         return Ok(MergeArchiveResult {
             merged: true, // The merge itself already happened; only cleanup stopped.
             action: "needs_confirmation".to_string(),
@@ -886,7 +913,15 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     //    the branch carries commits. `commits_ahead` is reported alongside so the
     //    dialog can also say that an empty branch's merge would be a no-op.
     let preflight = merge_preflight(&repo_path, &branch_name, &workspace_id, &target_branch);
-    if cleanup_needs_confirmation(&after_merge, force, &preflight.worktree_dirty) {
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &after_merge,
+        force,
+        &preflight.worktree_dirty,
+        false,
+    ) {
         return Ok(MergeArchiveResult {
             merged: false,
             action: "needs_confirmation".to_string(),
@@ -1328,6 +1363,78 @@ mod tests {
 
         assert_eq!(res.action, "archived", "nothing to lose, nothing to ask");
         assert!(!res.worktree_dirty);
+    }
+
+    #[test]
+    fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
+        let (_cfg, _guard) = isolated_config();
+        for action in ["archive", "delete"] {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "active-feature", true);
+            let original_head = git_cmd(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .run()
+                .unwrap()
+                .stdout;
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+            crate::state::tests_support::set_session_cwd(
+                &state,
+                "active-agent",
+                &worktree.to_string_lossy(),
+            );
+
+            let result = merge_and_archive_worktree_impl(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(result.action, "needs_confirmation", "{action}");
+            assert!(
+                !result.merged,
+                "{action} must wait for approval before merging"
+            );
+            assert_eq!(
+                git_cmd(repo.path())
+                    .args(["rev-parse", "HEAD"])
+                    .run()
+                    .unwrap()
+                    .stdout,
+                original_head
+            );
+            assert!(worktree.exists(), "{action} must leave the checkout intact");
+
+            let fingerprint = inspect_worktree_removal(&state, repo.path(), "active-feature")
+                .lifecycle
+                .dirty_fingerprint
+                .expect("confirmed checkout fingerprint");
+            let confirmed = merge_and_archive_worktree_impl_with_confirmation(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                true,
+                Some(&fingerprint),
+            )
+            .unwrap();
+            assert_eq!(
+                confirmed.action,
+                if action == "archive" {
+                    "archived"
+                } else {
+                    "deleted"
+                }
+            );
+            assert!(!worktree.exists(), "{action} proceeds after confirmation");
+        }
     }
 
     #[test]

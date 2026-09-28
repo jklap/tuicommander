@@ -245,6 +245,27 @@ describe("useConfirmDialog", () => {
 		});
 	});
 
+	describe("confirmDirtyWorktreeCleanup()", () => {
+		it("names a live agent before archiving a clean worktree", async () => {
+			const pending = dialog.confirmDirtyWorktreeCleanup("active-feature", "archive", 1, {
+				dirtyFiles: 0,
+				dirtyFingerprint: "confirmed-clean",
+				commitStatus: "unmerged",
+				removalSafety: "safe",
+				liveSessions: [{ sessionId: "pty-active", name: "Codex: gate work" }],
+				warnings: ["Live session: Codex: gate work"],
+			});
+
+			try {
+				expect(dialog.dialogState()?.message).toContain("Codex: gate work");
+				expect(dialog.dialogState()?.message).not.toContain("has uncommitted changes");
+			} finally {
+				dialog.handleClose();
+				expect(await pending).toBe(false);
+			}
+		});
+	});
+
 	describe("confirmCloseTerminal()", () => {
 		it("shows dialog with correct message for terminal name", async () => {
 			const promise = dialog.confirmCloseTerminal("Terminal 1");

@@ -2876,12 +2876,12 @@ pub fn worktree_dirtiness(base_repo: &Path, workspace_id: &str) -> WorktreeDirti
     }
 }
 
-/// The single gate every destructive worktree cleanup passes through.
+/// Shared dirty-state gate for destructive worktree cleanup.
 ///
 /// Both entry points — `merge_and_archive_worktree_impl` and
 /// `finalize_merged_worktree_impl` — call this, so the two cleanup paths cannot
-/// drift apart. `force` is the user's confirmation, arriving from the frontend
-/// after the dialog explained what is about to be destroyed.
+/// drift apart on dirtiness. The app layer also checks lifecycle and live
+/// sessions before automatic cleanup. `force` records the user's confirmation.
 pub fn cleanup_needs_confirmation(action: &str, force: bool, dirt: &WorktreeDirtiness) -> bool {
     let cleans_up = action == "archive" || action == "delete";
     if !cleans_up || force {
