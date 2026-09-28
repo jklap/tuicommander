@@ -34,6 +34,8 @@ export interface WorkspaceLifecycleStatus {
 	untrackedFiles?: number | null;
 	/** Live backend PTYs whose working directory is in this checkout. */
 	liveSessions?: Array<{ sessionId: string; name: string }>;
+	/** Backend-authored removal hazards, shared with non-interactive clients. */
+	warnings?: string[];
 	/** Git still registers this workspace, but its checkout directory is gone. */
 	missingCheckout?: boolean;
 	dirtyFingerprint?: string;

@@ -940,6 +940,7 @@ re-derived later.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
+- Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup skips live or dirty worktrees.
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools

@@ -112,10 +112,16 @@ export function useConfirmDialog() {
 		const dirty = lost > 0 ? `${lost} uncommitted file${lost === 1 ? "" : "s"} will be discarded` : "clean";
 		const commits =
 			status.commitStatus === "merged"
-				? "HEAD is merged into the default branch"
+				? "This branch's commits are in the default branch"
 				: status.commitStatus === "in_sync"
-					? "HEAD is the default branch tip — no commits of its own"
+					? "This branch has nothing of its own, not merged work"
 					: "commits remain in the parent repository";
+		const untracked = status.untrackedFiles
+			? `\nUntracked files: ${status.untrackedFiles} untracked files will be discarded.`
+			: "";
+		const sessions = status.liveSessions?.length
+			? `\nLive sessions in this worktree: ${status.liveSessions.map((session) => session.name).join(", ")}. Removing it will interrupt them.`
+			: "";
 		const branchAction = deleteBranch
 			? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
 			: "The local branch will be kept.";
@@ -125,7 +131,7 @@ export function useConfirmDialog() {
 			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
 		return await confirm({
 			title: destructive ? "Destroy workspace state?" : "Remove workspace?",
-			message: `Remove "${branchName}"?\n\n${missing ? "The checkout directory is missing; Git still has a worktree registration. Its submodule refs will be preserved before cleanup." : `Working tree: ${dirty}.`}${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
+			message: `Remove "${branchName}"?\n\n${missing ? "The checkout directory is missing; Git still has a worktree registration. Its submodule refs will be preserved before cleanup." : `Working tree: ${dirty}.`}${untracked}${sessions}${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
 			okLabel: destructive ? "Delete anyway" : "Remove",
 			cancelLabel: "Cancel",
 			kind: destructive ? "error" : "warning",

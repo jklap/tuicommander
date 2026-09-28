@@ -71,6 +71,107 @@ pub(crate) fn inspect_workspace_lifecycle(
     )
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct WorktreeRemovalPreview {
+    #[serde(flatten)]
+    pub lifecycle: WorkspaceLifecycleStatus,
+    pub untracked_files: Option<usize>,
+    pub live_sessions: Vec<WorktreeLiveSession>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WorktreeLiveSession {
+    pub session_id: String,
+    pub name: String,
+}
+
+pub(crate) fn inspect_worktree_removal(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+) -> WorktreeRemovalPreview {
+    let lifecycle = inspect_workspace_lifecycle(repo_path, workspace_id);
+    let worktree_path = resolve_any_workspace(repo_path, workspace_id)
+        .ok()
+        .map(|workspace| PathBuf::from(workspace.path));
+    let untracked_files = worktree_path.as_ref().and_then(|path| {
+        git_cmd(path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .ok()
+            .map(|output| {
+                output
+                    .stdout
+                    .lines()
+                    .filter(|line| line.starts_with("??"))
+                    .count()
+            })
+    });
+    let mut live_sessions = Vec::new();
+    if let Some(worktree_path) = &worktree_path {
+        let root = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.clone());
+        for entry in &state.session_maps.sessions {
+            let session = entry.value().lock();
+            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+                session
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.path.clone())
+            });
+            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+                live_sessions.push(WorktreeLiveSession {
+                    session_id: entry.key().clone(),
+                    name: session
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| entry.key().clone()),
+                });
+            }
+        }
+        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    }
+    let mut warnings = Vec::new();
+    match lifecycle.commit_status {
+        WorkspaceCommitStatus::InSync => {
+            warnings.push("This branch has nothing of its own, not merged work".to_string())
+        }
+        WorkspaceCommitStatus::Merged => {
+            warnings.push("This branch's commits are in the default branch".to_string())
+        }
+        WorkspaceCommitStatus::Unmerged => {
+            warnings.push("This branch has unmerged commits".to_string())
+        }
+        WorkspaceCommitStatus::Unknown => {
+            warnings.push("Branch history could not be verified".to_string())
+        }
+    }
+    if let Some(total) = lifecycle.dirty_files.filter(|total| *total > 0) {
+        let untracked = untracked_files.unwrap_or(0);
+        warnings.push(format!(
+            "{total} uncommitted files, including {untracked} untracked files"
+        ));
+    }
+    warnings.extend(
+        live_sessions
+            .iter()
+            .map(|session| format!("Live session: {}", session.name)),
+    );
+    WorktreeRemovalPreview {
+        lifecycle,
+        untracked_files,
+        live_sessions,
+        warnings,
+    }
+}
+
 pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     repo_path: &str,
     workspace_id: &str,
@@ -293,6 +394,7 @@ pub(crate) async fn remove_worktree(
         "remove_worktree command: invoked"
     );
     let script = resolve_archive_script(&repo_path);
+    let warnings = inspect_worktree_removal(&state, Path::new(&repo_path), &workspace_id).warnings;
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -311,7 +413,8 @@ pub(crate) async fn remove_worktree(
     .map_err(|e| format!("Task panic: {e}"))?;
 
     match result {
-        Ok(outcome) => {
+        Ok(mut outcome) => {
+            outcome.warnings = warnings;
             tracing::info!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: SUCCESS — invalidating caches");
             if outcome.branch_delete_warning.is_none() {
                 // Branch labels are branch-keyed, so a removed worktree drops the
@@ -925,13 +1028,17 @@ pub(crate) fn check_worktree_dirty(
     tuic_git::worktree::check_worktree_dirty(repo_path, workspace_id)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) async fn get_workspace_lifecycle(
+    state: State<'_, Arc<AppState>>,
     repo_path: String,
     workspace_id: String,
-) -> Result<WorkspaceLifecycleStatus, String> {
+) -> Result<WorktreeRemovalPreview, String> {
+    let state = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
-        Ok(inspect_workspace_lifecycle(
+        Ok(inspect_worktree_removal(
+            &state,
             Path::new(&repo_path),
             &workspace_id,
         ))
@@ -999,6 +1106,61 @@ mod tests {
     use tuic_git::test_fixtures::{
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-work", false);
+        fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
+        fs::write(worktree.join("README.md"), "changed").expect("modified file");
+        fs::write(worktree.join("new-a.txt"), "a").expect("first untracked file");
+        fs::write(worktree.join("new-b.txt"), "b").expect("second untracked file");
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "pty-active");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-active",
+            &worktree.join("nested").to_string_lossy(),
+        );
+        state
+            .session_maps
+            .sessions
+            .get("pty-active")
+            .unwrap()
+            .lock()
+            .display_name = Some("Codex: gate work".to_string());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-other");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-other",
+            &repo.path().to_string_lossy(),
+        );
+
+        let preview = inspect_worktree_removal(&state, repo.path(), "active-work");
+
+        assert_eq!(preview.lifecycle.dirty_files, Some(3));
+        assert_eq!(preview.untracked_files, Some(2));
+        assert_eq!(
+            preview.live_sessions,
+            vec![WorktreeLiveSession {
+                session_id: "pty-active".to_string(),
+                name: "Codex: gate work".to_string(),
+            }]
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Codex: gate work"))
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("2 untracked"))
+        );
+    }
 
     /// The post-merge cleanup dialog runs these one after another, and each was
     /// a plain `fn` command: a checkout, a branch delete that can take a whole

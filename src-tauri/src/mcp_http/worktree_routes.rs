@@ -296,6 +296,12 @@ pub(super) async fn remove_worktree_http(
             .into_response();
     }
     let id_for_event = workspace_id.clone();
+    let warnings = crate::worktree::inspect_worktree_removal(
+        &state,
+        std::path::Path::new(&q.repo_path),
+        &workspace_id,
+    )
+    .warnings;
     let result = tokio::task::spawn_blocking(move || {
         let archive = crate::worktree::resolve_archive_script(&repo_path);
         crate::worktree::remove_worktree_with_presence_confirmation(
@@ -326,6 +332,7 @@ pub(super) async fn remove_worktree_http(
                 "ok": true,
                 "branch_delete_warning": outcome.branch_delete_warning,
                 "removal_rule": outcome.removal_rule,
+                "warnings": warnings,
             })),
         )
             .into_response(),
@@ -453,12 +460,16 @@ pub(super) async fn merge_pr_via_github_http(
 }
 
 /// Fresh linked-worktree removal preflight.
-pub(super) async fn workspace_lifecycle_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
+pub(super) async fn workspace_lifecycle_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WorkspaceIdQuery>,
+) -> Response {
     if let Err(error) = validate_repo_path(&q.repo_path) {
         return error.into_response();
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::inspect_workspace_lifecycle(
+        crate::worktree::inspect_worktree_removal(
+            &state,
             std::path::Path::new(&q.repo_path),
             &q.workspace_id,
         )

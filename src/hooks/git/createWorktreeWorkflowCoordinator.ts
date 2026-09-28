@@ -66,6 +66,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		baseBranch: string;
 		hasDirtyFiles: boolean;
 		worktreeDirty: boolean;
+		removalWarnings?: string[];
 		worktreeFingerprint?: string;
 		submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	} | null>;
@@ -290,6 +291,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		let worktreeDirty = false;
 		let worktreeFingerprint: string | undefined;
 		let submoduleUnpushedCommits: Array<{ path: string; count: number }> | undefined;
+		let removalWarnings: string[] | undefined;
 		try {
 			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId });
 		} catch (err) {
@@ -300,6 +302,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			const lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
 			worktreeFingerprint = lifecycle.dirtyFingerprint;
 			submoduleUnpushedCommits = lifecycle.submoduleUnpushedCommits;
+			removalWarnings = lifecycle.warnings;
 		} catch (err) {
 			appLogger.warn("git", `Could not fingerprint the ${branchName} worktree`, err);
 		}
@@ -311,6 +314,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			baseBranch,
 			hasDirtyFiles,
 			worktreeDirty,
+			...(removalWarnings ? { removalWarnings } : {}),
 			...(worktreeFingerprint ? { worktreeFingerprint } : {}),
 			...(submoduleUnpushedCommits ? { submoduleUnpushedCommits } : {}),
 		});
