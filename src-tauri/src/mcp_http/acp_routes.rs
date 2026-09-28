@@ -186,6 +186,9 @@ struct AuthorityBody {
 #[serde(rename_all = "camelCase")]
 struct PromptBody {
     prompt: Vec<v1::ContentBlock>,
+    /// The repository on screen, a hint for this turn only.
+    #[serde(default)]
+    viewed_repo: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -414,7 +417,7 @@ async fn session_prompt(
     answer(
         state
             .acp
-            .prompt(connection_id, session_id, body.prompt)
+            .prompt_with_context(connection_id, session_id, body.prompt, body.viewed_repo)
             .await,
     )
 }
