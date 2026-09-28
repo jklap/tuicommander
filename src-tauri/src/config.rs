@@ -7903,6 +7903,30 @@ mod tests {
     // ConfigFile<T> — cross-process-safe update/save
     // -----------------------------------------------------------------
 
+    #[test]
+    #[serial_test::serial]
+    fn stale_agents_saves_preserve_independent_changes() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_agents_config();
+
+        let mut first = base.clone();
+        first.headless_agent = Some("claude".to_string());
+        let mut second = base;
+        second
+            .agents
+            .entry("claude".to_string())
+            .or_default()
+            .progress_tracking = Some(true);
+
+        save_agents_config(first).expect("first client save");
+        save_agents_config(second).expect("second client save");
+
+        let persisted = load_agents_config();
+        assert_eq!(persisted.headless_agent.as_deref(), Some("claude"));
+        assert_eq!(persisted.agents["claude"].progress_tracking, Some(true));
+    }
+
     #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
     struct CounterDoc {
         counters: HashMap<String, i64>,
