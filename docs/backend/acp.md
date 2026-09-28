@@ -173,6 +173,9 @@ on the desktop, a WebSocket in the browser, carrying byte-identical frames.
 Written down because each of them is a variant the plan named and this client
 deliberately does not have:
 
+- **One live process per peer.** Concurrent connects for the same peer wait
+  through launch and initialization, then reuse the registered connection.
+  Connects for different peers remain independent.
 - **A connection id is not public until initialization has succeeded.** It is
   minted inside `connect` and does not escape until v1 is negotiated, so there
   is no `starting` or `initializing` state — nothing that is still coming up can
