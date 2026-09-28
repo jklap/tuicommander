@@ -80,6 +80,18 @@ pub(crate) async fn update_and_restart(
     confirmed_sessions: usize,
     expected_sha256: &str,
 ) -> Result<UpdatePreview, String> {
+    if state.remote.automatic_update_in_progress(id) {
+        return Err("Automatic remote update is already in progress".to_string());
+    }
+    perform_update_and_restart(state, id, confirmed_sessions, expected_sha256).await
+}
+
+pub(crate) async fn perform_update_and_restart(
+    state: &Arc<crate::AppState>,
+    id: &str,
+    confirmed_sessions: usize,
+    expected_sha256: &str,
+) -> Result<UpdatePreview, String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
     let base_url = state
         .remote

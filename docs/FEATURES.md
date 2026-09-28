@@ -2345,7 +2345,8 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - **Auto-update remote daemons** — An opt-in per-connection setting. On connect,
   update an out-of-date daemon only when it reports zero live PTY sessions.
   With live sessions, show the count and offer the manual update without a queue.
-  Progress, success and errors appear in Remote Machines.
+  Progress, success and errors appear in Remote Machines. While the automatic
+  update runs, the backend rejects manual updates over IPC, HTTP, and MCP.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`

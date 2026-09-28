@@ -303,7 +303,8 @@ automatically only if the daemon reports zero live PTY sessions. A daemon with
 live sessions stays on its current build; Settings shows the session count and
 offers the manual update. No update is queued. An automatic failure is shown
 once for that selected build, without a retry on each reconnect.
-The manual update button is disabled while an automatic update is running. A
+The manual update button is disabled while an automatic update is running. The
+backend also rejects manual updates from IPC, HTTP, or MCP during that update. A
 stalled transfer reports a timeout, after which connection checks resume.
 Select **Update & restart remote** for either Direct or SSH transport. The
 preview reports the remote target and build, selected desktop build and source,
