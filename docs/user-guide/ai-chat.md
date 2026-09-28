@@ -24,9 +24,10 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
-On the mobile PWA, **Chat** is the first tab. Choose a configured repository in
-the header to open ego there. The conversation picker shows the titles of saved
-sessions; choose one to load its history, or tap **New**. Messages, collapsed tool
+On the mobile PWA, **Chat** is the first tab. The repository chosen in the
+header is sent with each message as context; the chat itself is the same one the
+desktop shows. The conversation picker shows the titles of saved sessions;
+choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
@@ -39,19 +40,21 @@ do not alert the phone.
 
 ## What it is bound to
 
-**A repository and a session, never a terminal.** A turn ego runs outlives any
-tab, may touch files no tab is showing, and is the same conversation for every
-window looking at that repository. The header names the repository.
+**One chat for the whole app, never a terminal.** Every conversation works
+across all your repositories: ego runs in `~/Gits`, and the repository on screen
+is sent with each message as context — a hint, never a limit on what ego may
+reach. The header names that repository. Switching repository keeps the same
+tabs and the same conversation, and starts or loads nothing.
 
-Switching repository opens a new conversation and leaves the previous one
-running. Coming back to a repository picks its conversation up where it was —
-nothing is relaunched, and the turn that was running kept running. **New** in the
-control bar starts a second conversation on the same repository; the picker
-beside it lists previous conversations by title, newest first. Selecting one
-loads its history. The last selected conversation is restored after restarting
-TUICommander.
+ego starts when you send the first message or click **+**; opening the panel
+starts nothing. There is one ego for the app: a reloaded window or the phone
+gets the one already running, and quitting TUICommander ends it. **New** in the
+control bar starts another conversation; the picker beside it lists previous
+conversations by title, newest first. Selecting one loads its history. The open
+tabs and the selected tab are restored after restarting TUICommander, and their
+history is replayed when ego starts.
 
-The panel has chat tabs for parallel conversations on the same repository.
+The panel has chat tabs for parallel conversations.
 Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
 focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
 browser keeps its own new-tab shortcut. Click a tab to switch, or close it to
@@ -68,12 +71,13 @@ When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
 percentage and shows the cumulative cost when ego reports one.
 
-ego reaches terminals and repositories the way any external agent does: by
-calling TUICommander's own MCP server. The entry for it is built by
-TUICommander, not by whoever opened the session, so a conversation can never be
-pointed at some other endpoint. It also names the socket **this** copy of
-TUICommander bound, so a second copy started with `TUIC_APP_INSTANCE=<id>` drives
-its own terminals and repositories rather than the default install's.
+ego reaches terminals and repositories by calling TUICommander's own MCP
+server, served on the ACP connection itself — no bridge process in between. The
+entry for it is built by TUICommander, not by whoever opened the session, so a
+conversation can never be pointed at some other endpoint, and a second copy
+started with `TUIC_APP_INSTANCE=<id>` serves its own terminals and repositories.
+ego also reads a workspace summary and its inbox from that server, and new mail
+wakes an idle ego with a short notice.
 
 ## During a turn
 
