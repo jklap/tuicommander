@@ -21,6 +21,9 @@ export function SuggestChips(props: SuggestChipsProps) {
 				(data) => retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data })),
 				text,
 				props.agentType,
+				undefined,
+				true,
+				props.sessionId,
 			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

@@ -12414,7 +12414,47 @@ fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
     );
 
     assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
-    assert_eq!(injection_enter_gap(None), INJECT_ENTER_GAP);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        "unrecognized-agent",
+        Box::new(TimedWriter {
+            writes: Arc::clone(&writes),
+        }),
+        TtyMode::Raw,
+    );
+    agent_session(&state, "unrecognized-agent", SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut("unrecognized-agent")
+        .unwrap()
+        .agent_type = Some("future-agent".into());
+
+    write_agent_command_to_pty(&state, "unrecognized-agent", "review this").unwrap();
+
+    let writes = writes.lock().unwrap();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|(_, bytes)| bytes.as_slice())
+            .collect::<Vec<_>>(),
+        vec![
+            b"\x15".as_slice(),
+            b"review this".as_slice(),
+            b"\r".as_slice()
+        ]
+    );
+    assert!(
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        "unknown agent must tolerate Codex paste suppression"
+    );
 }
 
 #[test]

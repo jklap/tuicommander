@@ -135,6 +135,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Agent command injection uses the longer Codex-safe Enter gap when the agent type is still unknown. MCP `session input` also separates text and Enter for Claude and other identified agents.
 - Worktree cleanup recognizes a merged GitHub PR whose head contains the local tip after a squash merge, and recognizes branches already contained in the checked-out integration branch. Warm copies retain ignored build directories while restoring owner write permission in the new worktree so sealed source caches do not block removal. MCP `repo branch_delete` safely deletes an integrated local branch without a worktree.
 - Dictation auto-send and other injected prompts now submit in Codex after its paste-burst Enter suppression window, in both the frontend and MCP session paths.
 - **Agent native scrollback** — TUICommander launches Claude, Codex, Grok and supported OpenCode versions without alternate-screen rendering by default, including resumed and orchestrated sessions. A one-time warning names any agent that still enters alternate screen.

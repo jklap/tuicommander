@@ -982,8 +982,11 @@ agents, and older queued commands reject before the first byte. A peer that
 arrives after the claim queues behind it; a peer that wins first makes `submit`
 reject. Slash commands, including `/clear`, follow the same receipt contract.
 
-`session action=input` remains the raw compatibility surface. Its `ok:true`
-proves PTY write only; it may prefill a composer or send an interactive key and
+`session action=input` remains the write-only compatibility surface. For an
+identified agent, text with `special_key=enter` holds one PTY writer lock and
+separates the text and CR with the agent Enter gap; Codex/OpenCode also use
+the managed injection framing. Shell sessions and other keys retain raw pair
+writes. Its `ok:true` proves PTY write only; it may prefill a composer or send an interactive key and
 never returns a submission receipt. Never split command text and Enter across
 two calls.
 
