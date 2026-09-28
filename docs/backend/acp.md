@@ -16,8 +16,53 @@ from `acp_*` Tauri commands and, identically, from `/acp` HTTP routes.
 | `src-tauri/src/acp/connection.rs` | The per-connection actor: decides and writes serially, waits concurrently |
 | `src-tauri/src/acp/events.rs` | `AcpEventJournal` — the ordered, bounded record every subscriber reads from |
 | `src-tauri/src/acp/ego_ext.rs` | `_ego/pause`, `_ego/resume`, `_ego/compact` |
+| `src-tauri/src/acp/mcp_host.rs` | MCP-over-ACP: the host contract and the per-connection channel |
+| `src-tauri/src/mcp_http/acp_mcp.rs` | The host: `tuicommander` served through the `/mcp` handler |
 | `src-tauri/src/acp_commands.rs` | The Tauri surface: one command per manager method, nothing else |
 | `src-tauri/src/mcp_http/acp_routes.rs` | The HTTP surface, calling the same cores |
+
+## MCP over ACP
+
+Every attended session is given one MCP server,
+`{"type":"acp","name":"tuicommander","serverId":"tuicommander"}` (schema 1.5.0,
+`unstable_mcp_over_acp`). ego reaches it on this connection:
+
+| ego sends | TUIC answers |
+|-----------|--------------|
+| `mcp/connect {serverId}` | `{connectionId}`; any other `serverId` is `-32602` |
+| `mcp/message {connectionId, method, params}` request | the inner MCP `result`, or the inner MCP error as the ACP error |
+| `mcp/message` notification | accepted, nothing sent back |
+| `$/cancel_request {requestId}` for a pending `mcp/message` | that request answers `-32800` and its handler future is dropped |
+| `mcp/disconnect {connectionId}` | `{}` |
+
+TUIC sends `mcp/message` notifications on the same `connectionId` for what the
+HTTP SSE stream carries: `notifications/tools/list_changed` and channel
+notifications. An unknown `connectionId` is `-32602` and never reaches the host.
+
+The connection layer only routes; `McpOverAcpHost` is injected with
+`set_mcp_host` because the handler needs the application state the manager must
+not hold. `AcpMcpHost` opens one MCP protocol session per `mcp/connect`, bound to
+the peer id ego was launched under (its `TUIC_SESSION`), and sends every request
+through `mcp_post` — the same handler, tool registry and collapsed surface as
+HTTP `/mcp`. `mcp/disconnect` and the end of the ACP connection both run
+`end_mcp_session`, the teardown DELETE `/mcp` uses. There is no `tuic-bridge`
+process and no HTTP round trip for ego.
+
+Two resources exist only on this channel (its `initialize`/`server/discover`
+add `"resources":{"subscribe":true}`; HTTP `/mcp` does not):
+
+| URI | Contents |
+|-----|----------|
+| `tuic://workspace` | `{repos:[{name,path,branch,liveAgents:[{sessionId,name,agentType}]}],viewedRepo}` — `repositories.json` order, agents by PTY cwd, `activeRepoPath` |
+| `tuic://inbox` | `{messages:[{id,from:{session,name},body,timestamp}],nextSince}` — unread mail after the peer's cursor; reading does not advance it, `agent action=inbox` does |
+
+`resources/subscribe {uri}` opts in; a subscribed resource gets one
+`notifications/resources/updated {uri}` per 250 ms burst, and the workspace only
+when its content changed. Mail also wakes an **idle** ego: two seconds after the
+first message of a burst, if any of it is still unread and no turn is running on
+the connection, `wake_idle_peer` sends one `session/prompt` carrying
+`PEER_MAIL_WAKE`. A busy ego hears about mail at its next tool boundary through
+`resources/updated` instead.
 
 ## The actor
 
@@ -164,7 +209,13 @@ deliberately does not have:
   ends. The seats, meanwhile, outlive the overwrite, so the two views would then
   disagree about what is being asked. A host that wants the history replayed
   detaches first, which says what it means. A fork is not affected: it names the
-  session it forks *from* and comes back with an id of its own.
+  session it forks *from* and comes back with an id of its own. A `load` or
+  `resume` still waiting for its answer holds the session too, so a second one
+  sent meanwhile is refused the same way: each load makes ego admit every MCP
+  server again. Every attach is logged (`ACP attach`, with the wire method and
+  session id) so a storm of them can be attributed. The AI Chat panel keeps one
+  replay per tab in flight and does not replay a tab whose load failed until a
+  person selects it or presses Retry.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own

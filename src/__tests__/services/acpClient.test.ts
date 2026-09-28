@@ -266,6 +266,7 @@ describe("acpClient: talking to a session", () => {
 				mcpStdio: false,
 				mcpHttp: true,
 				mcpSse: false,
+				mcpAcp: true,
 				clientFormElicitation: true,
 				clientBooleanConfig: false,
 				egoHoldVersion: null,
@@ -280,19 +281,21 @@ describe("acpClient: talking to a session", () => {
 			connectionId: CONNECTION,
 			sessionId: SESSION,
 			prompt: [{ type: "image", mimeType: "image/png", data: "iVBORw==" }],
+			viewedRepo: null,
 		});
 		streams.deliver({ ...frame(2), event: { kind: "promptSent", text: "Image" } });
 		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "Image" })]);
 	});
 
-	it("sends a prompt as one text content block", async () => {
+	it("sends a prompt as one text content block, with the viewed repository beside it", async () => {
 		await client.connect(ROOT);
-		await client.prompt(CONNECTION, SESSION, "hello");
+		await client.prompt(CONNECTION, SESSION, "hello", [], "/repo/viewed");
 
 		expect(mockInvoke).toHaveBeenCalledWith("acp_session_prompt", {
 			connectionId: CONNECTION,
 			sessionId: SESSION,
 			prompt: [{ type: "text", text: "hello" }],
+			viewedRepo: "/repo/viewed",
 		});
 	});
 

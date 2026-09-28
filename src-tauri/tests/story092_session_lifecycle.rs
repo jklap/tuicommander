@@ -362,6 +362,56 @@ async fn a_session_this_connection_already_holds_is_not_attached_twice() {
         .unwrap();
 }
 
+/// A session whose attach is still pending is not attached a second time.
+///
+/// The already-attached check alone leaves a window: until the agent answers
+/// the first `session/load` there is no attachment to collide with, so a host
+/// that asked again — a panel re-rendering, a retry loop — sent another load,
+/// and ego admits every MCP server again for each one. The scenario leaves the
+/// first load unanswered and fails if a second frame reaches it.
+#[tokio::test]
+async fn a_session_with_a_pending_attach_is_not_attached_twice() {
+    let fixture = Fixture::with("session-attach-pending");
+    let connection = fixture.connect().await;
+    let root = fixture.root();
+
+    let mut first = Box::pin(fixture.manager.attach(
+        connection.connection_id,
+        AcpAttachKind::Load,
+        session(FIRST),
+        authority(root.clone()),
+    ));
+    for kind in [AcpAttachKind::Load, AcpAttachKind::Resume] {
+        let second = fixture.manager.attach(
+            connection.connection_id,
+            kind,
+            session(FIRST),
+            authority(root.clone()),
+        );
+        // Biased, so the first load is queued before the second is.
+        let error = tokio::select! {
+            biased;
+            settled = &mut first => panic!("a second attach reached the agent: {settled:?}"),
+            refused = second => refused.unwrap_err(),
+        };
+        assert_eq!(
+            error.code,
+            AcpClientErrorCode::InvalidInput,
+            "{kind:?}: {error:?}"
+        );
+        assert_eq!(error.session_id, Some(session(FIRST)), "{kind:?}");
+    }
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+    first
+        .await
+        .expect_err("an unanswered load ends with the connection");
+}
+
 /// Every lifecycle operation is gated on the capability that names it.
 ///
 /// One test per operation would prove the same thing five times; what matters
@@ -438,24 +488,9 @@ async fn a_settled_connection_refuses_session_work_as_transport_closed() {
 // The one MCP server a session is given
 // ---------------------------------------------------------------------------
 
-/// The port the scenarios above expect in the synthesised address.
-///
-/// Any bound port would do — nothing listens on it during the test, because
-/// what is under test is the entry the client writes, not what answers it.
-const BRIDGE: &str = "/opt/tuic/tuic-bridge";
-
-/// The socket this process pretends to have bound.
-///
-/// Any path would do — nothing listens on it during the test. What is under
-/// test is that the path the process *bound* reaches the entry, rather than the
-/// bridge being left to find a socket of its own.
-const SOCKET: &str = "/tmp/tuic-mcp-0badc0de.sock";
-
 #[tokio::test]
-async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation() {
+async fn an_acp_peer_keeps_one_identity_in_ego_and_its_conversation() {
     let fixture = Fixture::with("session-new-peer-mcp");
-    fixture.manager.set_bridge_binary(Some(BRIDGE.into()));
-    fixture.manager.set_socket_path(Some(SOCKET.into()));
     let peer = "550e8400-e29b-41d4-a716-446655440a01";
     let connection = fixture
         .manager
@@ -506,8 +541,8 @@ async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation()
 /// Every session carries TUICommander, and carries nothing a caller named.
 ///
 /// Both halves of plan §4.5 in one scenario, because they are one rule: the
-/// list is built here from the bridge this process ships, so the intruder below
-/// is not filtered out of it — it is never consulted. `session/load` is in the
+/// list is built here from the server this process serves, so the intruder
+/// below is not filtered out of it — it is never consulted. `session/load` is in the
 /// same scenario for the same reason `start_attach` shares a body with
 /// `start_new_session`: an entry synthesised for one and forgotten for the
 /// other is a session that can reach nothing, found only by a person.
@@ -515,20 +550,9 @@ async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation()
 /// The intruder is an HTTP entry on purpose: replacement has to hold for a
 /// transport the grant no longer uses, or the test would pass on a list that
 /// merely filtered by shape.
-///
-/// The scenario also pins `TUIC_SOCKET`, because the entry naming our bridge is
-/// only half the grant: the bridge left to its own search finds the DEFAULT
-/// instance's socket, so a named instance would hand ego the wrong machine's
-/// repositories under the right command line.
 #[tokio::test]
 async fn every_session_carries_this_process_and_nothing_a_caller_named() {
     let fixture = Fixture::with("session-new-tuic-mcp");
-    fixture
-        .manager
-        .set_bridge_binary(Some(std::path::PathBuf::from(BRIDGE)));
-    fixture
-        .manager
-        .set_socket_path(Some(std::path::PathBuf::from(SOCKET)));
     let connection = fixture.connect().await;
 
     let intruder = AcpSessionAuthority {
@@ -556,32 +580,6 @@ async fn every_session_carries_this_process_and_nothing_a_caller_named() {
         )
         .await
         .expect("session/load");
-
-    fixture
-        .manager
-        .disconnect(connection.connection_id)
-        .await
-        .unwrap();
-}
-
-/// No bridge means no entry, rather than a command that cannot run.
-///
-/// This used to be the default install rather than an edge case: the entry was
-/// built from a TCP port, the listener starts only when remote access is
-/// enabled, and remote access is off by default — so an ordinary session
-/// reached no TUICommander tools at all. Over the bridge the socket is always
-/// there, and this is what it says it is: an install missing its own sidecar.
-#[tokio::test]
-async fn no_bridge_leaves_the_session_with_no_mcp_server() {
-    let fixture = Fixture::with("session-new-no-port");
-    fixture.manager.set_bridge_binary(None);
-    let connection = fixture.connect().await;
-
-    fixture
-        .manager
-        .new_session(connection.connection_id, authority(fixture.root()))
-        .await
-        .expect("session/new");
 
     fixture
         .manager

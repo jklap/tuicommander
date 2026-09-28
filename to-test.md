@@ -1,3 +1,15 @@
+## Global AI Chat (1157-1e54)
+
+- [ ] After a `make dev` restart, open AI Chat and switch between three repositories: `ps` shows no new `ego acp` process and the tabs stay. Send a message: exactly one `ego acp -C ~/Gits` starts, and ego's answer knows which repository was on screen. Reload the webview and send again: still one process. Quit TUICommander: no `ego acp` survives.
+
+## ego MCP over ACP (1156-1b61)
+
+- [ ] After a `make dev` restart and an ego build that advertises `mcpCapabilities.acp`, open AI Chat in an isolated `TUIC_APP_INSTANCE=<id>` and ask ego to list terminals. `ps` shows no `tuic-bridge` child of ego, the app log shows no `MCP initialize` line per tool call, and the tool answers.
+
+## AI Chat replay storm (1151-4243)
+
+- [ ] After a `make dev` restart, open AI Chat on a repository with two saved tabs in an isolated `TUIC_APP_INSTANCE=<id>`. The app log shows one `ACP attach` line with `method=session/load` per tab, not a repeating stream, and a refused load shows the error with Retry instead of re-sending.
+
 ## Crate split restart
 
 - [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout.
@@ -11,6 +23,10 @@
      then remove the tweak markers. -->
 
 # To Test
+
+## AI Chat layout and composer (story 1166-ef2f)
+
+- [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
 
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
@@ -4031,6 +4047,16 @@ or credential is touched.
       host picker and monochrome icons were rendered in an isolated browser on
       port 9877. _(verified 2026-09-22 from the worktree build; proof in
       `.tmp/visual-proof/remote-machines-fields.png`)_
+
+## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated test instance, connect the Installed-service
+      `aws-graviton` remote (56481148) over SSH. It should progress from
+      Connecting to Connected once the local forward listens and `/health`
+      answers, without an intermediate "installed daemon not answering" error.
+      Record the elapsed time and the tunnel status transitions. Use only the
+      configured host and credentials; the targeted Rust tests cover delayed
+      local ports and delayed health independently.
 
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
