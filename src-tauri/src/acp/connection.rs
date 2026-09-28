@@ -143,6 +143,7 @@ pub(super) enum Answer {
 pub(super) enum Pending {
     Attach {
         outcome: Result<Attached, AcpClientError>,
+        requested_session_id: Option<v1::SessionId>,
         authority: AcpSessionAuthority,
         reply: Reply<AcpAttachmentSnapshot>,
     },
@@ -313,6 +314,8 @@ pub(super) struct ConnectionActor {
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
+    /// Load/resume may stream updates before their reply establishes the attachment.
+    pending_attaches: HashMap<v1::SessionId, Option<AcpUsageSnapshot>>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
     queued_contents: HashMap<AcpTurnId, Vec<v1::ContentBlock>>,
     /// Open seats in the order the agent asked, which is the order they are
@@ -352,6 +355,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
+            pending_attaches: HashMap::new(),
             queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
@@ -415,6 +419,7 @@ impl ConnectionActor {
                     Ok(sent) => in_flight.push(Box::pin(async move {
                         Pending::Attach {
                             outcome: sent.await,
+                            requested_session_id: None,
                             authority,
                             reply,
                         }
@@ -427,14 +432,22 @@ impl ConnectionActor {
                 session_id,
                 authority,
                 reply,
-            } => match self.start_attach(kind, session_id, &authority, connection) {
-                Ok(sent) => in_flight.push(Box::pin(async move {
-                    Pending::Attach {
-                        outcome: sent.await,
-                        authority,
-                        reply,
+            } => match self.start_attach(kind, session_id.clone(), &authority, connection) {
+                Ok(sent) => {
+                    let requested_session_id =
+                        (!matches!(kind, AcpAttachKind::Fork)).then_some(session_id);
+                    if let Some(id) = &requested_session_id {
+                        self.pending_attaches.insert(id.clone(), None);
                     }
-                })),
+                    in_flight.push(Box::pin(async move {
+                        Pending::Attach {
+                            outcome: sent.await,
+                            requested_session_id,
+                            authority,
+                            reply,
+                        }
+                    }));
+                }
                 Err(error) => drop(reply.send(Err(error))),
             },
             Command::Detach {
@@ -902,10 +915,14 @@ impl ConnectionActor {
         match pending {
             Pending::Attach {
                 outcome,
+                requested_session_id,
                 authority,
                 reply,
             } => {
-                let outcome = outcome.map(|attached| self.record(attached, authority));
+                let usage = requested_session_id
+                    .and_then(|id| self.pending_attaches.remove(&id))
+                    .flatten();
+                let outcome = outcome.map(|attached| self.record(attached, authority, usage));
                 let _ = reply.send(outcome);
             }
             Pending::Detach {
@@ -984,6 +1001,24 @@ impl ConnectionActor {
     /// owner would put one turn's output into another turn's transcript.
     fn project(&mut self, notification: v1::SessionNotification) {
         let Some(attachment) = self.attachments.get_mut(&notification.session_id) else {
+            // Ego sends replay chunks before answering session/load. This id is
+            // known from the request even though its attachment is not yet
+            // recorded; other unknown session ids must still be ignored.
+            if let Some(usage) = self.pending_attaches.get_mut(&notification.session_id) {
+                if let v1::SessionUpdate::UsageUpdate(context) = &notification.update {
+                    *usage = Some(AcpUsageSnapshot {
+                        context: Some(context.clone()),
+                        end_turn: None,
+                    });
+                }
+                self.journal.append(
+                    Some(notification.session_id),
+                    None,
+                    AcpClientEvent::SessionUpdate {
+                        update: Box::new(notification.update),
+                    },
+                );
+            }
             return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
@@ -1053,7 +1088,10 @@ impl ConnectionActor {
         // on one would overwrite the running turn, the usage and the open
         // interaction ids with the empty state of a fresh attachment — while
         // the seats themselves survive, so the two would then disagree.
-        if !matches!(kind, AcpAttachKind::Fork) && self.attachments.contains_key(&session_id) {
+        if !matches!(kind, AcpAttachKind::Fork)
+            && (self.attachments.contains_key(&session_id)
+                || self.pending_attaches.contains_key(&session_id))
+        {
             return Err(AcpClientError::already_attached(
                 self.connection_id,
                 session_id,
@@ -1463,6 +1501,7 @@ impl ConnectionActor {
         &mut self,
         attached: Attached,
         authority: AcpSessionAuthority,
+        usage: Option<AcpUsageSnapshot>,
     ) -> AcpAttachmentSnapshot {
         let attachment = AcpAttachmentSnapshot {
             session_id: attached.session_id,
@@ -1470,7 +1509,7 @@ impl ConnectionActor {
             cwd: authority.cwd,
             additional_directories: authority.additional_directories,
             config_options: attached.config_options.unwrap_or_default(),
-            usage: None,
+            usage,
             active_turn: None,
             queued_prompts: Vec::new(),
             pending_permission_ids: Vec::new(),

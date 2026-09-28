@@ -165,6 +165,11 @@ deliberately does not have:
   disagree about what is being asked. A host that wants the history replayed
   detaches first, which says what it means. A fork is not affected: it names the
   session it forks *from* and comes back with an id of its own.
+- **A replay starts before the load response.** Ego may send `session/update`
+  chunks while `session/load` is pending. The requested session ID is already
+  known, so those updates enter the ordered journal before the attachment is
+  published. Updates for other unattached sessions are still discarded. Usage
+  received during the replay is included in the resulting attachment snapshot.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own

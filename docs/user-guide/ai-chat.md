@@ -94,7 +94,9 @@ agent did not advertise image prompts, or when the pasted images exceed 10 MiB
 in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
-  a *Thinking* disclosure, kept apart from the answer.
+  a *Thinking* disclosure, kept apart from the answer. When a saved
+  conversation is loaded, its earliest replayed chunks remain in order even
+  if ego sends them before the load request finishes.
 - **Turn markers.** AI Chat hides ego's TUICommander connection acknowledgement,
   shows `intent:` as a labelled status, and turns a `suggest: [ A | B | C ]`
   line or trailing token at the end of an answer into reply buttons. Choosing
