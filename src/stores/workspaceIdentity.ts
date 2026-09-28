@@ -30,6 +30,10 @@ export interface WorkspaceLifecycleStatus {
 	/** Files a removal would discard — staged, unstaged and untracked. `null`
 	 *  when the inspection failed; never confuse that with 0. */
 	dirtyFiles: number | null;
+	/** Files not tracked by Git, included in dirtyFiles. */
+	untrackedFiles?: number | null;
+	/** Live backend PTYs whose working directory is in this checkout. */
+	liveSessions?: Array<{ sessionId: string; name: string }>;
 	/** Git still registers this workspace, but its checkout directory is gone. */
 	missingCheckout?: boolean;
 	dirtyFingerprint?: string;
