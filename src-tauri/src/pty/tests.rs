@@ -4344,6 +4344,7 @@ fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
 }
 
 #[test]
+// Catches: a reused ready probe or a missing second idle notice after same-epoch work.
 fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "background-same-epoch-ready";
@@ -4406,7 +4407,10 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         )
         .transitioned
     );
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+    let first_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(first_notice.len(), 1);
+    let first_notice_timestamp = first_notice.front().unwrap().timestamp;
+    drop(first_notice);
     assert_eq!(
         state
             .session_maps
@@ -4489,7 +4493,11 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let final_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(final_notice.len(), 1);
+    let final_notice_timestamp = final_notice.front().unwrap().timestamp;
+    assert!(final_notice_timestamp > first_notice_timestamp);
+    drop(final_notice);
     let content: serde_json::Value = serde_json::from_str(
         &state
             .agent_inbox
@@ -4513,7 +4521,12 @@ fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
         0,
         state.process_snapshot_cache.load(),
     ));
-    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    let retained_notice = state.agent_inbox.get(parent_id).unwrap();
+    assert_eq!(retained_notice.len(), 1);
+    assert_eq!(
+        retained_notice.front().unwrap().timestamp,
+        final_notice_timestamp
+    );
 }
 
 /// Build a codex agent session held BUSY by a Protocol-rank submitted line
