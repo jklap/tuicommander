@@ -165,6 +165,8 @@ keep compressing.
 
 Tunnel profiles are stored as TOML files. **Global profiles** live in `<config_dir>/tunnels/` and are available across all repos. **Per-repo profiles** are stored in `<repo>/.tuic/tunnels/` and override global profiles with the same ID.
 
+A tunnel with local forwards shows **Connected** after every local port accepts a TCP connection. If SSH exits first or a port does not start listening within 30 seconds, the tunnel reports the failure instead.
+
 ### Auto-Connect
 
 Enable **Auto-Connect** on a tunnel profile to have it start automatically when TUICommander launches. Useful for tunnels you always need (database access, internal services).
@@ -252,6 +254,8 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 6. Set the remote daemon port (default 9877)
 7. Set the auth username and password the daemon was configured with
 8. Save, then click **Connect**
+
+For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
 ### Adding a Direct Connection
 
