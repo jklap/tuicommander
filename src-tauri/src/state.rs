@@ -4408,11 +4408,16 @@ impl AppState {
                         }
                     }
                     "protocol-question-cleared" if epoch_matches => {
-                        s.awaiting_input = false;
-                        s.question_text = None;
-                        s.question_confident = false;
-                        s.choice_prompt = None;
-                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        let expected = parsed
+                            .get("expected_question_text")
+                            .and_then(|value| value.as_str());
+                        if expected.is_none_or(|text| s.question_text.as_deref() == Some(text)) {
+                            s.awaiting_input = false;
+                            s.question_text = None;
+                            s.question_confident = false;
+                            s.choice_prompt = None;
+                            awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        }
                     }
                     "user-input" => {
                         // User responded — agent will start working

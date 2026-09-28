@@ -275,6 +275,7 @@ themselves mark the tab as awaiting input; TUICommander requires explicit
 permission, approval, or waiting-for-input wording, an agent hook, or a verified
 question on screen.
 Questions inside a wrapped suggested follow-up action do not mark the tab as awaiting input.
+Canceling a Codex approval with Esc clears its question indicator when Codex returns to its composer.
 
 ### Queueing Follow-up Commands
 
