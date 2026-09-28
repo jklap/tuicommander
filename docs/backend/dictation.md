@@ -52,7 +52,7 @@ including the resulting `whisper-rs-sys` artifacts. Run
 | Command | Description |
 |---------|-------------|
 | `start_dictation()` | Start recording + streaming transcription |
-| `stop_dictation_and_transcribe()` | Stop streaming, final pass on full captured audio, return `TranscribeResponse { text, skip_reason, duration_s, truncated_s }` |
+| `stop_dictation_and_transcribe()` | Stop streaming, final pass on full captured audio, return `TranscribeResponse { text, skip_reason, duration_s, truncated_s }`. A final Whisper skip keeps its specific reason; only an empty successful pass uses `no speech detected`. |
 | `inject_text(text)` | Apply corrections to text (called after transcription) |
 
 ### Hands-free
@@ -589,7 +589,8 @@ struct so a newly added field is covered by whoever adds it.
 
 Whisper transcribes whatever it is given. On room noise it invents subtitle
 boilerplate, so three gates in `transcribe()` decide whether audio is speech at
-all. They run in order and each returns a `skip_reason` the UI shows verbatim.
+all. They run in order and each returns a `skip_reason` the push-to-talk stop
+response, store and status show verbatim.
 
 | Gate | Rejects | Tunable |
 |---|---|---|
