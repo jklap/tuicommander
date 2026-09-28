@@ -649,6 +649,23 @@ pub(super) struct RequestedIdentity {
     /// twin of this field).
     pub display_name: Option<String>,
     pub display_name_is_custom: bool,
+    /// Extra `KEY=value` pairs applied to the spawned shell's environment,
+    /// on top of everything `bind_pty_identity`/`inject_worktree_env`/
+    /// `shell_integration::inject` already set — e.g. `materialize()`'s
+    /// `TUIC_NONINTERACTIVE_HINT` for a tmux-shim pane about to have a
+    /// launch command typed into it, not a human. Applied via `apply_extra_env`
+    /// before the shell execs, so it's visible to `.zshenv`/`.zshrc`/`.zshrc.d`
+    /// like every other spawn-time env var.
+    pub extra_env: Vec<(String, String)>,
+}
+
+/// Apply caller-requested extra env vars to a freshly built PTY command.
+/// Pulled out of `spawn_pty_session`'s spawn closure so it's unit-testable
+/// on its own, the same way `pty::inject_unix_terminal_env` is.
+fn apply_extra_env(cmd: &mut portable_pty::CommandBuilder, extra_env: &[(String, String)]) {
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
 }
 
 pub(super) fn spawn_pty_session(
@@ -686,6 +703,7 @@ pub(super) fn spawn_pty_session(
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
             crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
             crate::pty::inject_worktree_env(&mut cmd, cwd.as_deref());
+            apply_extra_env(&mut cmd, &requested.extra_env);
             cmd
         },
     )
@@ -776,6 +794,7 @@ pub(super) async fn create_session(
                 alias: body.alias,
                 display_name: body.display_name,
                 display_name_is_custom: body.display_name_is_custom,
+                ..Default::default()
             },
         )
     })
@@ -1206,6 +1225,7 @@ pub(super) async fn create_session_with_worktree(
                 alias: body.config.alias,
                 display_name: body.config.display_name,
                 display_name_is_custom: body.config.display_name_is_custom,
+                ..Default::default()
             },
         )
     })
@@ -3827,6 +3847,7 @@ mod tests {
                 alias: None,
                 display_name: None,
                 display_name_is_custom: false,
+                ..Default::default()
             },
         );
         // PTY unavailable in CI — skip gracefully
@@ -3836,6 +3857,59 @@ mod tests {
                 "must honor the client-provided id"
             );
         }
+    }
+
+    /// `apply_extra_env`'s output actually reaches a real shell's
+    /// environment — not just that `CommandBuilder::get_env` reports it back.
+    /// Drives a raw PTY pair directly (rather than through
+    /// `spawn_pty_session`'s own registered session, whose writer is already
+    /// consumed by `take_writer()` at spawn time) so the test can answer
+    /// cursor queries and read the echoed value, the same pattern
+    /// `state.rs`'s real-PTY replay tests use.
+    #[test]
+    fn apply_extra_env_reaches_a_real_shells_environment() {
+        let (shell_prog, flag) = crate::test_support::host_shell();
+        let script = crate::test_support::print_var_script("TUIC_TEST_EXTRA_ENV_MARKER");
+        let mut cmd = portable_pty::CommandBuilder::new(shell_prog);
+        cmd.arg(flag);
+        cmd.arg(script);
+        apply_extra_env(
+            &mut cmd,
+            &[(
+                "TUIC_TEST_EXTRA_ENV_MARKER".to_string(),
+                "extra-env-value".to_string(),
+            )],
+        );
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = match pty_system.openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            Ok(pair) => pair,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        let mut child = match pair.slave.spawn_command(cmd) {
+            Ok(child) => child,
+            Err(_) => return,
+        };
+        // See `state.rs`'s real-PTY tests: unix only, EOF handshake.
+        #[cfg(unix)]
+        drop(pair.slave);
+
+        let reader = pair.master.try_clone_reader().expect("reader");
+        let terminal = pair.master.take_writer().expect("writer");
+        let mut seen = Vec::new();
+        crate::test_support::drain_pty(reader, terminal, |chunk| seen.extend_from_slice(chunk));
+        let _ = child.wait();
+
+        let output = crate::test_support::normalize_newlines(&String::from_utf8_lossy(&seen));
+        assert!(
+            output.contains("extra-env-value"),
+            "expected the extra env var's value in the shell's real output, got: {output:?}"
+        );
     }
 
     /// A requested id that collides with an existing session is rejected in
@@ -3857,6 +3931,7 @@ mod tests {
                 alias: None,
                 display_name: None,
                 display_name_is_custom: false,
+                ..Default::default()
             },
         ) {
             Ok(id) => id,
@@ -3875,6 +3950,7 @@ mod tests {
                 alias: None,
                 display_name: None,
                 display_name_is_custom: false,
+                ..Default::default()
             },
         )
         .expect("second spawn should succeed with a fresh id");
