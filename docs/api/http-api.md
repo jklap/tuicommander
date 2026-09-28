@@ -1780,7 +1780,9 @@ GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 ```
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
-`{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the config
+`{ text, skip_reason, duration_s, truncated_s }`. A final transcription gate's
+`skip_reason` is returned unchanged; an empty successful transcription uses
+`no speech detected`. `PUT /dictation/config` takes the config
 object as the whole body, not wrapped in a field.
 
 The speech-asset routes take `asset`, an id from the catalogue in

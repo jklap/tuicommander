@@ -448,6 +448,9 @@ The backend crate split leaves its IPC and HTTP response shapes unchanged.
 `startRecording(source)` sends the same origin over IPC or HTTP. A native Fn
 release stops capture before the frontend's `stopRecording()` awaits the final
 transcription; blur releases a held hotkey if its key-up event was lost.
+`stopRecording()` stores the response's `skip_reason` as `lastSkipReason`, and
+`useDictation` shows that reason in the status. A final transcription gate's
+specific reason reaches both; an empty successful pass shows `no speech detected`.
 
 - `speechAssets` / `speechDownloads` — the installable languages and ONNX
   runtime, and a percent per asset **keyed by asset id**, because the runtime
