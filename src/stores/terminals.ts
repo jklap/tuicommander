@@ -1144,6 +1144,21 @@ function createTerminalsStore() {
 			return state.debouncedBusy[id] ?? false;
 		},
 
+		/** `isBusy` OR Claude's own hook-declared background work (`declaredBackgroundWork`) —
+		 *  the same "still working despite an idle shell" signal `effectiveActivityState`
+		 *  treats as authoritative over the idle-shell carve-out (see that function's doc
+		 *  comment in `activitySnapshot.ts`). Any status indicator that used to derive
+		 *  busy/idle from `isBusy`/`shellState` alone (sidebar dots, tab dots, the floating
+		 *  terminal's status pill, Smart Prompts' busy gate) must read this instead, or it
+		 *  silently renders/treats a session as idle while Claude has declared it's still
+		 *  waiting on background work. Deliberately does NOT also fold in the plain
+		 *  OS-heuristic `backgroundWork` field: that one keeps its idle-shell carve-out (a
+		 *  Codex-left-running dev server must not latch "working" forever), matching
+		 *  `effectiveActivityState`. */
+		isWorking(id: string): boolean {
+			return (state.debouncedBusy[id] ?? false) || (state.terminals[id]?.declaredBackgroundWork ?? false);
+		},
+
 		/** True if the shell has completed its initial startup (reached idle at least once).
 		 *  Used to distinguish "busy from .zshrc startup" from "busy from a user-launched process". */
 		hasReachedIdle(id: string): boolean {
@@ -1153,6 +1168,18 @@ function createTerminalsStore() {
 		/** True if any terminal has a debounced busy state */
 		isAnyBusy(): boolean {
 			return Object.values(state.debouncedBusy).some(Boolean);
+		},
+
+		/** True if any terminal is busy per `isWorking` (debounced busy, or declared
+		 *  background work despite an idle shell) — see that method's doc comment.
+		 *  Callers gating something on "is any session still doing something" (e.g.
+		 *  sleep prevention) should use this instead of `isAnyBusy`, or they stop
+		 *  protecting a session the moment its shell goes idle even though Claude
+		 *  declared it's still waiting on background work. */
+		isAnyWorking(): boolean {
+			return Object.keys(state.terminals).some(
+				(id) => (state.debouncedBusy[id] ?? false) || (state.terminals[id]?.declaredBackgroundWork ?? false),
+			);
 		},
 
 		/** Duration in ms of the current (or last) busy cycle. 0 if never busy. */

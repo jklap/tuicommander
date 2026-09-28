@@ -228,7 +228,7 @@ export const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 						if (!t) return s.branchTabDot;
 						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
 						if (t.awaitingInput === "question") return cx(s.branchTabDot, s.branchTabDotQuestion);
-						if (terminalsStore.isBusy(id)) return cx(s.branchTabDot, s.branchTabDotBusy);
+						if (terminalsStore.isWorking(id)) return cx(s.branchTabDot, s.branchTabDotBusy);
 						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
 						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
 						return s.branchTabDot;
@@ -300,8 +300,9 @@ export const BranchItem: Component<{
 
 	const hasQuestion = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "question");
 
-	// Debounced busy — centralized in terminalsStore with 2s hold
-	const hasBusy = () => props.branch.terminals.some((id) => terminalsStore.isBusy(id));
+	// Debounced busy, OR declared background work — centralized in terminalsStore.isWorking
+	// (2s hold; declaredBackgroundWork bypasses the idle-shell carve-out, see its doc comment)
+	const hasBusy = () => props.branch.terminals.some((id) => terminalsStore.isWorking(id));
 
 	const hasUnseen = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.unseen);
 
