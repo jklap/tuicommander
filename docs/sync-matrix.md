@@ -229,8 +229,10 @@ command ego runs, so the server-side synthesis in `granted` is what keeps it saf
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` it carries, and `mcp_stdio` in `capability_snapshot` |
-| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` and host-issued `TUIC_SESSION` it carries, and `mcp_stdio` in `capability_snapshot` |
+| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and the bridge; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp_commands.rs`, `src-tauri/src/config.rs` | Persist a root's ACP peer UUID beside its selected conversation and reuse it after reconnect or restart |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | Bind bridge mail, child parentage and blocked progress to the ACP peer without a PTY |
 | `src-tauri/src/mcp_http/mod.rs` | The bound socket is handed to `acp.set_socket_path` where it is recorded — the entry can only carry a path this process learned |
 | `src-tauri/src/agent_mcp.rs` | `locate_bridge_binary` — where the sidecar is looked for, shared with the agent config writers |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |

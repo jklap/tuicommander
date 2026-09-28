@@ -242,9 +242,9 @@ So when you add a discovery-based agent, look for a pid registry *first*. Codex 
 
 When adding a new agent: choose discovery-based if the agent writes session files to disk (add `sessionDiscovery` to `agents.ts` and a Rust `discover_*_session` to `agent_session.rs`). Choose forced injection only when discovery is impossible (e.g., SQLite-only storage).
 
-All of the above describes the **PTY** transport. `ego` does not use it — it runs over ACP and is deliberately not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring any assistant that speaks a protocol instead of a terminal: the hybrid PTY/ACP route, and every fallback between the two, are rejected by contract rather than merely unimplemented.
+All of the above describes the **PTY** transport. The AI Chat `ego` uses ACP and is not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring either transport: a session has exactly one transport, with no fallback.
 
-**And `ego` is the engine behind the AI Chat panel — not a tab, not an agent, not a terminal.** The sentence above says which transport it uses; this one says what it is allowed to be. It has no tab, no `AgentType`, no PTY, and no place in tab routing, split panes, or agent-state detection. It reaches terminals and repositories the same way Claude Code does, by calling TUICommander's own MCP server from outside — never by being one of the things that server drives. A change that makes `ego` look like an agent tab is wrong even when it compiles and even when it would be convenient.
+`ego` has three distinct faces: standalone CLI outside TUIC; AI Chat over ACP as an orchestration peer with a host-issued, durable `TUIC_SESSION` but **no** tab, PTY or terminal parser; and a separately launched terminal CLI over PTY, which may have an `AgentType`. The ACP peer reaches terminals and repositories through TUIC's MCP bridge. Its peer identity permits mail and child-parent routing, but does not turn the AI Chat conversation into a terminal or place it in tab routing, split panes or PTY agent-state detection.
 
 ## Logging
 

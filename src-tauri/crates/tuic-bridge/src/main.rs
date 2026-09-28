@@ -15,8 +15,8 @@ use std::sync::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// `$TUIC_SESSION` inherited from the parent agent PTY, read once at startup.
-/// `None` when the bridge runs outside a TUIC-managed PTY (e.g. a bare CLI).
+/// `$TUIC_SESSION` inherited from a parent PTY agent or supplied by the ACP
+/// host for ego, read once at startup. `None` for a bare standalone CLI.
 static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
@@ -282,8 +282,8 @@ async fn connect_ipc() -> Result<IpcStream, String> {
 // ---------------------------------------------------------------------------
 
 /// HTTP header the bridge asserts so the server can auto-bind this connection to
-/// the agent's PTY session. The value is `$TUIC_SESSION`, inherited from the
-/// parent agent process — the bridge never invents it. Absent env → no header,
+/// the agent's TUIC peer. The value is `$TUIC_SESSION`, inherited from a PTY
+/// or supplied by the ACP host — the bridge never invents it. Absent env → no header,
 /// and the server falls back to explicit `agent register`.
 fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
     match tuic_session {

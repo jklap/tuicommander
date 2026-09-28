@@ -12,6 +12,11 @@
 
 # To Test
 
+## ACP ego peer identity (story 1073-3431) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego configured and verify its MCP bridge appears in `agent list_peers` as an `ego` peer without a terminal; send mail, reconnect, restart, and verify the same peer UUID can read it with `agent wait`.
+- [ ] Spawn a child from that ACP bridge and verify `parent_session_id` equals the AI Chat peer UUID. Submit blocked progress and verify the desktop progress event carries the ACP conversation ID and the away-state mobile push is emitted when push is configured.
+
 ## AI Chat image paste (story 1085-fa65)
 
 - [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified.

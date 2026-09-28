@@ -451,6 +451,58 @@ const BRIDGE: &str = "/opt/tuic/tuic-bridge";
 /// bridge being left to find a socket of its own.
 const SOCKET: &str = "/tmp/tuic-mcp-0badc0de.sock";
 
+#[tokio::test]
+async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation() {
+    let fixture = Fixture::with("session-new-peer-mcp");
+    fixture.manager.set_bridge_binary(Some(BRIDGE.into()));
+    fixture.manager.set_socket_path(Some(SOCKET.into()));
+    let peer = "550e8400-e29b-41d4-a716-446655440a01";
+    let connection = fixture
+        .manager
+        .connect_with_peer(
+            &Fixture::config(),
+            tuicommander_lib::acp::AcpConnectRequest {
+                root: fixture.root(),
+            },
+            peer.to_string(),
+        )
+        .await
+        .expect("connect as ACP peer");
+
+    assert_eq!(fixture.manager.peer_root(peer), Some(fixture.root()));
+    let first = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("new session");
+    assert_eq!(first.session_id, session(FIRST));
+    assert_eq!(
+        fixture.manager.peer_conversation(peer),
+        Some((fixture.root(), session(FIRST)))
+    );
+
+    fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Load,
+            session(FORKED),
+            authority(fixture.root()),
+        )
+        .await
+        .expect("load session");
+    assert_eq!(
+        fixture.manager.peer_conversation(peer),
+        Some((fixture.root(), session(FORKED)))
+    );
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+    assert!(fixture.manager.peer_conversation(peer).is_none());
+}
+
 /// Every session carries TUICommander, and carries nothing a caller named.
 ///
 /// Both halves of plan §4.5 in one scenario, because they are one rule: the

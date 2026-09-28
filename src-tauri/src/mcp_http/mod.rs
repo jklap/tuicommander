@@ -396,6 +396,7 @@ async fn post_progress_report(
         None,
         None,
         None,
+        None,
     ))
 }
 

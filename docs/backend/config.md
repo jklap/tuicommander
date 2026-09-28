@@ -255,6 +255,7 @@ needs an app restart is what that costs.
 | `ide` | `String` | `""` | IDE for "Open in..." |
 | `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > AI Chat` and written through `save_config` like any other field |
 | `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
+| `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
