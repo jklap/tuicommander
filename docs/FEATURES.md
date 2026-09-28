@@ -779,7 +779,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 6.9 Agent Configuration (Settings > Agents)
 
 - Claude and Codex receive process-scoped native status signals at launch by default (`--settings` / `-c notify`), independently switchable per agent. Existing user overrides take precedence and no global settings are changed.
-- **Managed workspace trust:** Claude and direct Codex agent-to-agent spawns accept their new working directory by default, controlled by **Accept workspace trust for managed spawns** for each agent. Direct Codex receives a launch-only project trust override; Claude's startup picker is answered from its own PTY after the exact question and default **No, exit** selection appear. Normal user-opened terminals retain each CLI's trust behavior. No agent config file is rewritten.
+- **Managed workspace trust:** Claude and Codex agent-to-agent spawns accept their new working directory by default, controlled by **Accept workspace trust for managed spawns** for each agent. Codex receives a launch-only project trust override, including through custom launchers that forward arguments; Claude's startup picker is answered from its own PTY after the exact question and default **No, exit** selection appear. Normal user-opened terminals retain each CLI's trust behavior. No agent config file is rewritten.
 - **Agent list:** All supported agents with availability status and version detection
 - **Run configurations:** Named command templates per agent (binary, args, optional model, env vars). MCP spawn can override the model and environment per child.
 - **Default config:** One run config per agent marked as default for quick launching

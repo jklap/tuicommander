@@ -32,6 +32,10 @@
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send text plus `special_key=enter` to a disposable Claude MCP session and confirm it submits. Launch Codex through a wrapper that foreground detection does not recognize, then send a long prompt from a suggestion or dictation while the tab still has no agent type; confirm it submits and check app logs for one unknown-foreground warning. The current backend cannot load the Rust change until restart.
 
+## Managed Codex wrapper trust (story 1047-c41c) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, configure a Codex run config whose launcher forwards `"$@"` to Codex. Spawn a throwaway managed peer in a new directory and confirm it reaches Ready and receives its initial task without a trust answer. Turn off **Accept workspace trust for managed spawns** and repeat in another new directory; the ordinary Codex trust question must remain. The current live backend cannot load this Rust change until restart.
+
 ## AI Chat pending ACP badge and notification (story 1070-38ce)
 
 - [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge.
