@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { stateExplainStore } from "../../stores/stateExplain";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
@@ -226,6 +227,74 @@ describe("actionRegistry", () => {
 
 			expect(addSpy).toHaveBeenCalledWith("Diagnostics capture", "No active terminal session to capture.", "warn");
 			activeSpy.mockRestore();
+			addSpy.mockRestore();
+			vi.useRealTimers();
+		});
+	});
+
+	describe("explain-session-state", () => {
+		afterAll(() => {
+			stateExplainStore.close();
+		});
+
+		it("is present regardless of isPerfDebug (unlike toggle-diagnostics-capture)", () => {
+			setPerfDebug(false);
+			const ids = getActionEntries(createMockHandlers()).map((e) => e.id);
+			expect(ids).toContain("explain-session-state");
+		});
+
+		it("has the Terminal category", () => {
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "explain-session-state");
+			expect(entry?.category).toBe("Terminal");
+		});
+
+		it("opens the state-explain modal for the active terminal's id", () => {
+			const activeSpy = vi
+				.spyOn(terminalsStore, "getActive")
+				.mockReturnValue({ id: "term-1", sessionId: "sess-1", shellState: "idle" } as ReturnType<
+					typeof terminalsStore.getActive
+				>);
+			const openSpy = vi.spyOn(stateExplainStore, "open");
+
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "explain-session-state");
+			entry?.execute();
+
+			expect(openSpy).toHaveBeenCalledWith("term-1");
+			activeSpy.mockRestore();
+			openSpy.mockRestore();
+		});
+
+		it("toasts instead of silently no-op'ing when there is no active session", () => {
+			vi.useFakeTimers();
+			const addSpy = vi.spyOn(toastsStore, "add");
+			const activeSpy = vi.spyOn(terminalsStore, "getActive").mockReturnValue(undefined);
+
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "explain-session-state");
+			entry?.execute();
+
+			expect(addSpy).toHaveBeenCalledWith("Explain session state", "No active terminal session to explain.", "warn");
+			activeSpy.mockRestore();
+			addSpy.mockRestore();
+			vi.useRealTimers();
+		});
+
+		it("toasts instead of opening the modal for an exited terminal", () => {
+			vi.useFakeTimers();
+			const addSpy = vi.spyOn(toastsStore, "add");
+			const openSpy = vi.spyOn(stateExplainStore, "open");
+			const activeSpy = vi
+				.spyOn(terminalsStore, "getActive")
+				.mockReturnValue({ id: "term-1", sessionId: "sess-1", shellState: "exited" } as ReturnType<
+					typeof terminalsStore.getActive
+				>);
+
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "explain-session-state");
+			entry?.execute();
+
+			expect(openSpy).not.toHaveBeenCalled();
+			expect(addSpy).toHaveBeenCalledWith("Explain session state", "No active terminal session to explain.", "warn");
+			activeSpy.mockRestore();
+			openSpy.mockRestore();
 			addSpy.mockRestore();
 			vi.useRealTimers();
 		});

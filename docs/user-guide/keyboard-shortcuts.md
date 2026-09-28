@@ -294,6 +294,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |
 | `toggle-tunnels` | — | SSH Tunnels panel |
 | `toggle-diagnostics-capture` | — | Toggle diagnostics capture for the active tab (debug tool, visible only while `isPerfDebug()` is on) |
+| `explain-session-state` | — | Explain session state for the active tab (also available from the tab context menu and the Activity Dashboard row) |
 | `process-manager` | — | Process Manager |
 | `open-generators` | — | Open generators |
 | `show-remote-qr` | — | QR for Remote Mobile Connection |

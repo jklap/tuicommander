@@ -10,6 +10,7 @@ import type { ActionName } from "../keybindingDefaults";
 import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
+import { stateExplainStore } from "../stores/stateExplain";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
@@ -111,6 +112,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"block-search-toggle": { label: "Search in block", category: "Terminal" },
 	"toggle-compose-panel": { label: "Toggle compose panel", category: "Panels" },
 	"toggle-diagnostics-capture": { label: "Toggle diagnostics capture (active tab)", category: "Terminal" },
+	"explain-session-state": { label: "Explain session state (active tab)…", category: "Terminal" },
 };
 
 /**
@@ -198,6 +200,16 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 				// surfaces failure via a toast, so this no-op needs the same rather
 				// than silently doing nothing with no feedback at all.
 				toastsStore.add("Diagnostics capture", "No active terminal session to capture.", "warn");
+			}
+		},
+		"explain-session-state": () => {
+			const active = terminalsStore.getActive();
+			if (active?.sessionId && active.shellState !== "exited") {
+				stateExplainStore.open(active.id);
+			} else {
+				// Mirrors toggle-diagnostics-capture's guard: give feedback rather than
+				// silently no-op-ing when there's no live active terminal session.
+				toastsStore.add("Explain session state", "No active terminal session to explain.", "warn");
 			}
 		},
 		"process-manager": handlers.toggleProcessManager,
