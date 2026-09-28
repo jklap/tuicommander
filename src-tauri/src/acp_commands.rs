@@ -354,8 +354,12 @@ pub(crate) async fn acp_session_prompt(
     connection_id: AcpConnectionId,
     session_id: v1::SessionId,
     prompt: Vec<v1::ContentBlock>,
+    viewed_repo: Option<String>,
 ) -> Result<AcpTurnId, AcpClientError> {
-    state.acp.prompt(connection_id, session_id, prompt).await
+    state
+        .acp
+        .prompt_with_context(connection_id, session_id, prompt, viewed_repo)
+        .await
 }
 
 #[cfg(feature = "desktop")]
