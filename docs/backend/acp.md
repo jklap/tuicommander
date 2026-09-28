@@ -48,6 +48,22 @@ HTTP `/mcp`. `mcp/disconnect` and the end of the ACP connection both run
 `end_mcp_session`, the teardown DELETE `/mcp` uses. There is no `tuic-bridge`
 process and no HTTP round trip for ego.
 
+Two resources exist only on this channel (its `initialize`/`server/discover`
+add `"resources":{"subscribe":true}`; HTTP `/mcp` does not):
+
+| URI | Contents |
+|-----|----------|
+| `tuic://workspace` | `{repos:[{name,path,branch,liveAgents:[{sessionId,name,agentType}]}],viewedRepo}` — `repositories.json` order, agents by PTY cwd, `activeRepoPath` |
+| `tuic://inbox` | `{messages:[{id,from:{session,name},body,timestamp}],nextSince}` — unread mail after the peer's cursor; reading does not advance it, `agent action=inbox` does |
+
+`resources/subscribe {uri}` opts in; a subscribed resource gets one
+`notifications/resources/updated {uri}` per 250 ms burst, and the workspace only
+when its content changed. Mail also wakes an **idle** ego: two seconds after the
+first message of a burst, if any of it is still unread and no turn is running on
+the connection, `wake_idle_peer` sends one `session/prompt` carrying
+`PEER_MAIL_WAKE`. A busy ego hears about mail at its next tool boundary through
+`resources/updated` instead.
+
 ## The actor
 
 One `ConnectionActor` per connection. Deciding and writing is serial — a single

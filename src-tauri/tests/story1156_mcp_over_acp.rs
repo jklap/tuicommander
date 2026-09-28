@@ -242,3 +242,62 @@ async fn ego_cancels_a_pending_mcp_request_by_its_acp_id() {
         "the fixture agent saw -32800: a missing or different answer would have ended it early"
     );
 }
+
+/// Mail wakes an idle ego with one prompt, and never interrupts a turn.
+#[tokio::test]
+async fn an_idle_ego_is_woken_once_and_a_busy_one_is_left_alone() {
+    const NOTICE: &str = "[TUIC] message available — read it with: agent action=inbox";
+    let fixture = Fixture::with("wake-idle-peer");
+    let connection = fixture
+        .manager
+        .connect_with_peer(
+            &Fixture::config(),
+            tuicommander_lib::acp::AcpConnectRequest {
+                root: fixture.root(),
+            },
+            PEER.to_owned(),
+        )
+        .await
+        .expect("connect");
+    assert_eq!(
+        fixture
+            .manager
+            .wake_idle_peer(PEER, NOTICE)
+            .await
+            .expect("no conversation yet"),
+        None,
+        "a peer with no session has nothing to wake"
+    );
+    fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("session/new");
+
+    let woken = fixture
+        .manager
+        .wake_idle_peer(PEER, NOTICE)
+        .await
+        .expect("wake");
+    assert!(woken.is_some(), "an idle session is prompted");
+    assert_eq!(
+        fixture
+            .manager
+            .wake_idle_peer(PEER, NOTICE)
+            .await
+            .expect("second wake"),
+        None,
+        "the notice turn is running, so nothing more is sent"
+    );
+
+    let settlement = fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .expect("disconnect");
+    assert_eq!(
+        settlement.reason,
+        AcpConnectionSettlementReason::Disconnected,
+        "a second prompt would have ended the fixture agent early"
+    );
+}
