@@ -158,6 +158,7 @@ those directories from the parent. It excludes every `.tmp` or `.mdkb` path comp
 tracked paths, ignored files, nested repositories, and any directory containing
 the destination. Tauri `bundle.externalBin` entries additionally select their
 target-triple sidecar files by configuration, rather than by hard-coded names.
+Each sidecar copy lands only in a new worktree path; clonefile creates a separate inode, and warming skips an existing destination. The source executable is never opened for writing by this path.
 Submodules initialise from the parent checkout first (with the configured remote
 as fallback), so unpublished pinned objects remain usable; failures are returned
 as workspace warnings.
