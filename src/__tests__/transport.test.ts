@@ -309,7 +309,8 @@ describe("transport", () => {
 			// Every control the rejected design added — status, pause, resume,
 			// clear, update, read, export — is gone from both transports.
 			for (const command of ["progress_list", "progress_delete"]) {
-				const input = command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
+				const input =
+					command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
 				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
 					method: "POST",
 					path: `/progress/${command.slice(9)}?path=%2Frepo%20a`,
@@ -2272,6 +2273,64 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		it("sends the selected Claude profile root when verifying a browser resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("true"));
+
+			await rpc("verify_agent_session", {
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+
+			const [url, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(url).toContain("/agents/verify-session");
+			expect(JSON.parse(request.body)).toEqual({
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+		});
+
+		it("sends a live agent PID and Codex home when verifying through HTTP", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "codex",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+		});
+
+		it("preserves an empty override map for a default-profile resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "gemini",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: {},
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({ agentPid: null, envOverrides: {} });
 		});
 
 		// The defect this story fixes: rpcImpl used to fetch a remote baseUrl with
