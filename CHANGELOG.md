@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Browser agent resume verification** — HTTP verification carries the agent PID and saved profile environment, so sessions under a non-default Claude, Codex or Gemini profile are checked in the correct store.
+
 - **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted and Unicode values stay intact, and menu overrides cannot replace TUIC peer identity variables, including differently cased names on Windows.
 
 - **AI Chat session details** — Live ACP titles update the header and conversation picker. A footer shows context-window use and reported cost.

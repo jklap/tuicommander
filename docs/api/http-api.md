@@ -1650,6 +1650,17 @@ by `ego_executable` in `app_config.json` and holds no API key.
 
 ## Agent Endpoints
 
+### Verify Agent Session
+
+```
+POST /agents/verify-session
+Content-Type: application/json
+
+{ "agentType": "claude", "sessionId": "af467730-5e79-49d9-8a17-ebd94c99f262", "cwd": "/work/project", "agentPid": null, "envOverrides": { "CLAUDE_CONFIG_DIR": "/profiles/work" } }
+```
+
+Returns a JSON boolean. `agentPid` is a live process ID when available and `null` after restart; `envOverrides` carries the saved launch profile so verification reads the same session store the agent used. The same fields apply to Codex (`CODEX_HOME`) and Gemini (`GEMINI_CLI_HOME`).
+
 ### Detect All Agents
 
 ```
