@@ -881,11 +881,24 @@ fn classify_branch_merge(
             || source == default_branch
             || source == format!("refs/heads/{default_branch}")
     });
+    let pull_upstream_is_default = entries
+        .iter()
+        .any(|entry| entry.ends_with("\tpull: Fast-forward"))
+        && git_cmd(repo)
+            .args(["config", "--get", &format!("branch.{branch}.merge")])
+            .run()
+            .ok()
+            .is_some_and(|output| output.stdout.trim() == format!("refs/heads/{default_branch}"));
     let follows_default = entries.iter().all(|entry| {
         let message = entry.split_once('\t').map(|(_, message)| message);
         message.is_some_and(|message| {
             message == format!("merge {default_branch}: Fast-forward")
                 || message == format!("reset: moving to {default_branch}")
+                || (message.starts_with("pull ")
+                    && message.ends_with(&format!(" {default_branch}: Fast-forward")))
+                || (message == "pull: Fast-forward" && pull_upstream_is_default)
+                || (message.starts_with("rebase (finish): refs/heads/")
+                    && message.contains(&format!("refs/heads/{branch} onto ")))
         })
     });
     if merged && from_default && follows_default {
@@ -7025,6 +7038,98 @@ branch refs/heads/feat
             .unwrap();
 
         let status = inspect_workspace_lifecycle(&repo, "following-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_pulled_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "pulling-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args([
+                "pull",
+                "--ff-only",
+                &repo.to_string_lossy(),
+                &base_branch_of(&repo),
+            ])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "pulling-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_tracking_main_and_pulled_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "tracking-main");
+        git_cmd(&repo)
+            .args(["remote", "add", "origin", &repo.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["fetch", "origin", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args([
+                "branch",
+                "--set-upstream-to",
+                &format!("origin/{}", base_branch_of(&repo)),
+            ])
+            .run()
+            .unwrap();
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree).args(["pull"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "tracking-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_pulled_from_non_default_upstream_is_merged_after_integration() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let source = add_worktree(&repo, "source-work");
+        commit_file(&source, "feature.txt", "source work\n");
+        let tracking = add_worktree(&repo, "tracking-source");
+        git_cmd(&repo)
+            .args(["remote", "add", "origin", &repo.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["fetch", "origin", "source-work"])
+            .run()
+            .unwrap();
+        git_cmd(&tracking)
+            .args(["branch", "--set-upstream-to", "origin/source-work"])
+            .run()
+            .unwrap();
+        git_cmd(&tracking).args(["pull"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "source-work"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "tracking-source");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn branch_rebased_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "rebasing-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args(["rebase", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "rebasing-main");
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
     }
