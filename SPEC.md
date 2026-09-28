@@ -383,6 +383,9 @@ the new worktree, without following symlinks or changing the source checkout.
 
 Lifecycle state is one backend verdict keyed by workspace id: working-tree
 dirtiness, whether `HEAD` is merged into the default branch, and removal safety.
+A missing registered checkout has no dirty fingerprint; its preflight identifies
+the missing directory and requires explicit force confirmation. Cleanup preserves
+its submodule refs before pruning and checks separately before overriding a lock.
 Merged GitHub PR state can also prove a squash-merged branch safe when its local
 tip is contained in the PR head; ancestry in the checked-out integration branch
 is sufficient even when the remote default branch has not advanced. The MCP

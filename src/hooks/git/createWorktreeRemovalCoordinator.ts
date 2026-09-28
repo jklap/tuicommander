@@ -14,6 +14,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			force?: boolean,
 			overrideLock?: boolean,
 			expectedFingerprint?: string,
+			confirmMissingCheckout?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
@@ -134,6 +135,9 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		let shouldClearBranchLabel = true;
 		const removeConfirmed = (overrideLock: boolean) => {
 			if (lifecycle.removalSafety === "requires_force") {
+				if (lifecycle.missingCheckout) {
+					return deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true, overrideLock, undefined, true);
+				}
 				if (!lifecycle.dirtyFingerprint) {
 					throw new Error("Cannot verify the confirmed worktree state");
 				}

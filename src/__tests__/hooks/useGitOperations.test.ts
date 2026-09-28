@@ -2021,6 +2021,23 @@ describe("useGitOperations", () => {
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, "confirmed-state");
 		});
 
+		it("confirms a missing registered checkout without a fabricated fingerprint", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, undefined, true);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
 		it("closes branch terminals before removing", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -2045,6 +2062,26 @@ describe("useGitOperations", () => {
 
 	describe("handleRemoveWorkspace (locked worktree)", () => {
 		const LOCKED_ERROR = "worktree_locked:fatal: cannot remove a locked working tree, lock reason: claude agent";
+
+		it("asks separately before overriding a missing checkout lock", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR)).mockResolvedValueOnce(undefined);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith(
+				"/repo", "feature", true, true, true, undefined, true,
+			);
+		});
 
 		it("shows confirmation dialog when worktree is locked by agent", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });

@@ -92,6 +92,29 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     )
 }
 
+pub(crate) fn remove_worktree_with_presence_confirmation(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+    confirm_missing_checkout: bool,
+) -> Result<RemoveWorktreeOutcome, String> {
+    tuic_git::worktree::remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        expected_fingerprint,
+        Some(confirm_missing_checkout),
+        merged_github_pr_proves_tip,
+    )
+}
+
 pub(crate) fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
@@ -250,9 +273,11 @@ pub(crate) async fn remove_worktree(
     force: Option<bool>,
     override_lock: Option<bool>,
     expected_fingerprint: Option<String>,
+    confirm_missing_checkout: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let force = force.unwrap_or(false);
-    if force && expected_fingerprint.is_none() {
+    let confirm_missing_checkout = confirm_missing_checkout.unwrap_or(false);
+    if force && expected_fingerprint.is_none() && !confirm_missing_checkout {
         return Err(
             "force requires expected_fingerprint from the confirmed lifecycle status".into(),
         );
@@ -271,7 +296,7 @@ pub(crate) async fn remove_worktree(
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        remove_worktree_by_workspace_id_with_confirmation(
+        remove_worktree_with_presence_confirmation(
             &repo_path_clone,
             &workspace_id_clone,
             delete_branch,
@@ -279,6 +304,7 @@ pub(crate) async fn remove_worktree(
             force,
             override_lock,
             expected_fingerprint.as_deref(),
+            confirm_missing_checkout,
         )
     })
     .await
