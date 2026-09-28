@@ -11,6 +11,9 @@ no tool loop and no sandbox of its own.
    it and there is no separate AI Chat switch.
 2. Set **ego executable** in `Settings > General` (**Select…** opens a file picker). While it is empty, ACP is not
    configured: the panel says so and launches nothing.
+3. Optionally set **ego profile** in `Settings > General` to select a profile from ego's user configuration.
+   An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
+   it does not send profile rules in `session/new`.
 
 ## Opening it
 

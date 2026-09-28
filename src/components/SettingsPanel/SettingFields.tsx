@@ -78,7 +78,7 @@ export const SettingSlider: Component<{
 export const SettingInput: Component<{
 	label: string;
 	value: string;
-	onInput: (value: string) => void;
+	onInput: (value: string) => unknown;
 	placeholder?: string;
 	hint?: string;
 	type?: "text" | "password" | "number";
@@ -88,7 +88,9 @@ export const SettingInput: Component<{
 		<input
 			type={props.type ?? "text"}
 			value={props.value}
-			onInput={(e) => props.onInput(e.currentTarget.value)}
+			onInput={(e) => {
+				if (props.onInput(e.currentTarget.value) === false) e.currentTarget.value = props.value;
+			}}
 			placeholder={props.placeholder}
 		/>
 		<Show when={props.hint}>
