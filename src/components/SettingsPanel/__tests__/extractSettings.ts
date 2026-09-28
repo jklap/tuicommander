@@ -93,7 +93,7 @@ function unescapeJsx(s: string): string {
 
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
 function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
-	const re = /<(h3|label)\b|\blabel=/g;
+	const re = /<(h3|label)\b|(?<![\w-])label=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
 		if (m[1]) {
