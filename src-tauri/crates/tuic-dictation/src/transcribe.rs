@@ -408,6 +408,7 @@ const HALLUCINATION_EXACT: &[&str] = &[
     // it
     "grazie",
     "grazie mille",
+    "grazie a tutti",
     // pt
     "obrigado",
     "obrigada",
@@ -543,6 +544,16 @@ mod tests {
         assert!(is_hallucination("ご視聴ありがとうございました。"));
         assert!(is_hallucination("谢谢观看"));
         assert!(is_hallucination("감사합니다."));
+    }
+
+    /// A bare subtitle sign-off must not reach the composer, but the same
+    /// words inside a real instruction must remain available to dictate.
+    #[test]
+    fn bare_grazie_a_tutti_is_filtered_without_eating_an_instruction() {
+        // — catches: the missing phrase or a substring match that erases speech.
+        assert!(is_hallucination("Grazie a tutti."));
+        assert!(is_hallucination("Grazie a tutti! Grazie a tutti."));
+        assert!(!is_hallucination("Scrivi grazie a tutti nel messaggio."));
     }
 
     #[test]
