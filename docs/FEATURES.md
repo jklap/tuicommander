@@ -334,6 +334,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.3 Markdown Panel (`Cmd+Shift+M`)
 - Renders `.md` and `.mdx` files with syntax-highlighted code blocks
+- A Markdown document tab, including one opened through `tuic://open`, can be detached from its tab context menu into a resizable window. Its tab remains in the main window; selecting it focuses the document window, and closing that window returns the document to the tab. The detached viewer rereads the file on focus and while open.
 - Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and `file:line` or `file:line:column` targets work without navigating the WebView; web and email links use the system handler
 - File list from repository's markdown files
 - Clickable file paths in terminal open `.md` files here
@@ -569,6 +570,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Shared `PanelWindowControls` component provides consistent detach/reattach/close buttons across all panels
 - Closing a detached window automatically restores the panel to the main window
 - Tab bar "Detach to Window" context menu entry for per-tab detach (PTY session stays alive in Rust)
+- Markdown document tabs use the same panel-window commands with a window per document; their file path is passed to the detached viewer, which reads from disk and routes linked files back to the main window.
 - Generic lifecycle functions: `togglePanel()`, `detachPanel()`, `reattachPanel()` replace per-panel callsites
 - `uiStore.detachedPanels` map tracks all detached panels (replaces former `aiChatDetached` boolean)
 - Disk-backed panels hand over through their store, not through a live link: the detached window is opened with the params from `detachParams()` and reads its own state on mount, and the main window re-reads it in `onReattach()` when the detached copy closes or reattaches
