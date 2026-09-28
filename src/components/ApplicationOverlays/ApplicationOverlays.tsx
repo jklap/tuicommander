@@ -242,6 +242,7 @@ function CleanupOverlay(props: { contract: CleanupOverlayContract }) {
 						hasTerminals={(branch?.terminals.length ?? 0) > 0}
 						hasDirtyFiles={context.hasDirtyFiles}
 						worktreeDirty={context.worktreeDirty}
+						removalWarnings={context.removalWarnings}
 						submoduleUnpushedCommits={context.submoduleUnpushedCommits}
 						worktreeAction={props.contract.action()}
 						onWorktreeActionChange={props.contract.setAction}
