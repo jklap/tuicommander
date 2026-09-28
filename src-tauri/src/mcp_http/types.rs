@@ -297,6 +297,8 @@ pub(super) struct RemoveWorktreeQuery {
     pub override_lock: Option<bool>,
     #[serde(rename = "expectedFingerprint", default)]
     pub expected_fingerprint: Option<String>,
+    #[serde(rename = "confirmMissingCheckout", default)]
+    pub confirm_missing_checkout: Option<bool>,
 }
 
 #[derive(Deserialize)]

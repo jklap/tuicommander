@@ -65,6 +65,7 @@ export interface GitOperationsDeps {
 			force?: boolean,
 			overrideLock?: boolean,
 			expectedFingerprint?: string,
+			confirmMissingCheckout?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		createWorktree: (
 			baseRepo: string,
