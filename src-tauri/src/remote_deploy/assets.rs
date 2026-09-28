@@ -12,6 +12,7 @@ const TARGETS: &[(&str, &str)] = &[
     ("Darwin arm64", "aarch64-apple-darwin"),
 ];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuildIdentity {
@@ -93,7 +94,7 @@ async fn resolve_update_asset_from_url(
     local_path: &Path,
     known_local_target: Option<&str>,
 ) -> Result<UpdateAsset, String> {
-    match ensure_local_from_url(env!("CARGO_PKG_VERSION"), target, url).await {
+    match ensure_local_from_url(env!("CARGO_PKG_VERSION"), target, url, DOWNLOAD_TIMEOUT).await {
         Ok(binary) => Ok(UpdateAsset {
             binary,
             source: "release",
@@ -169,6 +170,13 @@ async fn probe_local_binary(path: &Path) -> Result<BuildIdentity, String> {
             )
         })?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("requires --no-default-features") {
+            return Err(format!(
+                "local tuic-remote at {} requires --no-default-features; run cargo build --bin tuic-remote --no-default-features from src-tauri",
+                path.display()
+            ));
+        }
         return Err(format!(
             "local tuic-remote did not report build identity at {}",
             path.display()
@@ -198,6 +206,7 @@ async fn ensure_local_from_url(
     version: &str,
     target: &str,
     url: &str,
+    timeout: std::time::Duration,
 ) -> Result<LocalAsset, String> {
     validate_component("version", version)?;
     validate_component("target", target)?;
@@ -216,7 +225,16 @@ async fn ensure_local_from_url(
         uuid::Uuid::new_v4()
     ));
 
-    let result = download_and_promote(version, target, url, &staging, &destination).await;
+    let result = tokio::time::timeout(
+        timeout,
+        download_and_promote(version, target, url, &staging, &destination),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(format!(
+            "tuic-remote release download timed out for {target}"
+        ))
+    });
     if result.is_err() {
         let _ = tokio::fs::remove_file(&staging).await;
     }
@@ -387,12 +405,17 @@ mod tests {
             .await;
         let url = format!("{}/tuic-remote-test-target", server.url());
 
-        let first = ensure_local_from_url("1.2.3", "test-target", &url)
+        let first = ensure_local_from_url("1.2.3", "test-target", &url, DOWNLOAD_TIMEOUT)
             .await
             .expect("download succeeds");
-        let second = ensure_local_from_url("1.2.3", "test-target", "http://127.0.0.1:1")
-            .await
-            .expect("cached file needs no network");
+        let second = ensure_local_from_url(
+            "1.2.3",
+            "test-target",
+            "http://127.0.0.1:1",
+            DOWNLOAD_TIMEOUT,
+        )
+        .await
+        .expect("cached file needs no network");
 
         let expected_hash = "7dee7cc2fcb3d9ee8394182fe8d23a1a3d7e5c80b869b281269df9215a5abf2f";
         assert_eq!(first.sha256, expected_hash);
@@ -410,6 +433,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_release_download_times_out_without_caching_an_asset() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let entered = Arc::new(AtomicBool::new(false));
+        let router = axum::Router::new().route(
+            "/asset",
+            axum::routing::get({
+                let entered = entered.clone();
+                move || {
+                    let entered = entered.clone();
+                    async move {
+                        entered.store(true, Ordering::SeqCst);
+                        std::future::pending::<axum::http::StatusCode>().await
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/asset", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            ensure_local_from_url(
+                "1.2.3",
+                "test-target",
+                &url,
+                std::time::Duration::from_secs(5),
+            ),
+        )
+        .await
+        .expect("release download must have its own timeout")
+        .expect_err("stalled response must not be cached");
+        assert!(
+            entered.load(Ordering::SeqCst),
+            "request reached the stalled release endpoint"
+        );
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            !config
+                .path()
+                .join("remote-bin/1.2.3/tuic-remote-test-target")
+                .exists()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn not_found_names_the_target_and_version() {
         let config = tempfile::tempdir().expect("temporary config directory");
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -424,6 +498,7 @@ mod tests {
             "9.8.7",
             "x86_64-unknown-linux-gnu",
             &format!("{}/missing", server.url()),
+            DOWNLOAD_TIMEOUT,
         )
         .await
         .expect_err("404 is a named error");
@@ -473,6 +548,26 @@ mod tests {
         .expect_err("cross-target binary must be refused");
         assert!(error.contains("remote target x86_64-unknown-linux-gnu"));
         assert!(error.contains("local tuic-remote target is aarch64-apple-darwin"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn desktop_feature_stub_names_the_headless_build_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = tempfile::tempdir().unwrap();
+        let stub = config.path().join("tuic-remote");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\necho 'tuic-remote requires --no-default-features' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = probe_local_binary(&stub).await.unwrap_err();
+        assert!(error.contains("requires --no-default-features"), "{error}");
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

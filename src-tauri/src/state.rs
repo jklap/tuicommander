@@ -2395,6 +2395,23 @@ impl AppState {
         stored_timestamp
     }
 
+    /// Hear every change to one peer's inbox without waiting on it.
+    ///
+    /// Unlike [`Self::begin_agent_wait_with_events`] this takes no waiter
+    /// lease, so it never becomes the owner that delivery assigns mail to: it
+    /// only learns that the inbox moved.
+    pub(crate) fn subscribe_agent_inbox(
+        &self,
+        tuic_session: &str,
+    ) -> tokio::sync::watch::Receiver<u64> {
+        self.active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default()
+            .lock()
+            .inbox_events
+            .subscribe()
+    }
+
     #[cfg(test)]
     pub(crate) fn begin_agent_wait(&self, tuic_session: &str) -> u64 {
         self.begin_agent_wait_with_events(tuic_session).0

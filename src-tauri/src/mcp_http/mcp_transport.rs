@@ -394,7 +394,7 @@ fn link_pending_children_to_parent(
 
 /// HTTP header the bridge asserts to declare its TUIC peer identity. A PTY
 /// agent inherits it from its tab; ACP-hosted ego receives a host-issued UUID.
-const TUIC_SESSION_HEADER: &str = "x-tuic-session";
+pub(super) const TUIC_SESSION_HEADER: &str = "x-tuic-session";
 
 /// Bind an MCP session to a TUIC peer identity: upsert `peer_agents`
 /// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
@@ -829,7 +829,7 @@ fn managed_parent_cwd_from_header(
 /// Both maps are in-memory and disappear on a TUIC restart; a long-lived bridge
 /// may keep its old MCP session id, so merely recreating `mcp_sessions` is not
 /// enough to keep `agent send` registered.
-fn refresh_mcp_session(
+pub(super) fn refresh_mcp_session(
     state: &AppState,
     mcp_sid: &str,
     is_claude_code: bool,
@@ -6875,7 +6875,7 @@ async fn handle_confirm(
 // Single /mcp endpoint — POST for JSON-RPC, GET for SSE notifications, DELETE ends session
 // ---------------------------------------------------------------------------
 
-const MCP_SESSION_HEADER: &str = "mcp-session-id";
+pub(super) const MCP_SESSION_HEADER: &str = "mcp-session-id";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-03-26"];
 
 /// Answered when the client asks for a revision we do not implement, or sends
@@ -7502,69 +7502,76 @@ pub(super) async fn mcp_delete(
         .get(MCP_SESSION_HEADER)
         .and_then(|v| v.to_str().ok())
     {
-        state.mcp.sessions.remove(sid);
-        // Now that an identity can have co-owners, teardown has to read the
-        // survivor list and act on it as one step: a bridge joining in the middle
-        // would otherwise re-create the routes this loop is about to delete and be
-        // left pointing at an identity that no longer exists. Same lock as the
-        // binds, so a join lands entirely before or entirely after the teardown.
-        // No `.await` inside — the guard never crosses a suspension point.
-        let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-        // Routes belong to the protocol session, so a sibling bridge that never
-        // became delivery owner still drops its own — otherwise its mapping
-        // outlives it and keeps resolving to an identity it no longer serves.
-        state.mcp.to_session.remove(sid);
-        let routed: Vec<String> = state
-            .mcp
-            .session_to_mcp
-            .iter()
-            .filter(|entry| entry.value().iter().any(|mapped| mapped == sid))
-            .map(|entry| entry.key().clone())
-            .collect();
-        for tuic in &routed {
-            let survivors = match state.mcp.session_to_mcp.get_mut(tuic) {
-                Some(mut reverse) => {
-                    reverse.retain(|mapped_sid| mapped_sid != sid);
-                    reverse.clone()
-                }
-                None => Vec::new(),
-            };
-            match survivors.first() {
-                // Another bridge in this PTY is still reading the identity, so
-                // hand it the delivery ownership rather than tearing down a
-                // mailbox and a role that are still in use.
-                Some(next_owner) => {
-                    if let Some(mut peer) = state.peer_agents.get_mut(tuic)
-                        && peer.mcp_session_id == sid
-                    {
-                        peer.mcp_session_id = next_owner.clone();
-                    }
-                }
-                None => {
-                    state.mcp.session_to_mcp.remove(tuic);
-                }
-            }
-        }
-        // Clean up peer agents and inboxes left with no protocol session at all.
-        let removed_tuic: Vec<String> = state
-            .peer_agents
-            .iter()
-            .filter(|e| e.value().mcp_session_id == sid)
-            .map(|e| e.key().clone())
-            .collect();
-        for tuic in &removed_tuic {
-            state.peer_agents.remove(tuic);
-            state.orchestrator_peers.remove(tuic);
-            state.agent_inbox.remove(tuic);
-            drop_identity_buffers(&state, tuic);
-            let _ = state
-                .event_bus
-                .send(crate::state::AppEvent::PeerUnregistered {
-                    tuic_session: tuic.clone(),
-                });
-        }
+        end_mcp_session(&state, sid);
     }
     StatusCode::OK
+}
+
+/// End one MCP protocol session: its routes, and any peer identity it was the
+/// last transport for. Shared by DELETE `/mcp` and an MCP-over-ACP disconnect,
+/// which end the same kind of session over different transports.
+pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
+    state.mcp.sessions.remove(sid);
+    // Now that an identity can have co-owners, teardown has to read the
+    // survivor list and act on it as one step: a bridge joining in the middle
+    // would otherwise re-create the routes this loop is about to delete and be
+    // left pointing at an identity that no longer exists. Same lock as the
+    // binds, so a join lands entirely before or entirely after the teardown.
+    // No `.await` inside — the guard never crosses a suspension point.
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    // Routes belong to the protocol session, so a sibling bridge that never
+    // became delivery owner still drops its own — otherwise its mapping
+    // outlives it and keeps resolving to an identity it no longer serves.
+    state.mcp.to_session.remove(sid);
+    let routed: Vec<String> = state
+        .mcp
+        .session_to_mcp
+        .iter()
+        .filter(|entry| entry.value().iter().any(|mapped| mapped == sid))
+        .map(|entry| entry.key().clone())
+        .collect();
+    for tuic in &routed {
+        let survivors = match state.mcp.session_to_mcp.get_mut(tuic) {
+            Some(mut reverse) => {
+                reverse.retain(|mapped_sid| mapped_sid != sid);
+                reverse.clone()
+            }
+            None => Vec::new(),
+        };
+        match survivors.first() {
+            // Another bridge in this PTY is still reading the identity, so
+            // hand it the delivery ownership rather than tearing down a
+            // mailbox and a role that are still in use.
+            Some(next_owner) => {
+                if let Some(mut peer) = state.peer_agents.get_mut(tuic)
+                    && peer.mcp_session_id == sid
+                {
+                    peer.mcp_session_id = next_owner.clone();
+                }
+            }
+            None => {
+                state.mcp.session_to_mcp.remove(tuic);
+            }
+        }
+    }
+    // Clean up peer agents and inboxes left with no protocol session at all.
+    let removed_tuic: Vec<String> = state
+        .peer_agents
+        .iter()
+        .filter(|e| e.value().mcp_session_id == sid)
+        .map(|e| e.key().clone())
+        .collect();
+    for tuic in &removed_tuic {
+        state.peer_agents.remove(tuic);
+        state.orchestrator_peers.remove(tuic);
+        state.agent_inbox.remove(tuic);
+        drop_identity_buffers(state, tuic);
+        let _ = state
+            .event_bus
+            .send(crate::state::AppEvent::PeerUnregistered {
+                tuic_session: tuic.clone(),
+            });
+    }
 }
 
 // ── Unified handlers (merged tools) ──────────────────────────────────────

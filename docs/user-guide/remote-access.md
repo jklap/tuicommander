@@ -297,6 +297,14 @@ does not rewrite the host's Claude, Codex, or other agent configuration.
 
 When a connected daemon reports a different binary SHA-256 from the binary the
 desktop would deploy, **Remote out of date** appears beside the connection.
+Each connection has an **Auto-update remote daemons** option in Settings. It is
+off by default. When enabled, a connection to a newer available build updates
+automatically only if the daemon reports zero live PTY sessions. A daemon with
+live sessions stays on its current build; Settings shows the session count and
+offers the manual update. No update is queued. An automatic failure is shown
+once for that selected build, without a retry on each reconnect.
+The manual update button is disabled while an automatic update is running. A
+stalled transfer reports a timeout, after which connection checks resume.
 Select **Update & restart remote** for either Direct or SSH transport. The
 preview reports the remote target and build, selected desktop build and source,
 and the number of live PTY sessions. Confirming ends those sessions. The
@@ -304,6 +312,9 @@ desktop uses the matching release asset first; if that asset does not exist, a
 locally built `tuic-remote` beside the desktop executable is used only when its
 target triple matches the remote. A target mismatch names both targets; a
 missing local binary reports its expected path.
+For a development build, build the headless binary with
+`cargo build --bin tuic-remote --no-default-features` from `src-tauri` when the
+desktop-feature sibling is a stub. The preview names that cause and command.
 
 Direct updates stream the binary over the authenticated connection. The daemon
 verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
@@ -315,8 +326,9 @@ binary between preview and confirmation cancels the update. In-process update
 on Windows is unavailable: a running `.exe` cannot be overwritten, and the
 daemon answers 501.
 
-An older daemon without `/health.build` is shown as out of date. SSH can
-bootstrap it because the desktop probes the host target with `uname`; an older
+An older daemon without `/health.build` is shown as out of date. Automatic
+updates require a build identity, so this daemon needs one manual installation.
+SSH can bootstrap it because the desktop probes the host target with `uname`; an older
 Direct daemon has no update endpoint or reported target, so it needs one manual
 installation of a compatible daemon before this action can update it.
 
