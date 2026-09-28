@@ -129,6 +129,21 @@ pub struct TranscribeResponse {
     pub truncated_s: f64,
 }
 
+/// The response at the stop command boundary when the final pass has no text.
+fn empty_final_response(
+    final_text: &str,
+    final_skip_reason: Option<String>,
+    duration_s: f64,
+    truncated_s: f64,
+) -> Option<TranscribeResponse> {
+    final_text.is_empty().then(|| TranscribeResponse {
+        text: String::new(),
+        skip_reason: Some(final_skip_reason.unwrap_or_else(|| "no speech detected".to_string())),
+        duration_s,
+        truncated_s,
+    })
+}
+
 /// Resolve a model name from config, falling back to the default.
 fn resolve_model(name: &str) -> model::WhisperModel {
     model::WhisperModel::from_name(name).unwrap_or(model::WhisperModel::LargeV3Turbo)
@@ -1708,6 +1723,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         }
 
         let mut final_text = String::new();
+        let mut final_skip_reason = None;
 
         if let Some(ref transcriber) = transcriber {
             let lang_ref = lang_owned.as_deref();
@@ -1724,6 +1740,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                             &format!("Final transcription skipped: {reason}"),
                         );
                     }
+                    final_skip_reason = result.skip_reason;
                 }
                 Err(e) => {
                     app_logger::log_via_handle(
@@ -1750,15 +1767,18 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             };
         }
 
-        if final_text.is_empty() {
+        let no_speech_fallback = final_skip_reason.is_none();
+        if let Some(response) = empty_final_response(
+            &final_text,
+            final_skip_reason,
+            total_duration_s,
+            truncated_s,
+        ) {
             trace_empty_final();
-            app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
-            return TranscribeResponse {
-                text: String::new(),
-                skip_reason: Some("no speech detected".to_string()),
-                duration_s: total_duration_s,
-                truncated_s,
-            };
+            if no_speech_fallback {
+                app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
+            }
+            return response;
         }
 
         // Log accuracy comparison (lengths only — no verbatim text to avoid PII in logs)
@@ -2558,6 +2578,32 @@ pub fn open_microphone_settings() {
 mod tests {
     use super::*;
     use crate::dictation::continuous::Phase;
+
+    #[test]
+    fn stopped_dictation_preserves_final_transcriber_skip_reason() {
+        let response = empty_final_response(
+            "",
+            Some("audio too quiet (RMS 0.0005 < 0.0010)".to_string()),
+            1.25,
+            0.0,
+        )
+        .expect("empty final transcription returns a response");
+
+        assert_eq!(response.text, "");
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["skip_reason"],
+            "audio too quiet (RMS 0.0005 < 0.0010)"
+        );
+        assert_eq!(response.duration_s, 1.25);
+    }
+
+    #[test]
+    fn stopped_dictation_uses_no_speech_for_empty_success() {
+        let response = empty_final_response("", None, 0.75, 0.0)
+            .expect("empty final transcription returns a response");
+        assert_eq!(response.skip_reason.as_deref(), Some("no speech detected"));
+        assert!(empty_final_response("hello", None, 0.75, 0.0).is_none());
+    }
 
     /// A microphone and a recogniser the test writes the script for.
     ///
