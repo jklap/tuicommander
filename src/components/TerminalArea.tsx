@@ -9,6 +9,8 @@ import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
+import { uiStore } from "../stores/ui";
+import { markdownDocumentPanelId } from "../utils/markdownDocumentPanelId";
 import { shouldAutoSubmitSuggestion } from "../utils/sendCommand";
 import { sendTextToSession } from "../utils/sendToActiveTerminal";
 import { PaneNodeView } from "./PaneTree/PaneTree";
@@ -215,7 +217,7 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 											classList={{ active: shouldShow(id, mdTabsStore.state.activeId === id) }}
 											onContextMenu={(e) => e.stopPropagation()}
 										>
-											{mdTab && (
+											{mdTab && !uiStore.isDetached(markdownDocumentPanelId(id)) && (
 												<MdTabContent
 													tab={mdTab}
 													onClose={() => props.onCloseTab(id)}
