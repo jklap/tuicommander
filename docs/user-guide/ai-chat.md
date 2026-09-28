@@ -119,9 +119,12 @@ in total. Text paste works as usual.
   in every connected view; either view can remove an item before ego receives
   it. Stop affects the running turn for every view. The conversation shows a
   queued message as sent only when it actually reaches ego.
-- **Model, reasoning effort and mode** come from the options the session
-  publishes. There is no list of models in TUICommander: the session is asked,
-  and the answer is what the control bar draws. This changes one conversation.
+- **Session settings** are published by the current conversation. The control bar
+  shows the current model and mode; its settings button opens a dialog with
+  labeled choices and descriptions for every select option ego offers, including
+  reasoning effort and sandbox when available. Changes apply to this conversation
+  and the displayed values follow ego's reply. A rejected change shows its error
+  in the dialog. TUICommander keeps no separate model list.
   The model every *new* run starts from is ego's own default, editable in
   Settings → **AI Chat** (see [Settings](settings.md#ai-chat)).
 

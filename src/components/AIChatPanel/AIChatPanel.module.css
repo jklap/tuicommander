@@ -1083,6 +1083,53 @@
   flex: 1;
 }
 
+.sessionSettingsSummary {
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.sessionSettingsDialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.sessionSettingRow + .sessionSettingRow {
+  margin-top: 16px;
+}
+
+.sessionSettingLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+}
+
+.sessionSettingDescription {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+}
+
+.sessionSettingSelect {
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-md);
+}
+
+.sessionSettingSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .planList {
   list-style: none;
   margin: 0;
