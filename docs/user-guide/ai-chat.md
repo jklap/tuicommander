@@ -122,7 +122,9 @@ in total. Text paste works as usual.
   it. Stop affects the running turn for every view. The conversation shows a
   queued message as sent only when it actually reaches ego.
 - **Session settings** are published by the current conversation. The control bar
-  shows the current model and mode; its settings button opens a dialog with
+  shows the model's short name and the current mode. Its summary shortens before
+  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  control has a tooltip and a name for assistive technology. The settings button opens a dialog with
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
   and the displayed values follow ego's reply. A rejected change shows its error
