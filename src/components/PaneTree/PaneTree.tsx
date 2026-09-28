@@ -17,6 +17,8 @@ import {
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
+import { markdownDocumentPanelId } from "../../utils/markdownDocumentPanelId";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
@@ -475,7 +477,7 @@ const TerminalPane: Component<{
 const MarkdownPane: Component<{ tabId: string; onClose: (id: string) => void; visible: () => boolean }> = (props) => {
 	const mdTab = () => mdTabsStore.get(props.tabId);
 	return (
-		<Show when={mdTab()} keyed>
+		<Show when={!uiStore.isDetached(markdownDocumentPanelId(props.tabId)) && mdTab()} keyed>
 			{(tab) => <MdTabContent tab={tab} onClose={() => props.onClose(props.tabId)} visible={props.visible} />}
 		</Show>
 	);

@@ -7,8 +7,10 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
+import { markdownDocumentPanelId } from "../../utils/markdownDocumentPanelId";
 import type { LeafRect } from "../../utils/paneTreeGeometry";
 import { getRepoColor } from "../../utils/repoColor";
 import { GlobeIcon } from "../GlobeIcon";
@@ -261,6 +263,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 interface FileTabViewProps extends SharedTabViewProps {
 	showPinned: boolean;
 	richIcon: boolean;
+	onFocusDetached?: (id: string) => void;
 }
 
 export const DiffTabView: Component<FileTabViewProps> = (props) => {
@@ -325,6 +328,7 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 
 export const MarkdownTabView: Component<FileTabViewProps> = (props) => {
 	const tab = () => mdTabsStore.get(props.id);
+	const isDetached = () => uiStore.isDetached(markdownDocumentPanelId(props.id));
 	const title = () => {
 		const current = tab();
 		return current?.type === "file"
@@ -343,11 +347,16 @@ export const MarkdownTabView: Component<FileTabViewProps> = (props) => {
 				class={cx(
 					s.tab,
 					tab()?.type === "file" ? s.mdTab : tab()?.type === "pr-diff" ? s.diffTab : s.panelTab,
-					mdTabsStore.state.activeId === props.id && s.active,
+					mdTabsStore.state.activeId === props.id && !isDetached() && s.active,
+					isDetached() && s.detached,
 					...dragClasses(props),
 				)}
 				data-tab-id={props.id}
 				onClick={() => {
+					if (isDetached()) {
+						props.onFocusDetached?.(props.id);
+						return;
+					}
 					mdTabsStore.setActive(props.id);
 					props.onSelect(props.id);
 				}}
