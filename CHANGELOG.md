@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat failed turns** — ACP prompt diagnostics and empty replies appear in the transcript; small choice requests use direct buttons, and untitled conversations have readable picker labels.
+
 - **Managed child questions** — Separate questions remain in the parent's inbox after earlier answers and later state updates.
 
 - **Browser agent resume verification** — HTTP verification carries the agent PID and saved profile environment, so sessions under a non-default Claude, Codex or Gemini profile are checked in the correct store.

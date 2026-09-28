@@ -1437,9 +1437,8 @@ impl ConnectionActor {
                     usage: response.usage,
                 }
             }
-            // A turn that failed has no stop reason to report:
-            // the agent never gave one, and inventing `Cancelled` here would
-            // tell a host the turn ended in a way it did not.
+            // A failed prompt has no stop reason, but the agent's diagnostic
+            // must reach every subscriber before the composer returns to idle.
             Err(error) => {
                 attachment.active_turn = None;
                 // ego's dedicated pause code means the hold reached its
@@ -1447,7 +1446,8 @@ impl ConnectionActor {
                 if error.agent_code == Some(-32011) {
                     attachment.state = AcpAttachmentState::Paused;
                 }
-                AcpClientEvent::AttachmentState {
+                AcpClientEvent::TurnFailed {
+                    message: error.message,
                     state: attachment.state,
                 }
             }

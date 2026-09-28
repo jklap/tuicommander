@@ -33,17 +33,25 @@ export type AcpTranscriptEntry =
 	| { id: string; kind: "tool"; call: AcpToolCall }
 	| { id: string; kind: "plan"; entries: AcpPlanEntry[] }
 	/** A turn that ended as something other than a finished answer. */
-	| { id: string; kind: "settled"; stopReason: string };
+	| { id: string; kind: "settled"; stopReason: string }
+	| { id: string; kind: "failed"; message: string };
 
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
 	titles: Record<AcpSessionId, string>;
 	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
+	turnHasReply: Record<AcpSessionId, boolean>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
 
-const [state, setState] = createStore<TranscriptState>({ sessions: {}, titles: {}, usage: {}, nextId: 1 });
+const [state, setState] = createStore<TranscriptState>({
+	sessions: {},
+	titles: {},
+	usage: {},
+	turnHasReply: {},
+	nextId: 1,
+});
 
 /**
  * The text inside a content block, or "" for a block that carries none.
@@ -158,6 +166,7 @@ function reduceUpdate(
 			break;
 		case "agent_message_chunk":
 			appendChunk(draft, entries, "agent", textOf(record.content));
+			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
 		case "agent_thought_chunk":
 			appendChunk(draft, entries, "thought", textOf(record.content));
@@ -191,7 +200,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, titles: {}, usage: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, nextId: 1 });
 	},
 
 	/**
@@ -211,6 +220,7 @@ export const acpTranscript = {
 		setState(
 			produce((s: TranscriptState) => {
 				delete s.sessions[sessionId];
+				delete s.turnHasReply[sessionId];
 			}),
 		);
 		return removed;
@@ -246,7 +256,12 @@ export const acpTranscript = {
 		setState(
 			produce((s: TranscriptState) => {
 				const entries = (s.sessions[sessionId] ??= []);
+				if (event.kind === "turnStarted") {
+					s.turnHasReply[sessionId] = false;
+					return;
+				}
 				if (event.kind === "promptSent") {
+					s.turnHasReply[sessionId] = false;
 					entries.push({ id: `e${s.nextId}`, kind: "user", text: event.text });
 					s.nextId += 1;
 					return;
@@ -255,11 +270,24 @@ export const acpTranscript = {
 					reduceUpdate(s, sessionId, entries, event.update);
 					return;
 				}
-				if (event.kind === "turnSettled" && event.stopReason !== "end_turn") {
+				if (event.kind === "turnFailed") {
+					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
+					s.nextId += 1;
+					return;
+				}
+				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {
 					// A turn that ended because it was cancelled, refused or ran
 					// out of room ended without answering, and a transcript that
 					// just stops there reads as the agent falling silent.
-					entries.push({ id: `e${s.nextId}`, kind: "settled", stopReason: event.stopReason });
+					entries.push({
+						id: `e${s.nextId}`,
+						kind: "settled",
+						stopReason: s.turnHasReply[sessionId]
+							? event.stopReason
+							: event.stopReason === "end_turn"
+								? "empty"
+								: event.stopReason,
+					});
 					s.nextId += 1;
 				}
 			}),
