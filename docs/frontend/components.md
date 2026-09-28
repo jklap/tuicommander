@@ -113,7 +113,9 @@ binding from app config after a fresh document opens.
 The control bar summarizes the current model and mode. Its session settings
 button opens a shared-style modal with one labeled select and description per
 ACP select config option. Choices and displayed values come from the selected
-session's latest attachment snapshot; rejected changes show an error in the modal.
+session's latest attachment snapshot. Flat choices use ACP `value` fields;
+grouped choices use `group` and nested `options`. Rejected changes show an error
+in the modal.
 The panel draws open chat tabs from `aiChatTabs`; each tab selects one ACP
 session on the repository's connection. A detached window reads the saved tab
 list and replays each open conversation. `aiChatDraft` keeps unsent text and
