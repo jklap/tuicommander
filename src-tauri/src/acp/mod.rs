@@ -69,6 +69,16 @@ impl AcpAttachKind {
             Self::Resume => AcpOperation::Resume,
         }
     }
+
+    /// The wire method this is sent as, for the log that attributes an attach.
+    #[must_use]
+    pub fn method(self) -> &'static str {
+        match self {
+            Self::Load => "session/load",
+            Self::Fork => "session/fork",
+            Self::Resume => "session/resume",
+        }
+    }
 }
 
 impl AcpDetachKind {

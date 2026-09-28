@@ -164,7 +164,13 @@ deliberately does not have:
   ends. The seats, meanwhile, outlive the overwrite, so the two views would then
   disagree about what is being asked. A host that wants the history replayed
   detaches first, which says what it means. A fork is not affected: it names the
-  session it forks *from* and comes back with an id of its own.
+  session it forks *from* and comes back with an id of its own. A `load` or
+  `resume` still waiting for its answer holds the session too, so a second one
+  sent meanwhile is refused the same way: each load makes ego admit every MCP
+  server again. Every attach is logged (`ACP attach`, with the wire method and
+  session id) so a storm of them can be attributed. The AI Chat panel keeps one
+  replay per tab in flight and does not replay a tab whose load failed until a
+  person selects it or presses Retry.
 
 Changing the first two means a different, asynchronous connect API — one that
 hands back an id before there is a connection behind it, with its own
