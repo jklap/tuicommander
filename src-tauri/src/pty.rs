@@ -8191,23 +8191,28 @@ fn agent_submission_rejection(
     if !submission_ready(state, session_id, human_reply) {
         return Some(("agent_not_ready", "empty"));
     }
-    // The agent IS ready, so anything still parked can be typed right now.
-    // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
-    // already have passed, and nothing else would fire it. Draining here is the
-    // same write the transition would have made, one item per idle window.
-    if state
-        .pending_injections
-        .get(session_id)
-        .is_some_and(|queue| !queue.is_empty())
-    {
-        flush_pending_injections_blocking(state, session_id);
-    }
-    if state
-        .pending_injections
-        .get(session_id)
-        .is_some_and(|queue| !queue.is_empty())
-    {
-        return Some(("queued_commands_pending", "empty"));
+    // A confident question belongs to the human. Its parked automated entries
+    // cannot drain until the answer clears the question, and must not prevent
+    // that answer from reaching the composer.
+    if !(human_reply && blocked_on_confident_question(state, session_id)) {
+        // The agent IS ready, so anything still parked can be typed right now.
+        // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
+        // already have passed, and nothing else would fire it. Draining here is the
+        // same write the transition would have made, one item per idle window.
+        if state
+            .pending_injections
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            flush_pending_injections_blocking(state, session_id);
+        }
+        if state
+            .pending_injections
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            return Some(("queued_commands_pending", "empty"));
+        }
     }
     // Re-read: a flush that emptied the queue typed one entry and left the
     // session BUSY, so the caller is now waiting on that turn, not on a queue.

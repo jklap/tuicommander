@@ -322,7 +322,10 @@ managed agent's idle state and empty composer, writes the whole reply and Enter
 atomically, and returns the same submission receipt. A closed session returns
 HTTP 404 with `submitted: false` and `reason: "session_not_found"`; another
 rejection returns HTTP 409 and its precise `reason`. A successful write can
-still have `acknowledged: false`: the client must not retry blindly.
+still have `acknowledged: false`: the client must not retry blindly. While a
+confident question is open, a human reply can pass queued automated messages;
+those messages remain parked until the question clears. Automated `session
+action=submit` cannot answer the question.
 
 ### Write Several Inputs at Once
 
