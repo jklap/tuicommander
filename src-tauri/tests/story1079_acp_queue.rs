@@ -1,5 +1,7 @@
 use agent_client_protocol::schema::v1;
-use tuicommander_lib::acp::{AcpClientEvent, AcpTurnState};
+use tuicommander_lib::acp::{
+    AcpAttachmentState, AcpClientEvent, AcpHoldState, AcpTurnState, EgoHoldRequest,
+};
 
 mod acp_support;
 use acp_support::{Fixture, authority, text, until_settled};
@@ -182,6 +184,127 @@ async fn cancelling_the_running_turn_is_visible_to_both_views() {
         .await;
         assert_eq!(cancelling.last().unwrap().turn_id, Some(turn));
         let settled = until_settled(stream).await;
+        assert_eq!(settled.last().unwrap().turn_id, Some(turn));
+    }
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn paused_session_holds_queued_prompts_until_resume_and_both_views_can_cancel() {
+    let fixture = Fixture::with("prompt-queued-through-pause");
+    let connection = fixture.connect().await;
+    let session = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .unwrap();
+    let mut desktop = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .unwrap();
+    let mut phone = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .unwrap();
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("desktop")],
+        )
+        .await
+        .unwrap();
+    let kept = fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("kept")],
+        )
+        .await
+        .unwrap();
+    let cancelled = fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("cancelled")],
+        )
+        .await
+        .unwrap();
+
+    let request_id = "01932d5e-0000-7000-8000-0000000000f1".parse().unwrap();
+    let hold = EgoHoldRequest {
+        session_id: session.session_id.clone(),
+        request_id,
+    };
+    let paused = fixture
+        .manager
+        .pause_turn(connection.connection_id, hold.clone())
+        .await
+        .unwrap();
+    assert_eq!(paused.state, AcpHoldState::Pending);
+    for stream in [&mut desktop, &mut phone] {
+        acp_support::until(stream, |event| {
+            matches!(
+                event,
+                AcpClientEvent::AttachmentState {
+                    state: AcpAttachmentState::Paused
+                }
+            )
+        })
+        .await;
+    }
+    let attachment = &fixture
+        .manager
+        .snapshot(connection.connection_id)
+        .unwrap()
+        .attachments[0];
+    assert_eq!(attachment.state, AcpAttachmentState::Paused);
+    assert_eq!(attachment.queued_prompts.len(), 2);
+
+    fixture
+        .manager
+        .cancel_queued(
+            connection.connection_id,
+            session.session_id.clone(),
+            cancelled,
+        )
+        .await
+        .expect("desktop cancels the phone's queued prompt while paused");
+    let added = fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("added while paused")],
+        )
+        .await
+        .expect("phone can queue while paused");
+    let queued = &fixture
+        .manager
+        .snapshot(connection.connection_id)
+        .unwrap()
+        .attachments[0]
+        .queued_prompts;
+    assert_eq!(
+        queued.iter().map(|item| item.turn_id).collect::<Vec<_>>(),
+        [kept, added]
+    );
+
+    let resumed = fixture
+        .manager
+        .resume_turn(connection.connection_id, hold)
+        .await
+        .unwrap();
+    assert_eq!(resumed.state, AcpHoldState::Running);
+    for turn in [kept, added] {
+        let settled = until_settled(&mut phone).await;
         assert_eq!(settled.last().unwrap().turn_id, Some(turn));
     }
     fixture
