@@ -1860,6 +1860,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
 - Shares transport layer, stores, and notification manager with desktop
+- Chat is the primary mobile tab: choose a repository, read ego's streamed ACP
+  conversation with shared transcript cards and collapsed activity, answer
+  pending interactions, and switch among titled saved conversations
 - Server-side routing: `/mobile/*` → `mobile.html`, everything else → `index.html`
 - Session state accumulator enriches `GET /sessions` with question/rate-limit/busy state
 - SSE endpoint (`/events`) and WebSocket JSON framing for real-time updates
