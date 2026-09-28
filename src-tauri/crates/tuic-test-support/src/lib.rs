@@ -42,9 +42,10 @@ pub fn test_temp_root() -> std::path::PathBuf {
 pub fn short_socket_test_temp_root() -> std::path::PathBuf {
     let requested = test_temp_root();
     if requested
-        .join("sXXXXXX/home/.mdkb/daemon-hook.sock.4294967295.tmp")
+        .join("sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp")
         .as_os_str()
         .len()
+        + 8
         < 104
     {
         return requested;
@@ -57,7 +58,7 @@ pub fn short_socket_test_temp_root() -> std::path::PathBuf {
     let root = checkout
         .ancestors()
         .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(format!(".tmp/tuic-tests/socket-{:016x}", hasher.finish())))
+        .map(|gits| gits.join(format!(".tmp/s{:016x}", hasher.finish())))
         .unwrap_or(requested);
     std::fs::create_dir_all(&root).expect("create short socket test root");
     root

@@ -4,9 +4,10 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 shared="$HOME/Gits/.tmp/tuic-tests"
 mkdir -p "$shared"
-old_socket="$shared/socket-prune-test-$$"
+socket_parent="$HOME/Gits/.tmp"
+old_socket="$socket_parent/s$(printf '%016x' "$$")"
 old_run="$shared/tuic-run.prune-test-$$"
-recent_socket="$shared/socket-keep-test-$$"
+recent_socket="$socket_parent/s$(printf '%016x' "$(($$ + 1))")"
 trap 'rm -rf "$old_socket" "$old_run" "$recent_socket"' EXIT
 mkdir "$old_socket" "$old_run" "$recent_socket"
 touch -t 202001010000 "$old_socket" "$old_run"

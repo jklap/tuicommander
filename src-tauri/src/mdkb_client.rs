@@ -808,7 +808,7 @@ pub(crate) mod tests {
             .prefix("s")
             .tempdir_in(crate::test_support::short_socket_test_temp_root())
             .expect("short socket test dir");
-        let home = tmp.path().join("home");
+        let home = tmp.path().to_path_buf();
         let repo = tmp.path().join("repo");
         assert!(
             home.join(".mdkb/daemon-hook.sock.4294967295.tmp")

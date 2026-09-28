@@ -34,8 +34,8 @@ fn socket_root_is_stable_and_distinct_for_long_checkout_paths() {
         first, second,
         "parallel checkouts must not share socket scratch"
     );
-    assert!(first.starts_with(fake_gits.join(".tmp/tuic-tests")));
-    assert!(second.starts_with(fake_gits.join(".tmp/tuic-tests")));
+    assert_eq!(first.parent(), Some(fake_gits.join(".tmp").as_path()));
+    assert_eq!(second.parent(), Some(fake_gits.join(".tmp").as_path()));
     assert!(first.is_dir());
     assert!(second.is_dir());
     assert!(first.as_os_str().len() < requested.as_os_str().len());
@@ -47,4 +47,15 @@ fn socket_root_is_stable_and_distinct_for_long_checkout_paths() {
     } else {
         unsafe { std::env::remove_var("TUIC_TEST_TMP_ROOT") };
     }
+}
+
+#[test]
+fn socket_root_leaves_room_for_mdkb_socket_with_longer_home() {
+    let root = tuic_test_support::short_socket_test_temp_root();
+    let daemon_socket = root.join("sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp");
+    assert!(
+        daemon_socket.as_os_str().len() + 8 < 104,
+        "mdkb socket path needs eight bytes of HOME margin: {}",
+        daemon_socket.display()
+    );
 }
