@@ -737,6 +737,16 @@ describe("AIChatPanel: a turn", () => {
 		(choices[1] as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta");
+		feed({ kind: "promptSent", text: "Una decisione aperta" });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Una decisione aperta" } },
+		});
+		await settle();
+		// Catches: the suggestion click creates a bubble that doubles when ego echoes the prompt.
+		expect(
+			[...container.querySelectorAll(".userMsg")].map((message) => message.textContent?.replace("Copy", "")),
+		).toEqual(["Una decisione aperta"]);
 	});
 
 	// Catches: an inline token at the end of the answer remaining visible as raw text.

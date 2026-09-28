@@ -41,6 +41,7 @@ interface TranscriptState {
 	titles: Record<AcpSessionId, string>;
 	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
 	turnHasReply: Record<AcpSessionId, boolean>;
+	pendingUserEcho: Record<AcpSessionId, { entryId: string; received: string }>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
@@ -50,6 +51,7 @@ const [state, setState] = createStore<TranscriptState>({
 	titles: {},
 	usage: {},
 	turnHasReply: {},
+	pendingUserEcho: {},
 	nextId: 1,
 });
 
@@ -87,6 +89,33 @@ function appendChunk(
 	}
 	entries.push({ id: `e${draft.nextId}`, kind, text });
 	draft.nextId += 1;
+}
+
+/** Reconcile ego's streamed echo with the prompt already shown by promptSent. */
+function appendUserChunk(
+	draft: TranscriptState,
+	sessionId: AcpSessionId,
+	entries: AcpTranscriptEntry[],
+	text: string,
+): void {
+	if (!text) return;
+	const pending = draft.pendingUserEcho[sessionId];
+	if (pending) {
+		const entry = entries.find((item) => item.id === pending.entryId);
+		if (entry?.kind === "user") {
+			const received = pending.received + text;
+			if (entry.text.startsWith(received)) {
+				if (received === entry.text) delete draft.pendingUserEcho[sessionId];
+				else pending.received = received;
+				return;
+			}
+			entry.text = received;
+			delete draft.pendingUserEcho[sessionId];
+			return;
+		}
+		delete draft.pendingUserEcho[sessionId];
+	}
+	appendChunk(draft, entries, "user", text);
 }
 
 /** Fold a tool call, or an update to one, into the single card that shows it. */
@@ -174,17 +203,20 @@ function reduceUpdate(
 			break;
 		}
 		case "user_message_chunk":
-			appendChunk(draft, entries, "user", textOf(record.content));
+			appendUserChunk(draft, sessionId, entries, textOf(record.content));
 			break;
 		case "agent_message_chunk":
+			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "agent", textOf(record.content));
 			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
 		case "agent_thought_chunk":
+			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "thought", textOf(record.content));
 			break;
 		case "tool_call":
 		case "tool_call_update":
+			delete draft.pendingUserEcho[sessionId];
 			foldToolCall(draft, entries, record);
 			break;
 		case "plan": {
@@ -212,7 +244,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, nextId: 1 });
 	},
 
 	/**
@@ -233,6 +265,7 @@ export const acpTranscript = {
 			produce((s: TranscriptState) => {
 				delete s.sessions[sessionId];
 				delete s.turnHasReply[sessionId];
+				delete s.pendingUserEcho[sessionId];
 			}),
 		);
 		return removed;
@@ -274,7 +307,9 @@ export const acpTranscript = {
 				}
 				if (event.kind === "promptSent") {
 					s.turnHasReply[sessionId] = false;
-					entries.push({ id: `e${s.nextId}`, kind: "user", text: event.text });
+					const id = `e${s.nextId}`;
+					entries.push({ id, kind: "user", text: event.text });
+					if (event.text) s.pendingUserEcho[sessionId] = { entryId: id, received: "" };
 					s.nextId += 1;
 					return;
 				}
@@ -283,12 +318,14 @@ export const acpTranscript = {
 					return;
 				}
 				if (event.kind === "turnFailed") {
+					delete s.pendingUserEcho[sessionId];
 					settleToolCalls(entries, "failed");
 					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
 					s.nextId += 1;
 					return;
 				}
 				if (event.kind === "turnSettled") {
+					delete s.pendingUserEcho[sessionId];
 					settleToolCalls(entries, event.stopReason === "end_turn" ? "completed" : "failed");
 				}
 				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {

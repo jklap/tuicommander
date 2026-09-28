@@ -100,6 +100,8 @@ in total. Text paste works as usual.
   line or trailing token at the end of an answer into reply buttons. Choosing
   one sends that text as the next prompt.
   Mentions in ordinary prose and code examples remain in the answer.
+  Sent messages appear once, including when ego streams an echo after a reply
+  button is chosen.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
   composer becomes available for another prompt.
