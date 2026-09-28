@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { createServer, loadConfigFromFile } from "vite";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
+const scratchRoot = join(repo, ".tmp");
+mkdirSync(scratchRoot, { recursive: true });
 
 async function otherCwd() {
 	const originalCwd = process.cwd();
-	const alternate = mkdtempSync(join(repo, ".tmp", "vite-watch-cwd-"));
+	const alternate = mkdtempSync(join(scratchRoot, "vite-watch-cwd-"));
 	try {
 		mkdirSync(join(alternate, "src-tauri"));
 		writeFileSync(join(alternate, "src-tauri", "tauri.conf.json"), '{"version":"wrong-checkout"}');
@@ -31,7 +33,7 @@ async function otherCwd() {
 
 async function watch() {
 	let server;
-	const scratch = mkdtempSync(join(repo, ".tmp", "vite-watch-"));
+	const scratch = mkdtempSync(join(scratchRoot, "vite-watch-"));
 	const sourceTmp = join(repo, "src", ".tmp");
 	const publicTmp = join(repo, "public", ".tmp");
 	const sourceControl = join(sourceTmp, "vite-watch-control.html");
