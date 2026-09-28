@@ -301,6 +301,70 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
+	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"), "utf8");
+		document.head.append(style);
+		try {
+			const { container } = renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Question" });
+			feed({ kind: "sessionUpdate", update: {
+				sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" },
+			} });
+			feed({ kind: "sessionUpdate", update: {
+				sessionUpdate: "tool_call", toolCallId: "one", title: "Inspect", status: "completed",
+			} });
+			await settle();
+			for (const label of ["Copy user message", "Copy assistant message"]) {
+				const button = container.querySelector(`button[aria-label="${label}"]`)!;
+				expect(getComputedStyle(button).minHeight, label).toBe("18px");
+			}
+			const count = container.querySelector(".toolCallCount")!;
+			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
+		} finally {
+			style.remove();
+		}
+	});
+	it("follows new output at the bottom and keeps the reading position after scrolling up", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const transcript = container.querySelector('[aria-label="Chat transcript"]') as HTMLDivElement;
+		Object.defineProperties(transcript, {
+			clientHeight: { configurable: true, value: 200 },
+			scrollHeight: { configurable: true, value: 900 },
+		});
+		transcript.scrollTop = 700;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({ kind: "sessionUpdate", update: {
+			sessionUpdate: "agent_message_chunk", content: { type: "text", text: "First answer" },
+		} });
+		await settle();
+		expect(transcript.scrollTop).toBe(900);
+		transcript.scrollTop = 300;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({ kind: "sessionUpdate", update: {
+			sessionUpdate: "agent_message_chunk", content: { type: "text", text: " and more" },
+		} });
+		await settle();
+		expect(transcript.scrollTop).toBe(300);
+	});
+
+	it("brings the typing indicator into view when a turn starts at the bottom", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const transcript = container.querySelector('[aria-label="Chat transcript"]') as HTMLDivElement;
+		Object.defineProperties(transcript, {
+			clientHeight: { configurable: true, value: 200 },
+			scrollHeight: { configurable: true, value: 900 },
+		});
+		transcript.scrollTop = 700;
+		transcript.dispatchEvent(new Event("scroll"));
+		feed({ kind: "turnStarted" }, SESSION, "turn-1");
+		await settle();
+		expect(container.querySelector(".thinkingPulse")).not.toBeNull();
+		expect(transcript.scrollTop).toBe(900);
+	});
 	// Catches: a permanently visible Copy label or a button removed from keyboard focus.
 	it("hides message Copy at rest while keeping it keyboard focusable", async () => {
 		const style = document.createElement("style");
@@ -687,6 +751,64 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("keeps a long paste compact in the composer but sends every original word", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const pasted = Array.from({ length: 201 }, (_, index) => `word${index}`).join(" ");
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { items: [], getData: () => pasted } });
+		textarea.dispatchEvent(event);
+		await settle();
+		expect(event.defaultPrevented).toBe(true);
+		expect(textarea.value).toBe("[Pasted text #1 +201 words]");
+		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, pasted);
+	});
+
+	it("preserves ordinary paste at the 200-word boundary", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: { items: [], getData: () => Array(200).fill("word").join(" ") },
+		});
+		textarea.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	it("keeps typed text around a large paste in the sent prompt", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Before after";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(7, 7);
+		const pasted = Array(201).fill("detail").join(" ");
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { items: [], getData: () => pasted } });
+		textarea.dispatchEvent(event);
+		await settle();
+		expect(textarea.value).toBe("Before [Pasted text #1 +201 words]after");
+		(container.querySelector("button.sendBtn") as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, `Before ${pasted}after`);
+	});
+
+	it("grows the composer with input until its maximum height", async () => {
+		const { container } = renderPanel();
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 108 });
+		textarea.value = "several lines\nmore lines";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(textarea.style.height).toBe("108px");
+		Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 600 });
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(textarea.style.height).toBe("150px");
+	});
 	it("hides the connection ack and presents intent as turn status", async () => {
 		const { container } = renderPanel();
 		await settle();
@@ -1353,6 +1475,22 @@ describe("AIChatPanel: tool activity", () => {
 			},
 		});
 	}
+
+	it("keeps raw command text out of the collapsed row", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: {
+			sessionUpdate: "tool_call", toolCallId: "bash", title: "bash -lc command -v tuic || true; ls tools/*",
+			kind: "execute", status: "completed",
+			content: [{ type: "content", content: { type: "text", text: "command output" } }],
+		} });
+		await settle();
+		const group = container.querySelector("details[class*=toolActivity]") as HTMLDetailsElement;
+		expect(group.querySelector(":scope > summary")?.textContent).toContain("1 tool call");
+		expect(group.querySelector(":scope > summary")?.textContent).not.toContain("command -v");
+		group.open = true;
+		expect(group.textContent).toContain("command -v");
+	});
 
 	it("collapses seven calls in one turn into one activity line with count and salient titles", async () => {
 		const { container } = renderPanel();

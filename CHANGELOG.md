@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat layout and composer** — Collapsed tool activity keeps commands in the expanded view, message Copy has reserved space, and streaming output follows the bottom until you scroll up. The composer grows with text and condenses pastes over 200 words into a marker until sending.
+
 - **New worktree tabs** — A session spawned before its worktree appears in the repository list moves under the registered repository after a refresh, without a misleading Register toast.
 
 - **SSH remote readiness** — Tunnels become Connected after SSH survives startup and every local forward accepts connections. Installed remote daemons get a bounded health retry during startup.
