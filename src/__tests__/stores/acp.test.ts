@@ -43,6 +43,7 @@ function attachment(overrides: Record<string, unknown> = {}) {
 		configOptions: [],
 		usage: null,
 		activeTurn: null,
+		queuedPrompts: [],
 		pendingPermissionIds: [],
 		pendingElicitationIds: [],
 		...overrides,
@@ -156,6 +157,27 @@ describe("acpStore: the journal cursor", () => {
 });
 
 describe("acpStore: state events", () => {
+	it("shows a turn started and cancelled by the other view as busy, cancelling, then idle", () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+		const started = { ...frame(2, { kind: "turnStarted" }, SESSION), turnId: "01932d5e-0000-7000-8000-0000000000a1" };
+		acpStore.applyFrame(CONNECTION, started);
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "prompting", activeTurn: { turnId: started.turnId, state: "running" } });
+
+		acpStore.applyFrame(CONNECTION, frame(3, { kind: "attachmentState", state: "cancelling" }, SESSION));
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "cancelling", activeTurn: { state: "cancelling" } });
+
+		acpStore.applyFrame(CONNECTION, { ...frame(4, { kind: "turnSettled", stopReason: "cancelled", usage: null }, SESSION), turnId: started.turnId });
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "idle", activeTurn: { state: "settled", stopReason: "cancelled" } });
+	});
+	it("shows a queued phone prompt from the server stream and removes it after another client cancels it", () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ queuedPrompts: [] })] }));
+		const queued = { turnId: "01932d5e-0000-7000-8000-0000000000b1", summary: "from phone" };
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "promptQueueChanged", queuedPrompts: [queued] }, SESSION));
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ queuedPrompts: [queued] });
+
+		acpStore.applyFrame(CONNECTION, frame(3, { kind: "promptQueueChanged", queuedPrompts: [] }, SESSION));
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ queuedPrompts: [] });
+	});
 	it("moves the connection to the state a connectionState frame reports", () => {
 		acpStore.applySnapshot(snapshot());
 		acpStore.applyFrame(CONNECTION, frame(2, { kind: "connectionState", state: "failed" }));

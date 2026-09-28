@@ -45,9 +45,9 @@ use super::events::AcpEventJournal;
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpAttachmentState, AcpCapabilitySnapshot,
     AcpClientError, AcpClientEvent, AcpConnectionId, AcpDetachKind, AcpHoldState, AcpHostRequestId,
-    AcpInteractionSettlement, AcpOperation, AcpPendingInteraction, AcpSessionAuthority, AcpTurnId,
-    AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot, EgoCompactRequest, EgoCompactResponse,
-    EgoHoldRequest, EgoHoldResponse, ego_ext,
+    AcpInteractionSettlement, AcpOperation, AcpPendingInteraction, AcpQueuedPrompt,
+    AcpSessionAuthority, AcpTurnId, AcpTurnSnapshot, AcpTurnState, AcpUsageSnapshot,
+    EgoCompactRequest, EgoCompactResponse, EgoHoldRequest, EgoHoldResponse, ego_ext,
 };
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, AcpClientError>>;
@@ -88,6 +88,11 @@ pub(super) enum Command {
     },
     Cancel {
         session_id: v1::SessionId,
+        reply: Reply<()>,
+    },
+    CancelQueued {
+        session_id: v1::SessionId,
+        turn_id: AcpTurnId,
         reply: Reply<()>,
     },
     /// Answer a request the agent is waiting on a person for.
@@ -308,6 +313,8 @@ pub(super) struct ConnectionActor {
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
+    /// Queued wire payloads stay here; snapshots and the journal carry summaries.
+    queued_contents: HashMap<AcpTurnId, Vec<v1::ContentBlock>>,
     /// Open seats in the order the agent asked, which is the order they are
     /// shown in and the order a cancel settles them in. A map keyed by id
     /// would have made that order depend on hashing.
@@ -345,6 +352,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
+            queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
             publish,
@@ -462,18 +470,27 @@ impl ConnectionActor {
             } => match self.start_prompt(&session_id, prompt, connection) {
                 Ok((turn_id, sent)) => {
                     let _ = reply.send(Ok(turn_id));
-                    in_flight.push(Box::pin(async move {
-                        Pending::Turn {
-                            session_id,
-                            turn_id,
-                            outcome: sent.await,
-                        }
-                    }));
+                    if let Some(sent) = sent {
+                        in_flight.push(Box::pin(async move {
+                            Pending::Turn {
+                                session_id,
+                                turn_id,
+                                outcome: sent.await,
+                            }
+                        }));
+                    }
                 }
                 Err(error) => drop(reply.send(Err(error))),
             },
             Command::Cancel { session_id, reply } => {
                 let _ = reply.send(self.cancel(&session_id, connection));
+            }
+            Command::CancelQueued {
+                session_id,
+                turn_id,
+                reply,
+            } => {
+                let _ = reply.send(self.cancel_queued(&session_id, turn_id));
             }
             Command::Respond {
                 request_id,
@@ -866,9 +883,14 @@ impl ConnectionActor {
     }
 
     /// Take in one answer we asked for, or one piece of news we did not.
-    pub(super) fn accept(&mut self, accepted: Accepted) {
+    pub(super) fn accept(
+        &mut self,
+        accepted: Accepted,
+        connection: &ConnectionTo<Agent>,
+        in_flight: &InFlight,
+    ) {
         match accepted {
-            Accepted::Settled(pending) => self.settle(*pending),
+            Accepted::Settled(pending) => self.settle(*pending, connection, in_flight),
             Accepted::Inbound(inbound) => match *inbound {
                 Inbound::Update(notification) => self.project(*notification),
                 Inbound::Interaction(interaction) => self.seat(*interaction),
@@ -876,7 +898,7 @@ impl ConnectionActor {
         }
     }
 
-    fn settle(&mut self, pending: Pending) {
+    fn settle(&mut self, pending: Pending, connection: &ConnectionTo<Agent>, in_flight: &InFlight) {
         match pending {
             Pending::Attach {
                 outcome,
@@ -894,7 +916,12 @@ impl ConnectionActor {
                 // A refused detach keeps the attachment on purpose: the agent
                 // still has the session, and forgetting it here would leave a
                 // live session nothing in this client can reach.
-                if outcome.is_ok() && self.attachments.remove(&session_id).is_some() {
+                if outcome.is_ok()
+                    && let Some(removed) = self.attachments.remove(&session_id)
+                {
+                    for queued in removed.queued_prompts {
+                        self.queued_contents.remove(&queued.turn_id);
+                    }
                     self.publish();
                     self.journal.append(
                         Some(session_id),
@@ -911,7 +938,11 @@ impl ConnectionActor {
                 session_id,
                 turn_id,
                 outcome,
-            } => self.settle_turn(&session_id, turn_id, outcome),
+            } => {
+                if self.settle_turn(&session_id, turn_id, outcome) {
+                    self.drain_next(&session_id, connection, in_flight);
+                }
+            }
             Pending::Config {
                 session_id,
                 outcome,
@@ -934,7 +965,10 @@ impl ConnectionActor {
                 session_id,
                 outcome,
                 reply,
-            } => self.settle_hold(&session_id, outcome, reply),
+            } => {
+                self.settle_hold(&session_id, outcome, reply);
+                self.drain_next(&session_id, connection, in_flight);
+            }
             // Nothing on this attachment changes. The successor is a different
             // session that this connection is not attached to, and attaching to
             // it is a separate decision a caller makes.
@@ -1093,12 +1127,7 @@ impl ConnectionActor {
         })
     }
 
-    /// Begin a turn, refusing content this agent never said it accepts.
-    ///
-    /// A second prompt on a session that is already prompting is refused rather
-    /// than queued: the protocol has one active turn per session, and a queued
-    /// prompt would leave its caller waiting on a turn it cannot see and cannot
-    /// cancel.
+    /// Accept a turn, queueing it when the session already has one in flight.
     ///
     /// The turn that settled is still held, because a host that has just been
     /// told a turn ended still has to be able to read how it ended. Holding it
@@ -1109,18 +1138,8 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
         connection: &ConnectionTo<Agent>,
-    ) -> Result<(AcpTurnId, Sent<v1::PromptResponse>), AcpClientError> {
+    ) -> Result<(AcpTurnId, Option<Sent<v1::PromptResponse>>), AcpClientError> {
         let attachment = self.attachment(session_id)?;
-        if attachment
-            .active_turn
-            .as_ref()
-            .is_some_and(|turn| turn.state != AcpTurnState::Settled)
-        {
-            return Err(AcpClientError::turn_in_progress(
-                self.connection_id,
-                session_id.clone(),
-            ));
-        }
         for block in &prompt {
             if let Some(operation) = content_operation(block) {
                 self.require(operation)?;
@@ -1128,6 +1147,48 @@ impl ConnectionActor {
         }
 
         let turn_id = AcpTurnId::new();
+        if attachment.state != AcpAttachmentState::Idle
+            || !attachment.queued_prompts.is_empty()
+            || attachment
+                .active_turn
+                .as_ref()
+                .is_some_and(|turn| turn.state != AcpTurnState::Settled)
+        {
+            let attachment = self
+                .attachments
+                .get_mut(session_id)
+                .expect("checked just above");
+            if attachment.queued_prompts.len() >= 32 {
+                return Err(AcpClientError::invalid_input("ACP prompt queue is full"));
+            }
+            attachment.queued_prompts.push(AcpQueuedPrompt {
+                turn_id,
+                summary: prompt_display(&prompt, 200),
+            });
+            self.queued_contents.insert(turn_id, prompt);
+            let queued_prompts = attachment.queued_prompts.clone();
+            self.publish();
+            self.journal.append(
+                Some(session_id.clone()),
+                Some(turn_id),
+                AcpClientEvent::PromptQueueChanged { queued_prompts },
+            );
+            return Ok((turn_id, None));
+        }
+        Ok((
+            turn_id,
+            Some(self.send_prompt(session_id, turn_id, prompt, connection)),
+        ))
+    }
+
+    fn send_prompt(
+        &mut self,
+        session_id: &v1::SessionId,
+        turn_id: AcpTurnId,
+        prompt: Vec<v1::ContentBlock>,
+        connection: &ConnectionTo<Agent>,
+    ) -> Sent<v1::PromptResponse> {
+        let text = prompt_display(&prompt, usize::MAX);
         let request = v1::PromptRequest::new(session_id.clone(), prompt);
         let sent = self.send(request, connection, None);
 
@@ -1146,9 +1207,56 @@ impl ConnectionActor {
         self.journal.append(
             Some(session_id.clone()),
             Some(turn_id),
+            AcpClientEvent::PromptSent { text },
+        );
+        self.journal.append(
+            Some(session_id.clone()),
+            Some(turn_id),
             AcpClientEvent::TurnStarted,
         );
-        Ok((turn_id, sent))
+        sent
+    }
+
+    /// Send the next accepted prompt only when ego can take a turn again.
+    fn drain_next(
+        &mut self,
+        session_id: &v1::SessionId,
+        connection: &ConnectionTo<Agent>,
+        in_flight: &InFlight,
+    ) {
+        loop {
+            let Some(attachment) = self.attachments.get_mut(session_id) else {
+                return;
+            };
+            if attachment.state != AcpAttachmentState::Idle {
+                return;
+            }
+            let Some(queued) = attachment.queued_prompts.first().cloned() else {
+                return;
+            };
+            attachment.queued_prompts.remove(0);
+            let queued_prompts = attachment.queued_prompts.clone();
+            self.publish();
+            self.journal.append(
+                Some(session_id.clone()),
+                Some(queued.turn_id),
+                AcpClientEvent::PromptQueueChanged { queued_prompts },
+            );
+            let Some(prompt) = self.queued_contents.remove(&queued.turn_id) else {
+                tracing::warn!(turn_id = ?queued.turn_id, "ACP queued prompt payload missing");
+                continue;
+            };
+            let sent = self.send_prompt(session_id, queued.turn_id, prompt, connection);
+            let session_id = session_id.clone();
+            in_flight.push(Box::pin(async move {
+                Pending::Turn {
+                    session_id,
+                    turn_id: queued.turn_id,
+                    outcome: sent.await,
+                }
+            }));
+            return;
+        }
     }
 
     /// Ask for the running turn to stop, exactly once.
@@ -1173,6 +1281,7 @@ impl ConnectionActor {
         if turn.state != AcpTurnState::Running {
             return Ok(());
         }
+        let turn_id = turn.turn_id;
 
         // Before the agent is told to stop, and not after: every seat this
         // session is waiting on is answered with the outcome that grants
@@ -1198,6 +1307,39 @@ impl ConnectionActor {
             turn.state = AcpTurnState::Cancelling;
         }
         self.publish();
+        self.journal.append(
+            Some(session_id.clone()),
+            Some(turn_id),
+            AcpClientEvent::AttachmentState {
+                state: AcpAttachmentState::Cancelling,
+            },
+        );
+        Ok(())
+    }
+
+    fn cancel_queued(
+        &mut self,
+        session_id: &v1::SessionId,
+        turn_id: AcpTurnId,
+    ) -> Result<(), AcpClientError> {
+        let attachment = self
+            .attachments
+            .get_mut(session_id)
+            .ok_or_else(|| AcpClientError::not_attached(self.connection_id, session_id.clone()))?;
+        let index = attachment
+            .queued_prompts
+            .iter()
+            .position(|queued| queued.turn_id == turn_id)
+            .ok_or_else(|| AcpClientError::invalid_input("queued prompt not found"))?;
+        attachment.queued_prompts.remove(index);
+        self.queued_contents.remove(&turn_id);
+        let queued_prompts = attachment.queued_prompts.clone();
+        self.publish();
+        self.journal.append(
+            Some(session_id.clone()),
+            Some(turn_id),
+            AcpClientEvent::PromptQueueChanged { queued_prompts },
+        );
         Ok(())
     }
 
@@ -1253,15 +1395,15 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         turn_id: AcpTurnId,
         outcome: Result<v1::PromptResponse, AcpClientError>,
-    ) {
+    ) -> bool {
         let Some(attachment) = self.attachments.get_mut(session_id) else {
-            return;
+            return false;
         };
         // A response for a turn that is no longer the active one belongs to a
         // turn that was already settled; applying it would rewrite the outcome
         // of whatever is running now.
         if attachment.active_turn.as_ref().map(|turn| turn.turn_id) != Some(turn_id) {
-            return;
+            return false;
         }
 
         attachment.state = AcpAttachmentState::Idle;
@@ -1313,6 +1455,7 @@ impl ConnectionActor {
         self.publish();
         self.journal
             .append(Some(session_id.clone()), Some(turn_id), event);
+        true
     }
 
     /// Remember what this connection is now attached to.
@@ -1329,6 +1472,7 @@ impl ConnectionActor {
             config_options: attached.config_options.unwrap_or_default(),
             usage: None,
             active_turn: None,
+            queued_prompts: Vec::new(),
             pending_permission_ids: Vec::new(),
             pending_elicitation_ids: Vec::new(),
         };
@@ -1449,6 +1593,25 @@ impl ConnectionActor {
 pub(super) enum Accepted {
     Settled(Box<Pending>),
     Inbound(Box<Inbound>),
+}
+
+fn prompt_display(prompt: &[v1::ContentBlock], limit: usize) -> String {
+    let text = prompt
+        .iter()
+        .map(|block| match block {
+            v1::ContentBlock::Text(text) => text.text.as_str(),
+            v1::ContentBlock::Image(_) => "Image",
+            _ => "Attachment",
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut chars = text.chars();
+    let shown: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{shown}…")
+    } else {
+        shown
+    }
 }
 
 /// The capability a content block needs before it may be sent.
