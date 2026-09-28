@@ -1,6 +1,6 @@
 import styles from "./BottomTabs.module.css";
 
-export type TabId = "sessions" | "files" | "progress" | "activity" | "settings";
+export type TabId = "chat" | "sessions" | "files" | "progress" | "activity" | "settings";
 
 interface BottomTabsProps {
 	active: TabId;
@@ -8,6 +8,11 @@ interface BottomTabsProps {
 }
 
 const tabs: Array<{ id: TabId; label: string; icon: string }> = [
+	{
+		id: "chat",
+		label: "Chat",
+		icon: `<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M3 2h14a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H7.4l-4.8 3.6A1 1 0 0 1 1 17.8V3a1 1 0 0 1 1-1zm1 2v11.8L6.7 13H16V4H4z"/></svg>`,
+	},
 	{
 		id: "sessions",
 		label: "Sessions",

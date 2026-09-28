@@ -1907,10 +1907,22 @@ fn is_tcc_protected_path(path: &std::path::Path) -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    if !path.starts_with(&home) {
+    // Resolve parent components without touching disk: even checking existence
+    // on a path that reaches ~/Library through `..` can trigger TCC.
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    if !normalized.starts_with(&home) {
         return false;
     }
-    if let Ok(rel) = path.strip_prefix(&home)
+    if let Ok(rel) = normalized.strip_prefix(&home)
         && let Some(first) = rel.components().next()
     {
         let name = first.as_os_str().to_string_lossy();
@@ -2044,11 +2056,13 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
     if line.is_some() {
         anchor.clear();
     } else if anchor.is_empty() {
-        if let Some((file, number)) = path.rsplit_once(':')
+        let without_suffix = strip_line_col_suffix(&path);
+        if without_suffix != path
+            && let Some(number) = path[without_suffix.len() + 1..].split(':').next()
             && let Ok(parsed) = number.parse::<usize>()
             && parsed > 0
         {
-            path = file.to_string();
+            path = without_suffix.to_string();
             line = Some(parsed);
         }
     }
@@ -3386,6 +3400,39 @@ mod tests {
     }
 
     // --- resolve_terminal_path tests ---
+
+    #[test]
+    fn tcc_guard_rejects_parent_traversal_into_protected_home_directories() {
+        let home = dirs::home_dir().unwrap();
+        for candidate in [
+            home.join("Projects/repo/../../Library/Mail"),
+            home.join("Projects/../Documents/report.md"),
+            home.join("Downloads/inside.txt"),
+        ] {
+            assert!(is_tcc_protected_path(&candidate), "{candidate:?}");
+        }
+        assert!(!is_tcc_protected_path(&home.join("Downloads/../Projects/readme.md")));
+    }
+
+    #[test]
+    fn markdown_links_open_files_with_line_and_column_suffixes() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("review.md"), "").unwrap();
+        fs::write(dir.path().join("file.rs"), "").unwrap();
+        fs::write(dir.path().join("Makefile"), "").unwrap();
+        let root = dir.path().to_string_lossy();
+        for (href, file, line) in [
+            ("file.rs:42:7", "file.rs", 42),
+            ("Makefile:42:7", "Makefile", 42),
+            ("file.rs:42", "file.rs", 42),
+        ] {
+            assert!(matches!(
+                resolve_markdown_link_impl(&root, "review.md", href),
+                MarkdownLinkTarget::File { open_path, line: Some(actual), .. }
+                    if open_path == file && actual == line
+            ), "{href}");
+        }
+    }
 
     #[test]
     fn markdown_link_resolution_decodes_paths_and_keeps_encoded_hashes() {

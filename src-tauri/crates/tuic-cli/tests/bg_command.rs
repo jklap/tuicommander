@@ -18,6 +18,14 @@ fn test_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
+fn socket_path(name: &str) -> std::path::PathBuf {
+    tuic_test_support::short_socket_test_temp_root().join(format!(
+        "bg-{name}-{}-{}",
+        std::process::id(),
+        NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 fn read_request(stream: &mut std::os::unix::net::UnixStream) -> (String, serde_json::Value) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut line = String::new();
@@ -69,7 +77,7 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
     std::fs::write(&log, "previous\n").unwrap();
     let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
     std::fs::write(&wake_file, r#"{"status":"failed","error":"stale"}"#).unwrap();
-    let socket = test_path("wake.sock");
+    let socket = socket_path("wake.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -155,7 +163,7 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
 #[test]
 fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
     let log = test_path("unbound.log");
-    let socket = test_path("unbound.sock");
+    let socket = socket_path("unbound.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -219,7 +227,7 @@ fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
 #[test]
 fn bg_does_not_call_inbox_only_mail_a_wake() {
     let log = test_path("inbox-only.log");
-    let socket = test_path("inbox-only.sock");
+    let socket = socket_path("inbox-only.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -279,7 +287,7 @@ fn bg_does_not_call_inbox_only_mail_a_wake() {
 #[test]
 fn bg_keeps_command_exit_separate_from_rejected_wake() {
     let log = test_path("rejected.log");
-    let socket = test_path("rejected.sock");
+    let socket = socket_path("rejected.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -328,7 +336,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
 #[test]
 fn bg_records_wake_failure_when_tuic_is_unavailable() {
     let log = test_path("tuic-down.log");
-    let missing_socket = test_path("tuic-down.sock");
+    let missing_socket = socket_path("tuic-down.sock");
     let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 9"])
         .env("TUIC_SESSION", "caller-1")
@@ -380,7 +388,7 @@ fn bg_refuses_to_start_without_a_managed_session() {
 fn bg_creates_missing_log_directories_and_wakes_caller() {
     let root = test_path("new-parent");
     let log = root.join("nested/job.log");
-    let socket = test_path("new-parent.sock");
+    let socket = socket_path("new-parent.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -462,7 +470,7 @@ fn bg_command_survives_killing_its_launchers_process_group() {
     ]);
     shell
         .env("TUIC_SESSION", "caller-1")
-        .env("TUIC_SOCKET", test_path("absent.sock"))
+        .env("TUIC_SOCKET", socket_path("absent.sock"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);

@@ -24,6 +24,13 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
+On the mobile PWA, **Chat** is the first tab. Choose a configured repository in
+the header to open ego there. The conversation picker shows the titles of saved
+sessions; choose one to load its history, or tap **New**. Messages, collapsed tool
+activity and pending permission or form cards use the same ACP stream as desktop.
+If the connection drops, the client resumes from its last received event. A
+missing part of the journal is shown as a gap with a **Recover** action.
+
 ## What it is bound to
 
 **A repository and a session, never a terminal.** A turn ego runs outlives any

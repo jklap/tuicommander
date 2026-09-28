@@ -500,6 +500,8 @@ The reader thread tracks output silence to detect unanswered agent prompts. When
 
 **Question extraction:** `extract_question_line()` scans changed rows for a candidate, excluding `suggest: [ … ]` protocol rows and their wrapped continuations even when an item ends in `?`. A visible input-box anchor makes chat order authoritative: only the latest chat content above the current prompt may become a question. The changed-row fallback is used only when no prompt anchor is available. This prevents scroll/repaint from resurrecting a question retained above a later answer or completion. Question events carry the input `turn_epoch`, and the state accumulator rejects an event produced by an older turn.
 
+**Codex approval cancellation:** An `Action Required` title raises a confident question. If Codex then paints `You canceled the request` after that approval, shows its ready or interrupted composer, and drops the title, the PTY reader clears the matching question. The clear carries the originating question text and turn epoch; an older cancellation in scrollback or a newer, different question cannot clear the current wait.
+
 **Echo suppression:** When the user submits a line — including bare Enter — the shared desktop/HTTP bookkeeping advances the turn, clears the current wait, and activates a 500ms suppression window (`suppress_user_input`). During this window, matching PTY echo is ignored for question detection.
 
 **Single threshold:** All silence-based questions use a uniform 10-second timeout regardless of whether new output has arrived since the question was detected.

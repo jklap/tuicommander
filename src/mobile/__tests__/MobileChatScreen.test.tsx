@@ -1,0 +1,99 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { invoke, hydrate, createAcpChat, answerPermission, selectSession } = vi.hoisted(() => ({
+	invoke: vi.fn(),
+	hydrate: vi.fn(async () => {}),
+	createAcpChat: vi.fn(),
+	answerPermission: vi.fn(async () => {}),
+	selectSession: vi.fn(async () => {}),
+}));
+vi.mock("../../invoke", () => ({ invoke }));
+vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
+vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
+
+import { MobileChatScreen } from "../screens/MobileChatScreen";
+
+function chat() {
+	return {
+		phase: () => "live",
+		root: () => "/repo",
+		connectionId: () => "connection-1",
+		sessionId: () => "current",
+		entries: () => [
+			{ id: "u", kind: "user", text: "Check the build" },
+			{ id: "a", kind: "agent", text: "The build passed." },
+			{ id: "t", kind: "tool", call: { toolCallId: "tool-1", title: "Run tests", status: "completed" } },
+		],
+		busy: () => false,
+		held: () => false,
+		gap: () => null,
+		error: () => null,
+		isStreaming: () => true,
+		interactions: () => [
+			{
+				kind: "permission",
+				requestId: "permission-1",
+				sessionId: "current",
+				request: {
+					toolCall: { title: "Write report" },
+					options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }],
+				},
+			},
+		],
+		sessions: () => [
+			{ sessionId: "current", cwd: "/repo", title: "Current work" },
+			{ sessionId: "previous", cwd: "/repo", title: "Earlier review" },
+		],
+		capabilities: () => ({ list: true, load: true }),
+		configOptions: () => [],
+		answerPermission,
+		selectSession,
+		answerElicitation: vi.fn(),
+		cancelPermission: vi.fn(),
+		startSession: vi.fn(),
+		send: vi.fn(),
+		cancel: vi.fn(),
+		recover: vi.fn(),
+	};
+}
+
+beforeEach(() => {
+	invoke.mockReset().mockImplementation(async (command: string) => {
+		if (command === "load_repositories") return { repos: { "/repo": {} } };
+		throw new Error(`unexpected ${command}`);
+	});
+	createAcpChat.mockReturnValue(chat());
+	answerPermission.mockClear();
+	selectSession.mockClear();
+});
+afterEach(cleanup);
+
+describe("mobile ego chat", () => {
+	it("shows the conversation, card and collapsed activity after selecting its repository", async () => {
+		const { container } = render(() => <MobileChatScreen />);
+		await waitFor(() => expect(screen.getByText("The build passed.")).toBeTruthy());
+		expect(screen.getByText("Check the build")).toBeTruthy();
+		const activity = screen.getByText(/1 tool call/).closest("details");
+		expect(activity?.open).toBe(false);
+		expect(activity?.textContent).toContain("Run tests");
+		expect(container.querySelector("textarea")).toBeTruthy();
+	});
+
+	it("sends one answer when the permission button is tapped twice", async () => {
+		render(() => <MobileChatScreen />);
+		const button = await screen.findByRole("button", { name: "Allow once" });
+		fireEvent.click(button);
+		fireEvent.click(button);
+		expect(answerPermission).toHaveBeenCalledTimes(1);
+		expect(answerPermission).toHaveBeenCalledWith("permission-1", "allow");
+	});
+
+	it("lists titled conversations and resumes the selected one", async () => {
+		render(() => <MobileChatScreen />);
+		const picker = await screen.findByRole("combobox", { name: "Conversation" });
+		expect(screen.getByRole("option", { name: "Earlier review" })).toBeTruthy();
+		fireEvent.change(picker, { target: { value: "previous" } });
+		expect(selectSession).toHaveBeenCalledWith("previous");
+	});
+});
