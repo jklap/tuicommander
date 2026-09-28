@@ -255,6 +255,10 @@ When an AI agent emits a plan file path (e.g., `PLAN.md`), a button appears in t
 
 ## Working with AI Agents
 
+When TUICommander sends text followed by Enter to an agent, it leaves a short
+pause so terminal-based agent interfaces can process the text first. An agent
+whose type is still unknown uses the longer Codex-safe pause.
+
 TUICommander detects rate limits, prompts, and status messages from AI agents:
 
 - **Rate limit detection** — Recognizes rate limit messages from Claude, Aider, Gemini, OpenCode, Codex

@@ -455,7 +455,7 @@ A debounce (`last_session_conflict_mark`) prevents creating multiple flag files 
 Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U precedes text by 50 ms. Enter follows text by 200 ms for Codex and 50 ms for other agents. Claude Code strips a Ctrl-U inside a long pasted text; Codex suppresses Enter for 120 ms after a paste burst.
+- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U precedes text by 50 ms. Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Claude Code strips a Ctrl-U inside a long pasted text; Codex suppresses Enter for 120 ms after a paste burst.
 - `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
 
 Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
@@ -617,9 +617,13 @@ requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
 spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
-gap (200 ms for Codex, 50 ms for other agents), and CR, so
+gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
+
+Foreground detection warns once per session when a non-shell process has no
+recognized agent type or run-config fallback. Such a session retains the safe
+200 ms Enter gap during managed injection.
 
 After a complete write, the existing input bookkeeping records the original
 text and CR, clears slash mode, and advances `turn_epoch` once. The MCP handler
