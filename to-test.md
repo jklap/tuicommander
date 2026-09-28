@@ -59,6 +59,8 @@
 
 ## Child lifecycle inbox coalescing — Rust restart required
 
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, let a throwaway managed child ask a confident question, answer it, then have it ask another. Confirm the parent inbox contains both question notices while ordinary state updates still coalesce. The current live backend cannot load this Rust change until restart.
+
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart.
 
 ## Agent inbox FIFO and paging — Rust restart required
