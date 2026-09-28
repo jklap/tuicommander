@@ -108,6 +108,43 @@ describe("RemoteMachinesPanel", () => {
 		expect(actions.updateAndRestart).not.toHaveBeenCalled();
 	});
 
+	it("offers the manual update with the live session count", async () => {
+		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true, liveSessions: 3 };
+		const { getByText } = render(() => <RemoteMachinesPanel />);
+		expect(getByText("3 live sessions. Update available.")).toBeTruthy();
+		expect(getByText("Update & restart remote")).toBeTruthy();
+	});
+
+	it("announces the automatic update result", () => {
+		connections["machine-1"] = {
+			...sshConnection(),
+			status: "connected",
+			updateNotice: "Remote updated successfully.",
+		};
+		const { getByRole } = render(() => <RemoteMachinesPanel />);
+		expect(getByRole("status").textContent).toBe("Remote updated successfully.");
+	});
+
+	it("shows the reason when a manual update cannot be prepared", async () => {
+		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true };
+		actions.prepareUpdate.mockRejectedValueOnce(new Error("requires --no-default-features"));
+		const { getByText, getByRole } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(getByText("Update & restart remote"));
+		await waitFor(() => expect(getByRole("alert").textContent).toBe("Error: requires --no-default-features"));
+	});
+
+	it("offers auto update per connection, off for a new machine", async () => {
+		const { getByLabelText, getByTitle, getByPlaceholderText, getByText } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(getByTitle("Add remote machine"));
+		const toggle = getByLabelText("Auto-update remote daemons") as HTMLInputElement;
+		expect(toggle.checked).toBe(false);
+		fireEvent.input(getByPlaceholderText("Name (e.g. dev-server, staging)"), { target: { value: "Builder" } });
+		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), { target: { value: "builder.local" } });
+		fireEvent.click(toggle);
+		fireEvent.click(getByText("Save"));
+		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledWith(expect.objectContaining({ auto_update: true })));
+	});
+
 	it("persists deployment mode and survive minutes when saving an SSH machine", async () => {
 		const { getByTitle, getByPlaceholderText, getByText, container } = render(() => <RemoteMachinesPanel />);
 		fireEvent.click(getByTitle("Add remote machine"));

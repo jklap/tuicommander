@@ -150,6 +150,7 @@ One runtime cache and one transient SSH socket support SSH-managed remote daemon
 Remote pairing tokens use the credential vault key
 `remote/connection/<uuid>/pairing-token`; they never live in either directory or
 in `connections.json`.
+Each connection stores `auto_update` there. Missing values default to `false`.
 
 ## Core Functions
 

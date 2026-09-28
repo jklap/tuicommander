@@ -169,6 +169,13 @@ async fn probe_local_binary(path: &Path) -> Result<BuildIdentity, String> {
             )
         })?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("requires --no-default-features") {
+            return Err(format!(
+                "local tuic-remote at {} requires --no-default-features; run cargo build --bin tuic-remote --no-default-features from src-tauri",
+                path.display()
+            ));
+        }
         return Err(format!(
             "local tuic-remote did not report build identity at {}",
             path.display()
@@ -473,6 +480,26 @@ mod tests {
         .expect_err("cross-target binary must be refused");
         assert!(error.contains("remote target x86_64-unknown-linux-gnu"));
         assert!(error.contains("local tuic-remote target is aarch64-apple-darwin"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn desktop_feature_stub_names_the_headless_build_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = tempfile::tempdir().unwrap();
+        let stub = config.path().join("tuic-remote");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\necho 'tuic-remote requires --no-default-features' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = probe_local_binary(&stub).await.unwrap_err();
+        assert!(error.contains("requires --no-default-features"), "{error}");
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

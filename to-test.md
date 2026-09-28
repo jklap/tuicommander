@@ -213,6 +213,7 @@
 
 ## Remote update and restart — Rust, needs `make dev` restart
 
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once, live sessions show a manual offer with their count, and a failed update shows its error. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart.
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections.
 
 ## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart

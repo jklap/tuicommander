@@ -74,6 +74,7 @@ export function emptyRemoteForm() {
 		authPassword: "",
 		deploy: "never" as DeployMode,
 		surviveMinutes: 30,
+		autoUpdate: false,
 	};
 }
 
@@ -88,6 +89,7 @@ export const RemoteMachinesPanel: Component = () => {
 	const [sshHosts, setSshHosts] = createSignal<SshHostStatus[]>([]);
 	const [probingHosts, setProbingHosts] = createSignal(false);
 	const [serviceBusyId, setServiceBusyId] = createSignal<string | null>(null);
+	const [updateErrors, setUpdateErrors] = createSignal<Record<string, string>>({});
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
@@ -132,6 +134,7 @@ export const RemoteMachinesPanel: Component = () => {
 			transport,
 			auth_username: f.authUsername.trim(),
 			enabled: true,
+			auto_update: f.autoUpdate,
 			deploy: f.transportType === "Ssh" ? f.deploy : "never",
 			survive_secs: Math.max(60, Math.round(f.surviveMinutes * 60)),
 		};
@@ -170,6 +173,7 @@ export const RemoteMachinesPanel: Component = () => {
 			authPassword: "",
 			deploy: conn.deploy,
 			surviveMinutes: Math.max(1, Math.round(conn.survive_secs / 60)),
+			autoUpdate: conn.auto_update ?? false,
 		});
 	}
 
@@ -194,6 +198,7 @@ export const RemoteMachinesPanel: Component = () => {
 			auth_username: f.authUsername.trim(),
 			deploy: f.transportType === "Ssh" ? f.deploy : "never",
 			survive_secs: Math.max(60, Math.round(f.surviveMinutes * 60)),
+			auto_update: f.autoUpdate,
 		};
 
 		setSaving(true);
@@ -243,6 +248,7 @@ export const RemoteMachinesPanel: Component = () => {
 		const id = connState.connection.id;
 		setServiceBusyId(id);
 		setError("");
+		setUpdateErrors((current) => ({ ...current, [id]: "" }));
 		try {
 			const { session_count, desktop_build, remote_build, source } = await remoteConnectionsStore.prepareUpdate(id);
 			const details =
@@ -252,7 +258,7 @@ export const RemoteMachinesPanel: Component = () => {
 			if (!window.confirm(details)) return;
 			await remoteConnectionsStore.updateAndRestart(id, session_count, desktop_build.sha256);
 		} catch (reason) {
-			setError(String(reason));
+			setUpdateErrors((current) => ({ ...current, [id]: String(reason) }));
 		} finally {
 			setServiceBusyId(null);
 		}
@@ -407,6 +413,15 @@ export const RemoteMachinesPanel: Component = () => {
 						/>
 					</label>
 				</Show>
+				<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+					Auto-update remote daemons
+					<input
+						type="checkbox"
+						style={{ order: -1 }}
+						checked={props.formData.autoUpdate}
+						onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
+					/>
+				</label>
 				<input
 					type="text"
 					class={s.input}
@@ -552,6 +567,9 @@ export const RemoteMachinesPanel: Component = () => {
 										<Show when={connState.outOfDate}>
 											<span style={{ "font-size": "11px", color: "var(--attention)" }}>Remote out of date</span>
 										</Show>
+										<Show when={connState.outOfDate && connState.liveSessions !== undefined && connState.liveSessions > 0}>
+											<span style={{ "font-size": "11px", color: "var(--attention)" }}>{connState.liveSessions} live sessions. Update available.</span>
+										</Show>
 									</div>
 									<div
 										class={s.hint}
@@ -569,6 +587,16 @@ export const RemoteMachinesPanel: Component = () => {
 									<Show when={connState.error}>
 										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--error)" }}>
 											{connState.error}
+										</div>
+									</Show>
+									<Show when={connState.updateNotice}>
+										<div class={s.hint} style={{ margin: 0, "font-size": "11px" }} role="status">
+											{connState.updateNotice}
+										</div>
+									</Show>
+									<Show when={updateErrors()[conn().id]}>
+										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--error)" }} role="alert">
+											{updateErrors()[conn().id]}
 										</div>
 									</Show>
 								</div>
