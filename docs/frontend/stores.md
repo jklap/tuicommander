@@ -472,6 +472,9 @@ transcription; blur releases a held hotkey if its key-up event was lost.
   `setSpeechLevelling` each save one field.
 - `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
   deliberately **one** command, because the dictation hotkey asks on every press.
+  `handsFree.pendingText` is the unsent hands-free turn; push-to-talk's
+  `partialText` is a separate recording. With an activation phrase,
+  `handsFree.holdBackMs` is at least 5000 even if the saved setting is shorter.
 - `turnEarcon(previous, next, owner)` — `applyHandsFree` plays an earcon
   (`utils/earcon.ts`, Web Audio, 80 ms) when `deliveredTurns` or `droppedTurns`
   moved since the last stored status. Only the client that owns the audio plays
