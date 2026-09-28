@@ -719,7 +719,13 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     }
 
     let dirt = worktree_dirtiness(&base_repo, &workspace_id);
-    if cleanup_needs_confirmation(&action, force, &dirt) {
+    let archive_needs_review = action == "archive" && !force && {
+        let preview = inspect_worktree_removal(state, &base_repo, &workspace_id);
+        preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged
+            || preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
+            || !preview.live_sessions.is_empty()
+    };
+    if cleanup_needs_confirmation(&action, force, &dirt) || archive_needs_review {
         return Ok(MergeArchiveResult {
             merged: true, // The merge itself already happened; only cleanup stopped.
             action: "needs_confirmation".to_string(),
@@ -1447,6 +1453,10 @@ mod tests {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         worktree_with(repo.path(), "feat-finalize-clean", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-finalize-clean", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
 
         let res = finalize_merged_worktree_impl(
@@ -1462,10 +1472,64 @@ mod tests {
     }
 
     #[test]
+    fn automatic_archive_keeps_a_clean_untouched_worktree() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "untouched-archive", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "untouched-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-archive", true);
+        git_cmd(repo.path())
+            .args(["merge", "active-archive", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "active-agent",
+            &worktree.to_string_lossy(),
+        );
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "active-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
     fn automatic_archive_leaves_a_locked_worktree_untouched() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let worktree = worktree_with(repo.path(), "feat-archive-locked", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-archive-locked", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
         git_cmd(repo.path())
             .args(["worktree", "lock", &worktree.to_string_lossy()])
             .run()
