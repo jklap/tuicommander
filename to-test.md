@@ -192,7 +192,7 @@
 
 ## Native scrollback capture fixtures (2026-09-25) — after mcp-config-guard lands
 
-- [ ] Only after story 949-0421 (mcp-config-guard) is on main: with `TUIC_CAPTURE_DIR=$HOME/Gits/.tmp/no-alt-screen/captures`, record a `codex --no-alt-screen` session (approval prompt, a resize, the idle footer) and an `opencode --mini` session, add both `.tcap` files to `src-tauri/src/fixtures/agent_prompts/`, and assert terminal mode, the chrome-cutoff anchor, and no BUSY edge on resize-only chunks (story 939-475b).
+- [x] In an isolated `tuic-remote` instance with `TUIC_CAPTURE_DIR` under `~/Gits/.tmp/`, captured Codex 0.157.1 with `--no-alt-screen` (approval prompt, resize, idle footer) and OpenCode 1.18.30 with `--mini` (idle resize). Both `.tcap` fixtures are in `src-tauri/src/fixtures/agent_prompts/`. Targeted Rust replay tests verify primary-screen mode, the Codex chrome-cutoff anchor, and no BUSY edge from the OpenCode resize repaint (story 939-475b). _(verified: `pty::tests::live_native_scrollback_captures_never_enter_alternate_screen`, `codex_native_scrollback_capture_keeps_approval_and_idle_composer_visible`, `opencode_mini_resize_repaint_does_not_reopen_an_idle_turn`; 3/3 passed)_
 
 ## Codex dictation auto-send (2026-09-25) — Rust, needs `make dev` restart
 
