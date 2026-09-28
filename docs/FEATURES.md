@@ -859,7 +859,8 @@ one configured ego binary and speaks ACP to it, per
   activity line per turn with calls and outputs expandable, and the agent's plan
   replaced whole each time it changes
 - The connection acknowledgement is hidden; `intent:` is shown as turn status;
-  bracketed `suggest:` items become buttons that send the selected reply
+  bracketed `suggest:` items on their own line or at the end of an answer become
+  buttons that send the selected reply. Message Copy appears on hover or keyboard focus
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
 - Untitled sessions show a readable prompt or activity-time label in the picker;
