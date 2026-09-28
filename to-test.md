@@ -4032,6 +4032,16 @@ or credential is touched.
       port 9877. _(verified 2026-09-22 from the worktree build; proof in
       `.tmp/visual-proof/remote-machines-fields.png`)_
 
+## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated test instance, connect the Installed-service
+      `aws-graviton` remote (56481148) over SSH. It should progress from
+      Connecting to Connected once the local forward listens and `/health`
+      answers, without an intermediate "installed daemon not answering" error.
+      Record the elapsed time and the tunnel status transitions. Use only the
+      configured host and credentials; the targeted Rust tests cover delayed
+      local ports and delayed health independently.
+
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting the desktop dev build, `GET http://127.0.0.1:9876/config/defaults`
