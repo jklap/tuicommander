@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Worktree removal review** — Confirmations identify untouched branches, live sessions, and local file counts. MCP and HTTP removal report the same hazards; automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees and report why.
+- **Worktree removal review** — Confirmations identify untouched branches, live sessions, and local file counts. One-click Merge & Archive asks before moving a live agent's checkout. MCP and HTTP removal report the same hazards; automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees and report why.
 
 - **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected. Stalled transfers time out, and the manual update action is disabled during an automatic update.
 

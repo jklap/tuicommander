@@ -234,10 +234,8 @@ export function useConfirmDialog() {
 		});
 	}
 
-	/** Confirm a cleanup that would take the worktree's uncommitted work with it.
-	 *  The backend refuses archive/delete on a worktree it cannot confirm is clean;
-	 *  this is the ask that unblocks it. `commitsAhead` is 0 when the merge itself
-	 *  would also be a no-op — worth saying, because then nothing is gained either. */
+	/** Confirm cleanup hazards before retrying with an explicit fingerprint.
+	 *  `commitsAhead` is 0 when the merge itself would also be a no-op. */
 	async function confirmDirtyWorktreeCleanup(
 		branchName: string,
 		action: string,
@@ -245,10 +243,15 @@ export function useConfirmDialog() {
 		lifecycle?: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 	): Promise<boolean> {
 		const verb = action === "delete" ? "Deleting" : "Archiving";
-		const fate =
-			action === "delete"
-				? "removes the worktree directory — the uncommitted changes are lost."
-				: "moves the worktree to __archived/ — the uncommitted changes move with it.";
+		const dirty = lifecycle?.dirtyFiles;
+		const fate = action === "delete" ? "removes the worktree directory" : "moves the worktree to __archived/";
+		const consequence =
+			dirty === 0
+				? `The worktree for "${branchName}" is clean. ${verb} it ${fate}.`
+				: `The worktree for "${branchName}" has uncommitted changes. ${verb} it ${fate} — ${action === "delete" ? "the changes are lost" : "the changes move with it"}.`;
+		const warnings = lifecycle?.warnings?.length
+			? lifecycle.warnings
+			: (lifecycle?.liveSessions?.map((session) => `Live session: ${session.name}`) ?? []);
 		const noop =
 			commitsAhead === 0
 				? `\n\n"${branchName}" also has no commits the target branch lacks, so the merge itself would do nothing.`
@@ -257,8 +260,8 @@ export function useConfirmDialog() {
 			.filter((entry) => entry.count > 0)
 			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
 		return await confirm({
-			title: "Uncommitted work in the worktree",
-			message: `The worktree for "${branchName}" has uncommitted changes. ${verb} it ${fate}${noop}${submoduleCommits.length ? `\n\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\n\nContinue?`,
+			title: dirty === 0 ? "Review worktree cleanup" : "Uncommitted work in the worktree",
+			message: `${consequence}${noop}${warnings.length ? `\n\n${warnings.join("\n")}` : ""}${submoduleCommits.length ? `\n\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\n\nContinue?`,
 			okLabel: action === "delete" ? "Delete anyway" : "Archive anyway",
 			cancelLabel: "Keep it",
 			kind: "warning",

@@ -362,7 +362,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				lifecycle,
 			);
 			if (!proceed) {
-				deps.setStatusInfo(`Left ${branchName} alone — its worktree still has uncommitted work`);
+				deps.setStatusInfo(`Left ${branchName} alone — its worktree needs review`);
 				return;
 			}
 			result = await deps.repo.mergeAndArchiveWorktree(
