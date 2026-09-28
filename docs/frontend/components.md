@@ -116,6 +116,9 @@ Untitled sessions use their first prompt or latest activity time in the picker,
 with the session ID in the option tooltip. Small single-choice elicitation
 forms use direct answer buttons and Cancel. Prompt failures and empty completed
 turns appear in the transcript.
+`Transcript` interprets complete ACP answer text as it streams: it hides the
+connection acknowledgement, shows a declared intent as status, and offers
+bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image
