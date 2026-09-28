@@ -362,6 +362,56 @@ async fn a_session_this_connection_already_holds_is_not_attached_twice() {
         .unwrap();
 }
 
+/// A session whose attach is still pending is not attached a second time.
+///
+/// The already-attached check alone leaves a window: until the agent answers
+/// the first `session/load` there is no attachment to collide with, so a host
+/// that asked again — a panel re-rendering, a retry loop — sent another load,
+/// and ego admits every MCP server again for each one. The scenario leaves the
+/// first load unanswered and fails if a second frame reaches it.
+#[tokio::test]
+async fn a_session_with_a_pending_attach_is_not_attached_twice() {
+    let fixture = Fixture::with("session-attach-pending");
+    let connection = fixture.connect().await;
+    let root = fixture.root();
+
+    let mut first = Box::pin(fixture.manager.attach(
+        connection.connection_id,
+        AcpAttachKind::Load,
+        session(FIRST),
+        authority(root.clone()),
+    ));
+    for kind in [AcpAttachKind::Load, AcpAttachKind::Resume] {
+        let second = fixture.manager.attach(
+            connection.connection_id,
+            kind,
+            session(FIRST),
+            authority(root.clone()),
+        );
+        // Biased, so the first load is queued before the second is.
+        let error = tokio::select! {
+            biased;
+            settled = &mut first => panic!("a second attach reached the agent: {settled:?}"),
+            refused = second => refused.unwrap_err(),
+        };
+        assert_eq!(
+            error.code,
+            AcpClientErrorCode::InvalidInput,
+            "{kind:?}: {error:?}"
+        );
+        assert_eq!(error.session_id, Some(session(FIRST)), "{kind:?}");
+    }
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+    first
+        .await
+        .expect_err("an unanswered load ends with the connection");
+}
+
 /// Every lifecycle operation is gated on the capability that names it.
 ///
 /// One test per operation would prove the same thing five times; what matters

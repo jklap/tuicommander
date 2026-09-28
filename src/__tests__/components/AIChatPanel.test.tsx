@@ -523,6 +523,54 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.disconnect).not.toHaveBeenCalled();
 	});
+	/** Two tabs on a live connection where neither has an attachment yet, then
+	 *  hidden and shown so the bound-root path replays them. */
+	async function unattachedTabs(visible: () => boolean, setVisible: (value: boolean) => void) {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const view = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
+		await settle();
+		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		setVisible(false);
+		setVisible(true);
+		await settle();
+		return view;
+	}
+	const loadsOf = (session: string) => client.loadSession.mock.calls.filter((call) => call[1] === session).length;
+
+	it("does not load a tab again while its first load is still pending", async () => {
+		client.loadSession.mockImplementation(() => new Promise(() => {}));
+		const [visible, setVisible] = createSignal(true);
+		await unattachedTabs(visible, setVisible);
+		expect(loadsOf(SECOND_SESSION)).toBe(1);
+		acpStore.applySnapshot(snapshot());
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } } });
+		setVisible(false);
+		setVisible(true);
+		await settle();
+		expect(loadsOf(SECOND_SESSION)).toBe(1);
+	});
+
+	it("does not re-load a failed tab on the next update, and says why", async () => {
+		client.loadSession.mockImplementation(async (_id, session) => {
+			if (session === SECOND_SESSION) throw { kind: "agent", message: "MCP admission refused" };
+		});
+		const [visible, setVisible] = createSignal(true);
+		const { container } = await unattachedTabs(visible, setVisible);
+		expect(loadsOf(SECOND_SESSION)).toBe(1);
+		expect(container.textContent).toContain("MCP admission refused");
+		acpStore.applySnapshot(snapshot());
+		setVisible(false);
+		setVisible(true);
+		await settle();
+		expect(loadsOf(SECOND_SESSION)).toBe(1);
+		(container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(loadsOf(SECOND_SESSION)).toBe(2);
+	});
+
 	it("keeps a terminal context-menu draft queued before the first session opens", async () => {
 		aiChatDraft.append("Explain this selected error");
 		const { container } = renderPanel();

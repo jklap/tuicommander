@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat replay storm** — A chat tab replays its conversation at most once at a time, and a failed replay waits for the person to select the tab or press Retry instead of repeating on every update. The backend refuses a second `session/load` or `session/resume` while one is pending, and logs every attach with its method and session id.
+
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
 
 - **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.

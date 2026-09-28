@@ -31,7 +31,7 @@
 //! connection is currently attached to, and which reply belongs to which
 //! caller.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -142,6 +142,8 @@ pub(super) enum Answer {
 /// nothing about a request it has already sent.
 pub(super) enum Pending {
     Attach {
+        /// The session a load or resume holds in `attaching` until it settles.
+        claimed: Option<v1::SessionId>,
         outcome: Result<Attached, AcpClientError>,
         authority: AcpSessionAuthority,
         reply: Reply<AcpAttachmentSnapshot>,
@@ -313,6 +315,8 @@ pub(super) struct ConnectionActor {
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
+    /// Sessions a load or resume has been sent for and not yet answered.
+    attaching: HashSet<v1::SessionId>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
     queued_contents: HashMap<AcpTurnId, Vec<v1::ContentBlock>>,
     /// Open seats in the order the agent asked, which is the order they are
@@ -352,6 +356,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
+            attaching: HashSet::new(),
             queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
@@ -411,9 +416,16 @@ impl ConnectionActor {
     ) {
         match command {
             Command::NewSession { authority, reply } => {
+                tracing::info!(
+                    source = "acp",
+                    connection_id = %self.connection_id,
+                    method = "session/new",
+                    "ACP attach"
+                );
                 match self.start_new_session(&authority, connection) {
                     Ok(sent) => in_flight.push(Box::pin(async move {
                         Pending::Attach {
+                            claimed: None,
                             outcome: sent.await,
                             authority,
                             reply,
@@ -428,8 +440,9 @@ impl ConnectionActor {
                 authority,
                 reply,
             } => match self.start_attach(kind, session_id, &authority, connection) {
-                Ok(sent) => in_flight.push(Box::pin(async move {
+                Ok((claimed, sent)) => in_flight.push(Box::pin(async move {
                     Pending::Attach {
+                        claimed,
                         outcome: sent.await,
                         authority,
                         reply,
@@ -901,10 +914,14 @@ impl ConnectionActor {
     fn settle(&mut self, pending: Pending, connection: &ConnectionTo<Agent>, in_flight: &InFlight) {
         match pending {
             Pending::Attach {
+                claimed,
                 outcome,
                 authority,
                 reply,
             } => {
+                if let Some(session_id) = &claimed {
+                    self.attaching.remove(session_id);
+                }
                 let outcome = outcome.map(|attached| self.record(attached, authority));
                 let _ = reply.send(outcome);
             }
@@ -1038,12 +1055,19 @@ impl ConnectionActor {
     /// shared, so they are written once. Fork is the one that comes back with
     /// an id the caller did not name, because a fork is a second session.
     fn start_attach(
-        &self,
+        &mut self,
         kind: AcpAttachKind,
         session_id: v1::SessionId,
         authority: &AcpSessionAuthority,
         connection: &ConnectionTo<Agent>,
-    ) -> Result<Sent<Attached>, AcpClientError> {
+    ) -> Result<(Option<v1::SessionId>, Sent<Attached>), AcpClientError> {
+        tracing::info!(
+            source = "acp",
+            connection_id = %self.connection_id,
+            method = kind.method(),
+            session_id = %session_id,
+            "ACP attach"
+        );
         let operation = kind.operation();
         self.require(operation)?;
         self.require_authority(authority)?;
@@ -1052,19 +1076,27 @@ impl ConnectionActor {
         // two can land on an attachment this connection already holds. Landing
         // on one would overwrite the running turn, the usage and the open
         // interaction ids with the empty state of a fresh attachment — while
-        // the seats themselves survive, so the two would then disagree.
-        if !matches!(kind, AcpAttachKind::Fork) && self.attachments.contains_key(&session_id) {
-            return Err(AcpClientError::already_attached(
-                self.connection_id,
-                session_id,
-            ));
-        }
+        // the seats themselves survive, so the two would then disagree. One
+        // still unanswered counts too: each load makes ego admit every MCP
+        // server again, and a host that asked twice would pay for both.
+        let claimed = if matches!(kind, AcpAttachKind::Fork) {
+            None
+        } else {
+            if self.attachments.contains_key(&session_id) || self.attaching.contains(&session_id) {
+                return Err(AcpClientError::already_attached(
+                    self.connection_id,
+                    session_id,
+                ));
+            }
+            self.attaching.insert(session_id.clone());
+            Some(session_id.clone())
+        };
         let operation = Some(operation);
         let cwd = authority.cwd.clone();
         let roots = authority.additional_directories.clone();
         let servers = authority.mcp_servers.clone();
 
-        Ok(match kind {
+        let sent: Sent<Attached> = match kind {
             AcpAttachKind::Load => {
                 let mut request = v1::LoadSessionRequest::new(session_id.clone(), cwd);
                 request.additional_directories = roots;
@@ -1101,7 +1133,8 @@ impl ConnectionActor {
                     })
                 })
             }
-        })
+        };
+        Ok((claimed, sent))
     }
 
     fn start_detach(

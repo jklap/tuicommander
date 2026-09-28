@@ -43,10 +43,20 @@ const bindings = new Map<string, { connectionId: AcpConnectionId; sessionId: Acp
 /** Roots with a connect in flight, so a second render cannot launch a second ego. */
 const starting = new Set<string>();
 
+/** `session/load` calls in flight, keyed by connection and session. Each load
+ *  makes ego admit every MCP server again, so one tab gets one load at a time. */
+const replaying = new Set<string>();
+
+/** Loads that failed. Only an explicit action retries them: a reactive re-run
+ *  that retried would turn one refusal into a storm of MCP initializes. */
+const refused = new Set<string>();
+
 /** Tests only: forget every root binding. */
 export function resetAcpChatBindings(): void {
 	bindings.clear();
 	starting.clear();
+	replaying.clear();
+	refused.clear();
 }
 
 export type AcpChatPhase = "unconfigured" | "no-repo" | "starting" | "failed" | "live";
@@ -122,6 +132,30 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 		}
 	}
 
+	/** Replay one session, at most once at a time. `explicit` is a person asking
+	 *  again, the only thing that retries a refused load. Answers whether the
+	 *  session can be shown: false when this load failed or a refusal stands. */
+	async function replay(
+		what: string,
+		id: AcpConnectionId,
+		session: AcpSessionId,
+		target: string,
+		explicit = false,
+	): Promise<boolean> {
+		const key = `${id}/${session}`;
+		if (replaying.has(key)) return true;
+		if (refused.has(key) && !explicit) return false;
+		replaying.add(key);
+		refused.delete(key);
+		try {
+			const loaded = await guard(what, () => client.loadSession(id, session, target));
+			if (loaded === null) refused.add(key);
+			return loaded !== null;
+		} finally {
+			replaying.delete(key);
+		}
+	}
+
 	async function open(target: string): Promise<void> {
 		if (starting.has(target)) return;
 		starting.add(target);
@@ -147,10 +181,9 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 				aiChatTabs.ensure(target, saved);
 				binding.sessionId = saved;
 				if (root() === target) setSessionId(saved);
-				await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, saved, target));
+				await replay("replaying the conversation", snapshot.connectionId, saved, target);
 				for (const tab of aiChatTabs.ids(target)) {
-					if (tab !== saved)
-						await guard("replaying a chat tab", () => client.loadSession(snapshot.connectionId, tab, target));
+					if (tab !== saved) await replay("replaying a chat tab", snapshot.connectionId, tab, target);
 				}
 				return;
 			}
@@ -180,10 +213,12 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			setConnectionId(known.connectionId);
 			const selected = untrack(() => aiChatTabs.active(target)) ?? known.sessionId;
 			setSessionId(selected);
-			for (const tab of untrack(() => aiChatTabs.ids(target))) {
-				if (!acpStore.attachment(known.connectionId, tab))
-					void guard("replaying a chat tab", () => client.loadSession(known.connectionId, tab, target));
-			}
+			untrack(() => {
+				for (const tab of aiChatTabs.ids(target)) {
+					if (!acpStore.attachment(known.connectionId, tab))
+						void replay("replaying a chat tab", known.connectionId, tab, target);
+				}
+			});
 			return;
 		}
 		setConnectionId(null);
@@ -375,10 +410,8 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			const id = connectionId();
 			const target = root();
 			if (!id || !target || session === sessionId()) return;
-			if (!acpStore.attachment(id, session)) {
-				const loaded = await guard("loading conversation", () => client.loadSession(id, session, target));
-				if (loaded === null && error()) return;
-			}
+			if (!acpStore.attachment(id, session) && !(await replay("loading conversation", id, session, target, true)))
+				return;
 			bindings.set(target, { connectionId: id, sessionId: session });
 			aiChatTabs.add(target, session);
 			setSessionId(session);
@@ -417,10 +450,9 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 				if (resumeId && snapshot.capabilities?.load) {
 					bindings.set(target, { connectionId: snapshot.connectionId, sessionId: resumeId });
 					setSessionId(resumeId);
-					await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, resumeId, target));
+					await replay("replaying the conversation", snapshot.connectionId, resumeId, target, true);
 					for (const tab of aiChatTabs.ids(target)) {
-						if (tab !== resumeId)
-							await guard("replaying a chat tab", () => client.loadSession(snapshot.connectionId, tab, target));
+						if (tab !== resumeId) await replay("replaying a chat tab", snapshot.connectionId, tab, target, true);
 					}
 					return;
 				}
