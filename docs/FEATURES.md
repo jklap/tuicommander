@@ -157,6 +157,7 @@ per cell and the configured history limit still apply.
 - Terminals report their current working directory via OSC 7 escape sequences
 - Parsed in the Rust backend from PTY output and stored per-session as `session_cwd`
 - When a terminal's CWD falls inside a known worktree path, the session is automatically reassigned to the correct branch in the sidebar
+- Sessions spawned into a new sibling worktree refresh their registered repository before final tab placement
 - Enables accurate branch association even when the user `cd`s into a different worktree from a single terminal
 
 ### 1.12 Kitty Keyboard Protocol
