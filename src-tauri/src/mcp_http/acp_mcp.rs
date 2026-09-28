@@ -8,7 +8,7 @@
 //! identity ego was launched under, and the server-to-client stream that GET
 //! `/mcp` would have carried.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
 
@@ -45,9 +45,13 @@ pub(crate) struct AcpMcpHost {
 /// What one MCP connection holds beyond its protocol session.
 struct Link {
     peer_id: Option<String>,
+    /// The resources ego asked to hear about.
+    subscriptions: Subscriptions,
     /// The stream GET `/mcp` would have carried, forwarded to ego.
     forwarder: JoinHandle<()>,
 }
+
+type Subscriptions = Arc<Mutex<HashSet<String>>>;
 
 impl AcpMcpHost {
     pub(crate) fn new(state: &Arc<AppState>) -> Self {
@@ -61,6 +65,19 @@ impl AcpMcpHost {
         self.state
             .upgrade()
             .ok_or_else(|| McpOverAcpError::new(INTERNAL_ERROR, "TUICommander is shutting down"))
+    }
+
+    fn link(
+        &self,
+        connection_id: &str,
+    ) -> Result<(Option<String>, Subscriptions), McpOverAcpError> {
+        self.connections
+            .lock()
+            .get(connection_id)
+            .map(|link| (link.peer_id.clone(), Arc::clone(&link.subscriptions)))
+            .ok_or_else(|| {
+                McpOverAcpError::new(INVALID_PARAMS, format!("no MCP connection {connection_id}"))
+            })
     }
 }
 
@@ -95,12 +112,24 @@ impl McpOverAcpHost for AcpMcpHost {
                 .or_insert_with(|| broadcast::channel(64).0)
                 .subscribe()
         };
-        let tools = state.mcp.tools_changed.subscribe();
-        let forwarder = tokio::spawn(forward(tools, messages, notify));
+        let subscriptions = Subscriptions::default();
+        let feeds = Feeds {
+            tools: state.mcp.tools_changed.subscribe(),
+            messages,
+            events: state.event_bus.subscribe(),
+            inbox: peer_id.map(|peer| state.subscribe_agent_inbox(peer)),
+        };
+        let forwarder = tokio::spawn(forward(
+            Arc::downgrade(&state),
+            feeds,
+            Arc::clone(&subscriptions),
+            notify,
+        ));
         self.connections.lock().insert(
             id.clone(),
             Link {
                 peer_id: peer_id.map(str::to_owned),
+                subscriptions,
                 forwarder,
             },
         );
@@ -114,17 +143,7 @@ impl McpOverAcpHost for AcpMcpHost {
         params: Option<Map<String, Value>>,
     ) -> McpReply {
         let prepared = self.state().and_then(|state| {
-            let peer_id = self
-                .connections
-                .lock()
-                .get(connection_id)
-                .map(|link| link.peer_id.clone())
-                .ok_or_else(|| {
-                    McpOverAcpError::new(
-                        INVALID_PARAMS,
-                        format!("no MCP connection {connection_id}"),
-                    )
-                })?;
+            let (peer_id, subscriptions) = self.link(connection_id)?;
             let mut headers = HeaderMap::new();
             let header = |value: &str| {
                 value.parse().map_err(|_| {
@@ -135,11 +154,42 @@ impl McpOverAcpHost for AcpMcpHost {
             if let Some(peer_id) = &peer_id {
                 headers.insert(TUIC_SESSION_HEADER, header(peer_id)?);
             }
-            Ok((state, headers))
+            Ok((state, headers, peer_id, subscriptions))
         });
-        let body = json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
         Box::pin(async move {
-            let (state, headers) = prepared?;
+            let (state, headers, peer_id, subscriptions) = prepared?;
+            match method.as_str() {
+                "resources/list" => return Ok(resource_list()),
+                "resources/read" => {
+                    let uri = uri_param(params.as_ref())?;
+                    let contents = match uri.as_str() {
+                        WORKSPACE_URI => {
+                            workspace_snapshot(&state, &crate::config::load_repositories())
+                        }
+                        INBOX_URI => inbox_snapshot(&state, peer_id.as_deref()),
+                        _ => return Err(unknown_resource(&uri)),
+                    };
+                    return Ok(json!({ "contents": [{
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": contents.to_string(),
+                    }] }));
+                }
+                "resources/subscribe" | "resources/unsubscribe" => {
+                    let uri = uri_param(params.as_ref())?;
+                    if uri != WORKSPACE_URI && uri != INBOX_URI {
+                        return Err(unknown_resource(&uri));
+                    }
+                    if method == "resources/subscribe" {
+                        subscriptions.lock().insert(uri);
+                    } else {
+                        subscriptions.lock().remove(&uri);
+                    }
+                    return Ok(json!({}));
+                }
+                _ => {}
+            }
+            let body = json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
             let response = mcp_post(State(state), ConnectInfo(loopback()), headers, Json(body))
                 .await
                 .into_response();
@@ -148,17 +198,30 @@ impl McpOverAcpHost for AcpMcpHost {
                 .map_err(|error| McpOverAcpError::new(INTERNAL_ERROR, error.to_string()))?;
             let reply: Value = serde_json::from_slice(&bytes)
                 .map_err(|error| McpOverAcpError::new(INTERNAL_ERROR, error.to_string()))?;
-            match reply.get("error") {
-                Some(error) => Err(McpOverAcpError {
+            if let Some(error) = reply.get("error") {
+                return Err(McpOverAcpError {
                     code: error["code"]
                         .as_i64()
                         .and_then(|code| i32::try_from(code).ok())
                         .unwrap_or(INTERNAL_ERROR),
                     message: error["message"].as_str().unwrap_or_default().to_owned(),
                     data: error.get("data").cloned(),
-                }),
-                None => Ok(reply.get("result").cloned().unwrap_or(Value::Null)),
+                });
             }
+            let mut result = reply.get("result").cloned().unwrap_or(Value::Null);
+            // The resources exist only on this channel, so only this channel's
+            // handshake says so; `/mcp` answers every other client unchanged.
+            if matches!(method.as_str(), "initialize" | "server/discover")
+                && let Some(capabilities) = result
+                    .get_mut("capabilities")
+                    .and_then(Value::as_object_mut)
+            {
+                capabilities.insert(
+                    "resources".to_owned(),
+                    json!({ "subscribe": true, "listChanged": false }),
+                );
+            }
+            Ok(result)
         })
     }
 
@@ -185,21 +248,197 @@ impl McpOverAcpHost for AcpMcpHost {
     }
 }
 
-/// Carry what GET `/mcp` would have streamed to ego, until the connection ends.
+/// The workspace snapshot ego reads instead of polling tools for it.
+pub(crate) const WORKSPACE_URI: &str = "tuic://workspace";
+/// This peer's unread mail.
+pub(crate) const INBOX_URI: &str = "tuic://inbox";
+/// How long a burst of changes is gathered into one `resources/updated`.
+const COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
+/// The most unread messages one inbox read carries.
+const INBOX_PAGE: usize = 100;
+
+fn resource_list() -> Value {
+    json!({ "resources": [
+        { "uri": WORKSPACE_URI, "name": "workspace", "mimeType": "application/json",
+          "description": "Every repository: name, path, branch, live agents, and the one Boss is viewing" },
+        { "uri": INBOX_URI, "name": "inbox", "mimeType": "application/json",
+          "description": "Unread peer mail for this ego, in arrival order; `agent inbox` marks it read" },
+    ] })
+}
+
+fn uri_param(params: Option<&Map<String, Value>>) -> Result<String, McpOverAcpError> {
+    params
+        .and_then(|params| params.get("uri"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| McpOverAcpError::new(INVALID_PARAMS, "missing uri"))
+}
+
+fn unknown_resource(uri: &str) -> McpOverAcpError {
+    // MCP's "resource not found".
+    McpOverAcpError::new(-32002, format!("no resource {uri}"))
+}
+
+/// Every repository in sidebar order, the agents running in each, and the one
+/// Boss is viewing. `data` is `repositories.json`, passed in so a test can
+/// name one.
+fn workspace_snapshot(state: &AppState, data: &Value) -> Value {
+    let order = data["repoOrder"].as_array().cloned().unwrap_or_default();
+    // Agent sessions, by working directory: presence only, so a turn flipping
+    // between busy and idle does not change the snapshot.
+    let agents: Vec<(String, Value)> = state
+        .session_maps
+        .session_states
+        .iter()
+        .filter_map(|entry| {
+            let agent_type = entry.value().agent_type.clone()?;
+            let session = state.session_maps.sessions.get(entry.key())?;
+            let session = session.lock();
+            let cwd = session.cwd.clone()?;
+            let name = state
+                .session_maps
+                .term_aliases
+                .get(entry.key())
+                .map(|alias| alias.value().clone())
+                .or_else(|| session.display_name.clone());
+            Some((
+                cwd,
+                json!({ "sessionId": entry.key(), "name": name, "agentType": agent_type }),
+            ))
+        })
+        .collect();
+    let repos: Vec<Value> = order
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|path| {
+            let info = crate::git::get_repo_info_cached(state, path);
+            let display = data["repos"][path]["displayName"]
+                .as_str()
+                .unwrap_or_default();
+            let worktrees = crate::worktree::get_worktree_paths_cached(state, path);
+            let inside = |cwd: &str| {
+                let cwd = std::path::Path::new(cwd);
+                cwd.starts_with(path)
+                    || worktrees
+                        .values()
+                        .any(|worktree| cwd.starts_with(&worktree.path))
+            };
+            let mut live: Vec<Value> = agents
+                .iter()
+                .filter(|(cwd, _)| inside(cwd))
+                .map(|(_, agent)| agent.clone())
+                .collect();
+            live.sort_by(|a, b| a["sessionId"].as_str().cmp(&b["sessionId"].as_str()));
+            json!({
+                "name": if display.is_empty() { info.name.as_str() } else { display },
+                "path": path,
+                "branch": (!info.branch.is_empty()).then_some(&info.branch),
+                "liveAgents": live,
+            })
+        })
+        .collect();
+    json!({ "repos": repos, "viewedRepo": data["activeRepoPath"].as_str() })
+}
+
+/// This peer's unread mail, without marking any of it read.
+fn inbox_snapshot(state: &AppState, peer_id: Option<&str>) -> Value {
+    let Some(peer_id) = peer_id else {
+        return json!({ "messages": [], "nextSince": 0 });
+    };
+    let since = state
+        .agent_read_cursor
+        .get(peer_id)
+        .map_or(0, |cursor| *cursor.value());
+    let messages: Vec<Value> = state
+        .agent_inbox
+        .get(peer_id)
+        .map(|inbox| {
+            inbox
+                .iter()
+                .filter(|message| message.timestamp > since)
+                .take(INBOX_PAGE)
+                .map(|message| {
+                    json!({
+                        "id": message.id,
+                        "from": { "session": message.from_tuic_session, "name": message.from_name },
+                        "body": message.content,
+                        "timestamp": message.timestamp,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let next_since = messages
+        .last()
+        .and_then(|message| message["timestamp"].as_u64())
+        .unwrap_or(since);
+    json!({ "messages": messages, "nextSince": next_since })
+}
+
+/// Whether an application event can change what the workspace snapshot says.
+fn touches_workspace(event: &crate::state::AppEvent) -> bool {
+    use crate::state::AppEvent;
+    matches!(
+        event,
+        AppEvent::HeadChanged { .. }
+            | AppEvent::RepositoriesChanged
+            | AppEvent::SessionCreated { .. }
+            | AppEvent::SessionClosed { .. }
+            | AppEvent::PtyExit { .. }
+            | AppEvent::SessionStateChanged { .. }
+            | AppEvent::WorktreeCreated(_)
+            | AppEvent::WorktreeRemoved(_)
+            | AppEvent::TermAliasAssigned { .. }
+    )
+}
+
+/// Everything one MCP connection listens to.
+struct Feeds {
+    tools: broadcast::Receiver<()>,
+    messages: broadcast::Receiver<String>,
+    events: broadcast::Receiver<crate::state::AppEvent>,
+    inbox: Option<tokio::sync::watch::Receiver<u64>>,
+}
+
+/// Carry what GET `/mcp` would have streamed to ego, and announce subscribed
+/// resources when they change, until the connection ends.
+///
+/// A resource is announced once per burst: the first change arms a deadline,
+/// later ones ride on it. The workspace is also compared with what was last
+/// announced, because most events that could change it do not.
 async fn forward(
-    mut tools: broadcast::Receiver<()>,
-    mut messages: broadcast::Receiver<String>,
+    state: Weak<AppState>,
+    mut feeds: Feeds,
+    subscriptions: Subscriptions,
     notify: McpNotify,
 ) {
     use broadcast::error::RecvError;
+    let updated = |uri: &str| {
+        let mut params = Map::new();
+        params.insert("uri".to_owned(), json!(uri));
+        notify("notifications/resources/updated".to_owned(), Some(params));
+    };
+    let subscribed = |uri: &str| subscriptions.lock().contains(uri);
+    let mut workspace_due: Option<tokio::time::Instant> = None;
+    let mut inbox_due: Option<tokio::time::Instant> = None;
+    let mut last_workspace: Option<Value> = None;
+    let arm = |due: &mut Option<tokio::time::Instant>| {
+        due.get_or_insert_with(|| tokio::time::Instant::now() + COALESCE);
+    };
+    let until = |due: Option<tokio::time::Instant>| async move {
+        match due {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending().await,
+        }
+    };
     loop {
         tokio::select! {
-            changed = tools.recv() => match changed {
+            changed = feeds.tools.recv() => match changed {
                 Ok(()) => notify("notifications/tools/list_changed".to_owned(), None),
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
             },
-            message = messages.recv() => match message {
+            message = feeds.messages.recv() => match message {
                 Ok(text) => {
                     let Ok(frame) = serde_json::from_str::<Value>(&text) else {
                         tracing::warn!(source = "acp_mcp", "dropped a channel frame that is not JSON");
@@ -212,6 +451,35 @@ async fn forward(
                 }
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
+            },
+            event = feeds.events.recv() => match event {
+                Ok(event) if touches_workspace(&event) && subscribed(WORKSPACE_URI) => arm(&mut workspace_due),
+                Ok(_) => {}
+                // Missed events could have been anything: look again.
+                Err(RecvError::Lagged(_)) => if subscribed(WORKSPACE_URI) { arm(&mut workspace_due) },
+                Err(RecvError::Closed) => return,
+            },
+            changed = async {
+                match feeds.inbox.as_mut() {
+                    Some(inbox) => inbox.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => match changed {
+                Ok(()) => if subscribed(INBOX_URI) { arm(&mut inbox_due) },
+                Err(_) => feeds.inbox = None,
+            },
+            () = until(workspace_due) => {
+                workspace_due = None;
+                let Some(state) = state.upgrade() else { return };
+                let snapshot = workspace_snapshot(&state, &crate::config::load_repositories());
+                if last_workspace.as_ref() != Some(&snapshot) {
+                    last_workspace = Some(snapshot);
+                    updated(WORKSPACE_URI);
+                }
+            },
+            () = until(inbox_due) => {
+                inbox_due = None;
+                updated(INBOX_URI);
             },
         }
     }
@@ -395,5 +663,200 @@ mod tests {
             heard.lock().is_empty(),
             "a released connection hears nothing"
         );
+    }
+
+    fn mail(id: &str, body: &str) -> crate::state::AgentMessage {
+        crate::state::AgentMessage {
+            id: id.to_owned(),
+            from_tuic_session: "11111111-2222-4333-8444-555555555555".to_owned(),
+            from_name: "orc-1".to_owned(),
+            content: body.to_owned(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }
+    }
+
+    async fn read(host: &AcpMcpHost, id: &str, uri: &str) -> Value {
+        let result = host
+            .message(
+                id,
+                "resources/read".to_owned(),
+                object(json!({ "uri": uri })),
+            )
+            .await
+            .expect("resources/read");
+        let text = result["contents"][0]["text"]
+            .as_str()
+            .expect("a text resource");
+        assert_eq!(result["contents"][0]["mimeType"], "application/json");
+        serde_json::from_str(text).expect("JSON contents")
+    }
+
+    /// Only this channel lists the two ego-only resources, and says it can
+    /// subscribe; HTTP `/mcp` answers discovery exactly as before.
+    #[tokio::test]
+    async fn the_acp_channel_offers_workspace_and_inbox_resources() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+
+        let listed = host
+            .message(&id, "resources/list".to_owned(), None)
+            .await
+            .expect("resources/list");
+        let uris: Vec<&str> = listed["resources"]
+            .as_array()
+            .expect("a resource list")
+            .iter()
+            .filter_map(|resource| resource["uri"].as_str())
+            .collect();
+        assert_eq!(uris, vec![WORKSPACE_URI, INBOX_URI]);
+
+        let discovered = host
+            .message(
+                &id,
+                "server/discover".to_owned(),
+                object(json!({ "_meta": ego_meta() })),
+            )
+            .await
+            .expect("server/discover");
+        assert_eq!(
+            discovered["capabilities"]["resources"]["subscribe"],
+            json!(true)
+        );
+
+        let over_http = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo(loopback()),
+            HeaderMap::new(),
+            Json(json!({ "jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {} })),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(over_http.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let over_http: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            over_http["result"]["capabilities"]
+                .get("resources")
+                .is_none(),
+            "other clients are not offered ego's resources: {over_http}"
+        );
+    }
+
+    #[test]
+    fn the_workspace_names_every_repo_and_the_one_being_viewed() {
+        let state = test_state();
+        let repos = json!({
+            "repos": { "/nowhere/alpha": { "displayName": "Alpha" }, "/nowhere/beta": {} },
+            "repoOrder": ["/nowhere/alpha", "/nowhere/beta"],
+            "activeRepoPath": "/nowhere/beta",
+        });
+        let workspace = workspace_snapshot(&state, &repos);
+        let paths: Vec<&str> = workspace["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|repo| repo["path"].as_str())
+            .collect();
+        assert_eq!(paths, vec!["/nowhere/alpha", "/nowhere/beta"]);
+        assert_eq!(workspace["repos"][0]["name"], "Alpha");
+        assert!(workspace["repos"][0].get("branch").is_some(), "{workspace}");
+        assert_eq!(workspace["repos"][0]["liveAgents"], json!([]));
+        assert_eq!(workspace["viewedRepo"], "/nowhere/beta");
+    }
+
+    /// Reading the inbox shows unread mail and leaves the cursor alone: the
+    /// `agent inbox` tool is still what marks it read.
+    #[tokio::test]
+    async fn the_inbox_resource_shows_unread_mail_without_reading_it() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+        state.push_agent_inbox(PEER, mail("m-1", "first"));
+        state.push_agent_inbox(PEER, mail("m-2", "second"));
+
+        let inbox = read(&host, &id, INBOX_URI).await;
+        let bodies: Vec<&str> = inbox["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["body"].as_str())
+            .collect();
+        assert_eq!(bodies, vec!["first", "second"]);
+        assert_eq!(inbox["messages"][0]["id"], "m-1");
+        assert_eq!(inbox["messages"][0]["from"]["name"], "orc-1");
+        assert!(inbox["nextSince"].as_u64().is_some(), "{inbox}");
+        assert!(
+            state.agent_read_cursor.get(PEER).is_none(),
+            "a resource read must not mark mail read"
+        );
+        assert_eq!(
+            read(&host, &id, INBOX_URI).await["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// A subscribed resource is announced when it changes; an unsubscribed one
+    /// is not, so ego is never told about what it did not ask for.
+    #[tokio::test]
+    async fn subscribed_resources_announce_their_changes() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, heard) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+        let updated = |uri: &str| {
+            heard
+                .lock()
+                .iter()
+                .filter(|(method, params)| {
+                    method == "notifications/resources/updated"
+                        && params.as_ref().and_then(|p| p.get("uri")) == Some(&json!(uri))
+                })
+                .count()
+        };
+
+        state.push_agent_inbox(PEER, mail("m-0", "before subscribing"));
+        let _ = state
+            .event_bus
+            .send(crate::state::AppEvent::RepositoriesChanged);
+        tokio::time::sleep(COALESCE * 3).await;
+        assert_eq!((updated(INBOX_URI), updated(WORKSPACE_URI)), (0, 0));
+
+        for uri in [INBOX_URI, WORKSPACE_URI] {
+            host.message(
+                &id,
+                "resources/subscribe".to_owned(),
+                object(json!({ "uri": uri })),
+            )
+            .await
+            .expect("resources/subscribe");
+        }
+        state.push_agent_inbox(PEER, mail("m-1", "for ego"));
+        state.push_agent_inbox(
+            "99999999-2222-4333-8444-555555555555",
+            mail("m-x", "not for ego"),
+        );
+        eventually("the inbox update", || updated(INBOX_URI) == 1).await;
+
+        for _ in 0..5 {
+            let _ = state
+                .event_bus
+                .send(crate::state::AppEvent::RepositoriesChanged);
+        }
+        eventually("the workspace update", || updated(WORKSPACE_URI) >= 1).await;
+        tokio::time::sleep(COALESCE * 3).await;
+        assert_eq!(
+            updated(WORKSPACE_URI),
+            1,
+            "a burst of changes is one update"
+        );
+        assert_eq!(updated(INBOX_URI), 1, "mail for another peer is not ego's");
     }
 }
