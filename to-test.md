@@ -2145,6 +2145,12 @@ Needs a `make dev` restart — these are Rust changes and `make dev` runs
    If `accounted_bytes` tracks the footprint, the named structure is the leak.
    If the footprint climbs far above `accounted_bytes`, the growth is outside
    `AppState` and the next suspect is the wry event-loop message queue.
+7. **Only app URLs become recovery targets.** After restarting `make dev`,
+   navigate among in-app routes, then verify that a blocked navigation to a
+   different localhost port or external host does not replace the URL returned
+   by `POST /debug/reload_webview`. The Rust origin guard is covered by
+   `webview_recovery::tests::recovery_keeps_the_last_app_url_when_other_documents_are_observed`;
+   this checks the native WebView path after rebuild.
 
 ## Workspace identity migration (725-b343) — needs a `make dev` restart
 

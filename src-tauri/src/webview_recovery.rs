@@ -49,13 +49,29 @@ const STARTUP_DELAY: Duration = Duration::from_secs(30);
 /// True when the main frame is no longer showing the app.
 ///
 /// Every `about:` URL qualifies: `about:blank` after a WebContent crash,
-/// `about:srcdoc` after the standby incident above. Nothing else can legitimately
-/// be the top document — the navigation handler in `lib.rs` blocks implicit
-/// external navigation instead of loading it — and restricting the test to
-/// the `about:` scheme means a healthy URL can never be mistaken for a lost one
-/// and re-navigated in a loop.
+/// `about:srcdoc` after the standby incident above. Restricting this test to
+/// the `about:` scheme prevents a healthy URL from being re-navigated in a loop.
+/// The separate boot-URL guard refuses non-app URLs as recovery targets.
 pub(crate) fn is_lost(url: &str) -> bool {
     url.starts_with("about:")
+}
+
+#[cfg(any(feature = "desktop", test))]
+fn record_boot_url(
+    slot: &parking_lot::RwLock<Option<url::Url>>,
+    observed: &url::Url,
+    dev_url: Option<&url::Url>,
+) {
+    let bundled = (observed.scheme() == "tauri" && observed.host_str() == Some("localhost"))
+        || (cfg!(windows)
+            && observed.scheme() == "http"
+            && observed.host_str() == Some("tauri.localhost")
+            && observed.port().is_none());
+    let development =
+        cfg!(debug_assertions) && dev_url.is_some_and(|dev| observed.origin() == dev.origin());
+    if observed.username().is_empty() && observed.password().is_none() && (bundled || development) {
+        *slot.write() = Some(observed.clone());
+    }
 }
 
 #[cfg(any(feature = "desktop", test))]
@@ -97,12 +113,12 @@ fn navigate_home_with(
 
 #[cfg(feature = "desktop")]
 mod desktop {
-    use super::{POLL_INTERVAL, STARTUP_DELAY, is_lost};
+    use super::{POLL_INTERVAL, STARTUP_DELAY, is_lost, record_boot_url};
     use crate::state::AppState;
     use std::sync::Arc;
+    use tauri::Manager;
 
     fn main_window(state: &Arc<AppState>) -> Option<tauri::WebviewWindow> {
-        use tauri::Manager;
         state.app_handle.read().as_ref()?.get_webview_window("main")
     }
 
@@ -138,8 +154,13 @@ mod desktop {
     fn lost_document(state: &Arc<AppState>) -> Option<String> {
         let window = main_window(state)?; // No window yet — nothing to recover.
         let url = window.url().ok()?; // A failed probe is not a lost document.
-        if !is_lost(url.as_str()) {
-            *state.webview_boot_url.write() = Some(url);
+        let lost = is_lost(url.as_str());
+        record_boot_url(
+            &state.webview_boot_url,
+            &url,
+            window.app_handle().config().build.dev_url.as_ref(),
+        );
+        if !lost {
             return None;
         }
         Some(url.to_string())
@@ -314,5 +335,38 @@ mod tests {
         // is a page of the app, not a lost frame.
         assert!(!is_lost("http://127.0.0.1:1421/about"));
         assert!(!is_lost("tauri://localhost/#/about:srcdoc"));
+    }
+
+    #[test]
+    fn recovery_keeps_the_last_app_url_when_other_documents_are_observed() {
+        let dev = url::Url::parse("http://localhost:1421/").unwrap();
+        let saved = url::Url::parse("http://localhost:1421/#/workspace").unwrap();
+        let slot = parking_lot::RwLock::new(Some(saved.clone()));
+        for candidate in [
+            "about:config",
+            "http://localhost.evil.com/",
+            "http://127.0.0.2:1421/",
+            "HTTP://LOCALHOST.EVIL.COM:1421/",
+            "http://localhost:14319/",
+            "asset://localhost/file.pdf",
+            "tauri://localhost.evil.com/",
+            "http://user@localhost:1421/",
+        ] {
+            record_boot_url(&slot, &url::Url::parse(candidate).unwrap(), Some(&dev));
+            assert_eq!(*slot.read(), Some(saved.clone()), "{candidate}");
+        }
+    }
+
+    #[test]
+    fn recovery_remembers_routes_on_the_configured_app_origin() {
+        let dev = url::Url::parse("http://localhost:1421/").unwrap();
+        let slot = parking_lot::RwLock::new(None);
+        let route = url::Url::parse("HTTP://LOCALHOST:1421/#/settings").unwrap();
+        record_boot_url(&slot, &route, Some(&dev));
+        assert_eq!(*slot.read(), Some(route));
+
+        let bundled = url::Url::parse("tauri://localhost/index.html#/workspace").unwrap();
+        record_boot_url(&slot, &bundled, None);
+        assert_eq!(*slot.read(), Some(bundled));
     }
 }
