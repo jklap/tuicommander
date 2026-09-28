@@ -56,6 +56,9 @@ pub type McpReply = Pin<Box<dyn Future<Output = Result<Value, McpOverAcpError>> 
 
 /// Whatever serves the `tuicommander` MCP server for an ACP connection.
 pub trait McpOverAcpHost: Send + Sync {
+    /// Whether this peer has a live MCP connection subscribed to its inbox.
+    fn has_inbox_subscriber(&self, peer_id: &str) -> bool;
+
     /// Open one MCP connection for `peer_id`, the identity ego was launched
     /// under. `notify` reaches ego for as long as the connection lives.
     fn connect(&self, peer_id: Option<&str>, notify: McpNotify) -> Result<String, McpOverAcpError>;
