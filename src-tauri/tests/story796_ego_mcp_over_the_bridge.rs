@@ -1,11 +1,9 @@
-//! ego reaches TUICommander over the stdio bridge, not a TCP port.
+//! Which MCP transports an ACP connection may carry.
 //!
-//! The entry a session gets used to be an HTTP URL built from the port this
-//! process bound. That port exists only when the TCP listener binds, and the
-//! listener binds only when Remote Access is on — which is off by default. So
-//! the default install handed ego no server at all, and the fix was never a
-//! second listener: `<config dir>/mcp.sock` already binds unconditionally and
-//! `tuic-bridge` is already shipped as the MCP-stdio adapter in front of it.
+//! This file used to hold the stdio `tuic-bridge` entry (story 796). That entry
+//! is gone — ego reaches `tuicommander` over ACP (story 1156) — and what stays
+//! here is the rule it shared with every transport: one the agent never
+//! advertised is refused.
 
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 

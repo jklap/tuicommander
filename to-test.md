@@ -1,3 +1,7 @@
+## ego MCP over ACP (1156-1b61)
+
+- [ ] After a `make dev` restart and an ego build that advertises `mcpCapabilities.acp`, open AI Chat in an isolated `TUIC_APP_INSTANCE=<id>` and ask ego to list terminals. `ps` shows no `tuic-bridge` child of ego, the app log shows no `MCP initialize` line per tool call, and the tool answers.
+
 ## AI Chat replay storm (1151-4243)
 
 - [ ] After a `make dev` restart, open AI Chat on a repository with two saved tabs in an isolated `TUIC_APP_INSTANCE=<id>`. The app log shows one `ACP attach` line with `method=session/load` per tab, not a repeating stream, and a refused load shows the error with Retry instead of re-sending.

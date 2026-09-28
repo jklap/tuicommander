@@ -488,24 +488,9 @@ async fn a_settled_connection_refuses_session_work_as_transport_closed() {
 // The one MCP server a session is given
 // ---------------------------------------------------------------------------
 
-/// The port the scenarios above expect in the synthesised address.
-///
-/// Any bound port would do — nothing listens on it during the test, because
-/// what is under test is the entry the client writes, not what answers it.
-const BRIDGE: &str = "/opt/tuic/tuic-bridge";
-
-/// The socket this process pretends to have bound.
-///
-/// Any path would do — nothing listens on it during the test. What is under
-/// test is that the path the process *bound* reaches the entry, rather than the
-/// bridge being left to find a socket of its own.
-const SOCKET: &str = "/tmp/tuic-mcp-0badc0de.sock";
-
 #[tokio::test]
-async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation() {
+async fn an_acp_peer_keeps_one_identity_in_ego_and_its_conversation() {
     let fixture = Fixture::with("session-new-peer-mcp");
-    fixture.manager.set_bridge_binary(Some(BRIDGE.into()));
-    fixture.manager.set_socket_path(Some(SOCKET.into()));
     let peer = "550e8400-e29b-41d4-a716-446655440a01";
     let connection = fixture
         .manager
@@ -556,8 +541,8 @@ async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation()
 /// Every session carries TUICommander, and carries nothing a caller named.
 ///
 /// Both halves of plan §4.5 in one scenario, because they are one rule: the
-/// list is built here from the bridge this process ships, so the intruder below
-/// is not filtered out of it — it is never consulted. `session/load` is in the
+/// list is built here from the server this process serves, so the intruder
+/// below is not filtered out of it — it is never consulted. `session/load` is in the
 /// same scenario for the same reason `start_attach` shares a body with
 /// `start_new_session`: an entry synthesised for one and forgotten for the
 /// other is a session that can reach nothing, found only by a person.
@@ -565,20 +550,9 @@ async fn an_acp_peer_keeps_one_identity_in_ego_the_bridge_and_its_conversation()
 /// The intruder is an HTTP entry on purpose: replacement has to hold for a
 /// transport the grant no longer uses, or the test would pass on a list that
 /// merely filtered by shape.
-///
-/// The scenario also pins `TUIC_SOCKET`, because the entry naming our bridge is
-/// only half the grant: the bridge left to its own search finds the DEFAULT
-/// instance's socket, so a named instance would hand ego the wrong machine's
-/// repositories under the right command line.
 #[tokio::test]
 async fn every_session_carries_this_process_and_nothing_a_caller_named() {
     let fixture = Fixture::with("session-new-tuic-mcp");
-    fixture
-        .manager
-        .set_bridge_binary(Some(std::path::PathBuf::from(BRIDGE)));
-    fixture
-        .manager
-        .set_socket_path(Some(std::path::PathBuf::from(SOCKET)));
     let connection = fixture.connect().await;
 
     let intruder = AcpSessionAuthority {
@@ -613,4 +587,3 @@ async fn every_session_carries_this_process_and_nothing_a_caller_named() {
         .await
         .unwrap();
 }
-

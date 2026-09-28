@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **ego reaches TUICommander over ACP** — The AI Chat's ego sessions now get the `tuicommander` MCP server on the ACP connection itself (MCP-over-ACP) instead of a `tuic-bridge` process. Each tool call no longer opens a fresh HTTP MCP session; the tools, their names and ego's permission rules are unchanged, and ego can cancel a running call. Claude Code, Codex and other agents keep using the bridge and HTTP `/mcp`.
+
 - **AI Chat replay storm** — A chat tab replays its conversation at most once at a time, and a failed replay waits for the person to select the tab or press Retry instead of repeating on every update. The backend refuses a second `session/load` or `session/resume` while one is pending, and logs every attach with its method and session id.
 
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.

@@ -1675,6 +1675,7 @@ fn mcp_server_operation(server: &v1::McpServer) -> Option<AcpOperation> {
         v1::McpServer::Http(_) => Some(AcpOperation::McpHttp),
         v1::McpServer::Sse(_) => Some(AcpOperation::McpSse),
         v1::McpServer::Stdio(_) => Some(AcpOperation::McpStdio),
+        v1::McpServer::Acp(_) => Some(AcpOperation::McpAcp),
         _ => None,
     }
 }

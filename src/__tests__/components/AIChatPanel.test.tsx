@@ -180,6 +180,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			mcpStdio: false,
 			mcpHttp: true,
 			mcpSse: false,
+			mcpAcp: true,
 			clientFormElicitation: true,
 			clientBooleanConfig: false,
 			egoHoldVersion: 1,
