@@ -324,6 +324,13 @@ message, in spoken order. A disarm drops a held turn like one still inside its
 hold-back (`discardedPending`). A target that cannot take hands-free input is
 refused at `arm` and at the sink; it stays unavailable, with no fallback.
 
+The shipping segmenter waits for 1.5 s of silence before closing speech, so a
+one-second breath stays in one transcription. With an activation phrase, the
+effective hold-back is at least 5 s even if the saved setting is shorter.
+Speech that starts before this deadline keeps the pending turn in the mode
+until its transcription can be appended. The 15 s activation window still
+decides whether a later, separate turn needs the phrase again.
+
 Each attempt is logged at INFO with the session: `Hands-free turn typed now`,
 or `Hands-free turn held` with the reason — a hold once, not once per tick.
 
@@ -1401,7 +1408,7 @@ beside it is a gap, not an omission from the documentation.
 | Phrase matching tolerates Whisper spellings, not look-alike speech | `the_phrase_matches_the_spellings_whisper_invents_for_it`, `speech_that_only_resembles_the_phrase_does_not_activate`, `an_accented_or_capitalised_phrase_setting_matches_the_plain_transcript`, `the_rejection_excerpt_keeps_the_first_words_verbatim_and_nothing_more` |
 | Phrase-only timeout | `the_phrase_alone_opens_the_window_without_sending_anything`, `follow_up_speech_inside_the_window_needs_no_phrase`, `speech_after_the_window_expires_needs_the_phrase_again` |
 | Hold-back cancellation | `nothing_is_enqueued_before_the_hold_back_expires`, `an_abort_inside_the_hold_back_sends_nothing` |
-| Pause mid-sentence during the hold-back — the continuation is appended to the pending text and restarts the hold-back, never replaces it | `speech_that_arrives_during_the_hold_back_joins_the_pending_turn` |
+| Pause mid-sentence during the hold-back — the continuation is appended to the pending text and restarts the hold-back, never replaces it | `a_one_second_breath_keeps_both_phrases_in_one_utterance`, `speech_that_arrives_during_the_hold_back_joins_the_pending_turn`, `keyword_turn_keeps_a_five_second_follow_up_in_the_same_terminal_message`, `speech_started_before_the_five_second_deadline_is_not_submitted_mid_phrase` |
 | Manual disarm | `a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send`, `disarming_a_mode_that_was_never_armed_reports_no_work` |
 | Busy or dialog target | `a_busy_target_takes_the_turn_a_dialog_holds_it_and_all_stay_targets`, `a_turn_the_composer_holds_stays_in_the_mode_and_is_retried`, `arming_types_speech_into_a_busy_session_and_leaves_its_compose_queue_alone`, `arming_against_a_target_that_cannot_take_a_compose_entry_is_refused` |
 | Target closure | `a_closed_target_disarms_the_running_mode`, `a_closed_target_disarms_and_a_different_session_does_not`, `closing_the_bound_session_disarms_the_running_mode_and_releases_the_device` |
