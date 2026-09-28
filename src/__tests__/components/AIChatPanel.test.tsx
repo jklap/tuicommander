@@ -1747,23 +1747,76 @@ describe("AIChatPanel: a gap", () => {
 });
 
 describe("AIChatPanel: the session's own knobs", () => {
-	// Model, effort and mode are the session's vocabulary. A list of models in
-	// the panel would be a second, wrong answer to a question ego already
-	// answers, and it would go stale the first time ego learned a new one.
-	it("renders the published options and sets one through set_config_option", async () => {
+	const mode: AcpSessionConfigOption = {
+		id: "mode",
+		name: "Mode",
+		description: "How ego handles tools",
+		type: "select",
+		currentValue: "ask",
+		options: [{ id: "ask", name: "Ask" }, { id: "auto", name: "Automatic" }],
+	};
+
+	// Catches: an ACP option is hidden or shown without its published name and choice.
+	it("shows every published select with a label, description, and current choice in a dialog", async () => {
 		const { container } = renderPanel();
 		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [MODEL_OPTION, mode] })] }));
+		await settle();
 
-		const picker = [...container.querySelectorAll("select")].find((select) =>
-			[...select.options].some((option) => option.textContent === "Sonnet"),
-		) as HTMLSelectElement;
-		expect(picker.value).toBe("opus");
+		expect(container.textContent).toContain("Opus");
+		expect(container.textContent).toContain("Ask");
+		expect(container.querySelectorAll(".controlBar select")).toHaveLength(0);
+		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
+		const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+		expect(dialog).not.toBeNull();
+		expect(dialog.textContent).toContain("How ego handles tools");
+		expect((dialog.querySelector('select[aria-label="Model"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Opus");
+		expect((dialog.querySelector('select[aria-label="Mode"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Ask");
+	});
+
+	// Catches: a new tab keeps a blank select after its options arrive.
+	it("shows the current choice when a second tab receives its options after opening", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: SECOND_SESSION, configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }));
+		await settle();
+		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
+		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
+		expect(picker.selectedOptions[0].textContent).toBe("Sonnet");
+	});
+
+	// Catches: the summary optimistically reports a choice ego has not accepted.
+	it("sends a changed choice and updates the summary only from the agent's reply", async () => {
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
+		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
 
 		picker.value = "sonnet";
 		picker.dispatchEvent(new Event("change", { bubbles: true }));
 		await settle();
-
 		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", { value: "sonnet" });
+		expect(container.querySelector(".controlBar")?.textContent).toContain("Opus");
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }));
+		await settle();
+		expect(container.querySelector(".controlBar")?.textContent).toContain("Sonnet");
+	});
+
+	// Catches: a rejected choice appears accepted and its error is lost.
+	it("shows a rejected setting change inside the dialog", async () => {
+		client.setConfigOption.mockRejectedValueOnce(new Error("Model unavailable"));
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
+		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
+		picker.value = "sonnet";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+		expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Model unavailable");
+		expect(picker.value).toBe("opus");
 	});
 });
 
