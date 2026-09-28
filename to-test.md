@@ -24,6 +24,10 @@
 
 # To Test
 
+## CLI install lint (story 1185-790d) — rebuild required
+
+- [x] After rebuilding `tuic`, the macOS elevated install path still uses the target's parent directory; the Linux path compiles without an unused binding. _(verified: `src-tauri/crates/tuic-cli/src/main.rs:1179` gates only the parent binding with `target_os = "macos"`; macOS and Linux-target Clippy both pass with `-D warnings`.)_
+
 ## Remote manual update guard (story 1183-7154) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "Automatic remote update is already in progress". Targeted Rust tests cover the guard and the unchanged manual update path; the running backend cannot load this Rust change until restart.
