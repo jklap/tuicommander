@@ -10601,14 +10601,14 @@ mod tests {
             .unwrap();
         let output = root.path().join("child-env");
         let command = format!(
-            "printf '%s|%s|%s|%s|%s' \"$CLAUDE_CONFIG_DIR\" \"$TUIC_SESSION\" \"$TUIC_PARENT\" \"$LAYER\" \"$ONLY_RUN\" > '{}'",
+            "printf '%s|%s|%s|%s|%s|%s' \"$CLAUDE_CONFIG_DIR\" \"$TUIC_SESSION\" \"$TUIC_PARENT\" \"$LAYER\" \"$ONLY_RUN\" \"$CARGO_INCREMENTAL\" > '{}'",
             output.display()
         );
         let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
         let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
             "agents": {"aider": {"run_configs": [{
                 "name": "Env Profile", "command": "/bin/sh", "args": ["-c", command],
-                "env": {"CLAUDE_CONFIG_DIR": "/run", "LAYER": "run", "ONLY_RUN": "present",
+                "env": {"CLAUDE_CONFIG_DIR": "/run", "LAYER": "run", "ONLY_RUN": "present", "CARGO_INCREMENTAL": "1",
                         "TUIC_SESSION": "run-spoof", "TUIC_PARENT": "run-spoof"}
             }]}}
         }))
@@ -10624,7 +10624,7 @@ mod tests {
             "127.0.0.1:1".parse().unwrap(),
             &serde_json::json!({
                 "action": "spawn", "agent_type": "Env Profile", "prompt": "inspect env",
-                "env": {"CLAUDE_CONFIG_DIR": "/caller", "LAYER": "caller",
+                "env": {"CLAUDE_CONFIG_DIR": "/caller", "LAYER": "caller", "CARGO_INCREMENTAL": "2",
                         "TUIC_SESSION": "spoofed", "TUIC_PARENT": "spoofed"}
             }),
             Some("mcp-env-test"),
@@ -10638,7 +10638,7 @@ mod tests {
         let actual = std::fs::read_to_string(&output).expect("child writes its environment");
         assert_eq!(
             actual,
-            format!("/caller|{session_id}|parent-peer|caller|present")
+            format!("/caller|{session_id}|parent-peer|caller|present|2")
         );
         std::fs::remove_file(&output).unwrap();
         let unparented = handle_agent(
@@ -10661,7 +10661,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(&output).unwrap(),
-            format!("/run|{unparented_id}||run|present")
+            format!("/run|{unparented_id}||run|present|1")
         );
     }
 
