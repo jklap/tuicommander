@@ -14,7 +14,7 @@
 
 ## AI Chat ego profile (story 1074-9373) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. Capture the Settings row to verify its layout. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart; the browser wrapper timed out twice while opening the worktree's Vite page, and maccontrol returned circuit open.
 
 ## AI Chat image paste (story 1085-fa65)
 

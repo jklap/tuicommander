@@ -7,8 +7,8 @@
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 use serde_json::json;
 use tuicommander_lib::acp::{
-    AcpOperation, AcpUnavailableReason, EgoAcpConfig, build_initialize_request,
-    capability_snapshot, launch_spec,
+    AcpClientErrorCode, AcpConnectRequest, AcpOperation, AcpReconnectRequest, AcpUnavailableReason,
+    EgoAcpConfig, build_initialize_request, capability_snapshot, launch_spec,
 };
 
 mod acp_support;
@@ -87,6 +87,66 @@ fn ambiguous_profile_names_are_refused_before_launch() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn selected_profile_reaches_the_process_and_session_new_carries_no_host_policy() {
+    let fixture = acp_support::Fixture::with("session-new");
+    let root = fixture.root();
+    std::fs::write(root.join("expected-profile.txt"), "coordinator").unwrap();
+    let mut config = acp_support::Fixture::config();
+    config.profile = "coordinator".to_string();
+
+    let connection = fixture
+        .manager
+        .connect(&config, AcpConnectRequest { root: root.clone() })
+        .await
+        .expect("ego received the selected profile");
+    fixture
+        .manager
+        .new_session(connection.connection_id, acp_support::authority(root))
+        .await
+        .expect("session/new carries no host policy");
+    fixture
+        .manager
+        .list_sessions(connection.connection_id, Default::default())
+        .await
+        .expect("complete the fixture scenario");
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn invalid_profile_on_reconnect_preserves_the_current_connection() {
+    let fixture = acp_support::Fixture::with("ready");
+    let connection = fixture.connect().await;
+    let mut config = acp_support::Fixture::config();
+    config.profile = "-invalid".to_string();
+
+    let error = fixture
+        .manager
+        .reconnect(
+            &config,
+            AcpReconnectRequest {
+                connection_id: connection.connection_id,
+                root: fixture.root(),
+            },
+        )
+        .await
+        .expect_err("an invalid profile cannot replace the live ego process");
+    assert_eq!(error.code, AcpClientErrorCode::InvalidInput);
+    assert_eq!(
+        fixture.manager.snapshot(connection.connection_id).unwrap(),
+        connection
+    );
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
 }
 
 #[test]

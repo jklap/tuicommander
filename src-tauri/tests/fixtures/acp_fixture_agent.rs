@@ -51,6 +51,16 @@ fn main() {
     assert_eq!(args.next().as_deref(), Some("acp"), "production argv");
     assert_eq!(args.next().as_deref(), Some("-C"), "production argv");
     let root = PathBuf::from(args.next().expect("production argv carries a root"));
+    let expected_profile = root.join("expected-profile.txt");
+    if expected_profile.exists() {
+        let expected = fs::read_to_string(expected_profile).expect("expected profile name");
+        assert_eq!(args.next().as_deref(), Some("--profile"), "production argv");
+        assert_eq!(
+            args.next().as_deref(),
+            Some(expected.as_str()),
+            "production argv"
+        );
+    }
     assert!(
         args.next().is_none(),
         "production argv carries nothing else"
