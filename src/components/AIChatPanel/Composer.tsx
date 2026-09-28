@@ -16,7 +16,7 @@ export const Composer: Component<{ chat: AcpChat }> = (props) => {
 	const send = () => {
 		const text = aiChatDraft.text();
 		const images = aiChatDraft.images().map((image) => image.block);
-		if ((!text.trim() && images.length === 0) || props.chat.busy()) return;
+		if (!text.trim() && images.length === 0) return;
 		aiChatDraft.clear();
 		setPasteError(null);
 		void props.chat.send(text, images);
@@ -50,6 +50,22 @@ export const Composer: Component<{ chat: AcpChat }> = (props) => {
 
 	return (
 		<div class={s.inputArea}>
+			<Show when={props.chat.queuedPrompts().length > 0}>
+				<div class={s.queueList} aria-label="Queued prompts">
+					<div class={s.queueHeader}>Queued <span class={s.queueBadge}>{props.chat.queuedPrompts().length}</span></div>
+					<For each={props.chat.queuedPrompts()}>
+						{(queued) => {
+							const label = queued.summary;
+							return <div class={s.queueRow}>
+								<span class={s.queueText}>{label}</span>
+								<button type="button" class={s.queueCancel} aria-label={`Cancel queued prompt ${label}`} onClick={() => void props.chat.cancelQueued(queued.turnId)}>
+									<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" /></svg>
+								</button>
+							</div>;
+						}}
+					</For>
+				</div>
+			</Show>
 			<div class={s.inputBody}>
 				<Show when={aiChatDraft.images().length > 0}>
 					<div class={s.imagePreviews}>
@@ -82,23 +98,19 @@ export const Composer: Component<{ chat: AcpChat }> = (props) => {
 					rows={1}
 				/>
 			</div>
-			<Show
-				when={props.chat.busy()}
-				fallback={
-					<button
-						type="button"
-						class={s.sendBtn}
-						disabled={!aiChatDraft.text().trim() && aiChatDraft.images().length === 0}
-						onClick={send}
-					>
-						Send
-					</button>
-				}
-			>
+			<Show when={props.chat.busy()}>
 				<button type="button" class={s.stopBtn} onClick={() => void props.chat.cancel()}>
 					Stop
 				</button>
 			</Show>
+			<button
+				type="button"
+				class={s.sendBtn}
+				disabled={!aiChatDraft.text().trim() && aiChatDraft.images().length === 0}
+				onClick={send}
+			>
+				{props.chat.busy() ? "Queue" : "Send"}
+			</button>
 		</div>
 	);
 };

@@ -117,6 +117,9 @@ questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image
 blocks through `acpClient.prompt`. It checks `promptImage` and the 10 MiB cap
 before reading clipboard bytes; each preview can be removed before sending.
+During a turn it offers **Queue** beside **Stop**, lists the host-owned queued
+prompts, and can remove any queued ID. The list follows ACP snapshots and
+events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 

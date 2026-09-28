@@ -499,6 +499,14 @@ pub enum AcpClientEvent {
         state: AcpAttachmentState,
     },
     TurnStarted,
+    /// The accepted user input was sent to the agent; all views render it once.
+    PromptSent {
+        text: String,
+    },
+    /// The complete queue after a change, so every subscriber sees the same order.
+    PromptQueueChanged {
+        queued_prompts: Vec<AcpQueuedPrompt>,
+    },
     /// Ego's own update, forwarded whole rather than reduced.
     ///
     /// The client has no business deciding which parts of what the agent said
@@ -775,6 +783,14 @@ pub struct AcpTurnSnapshot {
     pub usage: Option<v1::Usage>,
 }
 
+/// A prompt accepted by the host but not yet sent to the agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpQueuedPrompt {
+    pub turn_id: AcpTurnId,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAttachmentSnapshot {
@@ -785,6 +801,7 @@ pub struct AcpAttachmentSnapshot {
     pub config_options: Vec<v1::SessionConfigOption>,
     pub usage: Option<AcpUsageSnapshot>,
     pub active_turn: Option<AcpTurnSnapshot>,
+    pub queued_prompts: Vec<AcpQueuedPrompt>,
     pub pending_permission_ids: Vec<AcpHostRequestId>,
     pub pending_elicitation_ids: Vec<AcpHostRequestId>,
 }
@@ -1009,24 +1026,6 @@ impl AcpClientError {
         )
         .with_connection_id(connection_id)
         .with_session_id(session_id)
-    }
-
-    /// A second prompt arrived while the first was still running.
-    ///
-    /// Retryable, because the answer changes on its own: the turn settles and
-    /// the session takes prompts again.
-    pub(super) fn turn_in_progress(
-        connection_id: AcpConnectionId,
-        session_id: v1::SessionId,
-    ) -> Self {
-        let mut error = Self::new(
-            AcpClientErrorCode::InvalidInput,
-            format!("ACP session {session_id} already has a turn in progress"),
-        )
-        .with_connection_id(connection_id)
-        .with_session_id(session_id);
-        error.retryable = true;
-        error
     }
 
     /// A config option, or a value for one, that this session never offered.

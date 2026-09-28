@@ -26,6 +26,7 @@ function chat() {
 			{ id: "t", kind: "tool", call: { toolCallId: "tool-1", title: "Run tests", status: "completed" } },
 		],
 		busy: () => false,
+		queuedPrompts: () => [] as { turnId: string; summary: string }[],
 		held: () => false,
 		gap: () => null,
 		error: () => null,
@@ -54,6 +55,7 @@ function chat() {
 		startSession: vi.fn(),
 		send: vi.fn(),
 		cancel: vi.fn(),
+		cancelQueued: vi.fn(),
 		recover: vi.fn(),
 	};
 }
@@ -95,5 +97,18 @@ describe("mobile ego chat", () => {
 		expect(screen.getByRole("option", { name: "Earlier review" })).toBeTruthy();
 		fireEvent.change(picker, { target: { value: "previous" } });
 		expect(selectSession).toHaveBeenCalledWith("previous");
+	});
+
+	it("shows the shared queue and cancels a selected prompt from phone", async () => {
+		const shared = chat();
+		shared.busy = () => true;
+		shared.queuedPrompts = () => [{ turnId: "phone-turn", summary: "Follow up from desktop" }];
+		createAcpChat.mockReturnValue(shared);
+		render(() => <MobileChatScreen />);
+
+		expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel queued prompt Follow up from desktop" }));
+		expect(shared.cancelQueued).toHaveBeenCalledWith("phone-turn");
 	});
 });

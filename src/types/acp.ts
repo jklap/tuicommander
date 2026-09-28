@@ -132,6 +132,11 @@ export interface AcpTurnSnapshot {
 	usage: unknown | null;
 }
 
+export interface AcpQueuedPrompt {
+	turnId: AcpTurnId;
+	summary: string;
+}
+
 export interface AcpUsageSnapshot {
 	context: unknown | null;
 	endTurn: unknown | null;
@@ -146,6 +151,7 @@ export interface AcpAttachmentSnapshot {
 	configOptions: AcpSessionConfigOption[];
 	usage: AcpUsageSnapshot | null;
 	activeTurn: AcpTurnSnapshot | null;
+	queuedPrompts: AcpQueuedPrompt[];
 	pendingPermissionIds: AcpHostRequestId[];
 	pendingElicitationIds: AcpHostRequestId[];
 }
@@ -289,6 +295,8 @@ export type AcpClientEvent =
 	| { kind: "connectionState"; state: AcpConnectionState }
 	| { kind: "attachmentState"; state: AcpAttachmentState }
 	| { kind: "turnStarted" }
+	| { kind: "promptSent"; text: string }
+	| { kind: "promptQueueChanged"; queuedPrompts: AcpQueuedPrompt[] }
 	| { kind: "sessionUpdate"; update: AcpSessionUpdate }
 	| { kind: "turnSettled"; stopReason: string; usage: unknown | null }
 	| { kind: "permissionRequested"; requestId: AcpHostRequestId; request: AcpRequestPermissionRequest }
