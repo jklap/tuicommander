@@ -1679,7 +1679,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/agents/verify-session",
-			body: { agentType: args.agentType, sessionId: args.sessionId, cwd: args.cwd },
+			body: {
+				agentType: args.agentType,
+				sessionId: args.sessionId,
+				cwd: args.cwd,
+				agentPid: args.agentPid,
+				envOverrides: args.envOverrides,
+			},
 		}),
 	},
 	detect_agents: { map: () => ({ method: "GET", path: "/agents" }) },
