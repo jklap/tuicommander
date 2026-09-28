@@ -22,6 +22,7 @@ const {
 	mockSettings: { state: { preventSleepWhenBusy: true } },
 	mockTerminals: {
 		isAnyBusy: vi.fn(() => true),
+		isAnyWorking: vi.fn(() => true),
 		onShellExit: vi.fn(),
 	},
 }));
@@ -61,6 +62,7 @@ describe("application runtime boundaries", () => {
 			return Promise.resolve(unlisten);
 		});
 		mockTerminals.isAnyBusy.mockReturnValue(true);
+		mockTerminals.isAnyWorking.mockReturnValue(true);
 		mockInvoke.mockClear();
 		mockGithub.stopPolling.mockClear();
 		mockNotifications.clearBadge.mockClear();

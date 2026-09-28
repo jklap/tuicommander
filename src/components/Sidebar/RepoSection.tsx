@@ -283,7 +283,8 @@ function agentRow(term: TerminalState) {
 	return agentFacts(
 		{
 			awaitingInput: term.awaitingInput,
-			busy: (term.sessionId != null && rateLimitStore.isRateLimited(term.sessionId)) || terminalsStore.isBusy(term.id),
+			busy:
+				(term.sessionId != null && rateLimitStore.isRateLimited(term.sessionId)) || terminalsStore.isWorking(term.id),
 			agentIntent: term.agentIntent,
 			currentTask: term.currentTask,
 			lastPrompt: term.lastPrompt,
@@ -409,7 +410,7 @@ export const BranchTabList: Component<{ terminalIds: string[]; repoPath: string 
 			const visual = terminalVisualState({
 				error: t.awaitingInput === "error",
 				question: t.awaitingInput === "question",
-				busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
+				busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isWorking(id),
 				unseen: t.unseen,
 				idle: t.shellState === "idle",
 			});
@@ -627,8 +628,9 @@ export const BranchItem: Component<{
 
 	const hasQuestion = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "question");
 
-	// Debounced busy — centralized in terminalsStore with 2s hold
-	const hasBusy = () => props.branch.terminals.some((id) => terminalsStore.isBusy(id));
+	// Debounced busy, OR declared background work — centralized in terminalsStore.isWorking
+	// (2s hold; declaredBackgroundWork bypasses the idle-shell carve-out, see its doc comment)
+	const hasBusy = () => props.branch.terminals.some((id) => terminalsStore.isWorking(id));
 
 	const hasUnseen = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.unseen);
 

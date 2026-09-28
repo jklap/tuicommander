@@ -42,10 +42,13 @@ vi.mock("../../stores/promptLibrary", () => ({
 	},
 }));
 
+const { mockIsWorking } = vi.hoisted(() => ({ mockIsWorking: vi.fn(() => false) }));
+
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		getActive: vi.fn(() => ({ id: "t1", sessionId: "s1", agentType: "claude" })),
 		isBusy: vi.fn(() => false),
+		isWorking: mockIsWorking,
 	},
 }));
 
@@ -87,5 +90,34 @@ describe("SmartPromptsDropdown — disabled prompt", () => {
 		expect(item).not.toBeNull();
 		fireEvent.click(item as HTMLElement);
 		expect(mockExecuteSmartPrompt).not.toHaveBeenCalled();
+	});
+});
+
+describe("SmartPromptsDropdown — disabled-reason banner (getDisabledReason)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockCanExecute.mockReturnValue({ ok: true });
+		smartPromptsDropdownStore.open();
+	});
+
+	afterEach(() => {
+		cleanup();
+		smartPromptsDropdownStore.close();
+	});
+
+	it("shows the busy banner when terminalsStore.isWorking is true (e.g. declared background work on an idle shell)", async () => {
+		mockIsWorking.mockReturnValue(true);
+		const { getByText } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+
+		expect(getByText("Agent is busy — wait for it to finish")).toBeTruthy();
+	});
+
+	it("shows no busy banner when terminalsStore.isWorking is false", async () => {
+		mockIsWorking.mockReturnValue(false);
+		const { queryByText } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+
+		expect(queryByText(/Agent is busy/)).toBeNull();
 	});
 });
