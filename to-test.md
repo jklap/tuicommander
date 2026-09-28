@@ -3287,6 +3287,10 @@ restart, not before.
 - [ ] The AI Chat panel still detaches into its own window and the main window
       shows the *Bring back* placeholder; closing the detached window restores
       the docked shell.
+- [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose
+      first answer starts with `TUICommander v1.7.7 is connected.` followed by
+      `intent:`. The status appears and no clipped acknowledgement such as
+      `.7.7 is connected.` remains in the transcript.
 - [ ] **Needs a `make dev` restart (Rust).** In a tab *you* opened by hand (not
       one an orchestrator spawned), an agent calling `progress type=done` no
       longer answers `project_required`: the entry lands in that project's
