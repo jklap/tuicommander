@@ -121,6 +121,14 @@ describe("CommandPalette browser mode", () => {
 		expect(isBrowserCommandPaletteAction(settingAction)).toBe(true);
 	});
 
+	// Session State Explain has full HTTP transport parity (GET
+	// /sessions/{id}/explain-state) alongside its Tauri command and MCP surface,
+	// so unlike a native-dialog action it's safe to expose here too.
+	it("allowlists explain-session-state for browser mode", () => {
+		const explainAction = action("explain-session-state", "Explain session state (active tab)…");
+		expect(isBrowserCommandPaletteAction(explainAction)).toBe(true);
+	});
+
 	it("keeps the complete desktop action list when browser mode is off", () => {
 		const nativeDialog = action("open-file", "Open file");
 		const { container } = render(() => <CommandPalette actions={[nativeDialog]} />);
