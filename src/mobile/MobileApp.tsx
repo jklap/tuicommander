@@ -14,10 +14,13 @@ import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
 import { useVersionCheck } from "./useVersionCheck";
 
-// Both screens sit behind a bottom-tab tap; the app always opens on "sessions".
+// Screens behind a bottom-tab tap stay out of the initial mobile graph.
 // Eager imports dragged the settings store and the whole i18n string table into
 // the initial mobile graph, which is what pushed mobile.html over its gzip budget.
 const ActivityScreen = lazy(() => import("./screens/ActivityScreen").then((m) => ({ default: m.ActivityScreen })));
+const MobileChatScreen = lazy(() =>
+	import("./screens/MobileChatScreen").then((m) => ({ default: m.MobileChatScreen })),
+);
 const FilesScreen = lazy(() => import("./screens/FilesScreen").then((m) => ({ default: m.FilesScreen })));
 const ProgressDialog = lazy(() => import("../components/ProgressDialog").then((m) => ({ default: m.ProgressDialog })));
 const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
@@ -71,7 +74,7 @@ export default function MobileApp() {
 		});
 	});
 
-	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
+	const [activeTab, setActiveTab] = createSignal<TabId>("chat");
 	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
 	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
 	createEffect(() => {
@@ -160,6 +163,9 @@ export default function MobileApp() {
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
 							<Switch>
+								<Match when={activeTab() === "chat"}>
+									<MobileChatScreen />
+								</Match>
 								<Match when={activeTab() === "sessions"}>
 									<SessionsScreen
 										sessions={sessions()}
