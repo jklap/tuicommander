@@ -291,9 +291,11 @@ Content-Type: application/json
 { "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"] }
 ```
 
-Spawns an AI agent in a PTY session. The request is flat; browser transport merges
-the desktop `pty_config` and `agent_config` objects. The optional `env` map and
-`model` string use the same field names as desktop IPC spawn. By default,
+Spawns an AI agent in a PTY session. The request is flat; browser transport sends
+only the HTTP spawn fields from the desktop `pty_config` and `agent_config` objects.
+It uses `agent_config.cwd` when present, otherwise `pty_config.cwd`. Desktop-only
+PTY fields such as `shell`, `tuic_session`, and `alias` are omitted. The optional
+`env` map and `model` string use the same field names as desktop IPC spawn. By default,
 supported interactive CLIs use native scrollback according to the agent's
 `prevent_alt_screen` setting.
 The child receives its own `TUIC_SESSION`, equal to the returned `session_id`,

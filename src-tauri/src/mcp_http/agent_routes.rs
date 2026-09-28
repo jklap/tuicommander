@@ -538,13 +538,25 @@ mod tests {
 
     #[test]
     fn spawn_request_rejects_removed_screen_override() {
-        let request = serde_json::json!({
-            "rows": 24,
-            "cols": 80,
-            "prompt": "work",
-            "allow_alt_screen": true,
-        });
-        assert!(serde_json::from_value::<SpawnAgentRequest>(request).is_err());
+        for key in ["allow_alt_screen", "allowAltScreen"] {
+            let mut request = serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "prompt": "work",
+            });
+            request[key] = serde_json::json!(true);
+            assert!(serde_json::from_value::<SpawnAgentRequest>(request).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn spawn_request_accepts_browser_transport_body() {
+        let body = include_str!("../../tests/fixtures/spawn_agent_http_body.json");
+        let parsed: SpawnAgentRequest = serde_json::from_str(body).expect("HTTP spawn request");
+        assert_eq!(parsed.rows, Some(30));
+        assert_eq!(parsed.cols, Some(100));
+        assert_eq!(parsed.cwd.as_deref(), Some("/agent"));
+        assert_eq!(parsed.env.get("PROFILE").map(String::as_str), Some("work"));
     }
 
     #[tokio::test]
