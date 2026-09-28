@@ -291,9 +291,11 @@ Content-Type: application/json
 { "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"] }
 ```
 
-Spawns an AI agent in a PTY session. The request is flat; browser transport merges
-the desktop `pty_config` and `agent_config` objects. The optional `env` map and
-`model` string use the same field names as desktop IPC spawn. By default,
+Spawns an AI agent in a PTY session. The request is flat; browser transport sends
+only the HTTP spawn fields from the desktop `pty_config` and `agent_config` objects.
+It uses `agent_config.cwd` when present, otherwise `pty_config.cwd`. Desktop-only
+PTY fields such as `shell`, `tuic_session`, and `alias` are omitted. The optional
+`env` map and `model` string use the same field names as desktop IPC spawn. By default,
 supported interactive CLIs use native scrollback according to the agent's
 `prevent_alt_screen` setting.
 The child receives its own `TUIC_SESSION`, equal to the returned `session_id`,
@@ -1650,6 +1652,17 @@ by `ego_executable` in `app_config.json` and holds no API key.
 
 ## Agent Endpoints
 
+### Verify Agent Session
+
+```
+POST /agents/verify-session
+Content-Type: application/json
+
+{ "agentType": "claude", "sessionId": "af467730-5e79-49d9-8a17-ebd94c99f262", "cwd": "/work/project", "agentPid": null, "envOverrides": { "CLAUDE_CONFIG_DIR": "/profiles/work" } }
+```
+
+Returns a JSON boolean. `agentPid` is a live process ID when available and `null` after restart; `envOverrides` carries the saved launch profile so verification reads the same session store the agent used. The same fields apply to Codex (`CODEX_HOME`) and Gemini (`GEMINI_CLI_HOME`).
+
 ### Detect All Agents
 
 ```
@@ -2198,7 +2211,7 @@ use the returned id for later calls.
 GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
 ```
 
-Returns a fresh `{ dirty_files, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
+Returns a fresh `{ dirty_files, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
 for one exact workspace. `dirty_files` counts the staged, unstaged and untracked
 files a removal would discard; `null` means the inspection failed and is not the
 same answer as `0`. `dirty_fingerprint` identifies checkout status, HEAD, and submodule refs for
@@ -2208,7 +2221,7 @@ for commits absent from its remote-tracking branches. `commit_status` is
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -2260,7 +2273,8 @@ Query parameters:
 - `deleteBranch` (optional, default `true`, or `false` when `force=true`) -- when `true`, also requests deletion of the local git branch
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
-- `expectedFingerprint` (required with `force=true`) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

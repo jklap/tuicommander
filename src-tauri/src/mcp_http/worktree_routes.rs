@@ -287,7 +287,8 @@ pub(super) async fn remove_worktree_http(
     let delete_branch = q.delete_branch.unwrap_or(!force);
     let override_lock = q.override_lock.unwrap_or(false);
     let expected_fingerprint = q.expected_fingerprint.clone();
-    if force && expected_fingerprint.is_none() {
+    let confirm_missing_checkout = q.confirm_missing_checkout.unwrap_or(false);
+    if force && expected_fingerprint.is_none() && !confirm_missing_checkout {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"})),
@@ -297,7 +298,7 @@ pub(super) async fn remove_worktree_http(
     let id_for_event = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         let archive = crate::worktree::resolve_archive_script(&repo_path);
-        crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+        crate::worktree::remove_worktree_with_presence_confirmation(
             &repo_path,
             &workspace_id,
             delete_branch,
@@ -305,6 +306,7 @@ pub(super) async fn remove_worktree_http(
             force,
             override_lock,
             expected_fingerprint.as_deref(),
+            confirm_missing_checkout,
         )
     })
     .await;

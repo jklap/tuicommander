@@ -27,6 +27,9 @@ export function CommandWidget(props: CommandWidgetProps) {
 				(data) => retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data })),
 				text,
 				props.agentType,
+				undefined,
+				true,
+				props.sessionId,
 			);
 			// Dismiss only once the command reached the PTY; on failure keep the
 			// sheet open so the user can retry.

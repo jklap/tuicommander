@@ -437,6 +437,71 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	it("shows a new ACP session title in the header and conversation picker", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: ROOT, title: "Conversation 1", updatedAt: "2026-09-27T09:00:00Z" },
+				{ sessionId: "other", cwd: ROOT, title: "Other", updatedAt: "2026-09-26T09:00:00Z" },
+			],
+			nextCursor: null,
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Review architecture" } });
+		await settle();
+
+		expect(container.querySelector('select[title="Conversation"]')?.textContent).toContain("Review architecture");
+		expect(container.querySelector('[class*="headerLeft"]')?.textContent).toContain("Review architecture");
+	});
+
+	it("renders context occupancy and cost from one ACP usage update", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 50000, size: 200000, cost: { amount: 0.001035, currency: "USD" } },
+		});
+		await settle();
+
+		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).toContain("USD 0.001035");
+	});
+
+	it("renders context occupancy without a missing cost", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
+		await settle();
+
+		expect(container.textContent).toContain("Context 25%");
+		expect(container.textContent).not.toContain("NaN");
+		expect(container.textContent).not.toContain("USD");
+	});
+
+	it("does not carry a previous cost into a costless usage update", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "usage_update", used: 100, size: 400, cost: { amount: 2, currency: "USD" } },
+		});
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 200, size: 400 } });
+		await settle();
+
+		expect(container.textContent).toContain("Context 50%");
+		expect(container.textContent).not.toContain("USD 2");
+	});
+
+	it("does not render a percentage for a zero context window", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
+		await settle();
+
+		expect(container.textContent).not.toContain("Context");
+		expect(container.textContent).not.toContain("Infinity");
+	});
+
 	it("does not replace a saved binding when config cannot be read", async () => {
 		vi.mocked(invoke).mockRejectedValue(new Error("Config unavailable"));
 		const { container } = renderPanel();
@@ -611,6 +676,149 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.loadSession).toHaveBeenCalledTimes(1);
 		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", ROOT);
 		expect(container.textContent?.split("Only once")).toHaveLength(2);
+	});
+});
+
+describe("AIChatPanel: tool activity", () => {
+	function tool(id: number, status: "completed" | "failed" = "completed") {
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "tool_call",
+				toolCallId: `call-${id}`,
+				title: `Inspect file ${id}`,
+				kind: "read",
+				status,
+				content: [{ type: "content", content: { type: "text", text: `output ${id}` } }],
+			},
+		});
+	}
+
+	it("collapses seven calls in one turn into one activity line with count and salient titles", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Check files" } } });
+		for (let id = 1; id <= 7; id += 1) tool(id);
+		await settle();
+
+		const summaries = [...container.querySelectorAll("summary")].filter((summary) => summary.textContent?.includes("7 tool calls"));
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0].textContent).toContain("Inspect file 1");
+		expect(summaries[0].textContent).toContain("Inspect file 2");
+		expect(summaries[0].textContent).toMatch(/\d+(?:\.\d+)?s/);
+		expect((summaries[0].parentElement as HTMLDetailsElement).open).toBe(false);
+	});
+
+	it("requires a second expansion before showing tool output", async () => {
+		const { container } = renderPanel();
+		await settle();
+		tool(1);
+		await settle();
+
+		const activity = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent?.includes("tool call"));
+		expect(activity).toBeDefined();
+		expect(activity?.open).toBe(false);
+		activity!.open = true;
+		await settle();
+		expect(activity?.textContent).toContain("Inspect file 1");
+		expect(activity?.textContent).toContain("read");
+		expect(activity?.textContent).toContain("Completed");
+		const output = activity?.querySelector("details");
+		expect(output?.open).toBe(false);
+		expect(output?.textContent).toContain("output 1");
+	});
+
+	it("marks the activity line failed when any call fails", async () => {
+		const { container } = renderPanel();
+		await settle();
+		tool(1);
+		tool(2, "failed");
+		await settle();
+
+		const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("2 tool calls"));
+		expect(summary?.textContent).toContain("Failed");
+	});
+
+	it("keeps open permission and elicitation cards outside collapsed activity", async () => {
+		const { container } = renderPanel();
+		await settle();
+		tool(1);
+		feed({
+			kind: "permissionRequested",
+			requestId: "req-activity",
+			request: {
+				sessionId: SESSION,
+				toolCall: { title: "Write file" },
+				options: [{ optionId: "reject", name: "Reject", kind: "reject_once" }],
+			},
+		});
+		feed({
+			kind: "elicitationRequested",
+			requestId: "req-activity-form",
+			request: {
+				mode: "form",
+				sessionId: SESSION,
+				message: "Which branch?",
+				requestedSchema: { type: "object", properties: { branch: { type: "string" } } },
+			},
+		});
+		await settle();
+
+		const activity = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent?.includes("tool call"));
+		expect(activity?.open).toBe(false);
+		expect(container.textContent).toContain("Write file");
+		expect(container.textContent).toContain("Which branch?");
+		expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Reject")).toBeDefined();
+	});
+
+	it("keeps calls together across agent text but separates the next user turn", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "First task" } } });
+		tool(1);
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking more." } } });
+		tool(2);
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Second task" } } });
+		tool(3);
+		await settle();
+
+		const summaries = [...container.querySelectorAll("summary")].filter((summary) => summary.textContent?.includes("tool call"));
+		expect(summaries).toHaveLength(2);
+		expect(summaries[0].textContent).toContain("2 tool calls");
+		expect(summaries[1].textContent).toContain("1 tool call");
+	});
+
+	it("updates the collapsed line when an existing call later fails", async () => {
+		const { container } = renderPanel();
+		await settle();
+		tool(1);
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "failed" } });
+		await settle();
+
+		const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("1 tool call"));
+		expect(summary?.textContent).toContain("Failed");
+	});
+
+	it("extends observed duration when a later call joins an already completed activity", async () => {
+		const realNow = performance.now.bind(performance);
+		const now = vi.spyOn(performance, "now");
+		let elapsed = 0;
+		now.mockImplementation(() => realNow() + elapsed);
+		try {
+			const { container } = renderPanel();
+			await settle();
+			tool(1);
+			await settle();
+			elapsed = 2500;
+			tool(2);
+			await settle();
+
+			const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("2 tool calls"));
+			expect(summary?.textContent).toMatch(/2\.5s observed|2\.6s observed/);
+		} finally {
+			now.mockRestore();
+		}
 	});
 });
 

@@ -15,7 +15,7 @@ import { getShellFamily, sendCommand } from "./sendCommand";
 export async function sendTextToSession(sessionId: string, text: string, submit = true): Promise<void> {
 	const agentType = terminalsStore.getAgentTypeForSession(sessionId);
 	const shellFamily = await getShellFamily(sessionId);
-	await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, shellFamily, submit);
+	await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, shellFamily, submit, sessionId);
 }
 
 /** Send text to the currently-active terminal as a command.

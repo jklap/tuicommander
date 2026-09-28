@@ -11,6 +11,9 @@ no tool loop and no sandbox of its own.
    it and there is no separate AI Chat switch.
 2. Set **ego executable** in `Settings > General` (**Select…** opens a file picker). While it is empty, ACP is not
    configured: the panel says so and launches nothing.
+3. Optionally set **ego profile** in `Settings > General` to select a profile from ego's user configuration.
+   An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
+   it does not send profile rules in `session/new`.
 
 ## Opening it
 
@@ -35,6 +38,10 @@ beside it lists previous conversations by title, newest first. Selecting one
 loads its history. The last selected conversation is restored after restarting
 TUICommander.
 
+When ego updates the session title, the panel header and conversation picker
+show the new title. During a turn, the footer shows context-window use as a
+percentage and shows the cumulative cost when ego reports one.
+
 ego reaches terminals and repositories the way any external agent does: by
 calling TUICommander's own MCP server. The entry for it is built by
 TUICommander, not by whoever opened the session, so a conversation can never be
@@ -52,8 +59,11 @@ in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
-- **Tool calls** appear as one card per call, updated in place — not one card per
-  status change.
+- **Tool activity** appears as one collapsed line per turn, with a count,
+  observed duration, status and the first two call titles. Expand it to see
+  each call's title, kind and status; expand a call to see its output. The
+  duration measures only time observed while this panel is open. A replayed
+  conversation has no recorded timing data.
 - **The plan** ego publishes is shown as a list and replaced whole each time it
   changes.
 - **Stop** cancels the turn. **Pause** and **Resume** hold it where ego supports

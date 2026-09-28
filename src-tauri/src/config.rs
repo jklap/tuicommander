@@ -780,6 +780,9 @@ pub(crate) struct AppConfig {
     /// connect is refused.
     #[serde(default)]
     pub(crate) ego_executable: String,
+    /// Optional user-config profile passed to ego at ACP launch.
+    #[serde(default)]
+    pub(crate) ego_profile: String,
     /// Last selected ego conversation for each repository root.
     #[serde(default)]
     pub(crate) ai_chat_sessions: HashMap<String, String>,
@@ -1044,6 +1047,7 @@ impl Default for AppConfig {
             mcp_config_installed: false,
             ide: String::new(),
             ego_executable: String::new(),
+            ego_profile: String::new(),
             ai_chat_sessions: HashMap::new(),
             ai_chat_peer_ids: HashMap::new(),
             default_font_size: 13,
@@ -4275,6 +4279,7 @@ mod tests {
             mcp_config_installed: false,
             ide: "cursor".to_string(),
             ego_executable: "/opt/ego/bin/ego".to_string(),
+            ego_profile: "coordinator".to_string(),
             ai_chat_sessions: HashMap::from([(
                 "/repo/project".to_string(),
                 "session-42".to_string(),
@@ -4351,6 +4356,7 @@ mod tests {
         assert_eq!(loaded.font_size, 16);
         assert_eq!(loaded.ide, "cursor");
         assert_eq!(loaded.ego_executable, "/opt/ego/bin/ego");
+        assert_eq!(loaded.ego_profile, "coordinator");
         assert_eq!(
             loaded.ai_chat_sessions.get("/repo/project"),
             Some(&"session-42".to_string())

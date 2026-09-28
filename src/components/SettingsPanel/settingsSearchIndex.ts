@@ -158,6 +158,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "general.label.egoExecutable",
 		platform: "desktop",
 	},
+	{
+		tab: "general",
+		section: "ego",
+		label: "ego profile",
+		labelKey: "general.label.egoProfile",
+	},
 	{ tab: "general", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },

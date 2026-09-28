@@ -298,7 +298,13 @@ impl AcpClientManager {
         }
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
-        let spec = launch_spec(&EgoAcpConfig { executable }, &root)?;
+        let spec = launch_spec(
+            &EgoAcpConfig {
+                executable,
+                profile: config.profile.clone(),
+            },
+            &root,
+        )?;
         let mut agent_config = AcpAgentConfig::new(spec.program).args(spec.args);
         if let Some(peer_id) = &peer_id {
             agent_config = agent_config.env("TUIC_SESSION", peer_id);
@@ -416,7 +422,13 @@ impl AcpClientManager {
         // request that could never have succeeded left the caller with nothing.
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
-        launch_spec(&EgoAcpConfig { executable }, &root)?;
+        launch_spec(
+            &EgoAcpConfig {
+                executable,
+                profile: config.profile.clone(),
+            },
+            &root,
+        )?;
 
         self.disconnect(request.connection_id).await?;
         self.connect_within_with_peer(

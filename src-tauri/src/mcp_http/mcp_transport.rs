@@ -1171,7 +1171,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice write, coalesced notice, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice write, coalesced notice, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -2919,9 +2919,13 @@ fn handle_session(
             // semantics under one lock so concurrent writers cannot interleave.
             match (text.is_empty(), key_seq) {
                 (false, Some(seq)) => {
-                    if let Err(e) =
-                        super::session::write_pty_input_pair(state, session_id, text, seq)
-                    {
+                    if let Err(e) = super::session::write_pty_input_pair(
+                        state,
+                        session_id,
+                        text,
+                        seq,
+                        agent_type.as_deref(),
+                    ) {
                         return serde_json::json!({"error": e});
                     }
                 }
@@ -4058,7 +4062,7 @@ fn handle_agent_with_parent_cwd(
                 .and_then(|agent_type| agents_cfg.agents.get(agent_type))
                 .and_then(|settings| settings.skip_trust_dialog)
                 .unwrap_or(true);
-            if skip_trust_dialog && is_direct_codex_executable(&binary_path) {
+            if skip_trust_dialog && effective_agent_type.as_deref() == Some("codex") {
                 let cwd = effective_cwd
                     .as_deref()
                     .map(crate::cli::expand_tilde)
@@ -9098,6 +9102,26 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct InputTimedWriter {
+        writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for InputTimedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((std::time::Instant::now(), bytes.to_vec()));
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
     impl std::io::Write for SubmissionRecordingWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.bytes.lock().unwrap().extend_from_slice(buf);
@@ -9506,6 +9530,96 @@ mod tests {
                 .content(),
             "literal draft"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_claude_text_and_enter_arrive_in_separate_reads() {
+        let state = test_state();
+        let session_id = "claude-input-gap";
+        install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("claude".into());
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .writer = Arc::new(parking_lot::Mutex::new(Box::new(InputTimedWriter {
+            writes: Arc::clone(&writes),
+        })));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"review this", "special_key":"enter"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        let writes = writes.lock().unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|(_, bytes)| bytes.as_slice())
+                .collect::<Vec<_>>(),
+            vec![b"review this".as_slice(), b"\r".as_slice()]
+        );
+        assert!(
+            writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(45),
+            "raw-mode agent must consume text before Enter"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_shell_text_and_enter_keep_raw_bytes() {
+        let state = test_state();
+        let session_id = "shell-input-pair";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = None;
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"echo ready", "special_key":"enter"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"echo ready\r");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_claude_non_enter_key_keeps_raw_bytes() {
+        let state = test_state();
+        let session_id = "claude-tab-pair";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("claude".into());
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"choice", "special_key":"tab"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"choice\t");
     }
 
     #[tokio::test]
@@ -20677,6 +20791,171 @@ mod tests {
         assert!(
             !actual.contains("trust_level"),
             "opt-out must preserve Codex trust behavior: {actual}"
+        );
+    }
+
+    /// A configured Codex launcher must pass the launch-only trust setting to
+    /// the child it starts. The child records its own argv, not TUIC's builder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_wrapper_trusts_only_its_spawn_cwd_and_submits_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-wrapper-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let other = root.path().join("other-project");
+        std::fs::create_dir(&other).unwrap();
+        let wrapper = root.path().join("custom-launcher");
+        let child = root.path().join("codex");
+        let argv = root.path().join("child-argv");
+        let submitted = root.path().join("submitted");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nexec '{}' \"$@\"\n",
+                child.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(&child, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncase \"$*\" in\n  *'trust_level=\"trusted\"'*) sleep 0.1; printf 'Starting Codex\\n› \\n' ;;\n  *) printf 'Do you trust this directory?\\n'; exec cat >/dev/null ;;\nesac\nstty -echo\nIFS= read -r text\nprintf '%s' \"$text\" > '{}'\nexec cat >/dev/null\n", argv.display(), submitted.display())).unwrap();
+        for path in [&wrapper, &child] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                run_configs: vec![crate::config::AgentRunConfig {
+                    name: "Custom Codex".into(),
+                    command: wrapper.to_string_lossy().into_owned(),
+                    args: vec![],
+                    model: None,
+                    env: Default::default(),
+                    is_default: true,
+                }],
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        crate::pty::spawn_process_snapshot_refresher(state.clone());
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"Custom Codex", "cwd":cwd, "prompt":"say READY", "args":["--no-alt-screen"]}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let prompt = std::fs::read_to_string(&submitted).unwrap_or_default();
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        let expected = format!(
+            "projects.{}.trust_level=\"trusted\"",
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        );
+        assert!(
+            actual
+                .lines()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-c", expected.as_str()]),
+            "child must receive cwd-scoped trust: {actual}"
+        );
+        assert!(
+            !actual.contains(&other.to_string_lossy().to_string()),
+            "other cwd must not be trusted: {actual}"
+        );
+        assert!(
+            prompt.contains("say READY"),
+            "wrapper child must receive initial task: {prompt:?}; argv={actual}"
+        );
+        assert!(!root.path().join("codex-config/config.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_codex_wrapper_opt_out_leaves_trust_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("managed-codex-wrapper-opt-out-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let cwd = root.path().join("never-trusted");
+        std::fs::create_dir(&cwd).unwrap();
+        let wrapper = root.path().join("custom-launcher");
+        let argv = root.path().join("child-argv");
+        std::fs::write(&wrapper, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nprintf 'Do you trust this directory?\\n'\nexec cat >/dev/null\n", argv.display())).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("tuic-config"));
+        let mut agents = crate::config::AgentsConfig::default();
+        agents.agents.insert(
+            "codex".into(),
+            crate::config::AgentSettings {
+                skip_trust_dialog: Some(false),
+                run_configs: vec![crate::config::AgentRunConfig {
+                    name: "Custom Codex".into(),
+                    command: wrapper.to_string_lossy().into_owned(),
+                    args: vec![],
+                    model: None,
+                    env: Default::default(),
+                    is_default: true,
+                }],
+                ..Default::default()
+            },
+        );
+        crate::config::save_agents_config(agents).unwrap();
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({"action":"spawn", "agent_type":"Custom Codex", "cwd":cwd, "prompt":"say READY", "args":["--no-alt-screen"]}),
+            None,
+        );
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let sid = spawned["session_id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !argv.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let output = loop {
+            let output = handle_session(
+                &state,
+                &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
+                None,
+            );
+            if output.to_string().contains("Do you trust this directory?")
+                || std::time::Instant::now() >= deadline
+            {
+                break output;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":sid}),
+            None,
+        );
+        assert!(
+            !actual.contains("trust_level"),
+            "opt-out must preserve wrapper argv: {actual}"
+        );
+        assert!(
+            output.to_string().contains("Do you trust this directory?"),
+            "normal trust prompt must remain: {output}"
         );
     }
 

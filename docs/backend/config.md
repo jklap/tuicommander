@@ -253,7 +253,8 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
-| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > AI Chat` and written through `save_config` like any other field |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
+| `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. |
 | `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
 | `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
@@ -807,7 +808,7 @@ Each agent entry may contain `native_status_signals: boolean`. For Claude and Co
 
 Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
 
-Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent value means `true`. The setting applies only to MCP `agent spawn`: a direct Codex executable receives a launch-only project trust override for the canonical working directory, while Claude's first exact startup picker is answered through the managed PTY. A false value leaves the CLI's normal trust question in place. TUICommander does not modify either CLI's saved trust file.
+Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent value means `true`. The setting applies only to MCP `agent spawn`: Codex receives a launch-only project trust override for the canonical working directory, including through custom launchers that forward arguments, while Claude's first exact startup picker is answered through the managed PTY. A false value leaves the CLI's normal trust question in place. TUICommander does not modify either CLI's saved trust file.
 
 **Type:** `AgentsConfig`
 

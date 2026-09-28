@@ -1502,10 +1502,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			const force = args.force === true ? "&force=true" : "";
 			const overrideLock = args.overrideLock === true ? "&overrideLock=true" : "";
 			const expectedFingerprint = args.expectedFingerprint ? `&expectedFingerprint=${p("expectedFingerprint")}` : "";
+			const confirmMissingCheckout = args.confirmMissingCheckout === true ? "&confirmMissingCheckout=true" : "";
 			const deleteBranch = args.deleteBranch ?? args.force !== true;
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}${confirmMissingCheckout}`,
 			};
 		},
 	},
@@ -1679,7 +1680,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/agents/verify-session",
-			body: { agentType: args.agentType, sessionId: args.sessionId, cwd: args.cwd },
+			body: {
+				agentType: args.agentType,
+				sessionId: args.sessionId,
+				cwd: args.cwd,
+				agentPid: args.agentPid,
+				envOverrides: args.envOverrides,
+			},
 		}),
 	},
 	detect_agents: { map: () => ({ method: "GET", path: "/agents" }) },
@@ -1720,7 +1727,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return {
 				method: "POST",
 				path: "/sessions/agent",
-				body: { ...ptyConfig, ...agentConfig },
+				body: {
+					rows: ptyConfig.rows,
+					cols: ptyConfig.cols,
+					cwd: agentConfig.cwd ?? ptyConfig.cwd,
+					env: ptyConfig.env,
+					prompt: agentConfig.prompt,
+					model: agentConfig.model,
+					print_mode: agentConfig.print_mode,
+					output_format: agentConfig.output_format,
+					agent_type: agentConfig.agent_type,
+					binary_path: agentConfig.binary_path,
+					args: agentConfig.args,
+				},
 				transform: (data) => {
 					if (isRecord(data) && typeof data.session_id === "string") return data.session_id;
 					throw new Error("spawn_agent HTTP response missing session_id");
