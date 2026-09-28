@@ -3,6 +3,11 @@
 set -euo pipefail
 
 root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
+# A linked worktree must not inherit the parent TUICommander's Cargo target.
+# Otherwise its tests can reuse dependency artifacts compiled from another checkout.
+if [ -f "$root/.git" ]; then
+  unset CARGO_TARGET_DIR
+fi
 case "${TMPDIR:-}" in
   "$root/"*|"$HOME/Gits/"*) test_tmp_base="${TMPDIR%/}" ;;
   *) test_tmp_base="$root/.tmp/tuic-tests" ;;
