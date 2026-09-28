@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Worktree cleanup after external removal** — Removing a checkout already unregistered by Git now cancels its pending build-input copy even when leftover directory cleanup fails.
 
+- **Push-to-talk sustained-speech gate** — The final pass now uses the hands-free speech activity rule, skipping short noise bursts and quiet captures before Whisper can invent text.
+
 - **Push-to-talk skip reasons** — When the final transcription rejects audio, the dictation status now shows the specific speech-gate reason instead of always saying “no speech detected”.
 
 - **One AI Chat across repositories** — The AI Chat is the same conversation whichever repository is on screen: switching repository keeps its tabs and starts nothing, and the repository you are viewing is sent with each message as context. ego starts with your first message (or **+**), runs in `~/Gits`, is shared by every window and the phone, and is ended when TUICommander quits.

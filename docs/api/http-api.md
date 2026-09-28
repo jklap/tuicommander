@@ -1781,7 +1781,8 @@ GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
 `{ text, skip_reason, duration_s, truncated_s }`. A final transcription gate's
-`skip_reason` is returned unchanged; an empty successful transcription uses
+`skip_reason` is returned unchanged. A capture without the shared 200 ms
+sustained-speech activity returns `no sustained speech` before Whisper; an empty successful transcription uses
 `no speech detected`. `PUT /dictation/config` takes the config
 object as the whole body, not wrapped in a field.
 
