@@ -2257,7 +2257,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 23.1 Supervised Tunnels
 - Managed SSH processes with automatic lifecycle supervision
 - Tunnel states: Starting, Connected, Reconnecting, Stopped, Error
-- Health check: process must survive 500ms after spawn to be considered connected
+- Readiness check: every local forward must accept TCP connections before the tunnel is considered connected (30-second limit)
 - Graceful shutdown: SIGTERM with 5s grace period, then SIGKILL escalation
 - SSH agent forwarding: auto-discovers `SSH_AUTH_SOCK` for key-based auth
 
