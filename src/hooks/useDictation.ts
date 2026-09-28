@@ -185,7 +185,7 @@ export function useDictation(deps: DictationDeps) {
 				const writeFn = (data: string) => deps.pty.write(targetSessionId, data);
 				if (autoSend) {
 					const shellFamily = await getShellFamily(targetSessionId);
-					await sendCommand(writeFn, text, active.agentType, shellFamily);
+					await sendCommand(writeFn, text, active.agentType, shellFamily, true, targetSessionId);
 				} else {
 					await writeFn(text);
 				}

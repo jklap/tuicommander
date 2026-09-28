@@ -2914,9 +2914,13 @@ fn handle_session(
             // semantics under one lock so concurrent writers cannot interleave.
             match (text.is_empty(), key_seq) {
                 (false, Some(seq)) => {
-                    if let Err(e) =
-                        super::session::write_pty_input_pair(state, session_id, text, seq)
-                    {
+                    if let Err(e) = super::session::write_pty_input_pair(
+                        state,
+                        session_id,
+                        text,
+                        seq,
+                        agent_type.as_deref(),
+                    ) {
                         return serde_json::json!({"error": e});
                     }
                 }
@@ -9048,6 +9052,26 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct InputTimedWriter {
+        writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for InputTimedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((std::time::Instant::now(), bytes.to_vec()));
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
     impl std::io::Write for SubmissionRecordingWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.bytes.lock().unwrap().extend_from_slice(buf);
@@ -9456,6 +9480,96 @@ mod tests {
                 .content(),
             "literal draft"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_claude_text_and_enter_arrive_in_separate_reads() {
+        let state = test_state();
+        let session_id = "claude-input-gap";
+        install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("claude".into());
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .writer = Arc::new(parking_lot::Mutex::new(Box::new(InputTimedWriter {
+            writes: Arc::clone(&writes),
+        })));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"review this", "special_key":"enter"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        let writes = writes.lock().unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|(_, bytes)| bytes.as_slice())
+                .collect::<Vec<_>>(),
+            vec![b"review this".as_slice(), b"\r".as_slice()]
+        );
+        assert!(
+            writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(45),
+            "raw-mode agent must consume text before Enter"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_shell_text_and_enter_keep_raw_bytes() {
+        let state = test_state();
+        let session_id = "shell-input-pair";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = None;
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"echo ready", "special_key":"enter"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"echo ready\r");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_input_claude_non_enter_key_keeps_raw_bytes() {
+        let state = test_state();
+        let session_id = "claude-tab-pair";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .agent_type = Some("claude".into());
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action":"input", "session_id":session_id, "input":"choice", "special_key":"tab"}),
+            None,
+        );
+
+        assert_eq!(response, serde_json::json!({"ok":true}));
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"choice\t");
     }
 
     #[tokio::test]
