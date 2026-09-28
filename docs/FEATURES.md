@@ -334,7 +334,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.3 Markdown Panel (`Cmd+Shift+M`)
 - Renders `.md` and `.mdx` files with syntax-highlighted code blocks
-- Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and editor-line targets work without navigating the WebView; web and email links use the system handler
+- Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and `file:line` or `file:line:column` targets work without navigating the WebView; web and email links use the system handler
 - File list from repository's markdown files
 - Clickable file paths in terminal open `.md` files here
 - Auto-show: adding any markdown tab automatically opens the Markdown panel if it's closed
