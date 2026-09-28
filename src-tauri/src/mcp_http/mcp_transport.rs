@@ -9302,6 +9302,76 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn mobile_http_reply_answers_confident_question_with_automated_mail_queued() {
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let session_id = "queued-phone-question";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .question_confident = true;
+        state
+            .pending_injections
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back(crate::state::PendingInjection::notice("automated mail"));
+
+        let automated = handle_session_submit(
+            &state,
+            &serde_json::json!({"session_id": session_id, "input": "agent answer"}),
+            false,
+        )
+        .await;
+        assert_eq!(automated["reason"], "awaiting_input");
+        assert!(bytes.lock().unwrap().is_empty());
+
+        let mut request = axum::http::Request::post(format!("/sessions/{session_id}/submit"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"input":"Boss answer"}"#))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(loopback_addr()));
+        let app = super::super::build_router(Arc::clone(&state), false, true);
+        let call = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if bytes.lock().unwrap().last() == Some(&b'\r') {
+                    break;
+                }
+                assert!(!call.is_finished(), "reply returned before writing");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("phone answer did not reach the PTY");
+        state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .unwrap()
+            .lock()
+            .write(b"child moved");
+
+        let response = call.await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(receipt["submitted"], true);
+        assert_eq!(receipt["acknowledged"], true);
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+        assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn session_submit_write_only_cannot_false_positive_and_times_out() {
         let state = test_state();
         let session_id = "submit-timeout";
