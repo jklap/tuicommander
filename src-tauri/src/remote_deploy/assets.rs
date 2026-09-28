@@ -12,10 +12,7 @@ const TARGETS: &[(&str, &str)] = &[
     ("Darwin arm64", "aarch64-apple-darwin"),
 ];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
-#[cfg(not(test))]
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-#[cfg(test)]
-const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuildIdentity {
@@ -97,7 +94,7 @@ async fn resolve_update_asset_from_url(
     local_path: &Path,
     known_local_target: Option<&str>,
 ) -> Result<UpdateAsset, String> {
-    match ensure_local_from_url(env!("CARGO_PKG_VERSION"), target, url).await {
+    match ensure_local_from_url(env!("CARGO_PKG_VERSION"), target, url, DOWNLOAD_TIMEOUT).await {
         Ok(binary) => Ok(UpdateAsset {
             binary,
             source: "release",
@@ -209,6 +206,7 @@ async fn ensure_local_from_url(
     version: &str,
     target: &str,
     url: &str,
+    timeout: std::time::Duration,
 ) -> Result<LocalAsset, String> {
     validate_component("version", version)?;
     validate_component("target", target)?;
@@ -228,7 +226,7 @@ async fn ensure_local_from_url(
     ));
 
     let result = tokio::time::timeout(
-        DOWNLOAD_TIMEOUT,
+        timeout,
         download_and_promote(version, target, url, &staging, &destination),
     )
     .await
@@ -407,12 +405,17 @@ mod tests {
             .await;
         let url = format!("{}/tuic-remote-test-target", server.url());
 
-        let first = ensure_local_from_url("1.2.3", "test-target", &url)
+        let first = ensure_local_from_url("1.2.3", "test-target", &url, DOWNLOAD_TIMEOUT)
             .await
             .expect("download succeeds");
-        let second = ensure_local_from_url("1.2.3", "test-target", "http://127.0.0.1:1")
-            .await
-            .expect("cached file needs no network");
+        let second = ensure_local_from_url(
+            "1.2.3",
+            "test-target",
+            "http://127.0.0.1:1",
+            DOWNLOAD_TIMEOUT,
+        )
+        .await
+        .expect("cached file needs no network");
 
         let expected_hash = "7dee7cc2fcb3d9ee8394182fe8d23a1a3d7e5c80b869b281269df9215a5abf2f";
         assert_eq!(first.sha256, expected_hash);
@@ -431,23 +434,45 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_release_download_times_out_without_caching_an_asset() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
         let config = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let entered = Arc::new(AtomicBool::new(false));
         let router = axum::Router::new().route(
             "/asset",
-            axum::routing::get(|| async { std::future::pending::<axum::http::StatusCode>().await }),
+            axum::routing::get({
+                let entered = entered.clone();
+                move || {
+                    let entered = entered.clone();
+                    async move {
+                        entered.store(true, Ordering::SeqCst);
+                        std::future::pending::<axum::http::StatusCode>().await
+                    }
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/asset", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
         let error = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            ensure_local_from_url("1.2.3", "test-target", &url),
+            std::time::Duration::from_secs(15),
+            ensure_local_from_url(
+                "1.2.3",
+                "test-target",
+                &url,
+                std::time::Duration::from_secs(5),
+            ),
         )
         .await
         .expect("release download must have its own timeout")
         .expect_err("stalled response must not be cached");
+        assert!(
+            entered.load(Ordering::SeqCst),
+            "request reached the stalled release endpoint"
+        );
         assert!(error.contains("timed out"), "{error}");
         assert!(
             !config
@@ -473,6 +498,7 @@ mod tests {
             "9.8.7",
             "x86_64-unknown-linux-gnu",
             &format!("{}/missing", server.url()),
+            DOWNLOAD_TIMEOUT,
         )
         .await
         .expect_err("404 is a named error");
