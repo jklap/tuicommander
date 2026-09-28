@@ -858,7 +858,8 @@ one configured ego binary and speaks ACP to it, per
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
-  replaced whole each time it changes
+  replaced whole each time it changes. The view follows new output while the
+  reader is at the bottom; collapsed tool rows keep full commands in details
 - The connection acknowledgement is hidden; `intent:` is shown as turn status;
   bracketed `suggest:` items on their own line or at the end of an answer become
   buttons that send the selected reply. A sent reply appears once even when ego
@@ -870,6 +871,8 @@ one configured ego binary and speaks ACP to it, per
 - **Image paste** stages a removable preview in the composer. Sending forwards
   base64 image content blocks only when the agent advertises image prompts;
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
+- The composer grows up to a bounded height. Pastes over 200 words are shown as
+  numbered markers until Send restores the full text
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client

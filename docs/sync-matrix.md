@@ -216,27 +216,31 @@ sentence, never with an empty result.
 
 ### AI Chat panel (ego over ACP)
 The panel is a control plane over an agent that lives outside it (#785-58ca). It
-binds to a **repository root and a session**, never to a terminal: a turn ego
-runs outlives any tab and touches files no tab is showing. Nothing here holds a
+is **one chat for the app** (#1157-1e54), never bound to a terminal or a
+repository: sessions run in `~/Gits`, and the repository on screen is a hint sent
+with each prompt. Nothing here holds a
 provider, an API key or a tool loop.
 
-The session's one MCP server is **our `tuic-bridge` sidecar over stdio**
-(#796-7fa3), the same adapter every PTY agent uses to reach `mcp.sock`. It was an
-HTTP URL built from the bound TCP port, which made the panel's tools depend on
-Remote Access being on; the socket has no such condition. A stdio entry is a
-command ego runs, so the server-side synthesis in `granted` is what keeps it safe
-— see plan §4.5.
+The session's one MCP server is **`tuicommander` on the ACP transport**
+(#1156-1b61): `{"type":"acp","name":"tuicommander","serverId":"tuicommander"}`,
+served on the ACP connection itself through `mcp/connect`, `mcp/message` and
+`mcp/disconnect`. It replaced the stdio `tuic-bridge` entry (#796-7fa3), which
+opened a fresh HTTP MCP session for every ego tool operation. Every request goes
+through the same `mcp_post` handler as HTTP `/mcp`, bound to the connection's
+peer identity; the server-side synthesis in `granted` still keeps a caller from
+naming a server — see plan §4.5.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` and host-issued `TUIC_SESSION` it carries, and `mcp_stdio` in `capability_snapshot` |
-| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and the bridge; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp/mod.rs` | `tuicommander_acp_mcp_server` — the entry's name and `serverId`, and `mcp_acp`/`mcp_stdio` in `capability_snapshot` |
+| `src-tauri/src/acp/mcp_host.rs` | The `McpOverAcpHost` contract and `McpChannel`: which `serverId` is served, unknown connection ids refused, every connection released when the ACP connection ends |
+| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and every MCP connection; `set_mcp_host`; `mcp/message` runs under `$/cancel_request` |
+| `src-tauri/src/mcp_http/acp_mcp.rs` | `AcpMcpHost` — one protocol session per MCP connection, the GET `/mcp` stream forwarded as notifications, `end_mcp_session` on disconnect; `install` at both startup sites |
 | `src-tauri/src/acp_commands.rs`, `src-tauri/src/config.rs` | Persist a root's ACP peer UUID beside its selected conversation and reuse it after reconnect or restart |
 | `src-tauri/src/mcp_http/mcp_transport.rs` | Bind bridge mail, child parentage and blocked progress to the ACP peer without a PTY |
-| `src-tauri/src/mcp_http/mod.rs` | The bound socket is handed to `acp.set_socket_path` where it is recorded — the entry can only carry a path this process learned |
-| `src-tauri/src/agent_mcp.rs` | `locate_bridge_binary` — where the sidecar is looked for, shared with the agent config writers |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
-| `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
+| `src/components/AIChatPanel/useAcpChat.ts` | One connection for the app, rooted at `~/Gits` and started by the first message or "+"; global tabs; the viewed repo sent per prompt; every action it offers |
+| `src-tauri/src/acp/manager.rs` (`prompt_with_context`, `shutdown_all`, peer adoption) | `_meta.tuicommander/viewedRepo` on `session/prompt`; one live connection per peer id; every ego ended on app exit |
 | `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
 | `src/components/AIChatPanel/Interactions.tsx` | Permission options and elicitation forms; a single choice field with up to three values has direct buttons. `form` is the only mode drawn |
 | `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, pause/resume/compact, and readable labels for untitled conversations |
