@@ -34,7 +34,8 @@ use crate::acp::{
 /// empty setting is refused here rather than deep in a launch failure, because
 /// "not configured" and "configured wrongly" are different things to be told.
 pub(crate) fn ego_config(state: &AppState) -> Result<EgoAcpConfig, AcpClientError> {
-    let executable = state.config.read().ego_executable.clone();
+    let settings = state.config.read();
+    let executable = settings.ego_executable.clone();
     if executable.trim().is_empty() {
         return Err(AcpClientError::invalid_input(
             "no ego executable is configured; set it before connecting over ACP",
@@ -42,6 +43,7 @@ pub(crate) fn ego_config(state: &AppState) -> Result<EgoAcpConfig, AcpClientErro
     }
     Ok(EgoAcpConfig {
         executable: PathBuf::from(executable),
+        profile: settings.ego_profile.clone(),
     })
 }
 

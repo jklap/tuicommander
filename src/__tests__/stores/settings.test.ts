@@ -46,6 +46,41 @@ describe("settingsStore", () => {
 		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
 	}
 
+	describe("ego ACP profile", () => {
+		it("persists a selected profile and allows clearing it", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setEgoProfile("coordinator")).toBe(true);
+				expect(store.state.egoProfile).toBe("coordinator");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect((saveConfigCalls()[0][1] as { config: { ego_profile: string } }).config.ego_profile).toBe("coordinator");
+				expect(store.setEgoProfile("")).toBe(true);
+				expect(store.state.egoProfile).toBe("");
+			});
+		});
+
+		it.each(["my profile", "-other", " profile", "profile\nother", "name\u00a0part", "name\u0085part", "a".repeat(65)])(
+			"rejects ambiguous profile name %j without changing the saved choice",
+			async (name) => {
+				await testInScopeAsync(async () => {
+					await hydrateStore();
+					store.setEgoProfile("coordinator");
+					expect(store.setEgoProfile(name)).toBe(false);
+					expect(store.state.egoProfile).toBe("coordinator");
+				});
+			},
+		);
+
+		it("accepts a 64-byte profile name", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setEgoProfile("a".repeat(64))).toBe(true);
+				expect(store.state.egoProfile).toBe("a".repeat(64));
+			});
+		});
+	});
+
 	describe("pre-hydrate write protection", () => {
 		it("does not persist before hydrate", async () => {
 			await testInScopeAsync(async () => {
