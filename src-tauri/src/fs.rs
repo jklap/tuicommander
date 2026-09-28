@@ -2056,11 +2056,13 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
     if line.is_some() {
         anchor.clear();
     } else if anchor.is_empty() {
-        if let Some((file, number)) = path.rsplit_once(':')
+        let without_suffix = strip_line_col_suffix(&path);
+        if without_suffix != path
+            && let Some(number) = path[without_suffix.len() + 1..].split(':').next()
             && let Ok(parsed) = number.parse::<usize>()
             && parsed > 0
         {
-            path = file.to_string();
+            path = without_suffix.to_string();
             line = Some(parsed);
         }
     }
@@ -3410,6 +3412,26 @@ mod tests {
             assert!(is_tcc_protected_path(&candidate), "{candidate:?}");
         }
         assert!(!is_tcc_protected_path(&home.join("Downloads/../Projects/readme.md")));
+    }
+
+    #[test]
+    fn markdown_links_open_files_with_line_and_column_suffixes() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("review.md"), "").unwrap();
+        fs::write(dir.path().join("file.rs"), "").unwrap();
+        fs::write(dir.path().join("Makefile"), "").unwrap();
+        let root = dir.path().to_string_lossy();
+        for (href, file, line) in [
+            ("file.rs:42:7", "file.rs", 42),
+            ("Makefile:42:7", "Makefile", 42),
+            ("file.rs:42", "file.rs", 42),
+        ] {
+            assert!(matches!(
+                resolve_markdown_link_impl(&root, "review.md", href),
+                MarkdownLinkTarget::File { open_path, line: Some(actual), .. }
+                    if open_path == file && actual == line
+            ), "{href}");
+        }
     }
 
     #[test]
