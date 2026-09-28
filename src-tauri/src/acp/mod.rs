@@ -23,10 +23,14 @@ mod connection;
 mod ego_ext;
 mod events;
 mod manager;
+mod mcp_host;
 pub(crate) mod oneshot;
 
 pub use events::{AcpEventJournal, AcpEventStream};
 pub use manager::{AcpClientManager, INITIALIZE_TIMEOUT};
+pub use mcp_host::{
+    McpNotify, McpOverAcpError, McpOverAcpHost, McpReply, TUICOMMANDER_MCP_SERVER_ID,
+};
 
 /// The three ways a connection attaches to a session ego already owns.
 ///
@@ -67,6 +71,16 @@ impl AcpAttachKind {
             Self::Load => AcpOperation::Load,
             Self::Fork => AcpOperation::Fork,
             Self::Resume => AcpOperation::Resume,
+        }
+    }
+
+    /// The wire method this is sent as, for the log that attributes an attach.
+    #[must_use]
+    pub fn method(self) -> &'static str {
+        match self {
+            Self::Load => "session/load",
+            Self::Fork => "session/fork",
+            Self::Resume => "session/resume",
         }
     }
 }
@@ -113,75 +127,30 @@ pub struct AcpSessionAuthority {
 /// ego rule files, so renaming it breaks policy somebody else wrote.
 pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 
-/// The one MCP server a session is given: our own stdio bridge.
+/// The one MCP server an attended ego session is given: `tuicommander`, served
+/// by this process on the ACP connection itself (MCP-over-ACP).
 ///
 /// Synthesised here rather than accepted from a caller — see
 /// `AcpSessionAuthority` for why a request body must not be able to name one.
-/// That is what makes a stdio entry safe to send at all: a stdio MCP server is
-/// a command line the agent executes, and the danger has always been carrying
-/// somebody else's. This one is the sidecar we ship, located beside our own
-/// executable.
 ///
-/// It used to be `http://127.0.0.1:{port}/mcp`, built from the port this
-/// process bound, and that port only exists when the TCP listener binds — which
-/// happens only when Remote Access is on. So the default install, with remote
-/// off, handed ego no server at all. The socket at `<config dir>/mcp.sock`
-/// binds unconditionally and `tuic-bridge` already speaks MCP stdio to it for
-/// every PTY agent, so reaching ego the same way costs no listener and couples
-/// nothing to a remote-access switch.
+/// It used to be a stdio `tuic-bridge` command line, and before that an HTTP
+/// URL built from the TCP port. The bridge opened a fresh HTTP MCP session for
+/// every ego tool operation (13,409 initializes from one peer on 2026-09-28),
+/// and it had to be told which socket to reach and which identity to assert.
+/// Over ACP there is no process, no socket and no identity to pass along: the
+/// connection is the identity (Boss, 2026-09-28).
 ///
-/// The **bound** socket travels as `TUIC_SOCKET` rather than being left to the
-/// bridge's own search. `TUIC_APP_INSTANCE` used to be sent instead, and nothing
-/// read it: `tuic-bridge` resolves `TUIC_SOCKET`, then `<config dir>/mcp.sock`,
-/// then any `mcp-*.sock` beside it, while a named instance binds
-/// `$TMPDIR/tuic-mcp-<sha>.sock`. With a named instance and the default instance
-/// both running, ego therefore drove the DEFAULT one — a test build steering
-/// Boss's repositories, which is the exact failure this paragraph used to claim
-/// was prevented. The bound path also covers the case the id could not: a
-/// primary socket already held makes this process bind the `-<pid>` alternative.
-///
-/// A process in the middle does not cost ego its identity, and that matters
-/// more than it looks: `client_requires_meta_tools` gives the name `ego` the
-/// collapsed tool surface, worth 35.104 tokens a turn against 615 at 190 tools.
-/// Ego speaks the stateless 2026-07-28 lifecycle: it never sends `initialize`,
-/// so `handle_initialize` is not on its path at all. It names itself in the
-/// `_meta` `clientInfo` of **every** request, the bridge proxies that block
-/// verbatim, and `merged_tool_definitions` lets that per-request identity decide
-/// the surface — the session `tuic-bridge` opened under its own name is only the
-/// fallback for a legacy client that named itself once. Three tests hold it,
-/// because no one of them fails alone:
-/// `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own`
-/// in `tuic-bridge`, `the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded`
-/// in `mcp_http::mcp_transport`, and
-/// `a_bridge_session_reused_by_ego_still_lists_the_collapsed_surface`, which is
-/// the one that drives a real `tuic-bridge` session id through `tools/list`.
-///
-/// `None` when the bridge is not where we can see it, for the same reason port
-/// 0 used to yield `None`: an entry that cannot run makes ego report a server
-/// it could not admit, when the truth is that TUICommander was not ready.
+/// Ego still names itself in the `_meta` `clientInfo` of every MCP request, so
+/// `client_requires_meta_tools` gives it the collapsed tool surface, worth
+/// 35.104 tokens a turn against 615 at 190 tools. Ego speaks the stateless
+/// 2026-07-28 lifecycle, so `initialize` is not on its path.
 #[must_use]
-pub fn tuicommander_mcp_server(
-    bridge: Option<std::path::PathBuf>,
-    socket: Option<&std::path::Path>,
-    peer_id: Option<&str>,
-) -> Option<v1::McpServer> {
-    let mut server = v1::McpServerStdio::new(TUICOMMANDER_MCP_SERVER_NAME, bridge?);
-    let mut env = Vec::new();
-    if let Some(socket) = socket.and_then(|s| s.to_str()) {
-        env.push(v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket));
-    }
-    if let Some(peer_id) = peer_id {
-        env.push(v1::EnvVariable::new("TUIC_SESSION", peer_id));
-    }
-    server = server.env(env);
-    Some(v1::McpServer::Stdio(server))
+pub fn tuicommander_acp_mcp_server() -> v1::McpServer {
+    v1::McpServer::Acp(v1::McpServerAcp::new(
+        TUICOMMANDER_MCP_SERVER_NAME,
+        TUICOMMANDER_MCP_SERVER_ID,
+    ))
 }
-
-/// The variable `tuic-bridge` reads to skip its own socket search.
-///
-/// Named here because this is the only producer; the bridge is a separate
-/// crate, so the two ends agree by spelling and by the story796 contract test.
-pub const BRIDGE_SOCKET_ENV_VAR: &str = "TUIC_SOCKET";
 
 /// The bridge header accepts only the canonical UUID form used for TUIC peers.
 pub(crate) fn valid_peer_id(id: &str) -> bool {
@@ -269,6 +238,7 @@ pub enum AcpOperation {
     McpStdio,
     McpHttp,
     McpSse,
+    McpAcp,
     ClientFormElicitation,
     ClientBooleanConfig,
     Pause,
@@ -1223,6 +1193,7 @@ pub struct AcpCapabilitySnapshot {
     pub mcp_stdio: bool,
     pub mcp_http: bool,
     pub mcp_sse: bool,
+    pub mcp_acp: bool,
     pub client_form_elicitation: bool,
     pub client_boolean_config: bool,
     /// One version for `_ego/pause` and `_ego/resume`, which arrive together.
@@ -1249,6 +1220,7 @@ impl AcpCapabilitySnapshot {
             AcpOperation::McpStdio => included(self.mcp_stdio),
             AcpOperation::McpHttp => advertised(self.mcp_http),
             AcpOperation::McpSse => advertised(self.mcp_sse),
+            AcpOperation::McpAcp => included(self.mcp_acp),
             AcpOperation::ClientFormElicitation => included(self.client_form_elicitation),
             AcpOperation::ClientBooleanConfig => included(self.client_boolean_config),
             AcpOperation::Pause | AcpOperation::ResumeTurn => {
@@ -1294,14 +1266,14 @@ pub fn capability_snapshot(
         prompt_image: prompt.image,
         prompt_audio: prompt.audio,
         prompt_embedded_context: prompt.embedded_context,
-        // Not read from `mcp`, because v1 has no field to read: the capability
-        // struct carries `http` and `sse` only, so stdio is the protocol
-        // baseline and no agent advertises it. What this says is what *this
-        // client* carries, and it carries exactly one stdio server — the bridge
-        // in `tuicommander_mcp_server`. It sat at `false` for as long as the
-        // client carried none; leaving it there now would make the snapshot
-        // deny the transport it is about to use.
-        mcp_stdio: true,
+        // Neither is read from the agent. They say what *this client* carries:
+        // one server, `tuicommander`, on the ACP transport — the stdio bridge
+        // it used to carry is gone (Boss, 2026-09-28). ego advertises
+        // `mcpCapabilities.acp`, and a build that did not would refuse the
+        // session loudly rather than run without the server; both ends are
+        // ours, so there is no older agent to fall back for.
+        mcp_stdio: false,
+        mcp_acp: true,
         mcp_http: mcp.http,
         mcp_sse: mcp.sse,
         // What this client can do, not what the agent said. It is here rather
