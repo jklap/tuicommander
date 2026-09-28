@@ -722,7 +722,7 @@
 	"remoteRepoPicker.title": "Add Repository",
 	"remoteServers.heading": "Remote Servers",
 	"remoteServers.hint": "Connect to TUIC instances on other machines (SSH, Direct, or a local named instance), or manage SSH port-forwarding tunnels. An SSH connection's encrypted tunnel is created when you Connect, not when you save it.",
-	"remoteServers.sshTunnels": "SSH Tunnels",
+	"remoteServers.sshTunnels": "SSH Port-Forwarding Tunnels",
 	"renameBranch.cancel": "Cancel",
 	"renameBranch.placeholder": "New branch name",
 	"renameBranch.rename": "Rename",

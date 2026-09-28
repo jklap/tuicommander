@@ -62,7 +62,7 @@ export const RemoteServersTab: Component = () => {
 
 				<div class={s.group} style={{ display: "flex", "justify-content": "flex-end" }}>
 					<Show when={!editorTarget()}>
-						<button class={s.copyBtn} onClick={openAdd}>
+						<button class={s.testBtn} onClick={openAdd}>
 							Add Connection
 						</button>
 					</Show>

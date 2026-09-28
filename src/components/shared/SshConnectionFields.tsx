@@ -4,7 +4,6 @@ import type { SshConnectionParams } from "../../stores/tunnels";
 import { isTauri } from "../../transport";
 import { openDialog } from "../../utils/nativeDialog";
 import s from "../SettingsPanel/Settings.module.css";
-import d from "./dialog.module.css";
 
 interface AgentKey {
 	fingerprint: string;
@@ -92,6 +91,7 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 				<div class={s.group} style={{ flex: "1" }}>
 					<label class={s.label}>Host</label>
 					<input
+						type="text"
 						value={props.value.host}
 						onInput={(e) => props.onChange({ host: e.currentTarget.value })}
 						list={hostsListId}
@@ -112,13 +112,14 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 
 			<div class={s.group}>
 				<label class={s.label}>User</label>
-				<input value={props.value.user} onInput={(e) => props.onChange({ user: e.currentTarget.value })} />
+				<input type="text" value={props.value.user} onInput={(e) => props.onChange({ user: e.currentTarget.value })} />
 			</div>
 
 			<div class={s.group}>
 				<label class={s.label}>Identity / Authentication</label>
 				<div style={{ display: "flex", gap: "6px" }}>
 					<input
+						type="text"
 						style={{ flex: "1" }}
 						value={props.value.identity_file ?? ""}
 						onInput={(e) => props.onChange({ identity_file: e.currentTarget.value || null })}
@@ -127,15 +128,8 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 					<Show when={isTauri()}>
 						<button
 							type="button"
-							class={d.cancelBtn}
-							style={{
-								flex: "none",
-								padding: "4px 10px",
-								"font-size": "var(--font-sm)",
-								border: "none",
-								"border-radius": "var(--radius-md)",
-								cursor: "pointer",
-							}}
+							class={s.testBtn}
+							style={{ flex: "none" }}
 							onClick={browseIdentityFile}
 							title="Browse for key file"
 						>

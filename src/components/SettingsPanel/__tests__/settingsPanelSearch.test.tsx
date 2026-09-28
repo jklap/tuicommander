@@ -229,9 +229,9 @@ describe("SettingsPanel search", () => {
 
 		it("the SSH tunnels heading opens Remote Servers at its section", async () => {
 			const { container } = open();
-			const target = await openResult(container, "ssh tunnels", "Remote Servers", "SSH Tunnels");
+			const target = await openResult(container, "ssh tunnels", "Remote Servers", "SSH Port-Forwarding Tunnels");
 			expect(target.tagName).toBe("H3");
-			expect(ownText(target)).toBe("SSH Tunnels");
+			expect(ownText(target)).toBe("SSH Port-Forwarding Tunnels");
 		});
 
 		it("the ego executable opens General at that control", async () => {

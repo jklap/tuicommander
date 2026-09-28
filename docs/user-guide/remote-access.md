@@ -189,7 +189,7 @@ TUICommander can manage persistent SSH tunnels with automatic reconnection, port
 
 ### Where to create and edit tunnels
 
-**Settings (`Cmd+,`) → Remote Servers.** That page owns tunnel create, edit and delete through the same merged editor remote connections use — pick **Kind: SSH Tunnel**. Its **SSH Tunnels** section lists every profile with Start/Stop, Edit, Log and Del. The **Tunnels Panel** overlay (Command Palette → "tunnels", or the sidebar shield icon) is for live status, start/stop and the audit log only; its **Edit in Settings** link closes it and opens the Remote Servers page.
+**Settings (`Cmd+,`) → Remote Servers.** That page owns tunnel create, edit and delete through the same merged editor remote connections use — pick **Kind: SSH Tunnel**. Its **SSH Port-Forwarding Tunnels** section lists every profile with Start/Stop, Edit, Log and Del. The **Tunnels Panel** overlay (Command Palette → "tunnels", or the sidebar shield icon) is for live status, start/stop and the audit log only; its **Edit in Settings** link closes it and opens the Remote Servers page.
 
 ### Creating a Tunnel Profile
 
@@ -236,7 +236,7 @@ Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the T
 
 ### Starting and Stopping Tunnels
 
-- In the **Tunnels Panel** (or the SSH Tunnels list on Settings → Remote Servers), click **Start** next to a profile to launch the SSH tunnel
+- In the **Tunnels Panel** (or the SSH Port-Forwarding Tunnels list on Settings → Remote Servers), click **Start** next to a profile to launch the SSH tunnel
 - The status badge next to it shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
 - **Edit** (Settings only) reopens the merged editor on that profile; **Log** expands the last 20 audit events; **Del** removes the profile
 - Click **Stop** to gracefully terminate the SSH process (SIGTERM with 5s grace period, then SIGKILL)
