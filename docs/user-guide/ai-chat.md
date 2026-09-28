@@ -100,6 +100,8 @@ in total. Text paste works as usual.
   line or trailing token at the end of an answer into reply buttons. Choosing
   one sends that text as the next prompt.
   Mentions in ordinary prose and code examples remain in the answer.
+  Sent messages appear once, including when ego streams an echo after a reply
+  button is chosen.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
   composer becomes available for another prompt.
@@ -122,7 +124,9 @@ in total. Text paste works as usual.
   it. Stop affects the running turn for every view. The conversation shows a
   queued message as sent only when it actually reaches ego.
 - **Session settings** are published by the current conversation. The control bar
-  shows the current model and mode; its settings button opens a dialog with
+  shows the model's short name and the current mode. Its summary shortens before
+  the icon controls, so Pause, Resume, Compact and New stay on one row. Each
+  control has a tooltip and a name for assistive technology. The settings button opens a dialog with
   labeled choices and descriptions for every select option ego offers, including
   reasoning effort and sandbox when available. Changes apply to this conversation
   and the displayed values follow ego's reply. A rejected change shows its error
