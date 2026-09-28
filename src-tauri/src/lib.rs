@@ -3317,6 +3317,22 @@ mod tests {
         }
     }
 
+    /// The remote boot path enters a Tokio runtime before registering its
+    /// repositories. Registering a real watcher here exercises the same
+    /// runtime-dependent path that panicked in synchronous headless tests.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn remote_boot_can_register_a_repository_watcher() {
+        let repo = tempfile::tempdir().expect("repository directory");
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let path = repo.path().to_str().expect("UTF-8 test path");
+
+        crate::repo_watcher::start_watching(path, &state)
+            .expect("remote boot must register a watcher inside its Tokio runtime");
+        assert!(state.repo_watchers.contains_key(path));
+        crate::repo_watcher::stop_watching(path, &state);
+    }
+
     #[test]
     fn remote_options_control_binding_and_agent_config_installation() {
         let options = RemoteOptions {
