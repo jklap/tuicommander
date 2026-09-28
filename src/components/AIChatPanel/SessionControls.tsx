@@ -12,15 +12,17 @@
  * rather than a button that fails.
  */
 
-import { type Component, For, Show } from "solid-js";
+import { type Component, createSignal, For, Show } from "solid-js";
 import type { AcpListedSession } from "../../services/acpClient";
 import { acpTranscript } from "../../stores/acpTranscript";
+import { registerModal } from "../../stores/modalStack";
 import type {
 	AcpSessionConfigOption,
 	AcpSessionConfigSelectGroup,
 	AcpSessionConfigSelectOption,
 } from "../../types/acp";
 import { cx } from "../../utils";
+import d from "../shared/dialog.module.css";
 import s from "./AIChatPanel.module.css";
 import type { AcpChat } from "./useAcpChat";
 
@@ -38,6 +40,14 @@ function flat(option: SelectOption): AcpSessionConfigSelectOption[] {
 	return isGrouped(option.options) ? [] : option.options;
 }
 
+function choices(option: SelectOption): AcpSessionConfigSelectOption[] {
+	return [...flat(option), ...groups(option).flatMap((group) => group.options)];
+}
+
+function choiceName(option: SelectOption): string {
+	return choices(option).find((choice) => choice.id === option.currentValue)?.name ?? option.currentValue;
+}
+
 function conversationLabel(session: AcpListedSession): string {
 	const title = acpTranscript.title(session.sessionId) || session.title;
 	if (title?.trim() && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(title.trim())) return title.trim();
@@ -51,40 +61,78 @@ function conversationLabel(session: AcpListedSession): string {
 
 const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props) => (
 	<select
-		class={s.modelPicker}
-		title={props.option.description ?? props.option.name}
-		value={props.option.currentValue}
+		class={s.sessionSettingSelect}
+		aria-label={props.option.name}
 		disabled={props.chat.busy()}
-		onChange={(event) => void props.chat.setOption(props.option.id, { value: event.currentTarget.value })}
+		onChange={(event) => {
+			const select = event.currentTarget;
+			void props.chat.setOption(props.option.id, { value: select.value }).then(() => {
+				const latest = props.chat.configOptions().find((option) => option.id === props.option.id);
+				select.value = latest?.type === "select" ? latest.currentValue : props.option.currentValue;
+			});
+		}}
 	>
-		<For each={flat(props.option)}>{(choice) => <option value={choice.id}>{choice.name}</option>}</For>
+		<For each={flat(props.option)}>
+			{(choice) => <option value={choice.id} selected={choice.id === props.option.currentValue}>{choice.name}</option>}
+		</For>
 		<For each={groups(props.option)}>
 			{(group) => (
 				<optgroup label={group.name}>
-					<For each={group.options}>{(choice) => <option value={choice.id}>{choice.name}</option>}</For>
+					<For each={group.options}>
+						{(choice) => <option value={choice.id} selected={choice.id === props.option.currentValue}>{choice.name}</option>}
+					</For>
 				</optgroup>
 			)}
 		</For>
 	</select>
 );
 
+const SessionSettingsDialog: Component<{ chat: AcpChat; options: SelectOption[]; onClose: () => void }> = (props) => {
+	registerModal(props.onClose);
+	props.chat.clearError();
+	return (
+		<div class={d.overlay} onClick={props.onClose}>
+			<div class={cx(d.popover, s.sessionSettingsDialog)} role="dialog" aria-modal="true" aria-labelledby="session-settings-title" onClick={(event) => event.stopPropagation()}>
+				<div class={d.header}><h4 id="session-settings-title">Session settings</h4></div>
+				<div class={d.body}>
+					<For each={props.options}>
+						{(option) => (
+							<div class={s.sessionSettingRow}>
+								<label class={s.sessionSettingLabel}>{option.name}<ConfigSelect option={option} chat={props.chat} /></label>
+								<Show when={option.description}><p class={s.sessionSettingDescription}>{option.description}</p></Show>
+							</div>
+						)}
+					</For>
+					<Show when={props.chat.error()}><p class={d.error} role="alert">{props.chat.error()}</p></Show>
+				</div>
+				<div class={d.actions}><button type="button" class={d.cancelBtn} onClick={props.onClose}>Done</button></div>
+			</div>
+		</div>
+	);
+};
+
 export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
+	const [settingsOpen, setSettingsOpen] = createSignal(false);
 	const holdOffered = () => props.chat.capabilities()?.egoHoldVersion != null;
 	const compactOffered = () => props.chat.capabilities()?.egoCompactVersion != null;
 	const sessions = () => props.chat.sessions();
+	const selectOptions = () => props.chat.configOptions().filter((option): option is SelectOption => option.type === "select");
+	const summary = () => selectOptions()
+		.filter((option) => option.id === "model" || option.id === "mode")
+		.map((option) => `${option.name}: ${choiceName(option)}`)
+		.join(" · ");
 
 	return (
 		<div class={s.controlBar}>
 			{/* A boolean option is deliberately absent: the client does not advertise
 			    `clientBooleanConfig`, so one cannot arrive, and drawing a control for
 			    it would offer a switch the agent never said it would read. */}
-			<For each={props.chat.configOptions()}>
-				{(option) => (
-					<Show when={option.type === "select" && (option as SelectOption)}>
-						{(select) => <ConfigSelect option={select()} chat={props.chat} />}
-					</Show>
-				)}
-			</For>
+			<Show when={selectOptions().length > 0}>
+				<Show when={summary()}><span class={s.sessionSettingsSummary}>{summary()}</span></Show>
+				<button type="button" class={s.headerBtn} aria-label="Session settings" title="Session settings" onClick={() => setSettingsOpen(true)}>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.8 1h2.4l.4 1.6 1.3.6 1.4-.8L14 4l-.8 1.4.6 1.3 1.6.4v2.4l-1.6.4-.6 1.3.8 1.4-1.7 1.7-1.4-.8-1.3.6-.4 1.6H6.8l-.4-1.6-1.3-.6-1.4.8L2 12.3l.8-1.4-.6-1.3L.6 9.2V6.8l1.6-.4.6-1.3L2 3.7 3.7 2l1.4.8 1.3-.6L6.8 1Zm1.2 4.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z"/></svg>
+				</button>
+			</Show>
 
 			<Show when={sessions().length > 1}>
 				<select
@@ -156,6 +204,9 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 			>
 				New
 			</button>
+			<Show when={settingsOpen()}>
+				<SessionSettingsDialog chat={props.chat} options={selectOptions()} onClose={() => setSettingsOpen(false)} />
+			</Show>
 		</div>
 	);
 };
