@@ -12,9 +12,11 @@ import { terminalsStore } from "./terminals";
 /** How often a deferred relaunch re-checks whether every agent is idle. */
 const IDLE_POLL_MS = 2_000;
 
-/** Sessions an immediate relaunch would interrupt: busy, or waiting on the user. */
+/** Sessions an immediate relaunch would interrupt: working (debounced busy, or
+ *  Claude's declared background work despite an idle shell — see
+ *  `terminalsStore.isWorking`), or waiting on the user. */
 function countBusySessions(): number {
-	return terminalsStore.getIds().filter((id) => terminalsStore.isBusy(id) || !!terminalsStore.get(id)?.awaitingInput)
+	return terminalsStore.getIds().filter((id) => terminalsStore.isWorking(id) || !!terminalsStore.get(id)?.awaitingInput)
 		.length;
 }
 

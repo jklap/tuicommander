@@ -108,6 +108,7 @@ vi.mock("../../stores/terminals", () => ({
 		get: mockTerminalsGet,
 		getSubAgentTag: mockGetSubAgentTag,
 		isBusy: vi.fn(() => false),
+		isWorking: vi.fn(() => false),
 		onRemove: vi.fn(() => () => {}),
 		state: { activeId: null as string | null },
 	},
@@ -761,6 +762,7 @@ describe("Sidebar", () => {
 			});
 			mockTerminalsGet.mockImplementation(() => term());
 			vi.mocked(terminalsStore.isBusy).mockImplementation(() => term().shellState === "busy");
+			vi.mocked(terminalsStore.isWorking).mockImplementation(() => term().shellState === "busy");
 			settingsStore.setTabTreeEnabled(true);
 			withBranch(richBranch({ terminals: ["t1"] }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
@@ -781,6 +783,7 @@ describe("Sidebar", () => {
 				uiStore.cycleSidebarDensityMode();
 				uiStore.cycleSidebarDensityMode();
 				vi.mocked(terminalsStore.isBusy).mockImplementation(() => false);
+				vi.mocked(terminalsStore.isWorking).mockImplementation(() => false);
 			}
 		});
 

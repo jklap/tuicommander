@@ -36,7 +36,10 @@ vi.mock("../../transport", () => ({
 // Mock settings store — default to "stable" channel
 const mockSettingsState = { updateChannel: "stable" as string, deferUpdateRelaunch: true };
 // Terminal sessions as the updater sees them: id -> debounced busy / awaiting-input flags
-const mockTerminals = new Map<string, { busy: boolean; awaitingInput: "question" | "error" | null }>();
+const mockTerminals = new Map<
+	string,
+	{ busy: boolean; awaitingInput: "question" | "error" | null; declaredBackgroundWork?: boolean }
+>();
 let mockAppVersion = "0.0.1";
 vi.mock("../../stores/settings", () => ({
 	settingsStore: { state: mockSettingsState },
@@ -46,6 +49,7 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		getIds: () => [...mockTerminals.keys()],
 		isBusy: (id: string) => mockTerminals.get(id)?.busy ?? false,
+		isWorking: (id: string) => !!(mockTerminals.get(id)?.busy || mockTerminals.get(id)?.declaredBackgroundWork),
 		get: (id: string) => mockTerminals.get(id),
 	},
 }));
@@ -80,6 +84,7 @@ describe("updaterStore", () => {
 			terminalsStore: {
 				getIds: () => [...mockTerminals.keys()],
 				isBusy: (id: string) => mockTerminals.get(id)?.busy ?? false,
+				isWorking: (id: string) => !!(mockTerminals.get(id)?.busy || mockTerminals.get(id)?.declaredBackgroundWork),
 				get: (id: string) => mockTerminals.get(id),
 			},
 		}));
@@ -693,6 +698,15 @@ describe("updaterStore", () => {
 				expect(mockRelaunch).not.toHaveBeenCalled();
 				expect(store.state.restartPending).toBe(true);
 				expect(store.state.downloading).toBe(false);
+				expect(store.busyCount()).toBe(1);
+			});
+		});
+
+		it("counts a session with declared background work as busy even when its shell is idle", async () => {
+			mockTerminals.set("a", { busy: false, awaitingInput: null, declaredBackgroundWork: true });
+			await testInScopeAsync(async () => {
+				await install();
+				expect(mockRelaunch).not.toHaveBeenCalled();
 				expect(store.busyCount()).toBe(1);
 			});
 		});

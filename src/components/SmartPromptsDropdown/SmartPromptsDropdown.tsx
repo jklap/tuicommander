@@ -31,7 +31,7 @@ function getDisabledReason(): string | null {
 	const active = terminalsStore.getActive();
 	if (!active?.sessionId) return "No active terminal — open a terminal first";
 	if (!active.agentType) return "No AI agent detected in the active terminal";
-	if (terminalsStore.isBusy(active.id)) return "Agent is busy — wait for it to finish";
+	if (terminalsStore.isWorking(active.id)) return "Agent is busy — wait for it to finish";
 	return null;
 }
 
