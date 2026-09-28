@@ -78,6 +78,7 @@ export const ACTION_NAMES = [
 	"block-next",
 	"block-search-toggle",
 	"toggle-diagnostics-capture",
+	"explain-session-state",
 	// Numbered tabs and branches
 	...Array.from({ length: 9 }, (_, i) => `switch-tab-${i + 1}`),
 	...Array.from({ length: 9 }, (_, i) => `switch-branch-${i + 1}`),
@@ -167,6 +168,10 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
 	// Unbound by default: a debug tool, not a hot path, reachable via the
 	// Command Palette (gated on isPerfDebug() there).
 	"toggle-diagnostics-capture": "",
+	// Unbound by default: a troubleshooting tool, not a hot path, reachable via
+	// the Command Palette (also available from the tab context menu / Activity
+	// Dashboard row button).
+	"explain-session-state": "",
 	"process-manager": "",
 	"open-generators": "",
 	"show-remote-qr": "",
