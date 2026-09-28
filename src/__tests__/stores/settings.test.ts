@@ -60,7 +60,7 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it.each(["my profile", "-other", " profile", "profile\nother", "name\u00a0part", "a".repeat(65)])(
+		it.each(["my profile", "-other", " profile", "profile\nother", "name\u00a0part", "name\u0085part", "a".repeat(65)])(
 			"rejects ambiguous profile name %j without changing the saved choice",
 			async (name) => {
 				await testInScopeAsync(async () => {

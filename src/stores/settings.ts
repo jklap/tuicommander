@@ -807,7 +807,7 @@ function createSettingsStore() {
 		setEgoProfile(name: string): boolean {
 			if (
 				name !== "" &&
-				(name.startsWith("-") || /\s|[\x00-\x1f\x7f]/u.test(name) || new TextEncoder().encode(name).length > 64)
+				(name.startsWith("-") || /\s|[\x00-\x1f\x7f\x85]/u.test(name) || new TextEncoder().encode(name).length > 64)
 			) {
 				return false;
 			}
