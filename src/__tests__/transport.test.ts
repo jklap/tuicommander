@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildHttpUrl,
@@ -21,40 +22,40 @@ function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
 }
 
-function extractBalancedObject(source: string, marker: string): string {
-	const markerIndex = source.indexOf(marker);
-	if (markerIndex < 0) {
-		throw new Error(`Marker not found: ${marker}`);
+function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
+	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
+	const declaration = sourceFile.statements
+		.filter(ts.isVariableStatement)
+		.flatMap((statement) => [...statement.declarationList.declarations])
+		.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === "COMMAND_TABLE");
+	let value = declaration?.initializer;
+	while (value && !ts.isObjectLiteralExpression(value)) {
+		if (ts.isParenthesizedExpression(value)) value = value.expression;
+		else if (ts.isConditionalExpression(value)) value = value.whenFalse;
+		else if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.CommaToken) value = value.right;
+		else throw new Error("COMMAND_TABLE initializer is not an object");
 	}
-	const start = source.indexOf("{", markerIndex);
-	if (start < 0) {
-		throw new Error(`Object start not found after marker: ${marker}`);
-	}
-
-	let depth = 0;
-	for (let index = start; index < source.length; index += 1) {
-		const char = source[index];
-		if (char === "{") depth += 1;
-		if (char === "}") {
-			depth -= 1;
-			if (depth === 0) return source.slice(start, index + 1);
-		}
-	}
-
-	throw new Error(`Object end not found after marker: ${marker}`);
-}
-
-function extractCommandTableCommands(): Set<string> {
-	const transportSource = readRepoFile("src/transport.ts");
-	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
-	// Anchor on the single tab of a top-level key. `\s*` also matched nested
-	// `body: {` lines, which put a phantom "body" command in the set.
+	if (!value) throw new Error("COMMAND_TABLE initializer not found");
 	return new Set(
-		Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (match) => match[1]).filter(
-			(command) => command !== undefined,
-		),
+		value.properties
+			.filter(ts.isPropertyAssignment)
+			.map((property) => property.name)
+			.filter(ts.isIdentifier)
+			.map((name) => name.text),
 	);
 }
+
+describe("COMMAND_TABLE source scan", () => {
+	it("finds space-indented commands without treating a nested object key as a command", () => {
+		const source = `const COMMAND_TABLE = {
+  first_command: { map: () => ({ body: {
+    nested_key: {}
+  } }) },
+  second_command: { map: () => ({ method: "GET" }) },
+};`;
+		expect(extractCommandTableCommands(source)).toEqual(new Set(["first_command", "second_command"]));
+	});
+});
 
 function extractRegisteredTauriCommands(): Set<string> {
 	const libSource = readRepoFile("src-tauri/src/lib.rs");
