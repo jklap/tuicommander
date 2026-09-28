@@ -180,12 +180,13 @@ export interface AcpConnectionSnapshot {
 // ---------------------------------------------------------------------------
 
 export interface AcpSessionConfigSelectOption {
-	id: string;
+	value: string;
 	name: string;
 	description?: string;
 }
 
 export interface AcpSessionConfigSelectGroup {
+	group: string;
 	name: string;
 	options: AcpSessionConfigSelectOption[];
 }
