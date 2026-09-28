@@ -101,6 +101,17 @@ pnpm test:coverage     # Coverage report
 
 **Coverage:** ~80%+
 
+### Rust tests in linked worktrees
+
+Run standalone Rust tests through `scripts/with-test-tmp.sh`. In a linked
+worktree, the wrapper clears an inherited `CARGO_TARGET_DIR`, so Cargo selects
+that checkout's artifacts instead of a target supplied by the parent
+TUICommander process. The worktrees' `tuic-terminal` builds have the same Cargo
+fingerprint key, while [Cargo checks path sources by file mtime](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/fingerprint/index.html);
+sharing one target can therefore make an older checkout look fresh against an
+artifact from another checkout. The wrapper also keeps test scratch files under
+`~/Gits`.
+
 ### TypeScript mutation testing
 
 Run Stryker on the changed source files and their relevant Vitest files. Keep both
