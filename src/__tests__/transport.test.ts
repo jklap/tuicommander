@@ -2030,10 +2030,15 @@ describe("transport", () => {
 			],
 			[
 				"acp_session_prompt",
-				{ connectionId: CONNECTION, sessionId: SESSION, prompt: [{ type: "text", text: "hi" }] },
+				{
+					connectionId: CONNECTION,
+					sessionId: SESSION,
+					prompt: [{ type: "text", text: "hi" }],
+					viewedRepo: "/repo/viewed",
+				},
 				"POST",
 				`/acp/connections/${CONNECTION}/sessions/${SESSION}/prompt`,
-				{ prompt: [{ type: "text", text: "hi" }] },
+				{ prompt: [{ type: "text", text: "hi" }], viewedRepo: "/repo/viewed" },
 			],
 			[
 				"acp_session_cancel",

@@ -34,6 +34,9 @@ use super::{
 
 const INITIAL_GENERATION: u64 = 1;
 
+/// Where a prompt names the repository on screen (agreed with ego, #1157-1e54).
+pub const VIEWED_REPO_META_KEY: &str = "tuicommander/viewedRepo";
+
 /// How many wake signals the shared notice bus holds for a slow subscriber.
 ///
 /// Small because a notice carries no payload worth catching up on: a
@@ -224,6 +227,12 @@ impl AcpClientManager {
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         if let Some(peer_id) = peer_id.as_deref() {
             validate_peer_id(peer_id)?;
+            // One identity is one process. A reloaded webview or a second
+            // client asking again gets the ego this peer already has; `reconnect`
+            // is the way to a fresh one.
+            if let Some(connection_id) = self.live_connection_for_peer(peer_id) {
+                return self.snapshot(connection_id);
+            }
         }
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
@@ -464,18 +473,39 @@ impl AcpClientManager {
     ///
     /// The outcome is an event, because a turn outlives the call that started
     /// it and more than one reader needs to know how it ended.
+    /// [`prompt`](Self::prompt) with the repository on screen as a hint for
+    /// this turn only, as `_meta.tuicommander/viewedRepo`. The session's cwd is
+    /// untouched: the hint names what a person is looking at, never what ego
+    /// may reach.
+    pub async fn prompt_with_context(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        prompt: Vec<v1::ContentBlock>,
+        viewed_repo: Option<String>,
+    ) -> Result<AcpTurnId, AcpClientError> {
+        let meta = viewed_repo.map(|path| {
+            let mut meta = v1::Meta::new();
+            meta.insert(VIEWED_REPO_META_KEY.to_owned(), path.into());
+            meta
+        });
+        self.dispatch(connection_id, |reply| Command::Prompt {
+            session_id,
+            prompt,
+            meta,
+            reply,
+        })
+        .await
+    }
+
     pub async fn prompt(
         &self,
         connection_id: AcpConnectionId,
         session_id: v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
     ) -> Result<AcpTurnId, AcpClientError> {
-        self.dispatch(connection_id, |reply| Command::Prompt {
-            session_id,
-            prompt,
-            reply,
-        })
-        .await
+        self.prompt_with_context(connection_id, session_id, prompt, None)
+            .await
     }
 
     /// Ask the running turn to stop. It settles on its own response.
@@ -741,6 +771,18 @@ impl AcpClientManager {
             .map(Some)
     }
 
+    fn live_connection_for_peer(&self, peer_id: &str) -> Option<AcpConnectionId> {
+        self.connections
+            .lock()
+            .iter()
+            .filter(|(_, connection)| {
+                connection.peer_id.as_deref() == Some(peer_id)
+                    && connection.snapshot.settlement.is_none()
+            })
+            .max_by_key(|(_, connection)| connection.snapshot.generation)
+            .map(|(connection_id, _)| *connection_id)
+    }
+
     pub fn peer_root(&self, peer_id: &str) -> Option<PathBuf> {
         self.connections
             .lock()
@@ -751,6 +793,17 @@ impl AcpClientManager {
             })
             .max_by_key(|connection| connection.snapshot.generation)
             .map(|connection| connection.root.clone())
+    }
+
+    /// End every connection, for the app quitting.
+    ///
+    /// The process exits without running the destructors that kill each ego's
+    /// process group, so an ego left to them would outlive the app. Killed
+    /// rather than disconnected: nobody is left to read a graceful goodbye.
+    pub async fn shutdown_all(&self) {
+        for connection_id in self.connection_ids() {
+            let _ = self.kill(connection_id).await;
+        }
     }
 
     #[must_use]

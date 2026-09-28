@@ -2335,6 +2335,9 @@ pub fn run() {
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
                         }
+                        // End every ego AI Chat started: `std::process::exit`
+                        // skips the destructors that would kill them.
+                        tauri::async_runtime::block_on(state.acp.shutdown_all());
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the

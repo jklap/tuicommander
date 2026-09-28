@@ -116,6 +116,9 @@ import type {
 } from "../../types/acp";
 
 const ROOT = "/repo/tuicommander";
+const HOME = "/home/boss";
+/** Where every chat runs: the whole workspace, never one repository. */
+const CHAT_ROOT = "/home/boss/Gits";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
 const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
@@ -218,7 +221,29 @@ async function settle(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function renderPanel() {
+/** Open the panel and start a chat the way a person would, with "+". Nothing
+ *  starts ego on its own any more (#1157-1e54). */
+async function renderPanel() {
+	const view = render(() => <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />);
+	await settle();
+	(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+	await settle();
+	return view;
+}
+
+/** Type a message and press Send. */
+async function typeAndSend(container: HTMLElement, text: string): Promise<void> {
+	const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+	textarea.value = text;
+	textarea.dispatchEvent(new Event("input", { bubbles: true }));
+	(
+		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+	).click();
+	await settle();
+}
+
+/** Open the panel without starting anything. */
+function renderIdlePanel() {
 	return render(() => <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />);
 }
 
@@ -227,6 +252,7 @@ beforeEach(() => {
 	window.history.replaceState(null, "", "/");
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "load_config") return { ai_chat_sessions: {} };
+		if (command === "get_home_directory") return HOME;
 		return undefined;
 	});
 	sequence = 0;
@@ -250,8 +276,9 @@ beforeEach(() => {
 		return SESSION;
 	});
 	client.listSessions.mockResolvedValue({ sessions: [], nextCursor: null });
+	// A replacement is a fresh process: nothing is attached until it loads.
 	client.reconnect.mockImplementation(async () => {
-		const opened = snapshot({ attachments: [attachment()] });
+		const opened = snapshot();
 		acpStore.applySnapshot(opened);
 		acpStore.markStreaming(CONNECTION);
 		return opened;
@@ -281,7 +308,7 @@ describe("AIChatPanel: the frame it keeps", () => {
 	// swap. The registry entry behind this button is what makes Cmd+Alt+A, the
 	// status-bar button and the command-palette entry work as well.
 	it("offers its own window", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		expect(container.querySelector("#ai-chat-panel")).not.toBeNull();
@@ -294,7 +321,7 @@ describe("AIChatPanel: the frame it keeps", () => {
 	// to a repo root and a session, and a per-terminal binding is the exact
 	// inverse of a control plane.
 	it("names the repository it is bound to", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		expect(container.textContent).toContain("tuicommander");
@@ -311,7 +338,7 @@ describe("AIChatPanel: transcript actions", () => {
 		);
 		document.head.append(style);
 		try {
-			const { container } = renderPanel();
+			const { container } = await renderPanel();
 			await settle();
 			feed({ kind: "promptSent", text: "Question" });
 			feed({
@@ -338,7 +365,7 @@ describe("AIChatPanel: transcript actions", () => {
 			.join("\n");
 		document.head.append(style);
 		try {
-			const { container } = renderPanel();
+			const { container } = await renderPanel();
 			await settle();
 			feed({ kind: "promptSent", text: "Question" });
 			feed({
@@ -369,10 +396,11 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -391,7 +419,7 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
 	it("copies the raw user message, assistant answer, and fenced code", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "Question <one>" });
 		feed({
@@ -413,10 +441,11 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens web links externally and file links through the terminal file opener", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -439,10 +468,11 @@ describe("AIChatPanel: transcript actions", () => {
 	it("makes a bare source path clickable only after the backend resolves it", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -458,17 +488,19 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(link).toBeDefined();
 		link?.click();
 		await settle();
-		expect(invoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: ROOT, candidate: "src/main.ts:42" });
+		// Relative to where ego runs, which is the workspace, not the viewed repo.
+		expect(invoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: CHAT_ROOT, candidate: "src/main.ts:42" });
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts", undefined, 42, undefined);
 	});
 
 	it("opens links in a user message through the same URL and file handlers", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "Open https://example.com/help and src/main.ts" });
 		await settle();
@@ -483,10 +515,11 @@ describe("AIChatPanel: transcript actions", () => {
 	it("keeps a failed file lookup inside the panel without opening a path", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
 			if (command === "resolve_terminal_path") throw new Error("resolver unavailable");
 			return undefined;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -500,14 +533,117 @@ describe("AIChatPanel: transcript actions", () => {
 	});
 });
 
+describe("AIChatPanel: one chat across repositories", () => {
+	function renderSwitchable() {
+		const [repo, setRepo] = createSignal<string | null>(ROOT);
+		const view = render(() => <AIChatPanel visible={true} repoPath={repo()} onClose={() => {}} />);
+		return { ...view, setRepo };
+	}
+
+	async function send(container: HTMLElement, text: string): Promise<void> {
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = text;
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		).click();
+		await settle();
+	}
+
+	it("starts nothing when the panel opens or the repository changes", async () => {
+		const { setRepo } = renderSwitchable();
+		await settle();
+		setRepo("/repo/other");
+		await settle();
+		setRepo(null);
+		await settle();
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	it("starts one ego on the first message, in the workspace root, and a second tab reuses it", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderSwitchable();
+		await settle();
+		await send(container, "hello");
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.connect).toHaveBeenCalledWith(CHAT_ROOT);
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
+		expect(client.prompt).toHaveBeenCalledTimes(1);
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		expect(client.newSession).toHaveBeenCalledTimes(2);
+		expect(client.newSession).toHaveBeenLastCalledWith(CONNECTION, CHAT_ROOT);
+		expect(client.connect).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the same tabs and the same chat when the repository changes", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container, setRepo } = renderSwitchable();
+		await settle();
+		await send(container, "hello");
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		const tabs = () =>
+			[...container.querySelectorAll("[data-chat-session]")].map((tab) => tab.getAttribute("data-chat-session"));
+		const before = tabs();
+		expect(before).toEqual([SESSION, SECOND_SESSION]);
+		setRepo("/repo/other");
+		await settle();
+		expect(tabs()).toEqual(before);
+		await send(container, "still here");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SECOND_SESSION, "still here", [], "/repo/other");
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	// A reloaded document connects again and is handed the ego that is already
+	// running, with its sessions still attached; loading one again is refused.
+	it("does not replay a conversation the running ego already has attached", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: SESSION } };
+			if (command === "get_home_directory") return HOME;
+			return undefined;
+		});
+		client.connect.mockImplementation(async () => {
+			const adopted = snapshot({ attachments: [attachment()] });
+			acpStore.applySnapshot(adopted);
+			acpStore.markStreaming(CONNECTION);
+			return adopted;
+		});
+		const { container } = renderSwitchable();
+		await settle();
+		await send(container, "carry on");
+		expect(client.loadSession).not.toHaveBeenCalled();
+		expect(client.newSession).not.toHaveBeenCalled();
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "carry on", [], ROOT);
+	});
+
+	it("sends the viewed repository with each prompt as context, never as the session's cwd", async () => {
+		const { container, setRepo } = renderSwitchable();
+		await settle();
+		await send(container, "what is here");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "what is here", [], ROOT);
+		setRepo(null);
+		await settle();
+		await send(container, "and now");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "and now", [], null);
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
+		expect(client.newSession).not.toHaveBeenCalledWith(CONNECTION, ROOT);
+	});
+});
+
 describe("AIChatPanel: parallel tabs", () => {
 	it("keeps both tabs and transcripts when the panel is hidden and shown", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const [visible, setVisible] = createSignal(true);
 		const { container } = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
 		await settle();
-		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
-		await settle();
+		for (const _ of [SESSION, SECOND_SESSION]) {
+			(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+			await settle();
+		}
 		feed(
 			{
 				kind: "sessionUpdate",
@@ -530,8 +666,10 @@ describe("AIChatPanel: parallel tabs", () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
 		const view = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
 		await settle();
-		(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
-		await settle();
+		for (const _ of [SESSION, SECOND_SESSION]) {
+			(view.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+			await settle();
+		}
 		setVisible(false);
 		setVisible(true);
 		await settle();
@@ -545,7 +683,10 @@ describe("AIChatPanel: parallel tabs", () => {
 		await unattachedTabs(visible, setVisible);
 		expect(loadsOf(SECOND_SESSION)).toBe(1);
 		acpStore.applySnapshot(snapshot());
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } },
+		});
 		setVisible(false);
 		setVisible(true);
 		await settle();
@@ -574,13 +715,13 @@ describe("AIChatPanel: parallel tabs", () => {
 
 	it("keeps a terminal context-menu draft queued before the first session opens", async () => {
 		aiChatDraft.append("Explain this selected error");
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Explain this selected error");
 	});
 	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
@@ -591,7 +732,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
 		).click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Second request");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Second request", [], ROOT);
 		(container.querySelector(`button[aria-label="Close chat tab ${SECOND_SESSION}"]`) as HTMLButtonElement).click();
 		await settle();
 		textarea = container.querySelector("textarea") as HTMLTextAreaElement;
@@ -601,12 +742,12 @@ describe("AIChatPanel: parallel tabs", () => {
 			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
 		).click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "First request");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "First request", [], ROOT);
 		expect(client.disconnect).not.toHaveBeenCalled();
 	});
 	it("opens a new tab with the focused-panel shortcut", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector("textarea") as HTMLTextAreaElement).dispatchEvent(
 			new KeyboardEvent("keydown", { key: "t", metaKey: true, bubbles: true }),
@@ -617,7 +758,7 @@ describe("AIChatPanel: parallel tabs", () => {
 
 	it("keeps separate ACP transcripts and composer drafts while switching and closing tabs", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed(
 			{
@@ -660,7 +801,7 @@ describe("AIChatPanel: parallel tabs", () => {
 
 	it("restores both tabs and their transcripts after the panel mounts in a new document", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const first = renderPanel();
+		const first = await renderPanel();
 		await settle();
 		(first.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
@@ -681,9 +822,21 @@ describe("AIChatPanel: parallel tabs", () => {
 				session,
 			);
 		});
-		const second = renderPanel();
+		// The tabs come back with the document; their history comes back when
+		// ego does, which is the next message.
+		const second = renderIdlePanel();
 		await settle();
 		expect(second.container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		expect(client.loadSession).not.toHaveBeenCalled();
+		const textarea = second.container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "where were we";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(
+			[...second.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Send",
+			) as HTMLButtonElement
+		).click();
+		await settle();
 		expect(second.container.textContent).toContain("Second replay");
 		(second.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
 		await settle();
@@ -693,7 +846,7 @@ describe("AIChatPanel: parallel tabs", () => {
 
 describe("AIChatPanel: transcript keyboard", () => {
 	it("selects only the transcript, finds a term, and clears this tab's view", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "First question" });
 		feed({
@@ -726,7 +879,7 @@ describe("AIChatPanel: without a configured binary", () => {
 	// never starts.
 	it("explains that ACP is not configured and launches nothing", async () => {
 		settings.egoExecutable = "";
-		const { container } = renderPanel();
+		const { container } = renderIdlePanel();
 		await settle();
 
 		expect(container.textContent).toContain("ACP is not configured");
@@ -737,7 +890,7 @@ describe("AIChatPanel: without a configured binary", () => {
 
 describe("AIChatPanel: a turn", () => {
 	it("hides the connection ack and presents intent as turn status", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -759,7 +912,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("turns a streamed suggestion into three actions and submits the chosen text", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -785,12 +938,12 @@ describe("AIChatPanel: a turn", () => {
 		]);
 		(choices[1] as HTMLButtonElement).click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta", [], ROOT);
 	});
 
 	// Catches: an inline token at the end of the answer remaining visible as raw text.
 	it("turns a trailing inline suggestion into reply actions", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -809,7 +962,7 @@ describe("AIChatPanel: a turn", () => {
 
 	// Catches: parsing a protocol-looking phrase before the end of the answer.
 	it("keeps an inline suggestion before further prose as answer text", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -824,7 +977,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("leaves mentions of protocol words inside prose and fenced code unchanged", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -844,7 +997,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("keeps malformed suggestions and mid-sentence intent as answer text", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -866,7 +1019,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("does not interpret markers in indented markdown code", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -882,7 +1035,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("keeps an indented code example at the start of an answer", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -897,7 +1050,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("shows an ACP prompt failure in the transcript and returns the composer to Send", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		acpStore.applySnapshot(
 			snapshot({
@@ -920,7 +1073,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("shows that a normally settled turn without an agent reply ended", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "ciao" });
 		feed({ kind: "turnSettled", stopReason: "end_turn", usage: null });
@@ -929,7 +1082,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("shows an agent refusal after the prompt settles", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "promptSent", text: "ciao" });
 		feed({ kind: "turnSettled", stopReason: "refusal", usage: null });
@@ -938,7 +1091,7 @@ describe("AIChatPanel: a turn", () => {
 	});
 
 	it("shows the shared queue, can remove the phone prompt, and accepts a desktop prompt while busy", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		acpStore.applySnapshot(
 			snapshot({
@@ -965,12 +1118,12 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		[...container.querySelectorAll("button")].find((button) => button.textContent === "Queue")?.click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "desktop next");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "desktop next", [], ROOT);
 	});
 	// Catches: an image paste is ignored even though ego advertises image prompts.
 	it("stages a pasted PNG and sends it with the next turn", async () => {
 		supportsImages = true;
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		const file = new File([Uint8Array.from(atob(PNG_1X1), (byte) => byte.charCodeAt(0))], "clip.png", {
@@ -982,14 +1135,18 @@ describe("AIChatPanel: a turn", () => {
 		expect(event.defaultPrevented).toBe(true);
 		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "", [
-			{ type: "image", mimeType: "image/png", data: PNG_1X1 },
-		]);
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
 	});
 
 	// Catches: a paste is accepted for an agent that cannot read image blocks.
 	it("refuses an image when the connection did not advertise image prompts", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		pasteFile(textarea, new File(["png"], "clip.png", { type: "image/png" }));
@@ -1003,7 +1160,7 @@ describe("AIChatPanel: a turn", () => {
 	// Catches: a large clipboard blob is encoded before any size check.
 	it("refuses an oversized image and reports its size", async () => {
 		supportsImages = true;
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
@@ -1020,7 +1177,7 @@ describe("AIChatPanel: a turn", () => {
 	// Catches: two quick paste events each pass the cap while the first read is pending.
 	it("keeps rapid image pastes within the total size cap", async () => {
 		supportsImages = true;
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		pasteFile(textarea, new File([new Uint8Array(6 * 1024 * 1024)], "first.png", { type: "image/png" }));
@@ -1033,7 +1190,7 @@ describe("AIChatPanel: a turn", () => {
 	// Catches: a staged image still goes on the wire after the person removes it.
 	it("removes a staged image before sending the text", async () => {
 		supportsImages = true;
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		pasteFile(
 			container.querySelector("textarea") as HTMLTextAreaElement,
@@ -1047,12 +1204,12 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		[...container.querySelectorAll("button")].find((button) => button.textContent === "Send")?.click();
 		await settle();
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "text only");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "text only", [], ROOT);
 	});
 
 	// Catches: intercepting all paste events breaks the browser's text insertion.
 	it("leaves plain text paste to the textarea", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
 		const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -1060,16 +1217,16 @@ describe("AIChatPanel: a turn", () => {
 		textarea.dispatchEvent(event);
 		expect(event.defaultPrevented).toBe(false);
 	});
-	it("opens a connection on the repo root and a session on the same root", async () => {
-		renderPanel();
+	it("opens the connection and its session on the workspace root", async () => {
+		await renderPanel();
 		await settle();
 
-		expect(client.connect).toHaveBeenCalledWith(ROOT);
-		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
+		expect(client.connect).toHaveBeenCalledWith(CHAT_ROOT);
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 	});
 
 	it("sends what was typed and streams the answer back", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
@@ -1081,7 +1238,7 @@ describe("AIChatPanel: a turn", () => {
 		send?.click();
 		await settle();
 
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "what does acp/mod.rs do?");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "what does acp/mod.rs do?", [], ROOT);
 
 		feed({
 			kind: "sessionUpdate",
@@ -1099,11 +1256,11 @@ describe("AIChatPanel: a turn", () => {
 	// One connection per root. Coming back to a repository must not launch a
 	// second ego on a root that already has one.
 	it("reuses the connection a root already has", async () => {
-		const first = renderPanel();
+		const first = await renderPanel();
 		await settle();
 		first.unmount();
 
-		renderPanel();
+		await renderPanel();
 		await settle();
 
 		expect(client.connect).toHaveBeenCalledTimes(1);
@@ -1115,17 +1272,17 @@ describe("AIChatPanel: durable conversations", () => {
 	it("labels untitled conversations without exposing an id as the option text", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: SESSION, cwd: ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
 				{
 					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
-					cwd: ROOT,
+					cwd: CHAT_ROOT,
 					title: null,
 					updatedAt: "2026-09-26T09:00:00Z",
 				},
 			],
 			nextCursor: null,
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const options = [...container.querySelectorAll('select[title="Conversation"] option')];
 		expect(options).toHaveLength(2);
@@ -1137,12 +1294,12 @@ describe("AIChatPanel: durable conversations", () => {
 	it("shows a new ACP session title in the header and conversation picker", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: SESSION, cwd: ROOT, title: "Conversation 1", updatedAt: "2026-09-27T09:00:00Z" },
-				{ sessionId: "other", cwd: ROOT, title: "Other", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Conversation 1", updatedAt: "2026-09-27T09:00:00Z" },
+				{ sessionId: "other", cwd: CHAT_ROOT, title: "Other", updatedAt: "2026-09-26T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Review architecture" } });
 		await settle();
@@ -1152,7 +1309,7 @@ describe("AIChatPanel: durable conversations", () => {
 	});
 
 	it("renders context occupancy and cost from one ACP usage update", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -1165,7 +1322,7 @@ describe("AIChatPanel: durable conversations", () => {
 	});
 
 	it("renders context occupancy without a missing cost", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 400 } });
 		await settle();
@@ -1176,7 +1333,7 @@ describe("AIChatPanel: durable conversations", () => {
 	});
 
 	it("does not carry a previous cost into a costless usage update", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -1190,7 +1347,7 @@ describe("AIChatPanel: durable conversations", () => {
 	});
 
 	it("does not render a percentage for a zero context window", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "sessionUpdate", update: { sessionUpdate: "usage_update", used: 100, size: 0 } });
 		await settle();
@@ -1201,7 +1358,7 @@ describe("AIChatPanel: durable conversations", () => {
 
 	it("does not replace a saved binding when config cannot be read", async () => {
 		vi.mocked(invoke).mockRejectedValue(new Error("Config unavailable"));
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		expect(client.newSession).not.toHaveBeenCalled();
 		expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_config")).toBe(false);
@@ -1224,9 +1381,9 @@ describe("AIChatPanel: durable conversations", () => {
 			);
 			return SESSION;
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
-		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
 		const next = [...container.querySelectorAll("button")].find((button) => button.textContent === "New");
@@ -1240,6 +1397,7 @@ describe("AIChatPanel: durable conversations", () => {
 		const saved: Record<string, string> = {};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
+			if (command === "get_home_directory") return HOME;
 			if (command === "save_config")
 				Object.assign(
 					saved,
@@ -1247,16 +1405,17 @@ describe("AIChatPanel: durable conversations", () => {
 				);
 			return undefined;
 		});
-		const first = renderPanel();
+		const first = await renderPanel();
 		await settle();
-		expect(saved[ROOT]).toBe(SESSION);
+		expect(saved[CHAT_ROOT]).toBe(SESSION);
 		first.unmount();
 		resetAcpChatBindings();
 		vi.clearAllMocks();
 
-		renderPanel();
+		const second = renderIdlePanel();
 		await settle();
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+		await typeAndSend(second.container, "go on");
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
 		expect(client.newSession).not.toHaveBeenCalled();
 	});
 
@@ -1264,15 +1423,15 @@ describe("AIChatPanel: durable conversations", () => {
 		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
 			cursor
 				? {
-						sessions: [{ sessionId: "newest", cwd: ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
 						nextCursor: null,
 					}
 				: {
-						sessions: [{ sessionId: SESSION, cwd: ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
 						nextCursor: "page-2",
 					},
 		);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
 		expect([...picker.options].map((option) => option.textContent)).toEqual(["New page", "First page"]);
@@ -1281,13 +1440,13 @@ describe("AIChatPanel: durable conversations", () => {
 	it("keeps the current conversation visible when a picked load is refused", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: SESSION, cwd: ROOT, title: "Current", updatedAt: "2026-09-26T09:00:00Z" },
-				{ sessionId: "unavailable", cwd: ROOT, title: "Unavailable", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: "unavailable", cwd: CHAT_ROOT, title: "Unavailable", updatedAt: "2026-09-25T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
 		client.loadSession.mockRejectedValue(new Error("Session unavailable"));
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
 		picker.value = "unavailable";
@@ -1299,11 +1458,14 @@ describe("AIChatPanel: durable conversations", () => {
 
 	it("loads the saved conversation after a fresh document opens", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
-			if (command === "load_config") return { ai_chat_sessions: { [ROOT]: "prior-session" } };
+			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: "prior-session" } };
+			if (command === "get_home_directory") return HOME;
 			return undefined;
 		});
 		client.listSessions.mockResolvedValue({
-			sessions: [{ sessionId: "prior-session", cwd: ROOT, title: "Design review", updatedAt: "2026-09-26T12:00:00Z" }],
+			sessions: [
+				{ sessionId: "prior-session", cwd: CHAT_ROOT, title: "Design review", updatedAt: "2026-09-26T12:00:00Z" },
+			],
 			nextCursor: null,
 		});
 		client.loadSession.mockImplementation(async () => {
@@ -1317,24 +1479,26 @@ describe("AIChatPanel: durable conversations", () => {
 			);
 		});
 
-		const { container } = renderPanel();
+		const { container } = renderIdlePanel();
 		await settle();
+		expect(client.connect).not.toHaveBeenCalled();
+		await typeAndSend(container, "go on");
 
 		expect(client.newSession).not.toHaveBeenCalled();
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", CHAT_ROOT);
 		expect(container.textContent).toContain("Earlier answer");
 	});
 
 	it("lists durable conversation titles in latest activity order", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: "old", cwd: ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
-				{ sessionId: SESSION, cwd: ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
-				{ sessionId: "newest", cwd: ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "newest", cwd: CHAT_ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
@@ -1348,8 +1512,8 @@ describe("AIChatPanel: durable conversations", () => {
 	it("loads a picked conversation once and shows its replay without duplication", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: SESSION, cwd: ROOT, title: "Current", updatedAt: "2026-09-25T09:00:00Z" },
-				{ sessionId: "prior-session", cwd: ROOT, title: "Earlier", updatedAt: "2026-09-24T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "prior-session", cwd: CHAT_ROOT, title: "Earlier", updatedAt: "2026-09-24T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
@@ -1363,7 +1527,7 @@ describe("AIChatPanel: durable conversations", () => {
 				"prior-session",
 			);
 		});
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		const picker = container.querySelector('select[title="Conversation"]') as HTMLSelectElement;
 		picker.value = "prior-session";
@@ -1371,7 +1535,7 @@ describe("AIChatPanel: durable conversations", () => {
 		await settle();
 
 		expect(client.loadSession).toHaveBeenCalledTimes(1);
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "prior-session", CHAT_ROOT);
 		expect(container.textContent?.split("Only once")).toHaveLength(2);
 	});
 });
@@ -1392,7 +1556,7 @@ describe("AIChatPanel: tool activity", () => {
 	}
 
 	it("collapses seven calls in one turn into one activity line with count and salient titles", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -1412,7 +1576,7 @@ describe("AIChatPanel: tool activity", () => {
 	});
 
 	it("requires a second expansion before showing tool output", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		tool(1);
 		await settle();
@@ -1433,7 +1597,7 @@ describe("AIChatPanel: tool activity", () => {
 	});
 
 	it("marks the activity line failed when any call fails", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		tool(1);
 		tool(2, "failed");
@@ -1446,7 +1610,7 @@ describe("AIChatPanel: tool activity", () => {
 	});
 
 	it("keeps open permission and elicitation cards outside collapsed activity", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		tool(1);
 		feed({
@@ -1480,7 +1644,7 @@ describe("AIChatPanel: tool activity", () => {
 	});
 
 	it("keeps calls together across agent text but separates the next user turn", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -1508,7 +1672,7 @@ describe("AIChatPanel: tool activity", () => {
 	});
 
 	it("updates the collapsed line when an existing call later fails", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		tool(1);
 		await settle();
@@ -1527,7 +1691,7 @@ describe("AIChatPanel: tool activity", () => {
 	it.each(["completed", "failed"] as const)(
 		"stops pulsing both dots when a running call becomes %s",
 		async (status) => {
-			const { container } = renderPanel();
+			const { container } = await renderPanel();
 			await settle();
 			feed({
 				kind: "sessionUpdate",
@@ -1558,7 +1722,7 @@ describe("AIChatPanel: tool activity", () => {
 		{ event: { kind: "turnSettled", stopReason: "end_turn", usage: null } as const, status: "completed" },
 		{ event: { kind: "turnFailed", message: "tool process exited", state: "idle" } as const, status: "failed" },
 	])("stops pulsing an unfinished tool call when the turn ends as $status", async ({ event, status }) => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "sessionUpdate",
@@ -1585,7 +1749,7 @@ describe("AIChatPanel: tool activity", () => {
 		let elapsed = 0;
 		now.mockImplementation(() => realNow() + elapsed);
 		try {
-			const { container } = renderPanel();
+			const { container } = await renderPanel();
 			await settle();
 			tool(1);
 			await settle();
@@ -1607,7 +1771,7 @@ describe("AIChatPanel: permission", () => {
 	// The option list is the agent's. Answering with anything but one of its own
 	// option ids answers a question nobody asked.
 	it("renders the options ego published and answers with one of their ids", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		feed({
@@ -1636,7 +1800,7 @@ describe("AIChatPanel: permission", () => {
 
 describe("AIChatPanel: elicitation", () => {
 	it("keeps an elicitation with an additional unsupported field in the form", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "elicitationRequested",
@@ -1657,7 +1821,7 @@ describe("AIChatPanel: elicitation", () => {
 	});
 
 	it("keeps a four-choice elicitation in the form", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({
 			kind: "elicitationRequested",
@@ -1679,7 +1843,7 @@ describe("AIChatPanel: elicitation", () => {
 	});
 
 	it("offers small single-select trust choices as direct buttons plus Cancel", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		feed({ kind: "turnStarted" }, SESSION, "turn-1");
 		feed({
@@ -1721,7 +1885,7 @@ describe("AIChatPanel: elicitation", () => {
 	});
 
 	it("renders a form and submits the values that were filled in", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		feed({
@@ -1758,7 +1922,7 @@ describe("AIChatPanel: elicitation", () => {
 	// a host, so a mode this client never advertised must never be drawn — a form
 	// for it would collect values the agent cannot read back.
 	it("draws nothing for a mode this client did not advertise", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		feed({
@@ -1810,7 +1974,7 @@ describe("elicitationFields", () => {
 describe("AIChatPanel: a gap", () => {
 	it("replays every open tab after the ACP connection is replaced", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
@@ -1828,14 +1992,14 @@ describe("AIChatPanel: a gap", () => {
 			[...container.querySelectorAll("button")].find((button) => button.textContent === "Recover") as HTMLButtonElement
 		).click();
 		await settle();
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, ROOT);
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
 	});
 	// A gap says the journal no longer holds what the cursor asks for. Skipping
 	// ahead would leave a hole in the conversation that nothing on screen admits
 	// to; the recovery on record is a fresh process replaying the history.
 	it("surfaces the gap and offers the recovery", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		acpStore.applyFrame(CONNECTION, {
@@ -1854,8 +2018,8 @@ describe("AIChatPanel: a gap", () => {
 		recover?.click();
 		await settle();
 
-		expect(client.reconnect).toHaveBeenCalledWith(CONNECTION, ROOT);
-		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+		expect(client.reconnect).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
 	});
 });
 
@@ -1866,12 +2030,15 @@ describe("AIChatPanel: the session's own knobs", () => {
 		description: "How ego handles tools",
 		type: "select",
 		currentValue: "ask",
-		options: [{ value: "ask", name: "Ask" }, { value: "auto", name: "Automatic" }],
+		options: [
+			{ value: "ask", name: "Ask" },
+			{ value: "auto", name: "Automatic" },
+		],
 	};
 
 	// Catches: an ACP option is hidden or shown without its published name and choice.
 	it("shows every published select with a label, description, and current choice in a dialog", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [MODEL_OPTION, mode] })] }));
 		await settle();
@@ -1883,8 +2050,12 @@ describe("AIChatPanel: the session's own knobs", () => {
 		const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
 		expect(dialog).not.toBeNull();
 		expect(dialog.textContent).toContain("How ego handles tools");
-		expect((dialog.querySelector('select[aria-label="Model"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Opus");
-		expect((dialog.querySelector('select[aria-label="Mode"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Ask");
+		expect(
+			(dialog.querySelector('select[aria-label="Model"]') as HTMLSelectElement).selectedOptions[0].textContent,
+		).toBe("Opus");
+		expect(
+			(dialog.querySelector('select[aria-label="Mode"]') as HTMLSelectElement).selectedOptions[0].textContent,
+		).toBe("Ask");
 	});
 
 	it("renders ACP grouped choices with their group label and selected value", async () => {
@@ -1893,16 +2064,25 @@ describe("AIChatPanel: the session's own knobs", () => {
 			name: "Mode",
 			type: "select",
 			currentValue: "auto",
-			options: [{ group: "behavior", name: "Behavior", options: [{ value: "ask", name: "Ask" }, { value: "auto", name: "Automatic" }] }],
+			options: [
+				{
+					group: "behavior",
+					name: "Behavior",
+					options: [
+						{ value: "ask", name: "Ask" },
+						{ value: "auto", name: "Automatic" },
+					],
+				},
+			],
 		};
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [grouped] })] }));
 		await settle();
 		expect(container.querySelector(".controlBar")?.textContent).toContain("Mode: Automatic");
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Mode"]') as HTMLSelectElement;
-		expect(picker.querySelector('optgroup')?.label).toBe("Behavior");
+		expect(picker.querySelector("optgroup")?.label).toBe("Behavior");
 		expect(picker.selectedOptions[0].value).toBe("auto");
 		expect(picker.selectedOptions[0].textContent).toBe("Automatic");
 	});
@@ -1910,11 +2090,18 @@ describe("AIChatPanel: the session's own knobs", () => {
 	// Catches: a new tab keeps a blank select after its options arrive.
 	it("shows the current choice when a second tab receives its options after opening", async () => {
 		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
 		await settle();
-		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: SECOND_SESSION, configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }));
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment(),
+					attachment({ sessionId: SECOND_SESSION, configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] }),
+				],
+			}),
+		);
 		await settle();
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
@@ -1923,7 +2110,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 
 	// Catches: the summary optimistically reports a choice ego has not accepted.
 	it("sends a changed choice and updates the summary only from the agent's reply", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
@@ -1933,7 +2120,9 @@ describe("AIChatPanel: the session's own knobs", () => {
 		await settle();
 		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", { value: "sonnet" });
 		expect(container.querySelector(".controlBar")?.textContent).toContain("Opus");
-		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }));
+		acpStore.applySnapshot(
+			snapshot({ attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }),
+		);
 		await settle();
 		expect(container.querySelector(".controlBar")?.textContent).toContain("Sonnet");
 	});
@@ -1941,7 +2130,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 	// Catches: a rejected choice appears accepted and its error is lost.
 	it("shows a rejected setting change inside the dialog", async () => {
 		client.setConfigOption.mockRejectedValueOnce(new Error("Model unavailable"));
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
@@ -1955,7 +2144,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 
 describe("AIChatPanel: pause, resume and compact", () => {
 	it("pauses a running turn and resumes a held one", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
@@ -1976,7 +2165,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("compacts the conversation", async () => {
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		const compact = [...container.querySelectorAll("button")].find((button) => button.textContent === "Compact");
@@ -2007,7 +2196,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 			return SESSION;
 		});
 
-		const { container } = renderPanel();
+		const { container } = await renderPanel();
 		await settle();
 
 		const labels = [...container.querySelectorAll("button")].map((button) => button.textContent);

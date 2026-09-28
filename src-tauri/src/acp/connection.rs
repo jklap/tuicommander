@@ -84,6 +84,8 @@ pub(super) enum Command {
     Prompt {
         session_id: v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
+        /// Context for this turn only, such as the repository on screen.
+        meta: Option<v1::Meta>,
         reply: Reply<AcpTurnId>,
     },
     Cancel {
@@ -318,7 +320,7 @@ pub(super) struct ConnectionActor {
     /// Sessions a load or resume has been sent for and not yet answered.
     attaching: HashSet<v1::SessionId>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
-    queued_contents: HashMap<AcpTurnId, Vec<v1::ContentBlock>>,
+    queued_contents: HashMap<AcpTurnId, (Vec<v1::ContentBlock>, Option<v1::Meta>)>,
     /// Open seats in the order the agent asked, which is the order they are
     /// shown in and the order a cancel settles them in. A map keyed by id
     /// would have made that order depend on hashing.
@@ -479,8 +481,9 @@ impl ConnectionActor {
             Command::Prompt {
                 session_id,
                 prompt,
+                meta,
                 reply,
-            } => match self.start_prompt(&session_id, prompt, connection) {
+            } => match self.start_prompt(&session_id, prompt, meta, connection) {
                 Ok((turn_id, sent)) => {
                     let _ = reply.send(Ok(turn_id));
                     if let Some(sent) = sent {
@@ -1170,6 +1173,7 @@ impl ConnectionActor {
         &mut self,
         session_id: &v1::SessionId,
         prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<(AcpTurnId, Option<Sent<v1::PromptResponse>>), AcpClientError> {
         let attachment = self.attachment(session_id)?;
@@ -1198,7 +1202,7 @@ impl ConnectionActor {
                 turn_id,
                 summary: prompt_display(&prompt, 200),
             });
-            self.queued_contents.insert(turn_id, prompt);
+            self.queued_contents.insert(turn_id, (prompt, meta));
             let queued_prompts = attachment.queued_prompts.clone();
             self.publish();
             self.journal.append(
@@ -1210,7 +1214,7 @@ impl ConnectionActor {
         }
         Ok((
             turn_id,
-            Some(self.send_prompt(session_id, turn_id, prompt, connection)),
+            Some(self.send_prompt(session_id, turn_id, prompt, meta, connection)),
         ))
     }
 
@@ -1219,10 +1223,11 @@ impl ConnectionActor {
         session_id: &v1::SessionId,
         turn_id: AcpTurnId,
         prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
         connection: &ConnectionTo<Agent>,
     ) -> Sent<v1::PromptResponse> {
         let text = prompt_display(&prompt, usize::MAX);
-        let request = v1::PromptRequest::new(session_id.clone(), prompt);
+        let request = v1::PromptRequest::new(session_id.clone(), prompt).meta(meta);
         let sent = self.send(request, connection, None);
 
         let attachment = self
@@ -1275,11 +1280,11 @@ impl ConnectionActor {
                 Some(queued.turn_id),
                 AcpClientEvent::PromptQueueChanged { queued_prompts },
             );
-            let Some(prompt) = self.queued_contents.remove(&queued.turn_id) else {
+            let Some((prompt, meta)) = self.queued_contents.remove(&queued.turn_id) else {
                 tracing::warn!(turn_id = ?queued.turn_id, "ACP queued prompt payload missing");
                 continue;
             };
-            let sent = self.send_prompt(session_id, queued.turn_id, prompt, connection);
+            let sent = self.send_prompt(session_id, queued.turn_id, prompt, meta, connection);
             let session_id = session_id.clone();
             in_flight.push(Box::pin(async move {
                 Pending::Turn {

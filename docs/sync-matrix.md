@@ -216,8 +216,9 @@ sentence, never with an empty result.
 
 ### AI Chat panel (ego over ACP)
 The panel is a control plane over an agent that lives outside it (#785-58ca). It
-binds to a **repository root and a session**, never to a terminal: a turn ego
-runs outlives any tab and touches files no tab is showing. Nothing here holds a
+is **one chat for the app** (#1157-1e54), never bound to a terminal or a
+repository: sessions run in `~/Gits`, and the repository on screen is a hint sent
+with each prompt. Nothing here holds a
 provider, an API key or a tool loop.
 
 The session's one MCP server is **`tuicommander` on the ACP transport**
@@ -238,7 +239,8 @@ naming a server — see plan §4.5.
 | `src-tauri/src/acp_commands.rs`, `src-tauri/src/config.rs` | Persist a root's ACP peer UUID beside its selected conversation and reuse it after reconnect or restart |
 | `src-tauri/src/mcp_http/mcp_transport.rs` | Bind bridge mail, child parentage and blocked progress to the ACP peer without a PTY |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
-| `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
+| `src/components/AIChatPanel/useAcpChat.ts` | One connection for the app, rooted at `~/Gits` and started by the first message or "+"; global tabs; the viewed repo sent per prompt; every action it offers |
+| `src-tauri/src/acp/manager.rs` (`prompt_with_context`, `shutdown_all`, peer adoption) | `_meta.tuicommander/viewedRepo` on `session/prompt`; one live connection per peer id; every ego ended on app exit |
 | `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
 | `src/components/AIChatPanel/Interactions.tsx` | Permission options and elicitation forms; a single choice field with up to three values has direct buttons. `form` is the only mode drawn |
 | `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, pause/resume/compact, and readable labels for untitled conversations |
