@@ -9,7 +9,7 @@
  * advertised.
  */
 
-import { type Component, createSignal, For, Match, Switch } from "solid-js";
+import { type Component, createSignal, For, Match, Show, Switch } from "solid-js";
 import type {
 	AcpCreateElicitationRequest,
 	AcpHostRequestId,
@@ -127,12 +127,21 @@ const ElicitationCard: Component<{
 }> = (props) => {
 	const [values, setValues] = createSignal<Record<string, unknown>>({});
 	const fields = () => elicitationFields(props.request.requestedSchema);
+	const quickChoice = () => {
+		const schema = props.request.requestedSchema;
+		const properties = schema && typeof schema === "object" ? (schema as { properties?: unknown }).properties : null;
+		if (!properties || typeof properties !== "object" || Object.keys(properties).length !== 1) return null;
+		const all = fields();
+		return all.length === 1 && all[0].type === "enum" && all[0].choices.length > 0 && all[0].choices.length <= 3
+			? all[0]
+			: null;
+	};
 	const set = (name: string, value: unknown) => setValues({ ...values(), [name]: value });
 
 	return (
 		<div class={s.approvalCard}>
 			<div class={s.approvalText}>{props.request.message}</div>
-			<For each={fields()}>
+			<For each={quickChoice() ? [] : fields()}>
 				{(field) => (
 					<label class={s.formField}>
 						<span class={s.formLabel}>
@@ -176,16 +185,29 @@ const ElicitationCard: Component<{
 				)}
 			</For>
 			<div class={s.approvalActions}>
-				<button
-					type="button"
-					class={cx(s.approvalBtn, s.approveBtn)}
-					onClick={() => props.onAccept(props.requestId, values())}
-				>
-					Submit
-				</button>
-				<button type="button" class={cx(s.approvalBtn, s.denyBtn)} onClick={() => props.onDecline(props.requestId)}>
-					Decline
-				</button>
+				<For each={quickChoice()?.choices ?? []}>
+					{(choice) => (
+						<button
+							type="button"
+							class={s.approvalBtn}
+							onClick={() => props.onAccept(props.requestId, { [quickChoice()!.name]: choice })}
+						>
+							{choice === "trusted" ? "Trust" : choice === "untrusted" ? "Don't trust" : choice}
+						</button>
+					)}
+				</For>
+				<Show when={!quickChoice()}>
+					<button
+						type="button"
+						class={cx(s.approvalBtn, s.approveBtn)}
+						onClick={() => props.onAccept(props.requestId, values())}
+					>
+						Submit
+					</button>
+					<button type="button" class={cx(s.approvalBtn, s.denyBtn)} onClick={() => props.onDecline(props.requestId)}>
+						Decline
+					</button>
+				</Show>
 				<button type="button" class={s.approvalBtn} onClick={() => props.onCancel(props.requestId)}>
 					Cancel
 				</button>

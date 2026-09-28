@@ -12,6 +12,10 @@
 
 # To Test
 
+## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open a disposable ego chat and send a prompt that fails before producing a reply. Confirm its diagnostic appears in the transcript and the composer returns to Send. Answer a two-choice trust elicitation using its direct button and confirm the turn then shows a reply or a failure. The live backend cannot load the ACP failure event until restart; targeted Rust and frontend tests cover the wire and rendering behavior.
+
 ## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths.

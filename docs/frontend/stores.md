@@ -431,6 +431,9 @@ on each `promptQueueChanged` event, so desktop and browser views share the
 same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host
 has sent it to ego; a queued prompt cancelled before dispatch never enters
 the transcript.
+`turnFailed` carries an ACP error diagnostic into the transcript and restores
+the attachment state. A completed turn with no agent message receives an
+explicit no-reply entry.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state — plus the speech

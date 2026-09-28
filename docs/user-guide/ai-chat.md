@@ -45,6 +45,9 @@ beside it lists previous conversations by title, newest first. Selecting one
 loads its history. The last selected conversation is restored after restarting
 TUICommander.
 
+An untitled conversation appears with its first prompt or latest activity time;
+its session ID is available in the option tooltip.
+
 When ego updates the session title, the panel header and conversation picker
 show the new title. During a turn, the footer shows context-window use as a
 percentage and shows the cumulative cost when ego reports one.
@@ -66,6 +69,9 @@ in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
+- **Failed or empty turn.** An ACP prompt error appears in the conversation with
+  the agent's diagnostic. A turn that finishes without an answer says so; the
+  composer becomes available for another prompt.
 - **Tool activity** appears as one collapsed line per turn, with a count,
   observed duration, status and the first two call titles. Expand it to see
   each call's title, kind and status; expand a call to see its output. The
@@ -95,6 +101,8 @@ in total. Text paste works as usual.
 - **Permission.** The buttons are the options ego published, answered with one of
   its own option ids. TUICommander never invents an Allow/Deny pair of its own.
 - **A form.** An elicitation is drawn as a form built from the schema ego sent.
+  A single choice field with one to three values appears as direct answer
+  buttons plus **Cancel**; larger or more complex forms keep their fields.
   Only `form` mode is ever drawn; any other mode is declined before it reaches
   the panel.
 
