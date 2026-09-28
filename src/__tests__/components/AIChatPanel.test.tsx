@@ -3,7 +3,10 @@
 // The panel renders an agent's answer through ContentRenderer, whose DOMPurify
 // pass needs a complete NodeIterator; happy-dom's is not.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
@@ -11,6 +14,16 @@ const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => 
 	mockReattachPanel: vi.fn().mockResolvedValue(undefined),
 	mockClosePanel: vi.fn().mockResolvedValue(undefined),
 }));
+
+const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
+	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
+	mockOpenFile: vi.fn(),
+	mockOpenUrl: vi.fn(),
+}));
+
+vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
+vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
+vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: mockOpenUrl }));
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +34,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: vi.fn().mockResolvedValue(vi.fn()),
 	emit: vi.fn().mockResolvedValue(undefined),
+	emitTo: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../panelRouter", () => ({
@@ -85,12 +99,15 @@ const client = vi.hoisted(() => ({
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
 import { elicitationFields } from "../../components/AIChatPanel/Interactions";
 import { resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
+import { aiChatTabs } from "../../stores/aiChatTabs";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
@@ -101,6 +118,7 @@ import type {
 const ROOT = "/repo/tuicommander";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
+const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
 // A real 1x1 PNG admitted by ego's ACP prompt tests.
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 let supportsImages = false;
@@ -205,6 +223,7 @@ function renderPanel() {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	window.history.replaceState(null, "", "/");
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "load_config") return { ai_chat_sessions: {} };
 		return undefined;
@@ -215,7 +234,9 @@ beforeEach(() => {
 	acpStore.reset();
 	acpTranscript.reset();
 	resetAcpChatBindings();
-	aiChatDraft.clear();
+	localStorage.clear();
+	aiChatTabs.resetMemory();
+	aiChatDraft.reset();
 
 	client.connect.mockImplementation(async () => {
 		const opened = snapshot();
@@ -276,6 +297,348 @@ describe("AIChatPanel: the frame it keeps", () => {
 		await settle();
 
 		expect(container.textContent).toContain("tuicommander");
+	});
+});
+
+describe("AIChatPanel: transcript actions", () => {
+	it("makes message text, tool output, and code selectable under the global no-selection rule", async () => {
+		const style = document.createElement("style");
+		style.textContent = ["src/global.css", "src/components/AIChatPanel/AIChatPanel.module.css"]
+			.map((path) => readFileSync(resolve(process.cwd(), path), "utf8"))
+			.join("\n");
+		document.head.append(style);
+		try {
+			const { container } = renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Question" });
+			feed({
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "```sh\necho answer\n```" } },
+			});
+			feed({
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "tool_call",
+					toolCallId: "selectable-output",
+					title: "Run",
+					status: "completed",
+					content: [{ type: "content", content: { type: "text", text: "tool output" } }],
+				},
+			});
+			await settle();
+			for (const selector of [".userMsg", ".assistantMsg pre", ".toolCallBody"]) {
+				const element = container.querySelector(selector);
+				expect(element, selector).not.toBeNull();
+				expect(getComputedStyle(element!).userSelect, selector).toBe("text");
+			}
+		} finally {
+			style.remove();
+		}
+	});
+	it("sends a detached file link to the main-window terminal opener", async () => {
+		window.history.replaceState(null, "", "/?mode=panel");
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
+			return undefined;
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[file](src/main.ts)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+			panelId: "ai-chat",
+			action: "open-file",
+			data: { path: "/repo/tuicommander/src/main.ts" },
+		});
+		expect(mockOpenFile).not.toHaveBeenCalled();
+		aiChatPanelAdapter.handleAction?.("open-file", { path: "/repo/tuicommander/src/main.ts" });
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
+	});
+	it("copies the raw user message, assistant answer, and fenced code", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "promptSent", text: "Question <one>" });
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Answer **two**\n\n```sh\necho three\n```" },
+			},
+		});
+		await settle();
+		const buttons = [...container.querySelectorAll<HTMLButtonElement>('button[aria-label^="Copy "]')];
+		for (const button of buttons) button.click();
+		await settle();
+		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Question <one>");
+		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("Answer **two**\n\n```sh\necho three\n```");
+		expect(mockWriteClipboard.mock.calls.map(([text]) => text)).toContain("echo three");
+	});
+
+	it("opens web links externally and file links through the terminal file opener", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
+			return undefined;
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: {
+					type: "text",
+					text: "[Website](https://example.com/help) and [source](/repo/tuicommander/src/main.ts)",
+				},
+			},
+		});
+		await settle();
+		const links = [...container.querySelectorAll<HTMLAnchorElement>(".assistantMsg a")];
+		links.forEach((link) => link.click());
+		await settle();
+		expect(mockOpenUrl).toHaveBeenCalledWith("https://example.com/help");
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
+	});
+
+	it("makes a bare source path clickable only after the backend resolves it", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
+			return undefined;
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Open src/main.ts:42 to inspect it." },
+			},
+		});
+		await settle();
+		const link = [...container.querySelectorAll<HTMLAnchorElement>(".assistantMsg a")].find(
+			(anchor) => anchor.textContent === "src/main.ts:42",
+		);
+		expect(link).toBeDefined();
+		link?.click();
+		await settle();
+		expect(invoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: ROOT, candidate: "src/main.ts:42" });
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts", undefined, 42, undefined);
+	});
+
+	it("opens links in a user message through the same URL and file handlers", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
+			return undefined;
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "promptSent", text: "Open https://example.com/help and src/main.ts" });
+		await settle();
+		const links = [...container.querySelectorAll<HTMLAnchorElement>(".userMsg a")];
+		expect(links.map((link) => link.textContent)).toEqual(["https://example.com/help", "src/main.ts"]);
+		links.forEach((link) => link.click());
+		await settle();
+		expect(mockOpenUrl).toHaveBeenCalledWith("https://example.com/help");
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
+	});
+
+	it("keeps a failed file lookup inside the panel without opening a path", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "resolve_terminal_path") throw new Error("resolver unavailable");
+			return undefined;
+		});
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[file](src/main.ts)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(mockOpenFile).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("file");
+	});
+});
+
+describe("AIChatPanel: parallel tabs", () => {
+	it("keeps both tabs and transcripts when the panel is hidden and shown", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const [visible, setVisible] = createSignal(true);
+		const { container } = render(() => <AIChatPanel visible={visible()} repoPath={ROOT} onClose={() => {}} />);
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		feed(
+			{
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Background reply" } },
+			},
+			SESSION,
+		);
+		setVisible(false);
+		setVisible(true);
+		(container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		expect(container.textContent).toContain("Background reply");
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.disconnect).not.toHaveBeenCalled();
+	});
+	it("keeps a terminal context-menu draft queued before the first session opens", async () => {
+		aiChatDraft.append("Explain this selected error");
+		const { container } = renderPanel();
+		await settle();
+		expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Explain this selected error");
+	});
+	it("routes prompts to the selected session and returns to the neighbor when closing it", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		let textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Second request";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, "Second request");
+		(container.querySelector(`button[aria-label="Close chat tab ${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "First request";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "First request");
+		expect(client.disconnect).not.toHaveBeenCalled();
+	});
+	it("opens a new tab with the focused-panel shortcut", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector("textarea") as HTMLTextAreaElement).dispatchEvent(
+			new KeyboardEvent("keydown", { key: "t", metaKey: true, bubbles: true }),
+		);
+		await settle();
+		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+	});
+
+	it("keeps separate ACP transcripts and composer drafts while switching and closing tabs", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderPanel();
+		await settle();
+		feed(
+			{
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "First answer" } },
+			},
+			SESSION,
+		);
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "Draft for first";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		feed(
+			{
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Second answer" } },
+			},
+			SECOND_SESSION,
+		);
+		await settle();
+		expect(container.textContent).toContain("Second answer");
+		expect(container.textContent).not.toContain("First answer");
+		const secondTextarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(secondTextarea.value).toBe("");
+		secondTextarea.value = "Draft for second";
+		secondTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+		(container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(container.textContent).toContain("First answer");
+		expect(container.textContent).not.toContain("Second answer");
+		expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Draft for first");
+		(container.querySelector(`button[aria-label="Close chat tab ${SECOND_SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
+		expect(container.textContent).toContain("First answer");
+		expect(client.disconnect).not.toHaveBeenCalled();
+	});
+
+	it("restores both tabs and their transcripts after the panel mounts in a new document", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const first = renderPanel();
+		await settle();
+		(first.container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		first.unmount();
+		resetAcpChatBindings();
+		aiChatTabs.resetMemory();
+		acpStore.reset();
+		acpTranscript.reset();
+		client.loadSession.mockImplementation(async (_id, session) => {
+			feed(
+				{
+					kind: "sessionUpdate",
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						content: { type: "text", text: session === SESSION ? "First replay" : "Second replay" },
+					},
+				},
+				session,
+			);
+		});
+		const second = renderPanel();
+		await settle();
+		expect(second.container.querySelectorAll("[data-chat-session]")).toHaveLength(2);
+		expect(second.container.textContent).toContain("Second replay");
+		(second.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		expect(second.container.textContent).toContain("First replay");
+	});
+});
+
+describe("AIChatPanel: transcript keyboard", () => {
+	it("selects only the transcript, finds a term, and clears this tab's view", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "promptSent", text: "First question" });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Second answer" } },
+		});
+		await settle();
+		const transcript = container.querySelector('[aria-label="Chat transcript"]') as HTMLDivElement;
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "a", metaKey: true, bubbles: true }));
+		expect(window.getSelection()?.toString()).toContain("First question");
+		expect(window.getSelection()?.toString()).not.toContain("Ask ego about this repository");
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true }));
+		expect(mockWriteClipboard.mock.calls.at(-1)?.[0]).toContain("First question");
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, bubbles: true }));
+		const search = container.querySelector('input[aria-label="Find in chat"]') as HTMLInputElement;
+		expect(search).not.toBeNull();
+		search.value = "Second";
+		search.dispatchEvent(new Event("input", { bubbles: true }));
+		search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(window.getSelection()?.toString()).toBe("Second");
+		transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+		await settle();
+		expect(container.textContent).not.toContain("Second answer");
 	});
 });
 
@@ -1048,6 +1411,61 @@ describe("AIChatPanel: tool activity", () => {
 		expect(summary?.textContent).toContain("Failed");
 	});
 
+	it.each(["completed", "failed"] as const)(
+		"stops pulsing both dots when a running call becomes %s",
+		async (status) => {
+			const { container } = renderPanel();
+			await settle();
+			feed({
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "tool_call", toolCallId: "transition", title: "Inspect file", status: "pending" },
+			});
+			await settle();
+
+			const activity = container.querySelector("details[class*=toolActivity]") as HTMLDetailsElement;
+			activity.open = true;
+			const dots = () => [...activity.querySelectorAll("summary > span:first-child")];
+			expect(dots()).toHaveLength(2);
+			for (const dot of dots()) expect(dot.className).toContain("toolCallPending");
+
+			feed({
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "tool_call_update", toolCallId: "transition", status },
+			});
+			await settle();
+
+			for (const dot of dots()) {
+				expect(dot.className).not.toContain("toolCallPending");
+				expect(dot.className).toContain(status === "failed" ? "toolCallFailure" : "toolCallSuccess");
+			}
+		},
+	);
+
+	it.each([
+		{ event: { kind: "turnSettled", stopReason: "end_turn", usage: null } as const, status: "completed" },
+		{ event: { kind: "turnFailed", message: "tool process exited", state: "idle" } as const, status: "failed" },
+	])("stops pulsing an unfinished tool call when the turn ends as $status", async ({ event, status }) => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "tool_call", toolCallId: "unfinished", title: "Inspect file", status: "in_progress" },
+		});
+		await settle();
+		const activity = container.querySelector("details[class*=toolActivity]") as HTMLDetailsElement;
+		activity.open = true;
+		const dots = () => [...activity.querySelectorAll("summary > span:first-child")];
+		expect(dots()).toHaveLength(2);
+		for (const dot of dots()) expect(dot.className).toContain("toolCallPending");
+
+		feed(event);
+		await settle();
+		for (const dot of dots()) {
+			expect(dot.className).not.toContain("toolCallPending");
+			expect(dot.className).toContain(status === "failed" ? "toolCallFailure" : "toolCallSuccess");
+		}
+	});
+
 	it("extends observed duration when a later call joins an already completed activity", async () => {
 		const realNow = performance.now.bind(performance);
 		const now = vi.spyOn(performance, "now");
@@ -1277,6 +1695,29 @@ describe("elicitationFields", () => {
 });
 
 describe("AIChatPanel: a gap", () => {
+	it("replays every open tab after the ACP connection is replaced", async () => {
+		client.newSession.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(SECOND_SESSION);
+		const { container } = renderPanel();
+		await settle();
+		(container.querySelector('button[aria-label="New chat tab"]') as HTMLButtonElement).click();
+		await settle();
+		acpStore.applyFrame(CONNECTION, {
+			kind: "gap",
+			code: "stream_gap",
+			message: "journal expired",
+			connectionId: CONNECTION,
+			sessionId: null,
+			operation: null,
+			retryable: false,
+		});
+		await settle();
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Recover") as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+	});
 	// A gap says the journal no longer holds what the cursor asks for. Skipping
 	// ahead would leave a hole in the conversation that nothing on screen admits
 	// to; the recovery on record is a fresh process replaying the history.

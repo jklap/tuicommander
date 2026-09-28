@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Parallel AI Chats",
+		description: "With AI Chat focused, open another tab for a separate conversation and draft in the same repository.",
+		shortcut: `${mod}+T`,
+	},
+	{
 		feature: "AI Chat Images",
 		description: "Paste an image into AI Chat, review its preview, then send it with or without text.",
 		shortcut: `${mod}+V`,
