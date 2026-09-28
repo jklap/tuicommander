@@ -124,7 +124,7 @@ Before manual removal, the confirmation distinguishes a branch with no commits o
 
 Both **Archive** and **Delete** remove the worktree, so TUICommander asks first whenever the worktree is not known to be clean — whether or not the branch carries commits, and whether the cleanup was started by hand or by **Auto-archive merged**. The confirmation names what happens to the work: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, that counts as "not clean" and the cleanup still stops.
 
-The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).
+The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 
 Removing a worktree without force also refuses uncommitted changes when the
 branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive

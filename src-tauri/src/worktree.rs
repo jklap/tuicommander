@@ -394,7 +394,6 @@ pub(crate) async fn remove_worktree(
         "remove_worktree command: invoked"
     );
     let script = resolve_archive_script(&repo_path);
-    let warnings = inspect_worktree_removal(&state, Path::new(&repo_path), &workspace_id).warnings;
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -413,8 +412,7 @@ pub(crate) async fn remove_worktree(
     .map_err(|e| format!("Task panic: {e}"))?;
 
     match result {
-        Ok(mut outcome) => {
-            outcome.warnings = warnings;
+        Ok(outcome) => {
             tracing::info!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: SUCCESS — invalidating caches");
             if outcome.branch_delete_warning.is_none() {
                 // Branch labels are branch-keyed, so a removed worktree drops the

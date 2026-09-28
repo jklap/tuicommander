@@ -8,6 +8,7 @@ import type { ConfirmOptions } from "./useConfirmDialog";
 
 interface AutoDeleteDeps {
 	confirm: (options: ConfirmOptions) => Promise<boolean>;
+	setStatusInfo: (message: string) => void;
 }
 
 /**
@@ -74,11 +75,13 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 			});
 		} catch (error) {
 			appLogger.warn("git", `Skipping auto-delete for '${branch}': removal preview failed`, error);
+			deps.setStatusInfo(`Kept '${branch}': removal preview failed`);
 			return;
 		}
 		const warnings = preview.warnings ?? [];
 		if (mode === "auto" && (preview.dirty_files !== 0 || (preview.live_sessions?.length ?? 0) > 0)) {
 			appLogger.info("git", `Skipping auto-delete for '${branch}'`, { warnings });
+			deps.setStatusInfo(`Kept '${branch}': ${warnings.join("; ") || "local changes or live sessions"}`);
 			return;
 		}
 

@@ -3597,15 +3597,16 @@ async fn handle_worktree(
             }
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
-            let warnings = crate::worktree::inspect_worktree_removal(
-                state,
-                std::path::Path::new(&path),
-                &workspace_id,
-            )
-            .warnings;
+            let preview_state = Arc::clone(state);
             let result = tokio::task::spawn_blocking(move || {
+                let warnings = crate::worktree::inspect_worktree_removal(
+                    &preview_state,
+                    std::path::Path::new(&path_for_remove),
+                    &workspace_id_for_remove,
+                )
+                .warnings;
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
-                crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+                let outcome = crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
                     &path_for_remove,
                     &workspace_id_for_remove,
                     delete_branch,
@@ -3613,11 +3614,12 @@ async fn handle_worktree(
                     force,
                     override_lock,
                     expected_fingerprint.as_deref(),
-                )
+                )?;
+                Ok::<_, String>((outcome, warnings))
             })
             .await;
             match result {
-                Ok(Ok(outcome)) => {
+                Ok(Ok((outcome, warnings))) => {
                     state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                         repo_path: path.clone(),
                         workspace_id: workspace_id.clone(),

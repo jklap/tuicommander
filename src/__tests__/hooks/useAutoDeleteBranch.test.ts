@@ -3,15 +3,23 @@ import "../mocks/tauri";
 import { createRoot } from "solid-js";
 import { mockInvoke } from "../mocks/tauri";
 
-const { mockSetOnPrTerminal, mockGetEffective, mockGet, mockBumpRevision, mockBumpGitRevision, mockConfirm } =
-	vi.hoisted(() => ({
-		mockSetOnPrTerminal: vi.fn(),
-		mockGetEffective: vi.fn(),
-		mockGet: vi.fn(),
-		mockBumpRevision: vi.fn(),
-		mockBumpGitRevision: vi.fn(),
-		mockConfirm: vi.fn(),
-	}));
+const {
+	mockSetOnPrTerminal,
+	mockGetEffective,
+	mockGet,
+	mockBumpRevision,
+	mockBumpGitRevision,
+	mockConfirm,
+	mockSetStatusInfo,
+} = vi.hoisted(() => ({
+	mockSetOnPrTerminal: vi.fn(),
+	mockGetEffective: vi.fn(),
+	mockGet: vi.fn(),
+	mockBumpRevision: vi.fn(),
+	mockBumpGitRevision: vi.fn(),
+	mockConfirm: vi.fn(),
+	mockSetStatusInfo: vi.fn(),
+}));
 
 vi.mock("../../stores/github", () => ({
 	githubStore: {
@@ -88,7 +96,7 @@ describe("useAutoDeleteBranch", () => {
 		let dispose: (() => void) | undefined;
 		createRoot((d) => {
 			dispose = d;
-			useAutoDeleteBranch({ confirm: mockConfirm });
+			useAutoDeleteBranch({ confirm: mockConfirm, setStatusInfo: mockSetStatusInfo });
 		});
 		return dispose;
 	}
@@ -204,6 +212,7 @@ describe("useAutoDeleteBranch", () => {
 		});
 		expect(mockConfirm).not.toHaveBeenCalled();
 		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+		expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("1 uncommitted file"));
 		dispose?.();
 	});
 
