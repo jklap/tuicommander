@@ -3091,6 +3091,45 @@ mod tests {
         assert_eq!(json["survive_secs"], 1_800);
     }
 
+    #[tokio::test]
+    async fn verify_agent_session_http_uses_the_requested_claude_profile() {
+        let profile = tempfile::tempdir().unwrap();
+        let other_profile = tempfile::tempdir().unwrap();
+        let session_id = "af467730-5e79-49d9-8a17-ebd94c99f262";
+        let project_dir = profile.path().join("projects/-work-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join(format!("{session_id}.jsonl")), "{}").unwrap();
+
+        let app = build_router(test_state(), false, true);
+        for (profile_root, requested_id, expected) in [
+            (profile.path(), session_id, true),
+            (other_profile.path(), session_id, false),
+            (profile.path(), "not-a-session-id", false),
+        ] {
+            let body = serde_json::json!({
+                "agentType": "claude",
+                "sessionId": requested_id,
+                "cwd": "/work/project",
+                "agentPid": null,
+                "envOverrides": { "CLAUDE_CONFIG_DIR": profile_root.to_str().unwrap() },
+            });
+            let response = app
+                .clone()
+                .oneshot(mcp_post("/agents/verify-session", &body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let found: bool = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                found, expected,
+                "profile={profile_root:?}, session={requested_id}"
+            );
+        }
+    }
+
     /// The node-tree call map was removed on 2026-09-23; the Progress Flow
     /// view replaced it. Its three routes must not come back as a stray page,
     /// and nothing under them may read a transcript.
