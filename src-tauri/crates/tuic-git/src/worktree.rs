@@ -6930,17 +6930,17 @@ branch refs/heads/feat
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
     }
 
-    /// The other side of the same ancestor check: HEAD is behind the tip, so
-    /// every commit it carries is already in the default branch.
+    /// A branch created at an older main tip has no work of its own even after
+    /// main advances. Its removal can still be confirmed explicitly.
     #[test]
-    fn a_workspace_behind_the_default_tip_is_merged() {
+    fn a_workspace_behind_the_default_tip_without_own_commits_is_in_sync() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let worktree = add_worktree(&repo, "trails");
         commit_file(&repo, "moved-on.txt", "default branch advanced\n");
 
         let status = inspect_workspace_lifecycle(&repo, "trails");
 
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert!(worktree.exists());
         let outcome =
