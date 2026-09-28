@@ -2342,12 +2342,17 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   will be lost, deploy, and verify the new hash after automatic reconnect.
   Direct uses an authenticated, size-limited upload; SSH uses SCP. Windows
   in-process replacement is explicitly unsupported.
+- **Auto-update remote daemons** — An opt-in per-connection setting. On connect,
+  update an out-of-date daemon only when it reports zero live PTY sessions.
+  With live sessions, show the count and offer the manual update without a queue.
+  Progress, success and errors appear in Remote Machines.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
 - Each connection has UUID, name, transport, auth username, enabled flag,
-  `deploy` (`never | on_connect | installed`) and `survive_secs`
+  `deploy` (`never | on_connect | installed`), `survive_secs` and
+  `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a

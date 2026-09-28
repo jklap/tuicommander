@@ -16,6 +16,7 @@ export interface RemoteConnection {
 	transport: RemoteTransport;
 	auth_username: string;
 	enabled: boolean;
+	auto_update?: boolean;
 	deploy: DeployMode;
 	survive_secs: number;
 }
@@ -51,6 +52,9 @@ export interface ConnectionState {
 	baseUrl?: string;
 	protocolVersion?: number;
 	outOfDate?: boolean;
+	liveSessions?: number;
+	updateNotice?: string;
+	updateInProgress?: boolean;
 	error?: string;
 	deployStep?: string;
 }
@@ -63,6 +67,9 @@ interface RemoteConnectionStatusPayload {
 	token?: string;
 	protocol_version?: number;
 	out_of_date?: boolean;
+	live_sessions?: number;
+	update_notice?: string;
+	update_in_progress?: boolean;
 	error?: string;
 	step?: string;
 }
@@ -161,6 +168,9 @@ function createRemoteConnectionsStore() {
 			baseUrl: payload.base_url,
 			protocolVersion: payload.protocol_version,
 			outOfDate: payload.out_of_date,
+			liveSessions: payload.live_sessions,
+			updateNotice: payload.update_notice,
+			updateInProgress: payload.update_in_progress,
 			error: payload.error,
 			deployStep: payload.step,
 		});
