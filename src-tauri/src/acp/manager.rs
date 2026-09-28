@@ -116,6 +116,8 @@ impl Default for AcpClientManager {
 
 struct ConnectionHandle {
     snapshot: AcpConnectionSnapshot,
+    peer_id: Option<String>,
+    root: PathBuf,
     commands: mpsc::Sender<Command>,
     journal: Arc<AcpEventJournal>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -210,12 +212,24 @@ impl AcpClientManager {
     /// at any endpoint it liked. `deny_unknown_fields` refuses such a body one
     /// layer up; this is the layer that makes a Rust caller unable to do it
     /// either.
-    fn granted(&self, mut authority: AcpSessionAuthority) -> AcpSessionAuthority {
+    fn granted(
+        &self,
+        connection_id: AcpConnectionId,
+        mut authority: AcpSessionAuthority,
+    ) -> AcpSessionAuthority {
         let socket = self.socket.lock().clone();
-        authority.mcp_servers =
-            tuicommander_mcp_server(self.bridge.lock().clone(), socket.as_deref())
-                .into_iter()
-                .collect();
+        let peer_id = self
+            .connections
+            .lock()
+            .get(&connection_id)
+            .and_then(|connection| connection.peer_id.clone());
+        authority.mcp_servers = tuicommander_mcp_server(
+            self.bridge.lock().clone(),
+            socket.as_deref(),
+            peer_id.as_deref(),
+        )
+        .into_iter()
+        .collect();
         authority
     }
 
@@ -241,7 +255,17 @@ impl AcpClientManager {
         config: &EgoAcpConfig,
         request: AcpConnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
-        self.connect_within(config, request, INITIALIZE_TIMEOUT)
+        self.connect_within_with_peer(config, request, INITIALIZE_TIMEOUT, None)
+            .await
+    }
+
+    pub async fn connect_with_peer(
+        &self,
+        config: &EgoAcpConfig,
+        request: AcpConnectRequest,
+        peer_id: String,
+    ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        self.connect_within_with_peer(config, request, INITIALIZE_TIMEOUT, Some(peer_id))
             .await
     }
 
@@ -258,6 +282,20 @@ impl AcpClientManager {
         request: AcpConnectRequest,
         initialize_timeout: std::time::Duration,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        self.connect_within_with_peer(config, request, initialize_timeout, None)
+            .await
+    }
+
+    async fn connect_within_with_peer(
+        &self,
+        config: &EgoAcpConfig,
+        request: AcpConnectRequest,
+        initialize_timeout: std::time::Duration,
+        peer_id: Option<String>,
+    ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        if let Some(peer_id) = peer_id.as_deref() {
+            validate_peer_id(peer_id)?;
+        }
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
         let spec = launch_spec(
@@ -267,7 +305,11 @@ impl AcpClientManager {
             },
             &root,
         )?;
-        let agent = AcpAgent::new(AcpAgentConfig::new(spec.program).args(spec.args));
+        let mut agent_config = AcpAgentConfig::new(spec.program).args(spec.args);
+        if let Some(peer_id) = &peer_id {
+            agent_config = agent_config.env("TUIC_SESSION", peer_id);
+        }
+        let agent = AcpAgent::new(agent_config);
         let connection_id = AcpConnectionId::new();
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let (initialized_tx, initialized_rx) = oneshot::channel();
@@ -341,6 +383,8 @@ impl AcpClientManager {
             connection_id,
             ConnectionHandle {
                 snapshot: snapshot.clone(),
+                peer_id,
+                root,
                 commands: commands_tx,
                 journal,
                 shutdown: Some(shutdown_tx),
@@ -357,7 +401,19 @@ impl AcpClientManager {
         config: &EgoAcpConfig,
         request: AcpReconnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        self.reconnect_with_peer(config, request, None).await
+    }
+
+    pub async fn reconnect_with_peer(
+        &self,
+        config: &EgoAcpConfig,
+        request: AcpReconnectRequest,
+        peer_id: Option<String>,
+    ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         self.snapshot(request.connection_id)?;
+        if let Some(peer_id) = peer_id.as_deref() {
+            validate_peer_id(peer_id)?;
+        }
         // Validate the replacement BEFORE giving up the working connection.
         // Every input check lives inside `connect`, so disconnecting first meant
         // a renamed root or a moved binary destroyed the live connection, every
@@ -375,7 +431,13 @@ impl AcpClientManager {
         )?;
 
         self.disconnect(request.connection_id).await?;
-        self.connect(config, AcpConnectRequest { root }).await
+        self.connect_within_with_peer(
+            config,
+            AcpConnectRequest { root },
+            INITIALIZE_TIMEOUT,
+            peer_id,
+        )
+        .await
     }
 
     /// Open a durable session on a live connection.
@@ -388,7 +450,7 @@ impl AcpClientManager {
         connection_id: AcpConnectionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-        let authority = self.granted(authority);
+        let authority = self.granted(connection_id, authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
             reply,
@@ -432,7 +494,7 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-        let authority = self.granted(authority);
+        let authority = self.granted(connection_id, authority);
         self.dispatch(connection_id, |reply| Command::Attach {
             kind,
             session_id,
@@ -677,6 +739,42 @@ impl AcpClientManager {
             .ok_or_else(|| AcpClientError::not_found(connection_id))
     }
 
+    /// Resolve only live ACP connections. A settled connection must never
+    /// route a blocked report to a conversation that no longer has a seat.
+    pub fn peer_conversation(&self, peer_id: &str) -> Option<(PathBuf, v1::SessionId)> {
+        self.connections
+            .lock()
+            .values()
+            .filter(|connection| {
+                connection.peer_id.as_deref() == Some(peer_id)
+                    && connection.snapshot.settlement.is_none()
+                    && !connection.snapshot.attachments.is_empty()
+            })
+            .max_by_key(|connection| connection.snapshot.generation)
+            .and_then(|connection| {
+                connection
+                    .snapshot
+                    .attachments
+                    .iter()
+                    .rev()
+                    .find(|attachment| attachment.active_turn.is_some())
+                    .or_else(|| connection.snapshot.attachments.last())
+                    .map(|attachment| (connection.root.clone(), attachment.session_id.clone()))
+            })
+    }
+
+    pub fn peer_root(&self, peer_id: &str) -> Option<PathBuf> {
+        self.connections
+            .lock()
+            .values()
+            .filter(|connection| {
+                connection.peer_id.as_deref() == Some(peer_id)
+                    && connection.snapshot.settlement.is_none()
+            })
+            .max_by_key(|connection| connection.snapshot.generation)
+            .map(|connection| connection.root.clone())
+    }
+
     #[must_use]
     pub fn connection_ids(&self) -> Vec<AcpConnectionId> {
         self.connections.lock().keys().copied().collect()
@@ -755,6 +853,16 @@ impl AcpClientManager {
         self.snapshot(connection_id)?.settlement.ok_or_else(|| {
             AcpClientError::initialization_failed(connection_id, "ACP kill did not settle")
         })
+    }
+}
+
+fn validate_peer_id(peer_id: &str) -> Result<(), AcpClientError> {
+    if super::valid_peer_id(peer_id) {
+        Ok(())
+    } else {
+        Err(AcpClientError::invalid_input(
+            "ACP peer identity must be a canonical UUID",
+        ))
     }
 }
 
@@ -1134,6 +1242,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_attended_bridge_carries_a_peer_identity() {
+        let server = tuicommander_mcp_server(
+            Some(PathBuf::from("/opt/tuic/tuic-bridge")),
+            Some(std::path::Path::new("/repo/mcp.sock")),
+            Some("550e8400-e29b-41d4-a716-446655440a01"),
+        )
+        .expect("installed bridge");
+        let wire = serde_json::to_value(server).expect("ACP server wire shape");
+        let env = wire["env"].as_array().expect("stdio bridge environment");
+        assert!(
+            env.iter().any(|entry| entry["name"] == "TUIC_SESSION"
+                && entry["value"]
+                    .as_str()
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())),
+            "the bridge must assert a host-issued UUID as x-tuic-session: {wire}"
+        );
+        assert!(
+            env.iter()
+                .any(|entry| entry["name"] == "TUIC_SOCKET" && entry["value"] == "/repo/mcp.sock")
+        );
+    }
+
+    #[test]
+    fn an_unattended_bridge_does_not_claim_an_acp_peer() {
+        let server = tuicommander_mcp_server(
+            Some(PathBuf::from("/opt/tuic/tuic-bridge")),
+            Some(std::path::Path::new("/repo/mcp.sock")),
+            None,
+        )
+        .expect("installed bridge");
+        let wire = serde_json::to_value(server).expect("ACP server wire shape");
+        assert!(
+            wire["env"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["name"] != "TUIC_SESSION")
+        );
+    }
+
+    #[test]
+    fn a_missing_bridge_cannot_claim_a_peer() {
+        assert!(
+            tuicommander_mcp_server(
+                None,
+                Some(std::path::Path::new("/repo/mcp.sock")),
+                Some("550e8400-e29b-41d4-a716-446655440a01"),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn an_unattended_session_is_given_no_mcp_server() {
         let authority = AcpSessionAuthority {
             cwd: PathBuf::from("/repo"),
@@ -1142,6 +1303,7 @@ mod tests {
             // server would prove only that some list was emptied.
             mcp_servers: tuicommander_mcp_server(
                 Some(PathBuf::from("/opt/tuic/tuic-bridge")),
+                None,
                 None,
             )
             .into_iter()

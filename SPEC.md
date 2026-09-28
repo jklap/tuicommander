@@ -226,17 +226,25 @@ Full agent configuration (binary, resume command, session discovery, detection p
 Two transports carry an assistant, and a session belongs to exactly one of them.
 There is no hybrid route and no fallback between them.
 
-- **PTY.** Every member of `AgentType` above. TUICommander allocates a terminal,
+- **PTY.** Every member of `AgentType` above, and a separately launched terminal
+  `ego` CLI when its PTY integration is enabled. TUICommander allocates a terminal,
   runs the CLI executable, and infers state by parsing the rendered rows into
   `ParsedEvent`. Session state is recovered from the agent's own session files
   on disk (see AGENTS.md, "Agent Session Management").
-- **ACP.** `ego` only, through the Agent Client Protocol v1 client in
+- **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
   `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
   adding `--profile <name>` only when a user selected an ego profile, and
   owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
-  invoked, and no output is scraped.
+  invoked, and no output is scraped. The host issues a durable `TUIC_SESSION`
+  peer UUID for the repository conversation, persists it beside the selected
+  conversation binding, and passes it to ego and its MCP bridge. Mail and child
+  parentage use that peer identity without a PTY wake.
 
-`ego` is deliberately **not** an `AgentType`. `AgentType` describes a CLI
+Standalone `ego` outside TUIC is a third face: it has neither a TUIC peer
+identity nor a TUIC transport. A terminal `ego` and an ACP-hosted `ego` are
+separate processes and sessions; neither falls back to the other's transport.
+
+The ACP-hosted `ego` is deliberately **not** an `AgentType`. `AgentType` describes a CLI
 executable, its launch arguments and its parser behaviour; it carries no
 negotiated protocol version, connection lifetime, capability snapshot, reverse
 request, or durable ACP session ID. Adding `ego` to it would make the ACP
