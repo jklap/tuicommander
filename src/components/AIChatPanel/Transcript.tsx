@@ -13,6 +13,7 @@ import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import s from "./AIChatPanel.module.css";
+import { projectChatProtocolText } from "./protocolText";
 
 /** Why a turn ended, for the turns that ended without an answer. */
 const SETTLEMENTS: Record<string, string> = {
@@ -145,6 +146,7 @@ export interface TranscriptProps {
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
 	emptyMessage: string;
+	onSuggestion: (text: string) => void;
 	/** Open questions, drawn at the end of the conversation they belong to. */
 	children?: JSX.Element;
 }
@@ -161,14 +163,35 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 								{(user) => <div class={s.userMsg}>{user().text}</div>}
 							</Match>
 							<Match when={entry.kind === "agent" && entry}>
-								{(agent) => (
-									<div class={s.assistantMsg}>
-										{/* Incremental: an answer is append-only while it streams, so a
-										    tick re-parses the block still being written and not the
-										    whole message. */}
-										<ContentRenderer content={agent().text} incremental={true} />
-									</div>
-								)}
+								{(agent) => {
+									const projected = createMemo(() => projectChatProtocolText(agent().text));
+									return (
+										<div class={s.assistantMsg}>
+											<Show when={projected().intent}>
+												{(intent) => (
+													<div class={s.agentIntent} aria-label="Agent intent">
+														<span>{intent().title ?? "Status"}</span>
+														{intent().text}
+													</div>
+												)}
+											</Show>
+											<Show when={projected().body}>
+												<ContentRenderer content={projected().body} incremental={true} />
+											</Show>
+											<Show when={projected().suggestions.length > 0}>
+												<div class={s.suggestedReplies} aria-label="Suggested replies">
+													<For each={projected().suggestions}>
+														{(item) => (
+															<button type="button" onClick={() => props.onSuggestion(item)}>
+																{item}
+															</button>
+														)}
+													</For>
+												</div>
+											</Show>
+										</div>
+									);
+								}}
 							</Match>
 							<Match when={entry.kind === "thought" && entry}>
 								{(thought) => (

@@ -131,7 +131,12 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				<SessionControls chat={chat} />
 			</Show>
 
-			<Transcript entries={chat.entries} busy={chat.busy} emptyMessage={emptyMessage()}>
+			<Transcript
+				entries={chat.entries}
+				busy={chat.busy}
+				emptyMessage={emptyMessage()}
+				onSuggestion={(text) => void chat.send(text)}
+			>
 				<Interactions
 					interactions={chat.interactions}
 					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}

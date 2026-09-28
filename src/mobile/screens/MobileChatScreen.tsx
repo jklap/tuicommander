@@ -113,6 +113,7 @@ export function MobileChatScreen() {
 			<Transcript
 				entries={chat.entries}
 				busy={chat.busy}
+				onSuggestion={(text) => void chat.send(text)}
 				emptyMessage={
 					chat.phase() === "unconfigured"
 						? "Configure ego in desktop Settings to start a conversation."

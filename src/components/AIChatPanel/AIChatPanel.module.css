@@ -153,6 +153,40 @@
   line-height: 1.5;
 }
 
+.agentIntent {
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  margin-bottom: 8px;
+}
+
+.agentIntent span {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.suggestedReplies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.suggestedReplies button {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-sm);
+  padding: 4px 8px;
+}
+
+.suggestedReplies button:hover {
+  background: var(--bg-highlight);
+}
+
 .assistantMsg :global(#markdown-content) {
   padding: 0;
   font-size: inherit;
