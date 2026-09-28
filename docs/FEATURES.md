@@ -848,6 +848,8 @@ one configured ego binary and speaks ACP to it, per
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
   replaced whole each time it changes
+- The connection acknowledgement is hidden; `intent:` is shown as turn status;
+  bracketed `suggest:` items become buttons that send the selected reply
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
 - Untitled sessions show a readable prompt or activity-time label in the picker;
