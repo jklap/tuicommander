@@ -16,8 +16,37 @@ from `acp_*` Tauri commands and, identically, from `/acp` HTTP routes.
 | `src-tauri/src/acp/connection.rs` | The per-connection actor: decides and writes serially, waits concurrently |
 | `src-tauri/src/acp/events.rs` | `AcpEventJournal` — the ordered, bounded record every subscriber reads from |
 | `src-tauri/src/acp/ego_ext.rs` | `_ego/pause`, `_ego/resume`, `_ego/compact` |
+| `src-tauri/src/acp/mcp_host.rs` | MCP-over-ACP: the host contract and the per-connection channel |
+| `src-tauri/src/mcp_http/acp_mcp.rs` | The host: `tuicommander` served through the `/mcp` handler |
 | `src-tauri/src/acp_commands.rs` | The Tauri surface: one command per manager method, nothing else |
 | `src-tauri/src/mcp_http/acp_routes.rs` | The HTTP surface, calling the same cores |
+
+## MCP over ACP
+
+Every attended session is given one MCP server,
+`{"type":"acp","name":"tuicommander","serverId":"tuicommander"}` (schema 1.5.0,
+`unstable_mcp_over_acp`). ego reaches it on this connection:
+
+| ego sends | TUIC answers |
+|-----------|--------------|
+| `mcp/connect {serverId}` | `{connectionId}`; any other `serverId` is `-32602` |
+| `mcp/message {connectionId, method, params}` request | the inner MCP `result`, or the inner MCP error as the ACP error |
+| `mcp/message` notification | accepted, nothing sent back |
+| `$/cancel_request {requestId}` for a pending `mcp/message` | that request answers `-32800` and its handler future is dropped |
+| `mcp/disconnect {connectionId}` | `{}` |
+
+TUIC sends `mcp/message` notifications on the same `connectionId` for what the
+HTTP SSE stream carries: `notifications/tools/list_changed` and channel
+notifications. An unknown `connectionId` is `-32602` and never reaches the host.
+
+The connection layer only routes; `McpOverAcpHost` is injected with
+`set_mcp_host` because the handler needs the application state the manager must
+not hold. `AcpMcpHost` opens one MCP protocol session per `mcp/connect`, bound to
+the peer id ego was launched under (its `TUIC_SESSION`), and sends every request
+through `mcp_post` — the same handler, tool registry and collapsed surface as
+HTTP `/mcp`. `mcp/disconnect` and the end of the ACP connection both run
+`end_mcp_session`, the teardown DELETE `/mcp` uses. There is no `tuic-bridge`
+process and no HTTP round trip for ego.
 
 ## The actor
 

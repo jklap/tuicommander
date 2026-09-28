@@ -266,6 +266,7 @@ describe("acpClient: talking to a session", () => {
 				mcpStdio: false,
 				mcpHttp: true,
 				mcpSse: false,
+				mcpAcp: true,
 				clientFormElicitation: true,
 				clientBooleanConfig: false,
 				egoHoldVersion: null,

@@ -2585,6 +2585,7 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     );
     // The daemon is precisely where nobody can watch a CPU spike happen.
     cpu_watchdog::spawn(state.clone());
+    mcp_http::acp_mcp::install(state);
     mcp_http::spawn_maintenance_sweep(state);
 
     // Deliberately NOT started on the daemon:

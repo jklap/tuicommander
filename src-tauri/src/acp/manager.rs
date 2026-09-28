@@ -21,14 +21,15 @@ use super::connection::{
     Accepted, Answer, Command, ConnectionActor, InFlight, Inbound, Interaction, Publish,
 };
 use super::events::{AcpEventJournal, AcpEventStream};
+use super::mcp_host::McpChannel;
 use super::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpCapabilitySnapshot, AcpClientError, AcpClientEvent,
     AcpConnectRequest, AcpConnectionId, AcpConnectionSettlement, AcpConnectionSettlementReason,
     AcpConnectionSnapshot, AcpConnectionState, AcpDetachKind, AcpHostRequestId,
     AcpInteractionSettlement, AcpNotice, AcpPendingInteraction, AcpReconnectRequest,
     AcpSessionAuthority, AcpTurnId, EgoAcpConfig, EgoCompactRequest, EgoCompactResponse,
-    EgoHoldRequest, EgoHoldResponse, build_initialize_request, capability_snapshot, launch_spec,
-    tuicommander_mcp_server,
+    EgoHoldRequest, EgoHoldResponse, McpOverAcpHost, build_initialize_request, capability_snapshot,
+    launch_spec, tuicommander_acp_mcp_server,
 };
 
 const INITIAL_GENERATION: u64 = 1;
@@ -88,24 +89,9 @@ pub struct AcpClientManager {
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
     next_generation: AtomicU64,
     notices: broadcast::Sender<AcpNotice>,
-    /// The bridge binary an ego session is handed as its one MCP server, or
-    /// `None` when this install has none to point at.
-    ///
-    /// Held here rather than resolved per session because the answer cannot
-    /// change while the process runs — it is a file beside our own executable —
-    /// and because a test needs to name it. Resolving it inside `granted` made
-    /// the session wire shape depend on whether the machine running the suite
-    /// happened to have a `tuic-bridge` on its `PATH`.
-    bridge: Mutex<Option<PathBuf>>,
-    /// The MCP socket this process actually bound, handed to the bridge as
-    /// `TUIC_SOCKET`.
-    ///
-    /// Learned rather than derived: the path a named instance *would* bind is
-    /// computable, but the one it *did* bind is not — a primary socket already
-    /// held makes the binder fall back to a `-<pid>` alternative. `None` until
-    /// the socket is up, and on a platform that binds none at all; the bridge
-    /// then searches as it always did.
-    socket: Mutex<Option<PathBuf>>,
+    /// What serves `tuicommander` to ego over MCP-over-ACP, once the
+    /// application has one to offer.
+    mcp_host: Mutex<Option<Arc<dyn McpOverAcpHost>>>,
 }
 
 impl Default for AcpClientManager {
@@ -144,37 +130,6 @@ enum SupervisorExit {
     ProtocolViolation,
 }
 
-/// What to say when there is no bridge binary to hand a session.
-///
-/// Built as a string rather than as tracing fields so the sentence can be
-/// asserted on. The paths come from `agent_mcp`'s own search, so the advice
-/// cannot name a directory the search never looked in.
-fn missing_bridge_warning() -> String {
-    let checked = crate::agent_mcp::bridge_search_paths()
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "No tuic-bridge binary found, so ego sessions start with no MCP server and ego \
-         cannot see terminals or repositories. Checked: {checked}"
-    )
-}
-
-/// Take a bridge binary, and say so when there is none.
-///
-/// A missing bridge is not an error anywhere below this line: `granted` hands
-/// the session an empty `mcp_servers` and every call still succeeds. The only
-/// symptom anybody ever sees is ego answering that it cannot see terminals or
-/// repositories — which reads as an ego fault, in the one place where nothing
-/// names the real cause. This is that place.
-fn note_bridge(bridge: Option<PathBuf>) -> Option<PathBuf> {
-    if bridge.is_none() {
-        tracing::warn!(source = "acp", "{}", missing_bridge_warning());
-    }
-    bridge
-}
-
 impl AcpClientManager {
     #[must_use]
     pub fn new() -> Self {
@@ -183,24 +138,14 @@ impl AcpClientManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(INITIAL_GENERATION),
             notices,
-            bridge: Mutex::new(note_bridge(crate::agent_mcp::locate_bridge_binary())),
-            socket: Mutex::new(None),
+            mcp_host: Mutex::new(None),
         }
     }
 
-    /// Record the MCP socket this process bound, so every session granted from
-    /// now on points the bridge at THIS instance.
-    pub fn set_socket_path(&self, socket: Option<PathBuf>) {
-        *self.socket.lock() = socket;
-    }
-
-    /// Name the bridge binary sessions are given.
-    ///
-    /// Exists for the tests that assert the session wire shape: what they are
-    /// checking is the entry this process builds, and that must not turn on
-    /// whether the machine running the suite has a `tuic-bridge` installed.
-    pub fn set_bridge_binary(&self, bridge: Option<PathBuf>) {
-        *self.bridge.lock() = note_bridge(bridge);
+    /// Serve the `tuicommander` MCP server on every connection opened from now
+    /// on through `host`.
+    pub fn set_mcp_host(&self, host: Arc<dyn McpOverAcpHost>) {
+        *self.mcp_host.lock() = Some(host);
     }
 
     /// Replace whatever a caller put in `mcp_servers` with what this process
@@ -212,24 +157,8 @@ impl AcpClientManager {
     /// at any endpoint it liked. `deny_unknown_fields` refuses such a body one
     /// layer up; this is the layer that makes a Rust caller unable to do it
     /// either.
-    fn granted(
-        &self,
-        connection_id: AcpConnectionId,
-        mut authority: AcpSessionAuthority,
-    ) -> AcpSessionAuthority {
-        let socket = self.socket.lock().clone();
-        let peer_id = self
-            .connections
-            .lock()
-            .get(&connection_id)
-            .and_then(|connection| connection.peer_id.clone());
-        authority.mcp_servers = tuicommander_mcp_server(
-            self.bridge.lock().clone(),
-            socket.as_deref(),
-            peer_id.as_deref(),
-        )
-        .into_iter()
-        .collect();
+    fn granted(&self, mut authority: AcpSessionAuthority) -> AcpSessionAuthority {
+        authority.mcp_servers = vec![tuicommander_acp_mcp_server()];
         authority
     }
 
@@ -336,6 +265,7 @@ impl AcpClientManager {
                 updates: updates_rx,
                 shutdown: shutdown_rx,
                 journal: Arc::clone(&journal),
+                mcp: McpChannel::new(self.mcp_host.lock().clone(), peer_id.clone()),
             },
             Arc::clone(&self.connections),
         ));
@@ -450,7 +380,7 @@ impl AcpClientManager {
         connection_id: AcpConnectionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-        let authority = self.granted(connection_id, authority);
+        let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
             reply,
@@ -494,7 +424,7 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-        let authority = self.granted(connection_id, authority);
+        let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::Attach {
             kind,
             session_id,
@@ -915,6 +845,7 @@ struct SupervisorWiring {
     updates: mpsc::Receiver<Inbound>,
     shutdown: oneshot::Receiver<()>,
     journal: Arc<AcpEventJournal>,
+    mcp: McpChannel,
 }
 
 async fn supervise_connection(
@@ -933,6 +864,7 @@ async fn supervise_connection(
         mut updates,
         shutdown,
         journal,
+        mcp,
     } = wiring;
     let ready = Arc::new(AtomicBool::new(false));
     let closure_ready = Arc::clone(&ready);
@@ -944,6 +876,8 @@ async fn supervise_connection(
     let updates_in = inbound.clone();
     let permissions_in = inbound.clone();
     let elicitations_in = inbound;
+    let (mcp_connect, mcp_message, mcp_notified, mcp_disconnect) =
+        (mcp.clone(), mcp.clone(), mcp.clone(), mcp.clone());
     let outcome = Client
         .builder()
         // Deliberately short, because it holds the SDK's dispatch loop: the
@@ -992,6 +926,54 @@ async fn supervise_connection(
                         responder,
                     },
                 )
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // MCP-over-ACP. Answered here rather than by the actor, because none
+        // of it touches attachment state: it is the `tuicommander` server
+        // reached over this connection. A request is answered off the dispatch
+        // loop, since a tool call can take as long as the tool does.
+        .on_receive_request(
+            async move |request: v1::ConnectMcpRequest,
+                        responder: Responder<v1::ConnectMcpResponse>,
+                        connection: ConnectionTo<Agent>| {
+                responder.respond_with_result(mcp_connect.connect(&request, connection))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: v1::MessageMcpRequest,
+                        responder: Responder<v1::MessageMcpResponse>,
+                        _connection| {
+                match mcp_message.message(request) {
+                    // `$/cancel_request` names this request by its ACP id, the
+                    // only id it has; the reply future is dropped, which stops
+                    // the call at its next await.
+                    Ok(reply) => {
+                        let cancellation = responder.cancellation();
+                        tokio::spawn(async move {
+                            let outcome = cancellation.run_until_cancelled(reply).await;
+                            let _ = responder.respond_with_result(outcome);
+                        });
+                        Ok(())
+                    }
+                    Err(error) => responder.respond_with_error(error),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_notification(
+            async move |notification: v1::MessageMcpNotification, _connection| {
+                mcp_notified.notification(notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |request: v1::DisconnectMcpRequest,
+                        responder: Responder<v1::DisconnectMcpResponse>,
+                        _connection| {
+                responder.respond_with_result(mcp_disconnect.disconnect(&request))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -1107,6 +1089,7 @@ async fn supervise_connection(
             }
         })
         .await;
+    mcp.close_all();
 
     let reason = match outcome {
         Ok(SupervisorExit::Disconnected) => AcpConnectionSettlementReason::Disconnected,
@@ -1262,13 +1245,7 @@ mod tests {
             additional_directories: vec![PathBuf::from("/repo/docs")],
             // The real one, built the way `granted` builds it — an invented
             // server would prove only that some list was emptied.
-            mcp_servers: tuicommander_mcp_server(
-                Some(PathBuf::from("/opt/tuic/tuic-bridge")),
-                None,
-                None,
-            )
-            .into_iter()
-            .collect(),
+            mcp_servers: vec![tuicommander_acp_mcp_server()],
         };
         assert_eq!(
             authority.mcp_servers.len(),
@@ -1289,5 +1266,4 @@ mod tests {
             vec![PathBuf::from("/repo/docs")]
         );
     }
-
 }

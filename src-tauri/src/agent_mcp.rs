@@ -422,12 +422,10 @@ pub(crate) fn bridge_search_paths() -> Vec<PathBuf> {
 
 /// The bridge binary, only when we can point at a file that exists.
 ///
-/// Separate from [`detect_bridge_binary`] because the two callers want opposite
-/// things from a miss. A config file written for another agent may name a bare
-/// `tuic-bridge` and still work, since the agent resolves it against its own
-/// `PATH` at launch. A server handed to ego has no such second chance: it is a
-/// command we chose, and naming one we could not find would surface as ego
-/// failing to admit a server rather than as this process saying it is not ready.
+/// Separate from [`detect_bridge_binary`], which turns a miss into the bare
+/// name: a config file written for an agent may name `tuic-bridge` and still
+/// work, since the agent resolves it against its own `PATH` at launch. ego is
+/// not such an agent any more — it reaches `tuicommander` over ACP.
 pub(crate) fn locate_bridge_binary() -> Option<PathBuf> {
     // Primary: sidecar bundled alongside the main executable
     if let Ok(exe) = std::env::current_exe()
