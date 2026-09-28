@@ -19,6 +19,14 @@ for stale_root in "$root/.tmp/tuic-tests" "$HOME/Gits/.tmp/tuic-tests"; do
       \( -name 'tuic-run.*' -o -name 'socket-*' \) -mtime +6 -exec rm -rf -- {} +
   fi
 done
+shared_socket_parent="$HOME/Gits/.tmp"
+if [[ -d "$shared_socket_parent" ]]; then
+  while IFS= read -r -d '' stale_socket; do
+    [[ ${stale_socket##*/} =~ ^s[0-9a-f]{16}$ ]] || continue
+    rm -rf -- "$stale_socket"
+  done < <(find "$shared_socket_parent" -mindepth 1 -maxdepth 1 -type d \
+    -name 's????????????????' -mtime +6 -print0)
+fi
 test_tmp="$(mktemp -d "$test_tmp_base/tuic-run.XXXXXX")"
 trap 'rm -rf "$test_tmp"' EXIT
 export TMPDIR="$test_tmp/"
