@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
 
+- **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.
+
 - **AI Chat session settings** — The control bar shows the current model and mode. A settings dialog labels every option ego offers and reports rejected changes.
 
 - **AI Chat parity** — Select or copy transcript text and code, open web and file links through the terminal's handlers, and keep parallel ACP conversations in chat tabs. Finished tool calls stop pulsing even when ego sends no final tool update.
