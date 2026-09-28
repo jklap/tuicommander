@@ -59,6 +59,14 @@ struct TmuxWindow {
     index: u32,
     active_pane: Option<String>,
     panes: Vec<TmuxPane>,
+    /// The layout string ("tiled", "main-vertical", …) from the most recent
+    /// real `select-layout` requested for this window, if any. `None` means
+    /// this window has never been arranged into a split — a new pane joining
+    /// it should NOT force one into existence. Once set, [`create_tmux_pane`]
+    /// reuses it to self-trigger a re-arrangement after every subsequent
+    /// split, so a later pane isn't stranded waiting for a select-layout call
+    /// that may never come (see `arrange_window_layout`'s doc comment).
+    last_layout: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +113,13 @@ impl TmuxTopology {
         self.sessions
             .iter_mut()
             .flat_map(|s| s.windows.iter_mut())
+            .find(|w| w.id == window_id)
+    }
+
+    fn find_window(&self, window_id: &str) -> Option<&TmuxWindow> {
+        self.sessions
+            .iter()
+            .flat_map(|s| s.windows.iter())
             .find(|w| w.id == window_id)
     }
 
@@ -346,6 +361,7 @@ pub(crate) async fn create_tmux_session(
                 tuic_session_id: None, // virtual until first use
                 accent_color: None,
             }],
+            last_layout: None,
         }],
     });
 
@@ -417,6 +433,7 @@ pub(crate) async fn create_tmux_window(
                 tuic_session_id: None, // virtual until first use
                 accent_color: None,
             }],
+            last_layout: None,
         });
         session.active_window = Some(window_id.clone());
     }
@@ -468,11 +485,34 @@ pub(crate) async fn create_tmux_pane(
     // implicit initial pane (which stays virtual until first use) — this
     // pane is the one Claude Code's respawn-pane will actually target.
     match materialize(&state, &label, &pane_id, body.cwd).await {
-        Ok(tuic_session_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "pane_id": pane_id, "tuic_session_id": tuic_session_id })),
-        )
-            .into_response(),
+        Ok(tuic_session_id) => {
+            // If this window has already been arranged into a split at least
+            // once, re-derive and re-emit that arrangement now that this new
+            // pane has joined it. Without this, the real caller (Claude
+            // Code's Agent Teams flow) issues exactly one select-layout per
+            // teammate, immediately after that teammate's own split-window —
+            // so the LAST teammate added to a window has no SUBSEQUENT
+            // select-layout call to ever include its session id, and stays
+            // permanently un-docked from the split even though its PTY is
+            // running fine. Self-triggering here means every split-window
+            // always gets docked regardless of whether the caller happens to
+            // issue one more select-layout afterward. A no-op for a window
+            // that was never split (`last_layout` still `None`) — a plain
+            // split-window shouldn't force a split view into existence on
+            // its own.
+            let last_layout = state.tmux_servers.get(&label).and_then(|t| {
+                t.find_window(&body.window_id)
+                    .and_then(|w| w.last_layout.clone())
+            });
+            if let Some(layout) = last_layout {
+                arrange_window_layout(&state, &label, &body.window_id, layout);
+            }
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "pane_id": pane_id, "tuic_session_id": tuic_session_id })),
+            )
+                .into_response()
+        }
         Err(err) => {
             // Roll back the insertion above — a failed split-window must
             // not leave a permanent phantom pane (marked active, no less)
@@ -783,21 +823,27 @@ pub(crate) async fn kill_pane(
 /// `materialize`'s own "nothing to arrange yet" precedent for other
 /// virtual-pane cases. The frontend owns actually arranging the split view
 /// (`paneLayoutStore`) — this only announces the request.
-pub(crate) async fn request_window_layout(
-    State(state): State<Arc<AppState>>,
-    Path(window_id): Path<String>,
-    Json(body): Json<RequestWindowLayoutRequest>,
-) -> impl IntoResponse {
-    let label = resolve_label(body.label);
-    let live = live_session_ids(&state);
+/// Re-derives `session_ids` for `window_id` from currently-materialized panes
+/// and dual-emits `TmuxWindowLayoutRequested` — the same work
+/// `request_window_layout` itself does for a real `select-layout` call, and
+/// also called by `create_tmux_pane` right after a new pane joins an
+/// already-split window, so a rebuild is driven by identical logic
+/// regardless of which caller asks for it. Records `layout` onto the window
+/// as `last_layout` so the next `create_tmux_pane` call knows to self-trigger
+/// too. Silently does nothing if the window is gone or nothing is
+/// materialized yet — callers that need a 404 for "window doesn't exist"
+/// check that themselves first.
+fn arrange_window_layout(state: &Arc<AppState>, label: &str, window_id: &str, layout: String) {
+    let live = live_session_ids(state);
     let session_ids: Vec<String> = {
-        let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
-            return not_found("window").into_response();
+        let Some(mut topology) = state.tmux_servers.get_mut(label) else {
+            return;
         };
         reconcile(&mut topology, &live);
-        let Some(window) = topology.find_window_mut(&window_id) else {
-            return not_found("window").into_response();
+        let Some(window) = topology.find_window_mut(window_id) else {
+            return;
         };
+        window.last_layout = Some(layout.clone());
         window
             .panes
             .iter()
@@ -808,11 +854,11 @@ pub(crate) async fn request_window_layout(
         // Nothing materialized yet — nothing to arrange. Not an error: this
         // is the normal state right after `new-session`/`new-window`
         // creates a still-virtual initial pane.
-        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+        return;
     }
     state.emit_pty_event(crate::state::AppEvent::TmuxWindowLayoutRequested {
         session_ids: session_ids.clone(),
-        layout: body.layout.clone(),
+        layout: layout.clone(),
     });
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
@@ -821,10 +867,29 @@ pub(crate) async fn request_window_layout(
             "tmux-window-layout-requested",
             serde_json::json!({
                 "session_ids": session_ids,
-                "layout": body.layout,
+                "layout": layout,
             }),
         );
     }
+}
+
+pub(crate) async fn request_window_layout(
+    State(state): State<Arc<AppState>>,
+    Path(window_id): Path<String>,
+    Json(body): Json<RequestWindowLayoutRequest>,
+) -> impl IntoResponse {
+    let label = resolve_label(body.label);
+    let live = live_session_ids(&state);
+    {
+        let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
+            return not_found("window").into_response();
+        };
+        reconcile(&mut topology, &live);
+        if topology.find_window_mut(&window_id).is_none() {
+            return not_found("window").into_response();
+        }
+    }
+    arrange_window_layout(&state, &label, &window_id, body.layout);
     (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
 }
 
@@ -879,6 +944,7 @@ mod tests {
                         accent_color: None,
                     },
                 ],
+                last_layout: None,
             }],
         });
         t
@@ -2145,5 +2211,167 @@ mod tests {
             rx.try_recv().is_err(),
             "new-session's still-virtual initial pane means nothing to arrange yet"
         );
+    }
+
+    // Regression (2026-09-28): the real caller (Claude Code's Agent Teams flow)
+    // issues exactly one select-layout per teammate, immediately after that
+    // teammate's own split-window — never a trailing call after the LAST
+    // teammate joins. Before this fix, `request_window_layout` was the ONLY
+    // thing that ever emitted `TmuxWindowLayoutRequested`, so the last
+    // teammate's session id was never handed to the frontend's
+    // `arrangeSessionsAsLayout` and it stayed permanently un-docked from the
+    // split even though its PTY was running fine (live-reproduced against a
+    // real debug instance: 2 of 3 swarm teammates landed in the split, the
+    // third — the last one added — did not).
+    #[tokio::test]
+    async fn create_tmux_pane_self_triggers_arrangement_for_the_last_teammate_with_no_further_select_layout()
+     {
+        let state = super::super::tests::test_state();
+        let label = "test-last-teammate-self-trigger";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let window_id = created["window_id"].as_str().unwrap().to_string();
+
+        // Teammate 1: split-window off the initial pane, then a real
+        // select-layout — mirrors the real per-teammate onboarding sequence.
+        let split1 = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id: window_id.clone(),
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(split1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tuic1 = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp = request_window_layout(
+            State(state.clone()),
+            Path(window_id.clone()),
+            Json(RequestWindowLayoutRequest {
+                label: Some(label.to_string()),
+                layout: "tiled".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Teammate 2 — the LAST one. Nothing joins after it, and critically no
+        // explicit select-layout call follows this split either.
+        let mut rx = state.event_bus.subscribe();
+        let split2 = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id: window_id.clone(),
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(split2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tuic2 = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::TmuxWindowLayoutRequested { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::TmuxWindowLayoutRequested {
+                session_ids,
+                layout,
+            }) => {
+                assert_eq!(
+                    session_ids,
+                    vec![tuic1, tuic2],
+                    "the last teammate's own split-window must self-trigger a re-arrangement \
+                     that includes it, with no further select-layout call needed"
+                );
+                assert_eq!(layout, "tiled");
+            }
+            other => panic!(
+                "expected create_tmux_pane to self-trigger TmuxWindowLayoutRequested for the \
+                 last teammate, got {other:?}"
+            ),
+        }
+    }
+
+    // Control for the regression above: a plain split-window on a window that
+    // has NEVER been arranged into a split (no select-layout call has ever
+    // named it) must not force one into existence on its own.
+    #[tokio::test]
+    async fn create_tmux_pane_does_not_self_trigger_a_layout_for_a_window_never_split_before() {
+        let state = super::super::tests::test_state();
+        let label = "test-never-split-no-self-trigger";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let window_id = created["window_id"].as_str().unwrap().to_string();
+
+        let mut rx = state.event_bus.subscribe();
+        let split = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(split.status(), StatusCode::CREATED);
+
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    event,
+                    crate::state::AppEvent::TmuxWindowLayoutRequested { .. }
+                ),
+                "a window that was never split before must not get one from a plain split-window"
+            );
+        }
     }
 }
