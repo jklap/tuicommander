@@ -835,12 +835,12 @@ here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
 `plans/ego-integration/archive/plan.md` section 1.
 
-- **Bound to a repository and a session, never to a terminal.** A turn ego runs
+- **One chat across repositories, never bound to a terminal.** A turn ego runs
   outlives any tab and may touch files no tab is showing. Switching repository
-  opens a new conversation and leaves the previous one running; coming back
-  picks it up without relaunching anything. The last selected session ID is
-  saved per root and loaded after an app restart. The conversation picker lists
-  ego's durable sessions by title and latest activity. One connection per repo root
+  keeps the same conversations; the viewed repository is sent with each prompt.
+  The conversation picker lists ego's durable sessions by title and latest
+  activity. Desktop and mobile clients connecting to one peer share one ego process, even
+  when both connect at the same time.
 - Docked on the right, resizable by its left edge (session-scoped width, not
   persisted); detaches into its own window, with `DetachedPlaceholder` in the
   main window meanwhile
