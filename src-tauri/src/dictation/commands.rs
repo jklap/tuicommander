@@ -151,7 +151,10 @@ fn transcribe_final_ptt_audio(
     language: Option<&str>,
     gates: transcribe::VoiceGates,
 ) -> Result<transcribe::TranscribeResult, String> {
-    let activity = continuous::SegmenterConfig::default();
+    let activity = continuous::SegmenterConfig {
+        activity_rms: gates.rms_threshold,
+        ..continuous::SegmenterConfig::default()
+    };
     if !continuous::has_sustained_speech(audio, activity) {
         return Ok(transcribe::TranscribeResult {
             text: String::new(),
@@ -2641,8 +2644,8 @@ mod tests {
     }
 
     #[test]
-    fn push_to_talk_rejects_quiet_audio_above_the_whole_buffer_rms_floor() {
-        let audio = vec![0.005; 16_000];
+    fn push_to_talk_rejects_audio_below_the_transcriber_rms_floor() {
+        let audio = vec![0.0005; 16_000];
         let result = transcribe_final_ptt_audio(
             &PhraseTranscriber,
             &audio,
@@ -2670,6 +2673,43 @@ mod tests {
         .unwrap();
         assert_eq!(result.text, "run the tests");
         assert!(result.skip_reason.is_none());
+    }
+
+    #[test]
+    fn push_to_talk_keeps_400ms_speech_with_unvoiced_frames() {
+        for level in [0.003, 0.015] {
+            let mut audio = Vec::new();
+            for frame in 0..20 {
+                let sample = if frame % 4 == 3 { 0.0 } else { level };
+                audio.extend(vec![sample; 320]);
+            }
+
+            let result = transcribe_final_ptt_audio(
+                &PhraseTranscriber,
+                &audio,
+                Some("en"),
+                transcribe::VoiceGates::default(),
+            )
+            .unwrap();
+            assert_eq!(result.text, "run the tests", "400ms speech at RMS {level}");
+            assert!(result.skip_reason.is_none());
+        }
+    }
+
+    #[test]
+    fn push_to_talk_activity_uses_the_configured_transcription_floor() {
+        let audio = vec![0.003; 16_000 * 400 / 1_000];
+        let gates = transcribe::VoiceGates {
+            rms_threshold: 0.004,
+            ..transcribe::VoiceGates::default()
+        };
+        let result =
+            transcribe_final_ptt_audio(&PhraseTranscriber, &audio, Some("en"), gates).unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
     }
 
     #[test]

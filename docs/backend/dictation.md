@@ -589,8 +589,10 @@ struct so a newly added field is covered by whoever adds it.
 
 Whisper transcribes whatever it is given. On room noise it invents subtitle
 boilerplate. Before the final push-to-talk pass, the captured audio goes through
-the hands-free `Segmenter` with the same `activity_rms` and `min_speech_ms` defaults.
-A short burst or quiet capture returns `no sustained speech` without invoking
+the hands-free `Segmenter` with its 20 ms frame and `min_speech_ms` duration rule.
+Push-to-talk takes the frame activity floor from the configured transcription
+`rms_threshold`; hands-free retains its own `activity_rms` default. A short
+burst or capture below that floor returns `no sustained speech` without invoking
 Whisper; an utterance still open at key release counts. Three further gates in
 `transcribe()` decide whether the admitted audio is speech at all. They run in
 order and each returns a `skip_reason` the push-to-talk stop
