@@ -1180,7 +1180,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = [...container.querySelectorAll("button")].find((button) => button.textContent === "New");
+		const next = container.querySelector('button[aria-label="Start another conversation on this repository"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
