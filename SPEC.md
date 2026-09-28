@@ -231,7 +231,8 @@ There is no hybrid route and no fallback between them.
   `ParsedEvent`. Session state is recovered from the agent's own session files
   on disk (see AGENTS.md, "Agent Session Management").
 - **ACP.** `ego` only, through the Agent Client Protocol v1 client in
-  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly and
+  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
+  adding `--profile <name>` only when a user selected an ego profile, and
   owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
   invoked, and no output is scraped.
 

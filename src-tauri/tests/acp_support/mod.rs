@@ -65,6 +65,7 @@ impl Fixture {
     pub fn config() -> EgoAcpConfig {
         EgoAcpConfig {
             executable: fixture_agent(),
+            profile: String::new(),
         }
     }
 

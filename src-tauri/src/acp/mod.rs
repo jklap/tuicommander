@@ -180,6 +180,7 @@ pub const BRIDGE_SOCKET_ENV_VAR: &str = "TUIC_SOCKET";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {
     pub executable: PathBuf,
+    pub profile: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,9 +204,25 @@ pub fn launch_spec(config: &EgoAcpConfig, root: &Path) -> Result<LaunchSpec, Acp
         .to_str()
         .ok_or_else(|| AcpClientError::invalid_input("ACP root must be valid UTF-8"))?;
 
+    let profile = &config.profile;
+    if !profile.is_empty()
+        && (profile.len() > 64
+            || profile.starts_with('-')
+            || profile
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_ascii_control()))
+    {
+        return Err(AcpClientError::invalid_input("invalid ego profile name"));
+    }
+
+    let mut args = vec!["acp".to_string(), "-C".to_string(), root.to_string()];
+    if !profile.is_empty() {
+        args.extend(["--profile".to_string(), profile.clone()]);
+    }
+
     Ok(LaunchSpec {
         program: config.executable.clone(),
-        args: vec!["acp".to_string(), "-C".to_string(), root.to_string()],
+        args,
     })
 }
 

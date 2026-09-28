@@ -260,7 +260,13 @@ impl AcpClientManager {
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
-        let spec = launch_spec(&EgoAcpConfig { executable }, &root)?;
+        let spec = launch_spec(
+            &EgoAcpConfig {
+                executable,
+                profile: config.profile.clone(),
+            },
+            &root,
+        )?;
         let agent = AcpAgent::new(AcpAgentConfig::new(spec.program).args(spec.args));
         let connection_id = AcpConnectionId::new();
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -360,7 +366,13 @@ impl AcpClientManager {
         // request that could never have succeeded left the caller with nothing.
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
-        launch_spec(&EgoAcpConfig { executable }, &root)?;
+        launch_spec(
+            &EgoAcpConfig {
+                executable,
+                profile: config.profile.clone(),
+            },
+            &root,
+        )?;
 
         self.disconnect(request.connection_id).await?;
         self.connect(config, AcpConnectRequest { root }).await

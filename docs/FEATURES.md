@@ -2413,6 +2413,9 @@ The one binary this may launch is the `ego_executable` setting, read at each
 connect. It is not an argument of any command or route, so no request — local
 or remote — can choose what the host runs. An empty setting refuses every
 connect rather than failing later inside a spawn.
+The optional `ego_profile` setting selects one profile in ego's user
+configuration at ACP launch. Empty adds no `--profile` argument. TUIC sends no
+profile rules or allow/deny policy in `session/new`.
 
 ## 27. Terminal Progress
 
