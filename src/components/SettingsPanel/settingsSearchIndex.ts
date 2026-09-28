@@ -949,7 +949,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/RemoteServersTab.tsx + the merged connection editor (RemoteConnectionEditor,
 	// SshConnectionFields, PortForwardsEditor) + SshTunnelsSection + RemoteMachinesTab/Panel
 	{ tab: "remote-servers", section: "Remote Servers", sectionKey: "remoteServers.heading" },
-	{ tab: "remote-servers", section: "SSH Tunnels", sectionKey: "remoteServers.sshTunnels" },
+	{ tab: "remote-servers", section: "SSH Port-Forwarding Tunnels", sectionKey: "remoteServers.sshTunnels" },
 	{ tab: "remote-servers", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Auto-update remote daemons" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Auth username (optional)" },

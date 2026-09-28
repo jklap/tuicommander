@@ -71,7 +71,7 @@ App.tsx (central orchestrator)
 │   ├── tabs/AiChatTab        # default model, providers
 │   ├── tabs/SmartPromptsTab  # Smart Prompts library
 │   ├── tabs/RemoteServersTab # Remote Servers page: merged connection editor, SshTunnelsSection, RemoteMachinesTab
-│   ├── tabs/SshTunnelsSection # SSH Tunnels section (TunnelProfileList with Edit)
+│   ├── tabs/SshTunnelsSection # "SSH Port-Forwarding Tunnels" section (TunnelProfileList with Edit)
 │   ├── tabs/RemoteMachinesTab # Remote Machines section (wraps services/RemoteMachinesPanel)
 │   ├── tabs/PluginsTab       # Plugin management, logs
 │   ├── tabs/services/        # LocalMcpPanel + UpstreamMcpPanel (MCP page), RemoteAccessPanel, RemoteMachinesPanel, RemoteConnectionEditor (merged Kind-dropdown editor)
@@ -334,7 +334,7 @@ label row above its pages, and the configured repositories follow under
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
   - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
-  - **Remote Servers** (`RemoteServersTab`) — one merged editor (`RemoteConnectionEditor`: Kind SSH Tunnel / Remote Server — SSH / Direct / Local), then SSH Tunnels (`SshTunnelsSection` → `TunnelProfileList`) and Remote Machines (`RemoteMachinesTab` → `RemoteMachinesPanel`: discovered hosts, status, Connect/Update/Install/Edit/Remove). The retired `remote-machines` key opens it
+  - **Remote Servers** (`RemoteServersTab`) — one merged editor (`RemoteConnectionEditor`: Kind SSH Tunnel / Remote Server — SSH / Direct / Local), then SSH Port-Forwarding Tunnels (`SshTunnelsSection` → `TunnelProfileList`) and Remote Machines (`RemoteMachinesTab` → `RemoteMachinesPanel`: discovered hosts, status, Connect/Update/Install/Edit/Remove). The retired `remote-machines` key opens it
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
   - **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode

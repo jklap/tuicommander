@@ -496,7 +496,7 @@ separate **Remote Machines** page; an old `remote-machines` link opens it).
 **Add Connection** opens one merged editor: a **Name** and a **Kind** — SSH
 Tunnel, Remote Server — SSH, Remote Server — Direct or Remote Server — Local —
 then only that kind's fields, a **Test Connection** button and Save. Below it,
-**SSH Tunnels** lists the tunnel profiles (Start/Stop, Edit, Log, Del) and
+**SSH Port-Forwarding Tunnels** lists the tunnel profiles (Start/Stop, Edit, Log, Del) and
 **Remote Machines** the `tuic-remote` connections: discovered SSH hosts, then
 each connection's status with Connect, Update, Install, Edit and Remove.
 
