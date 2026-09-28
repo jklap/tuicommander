@@ -719,8 +719,9 @@ can choose what the host runs.
 | `acp_session_fork` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/fork` |
 | `acp_session_delete` | `connectionId, sessionId` | `()` | `session/delete` — the session is gone for good |
 | `acp_session_close` | `connectionId, sessionId` | `()` | Detach without deleting |
-| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn; its updates arrive on the stream |
+| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn or accept it into the server-owned FIFO when one is running |
 | `acp_session_cancel` | `connectionId, sessionId` | `()` | Cancel the running turn |
+| `acp_queued_prompt_cancel` | `connectionId, sessionId, turnId` | `()` | Remove one queued prompt before it reaches ego |
 | `acp_session_set_config_option` | `connectionId, sessionId, configId, value` | `Vec<SessionConfigOption>` | Set one option; the agent returns the whole resulting set |
 | `acp_turn_pause` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/pause`. `state` may be `pending` — the hold has not landed yet |
 | `acp_turn_resume` | `connectionId, sessionId, requestId` | `EgoHoldResponse` | `_ego/resume` |
