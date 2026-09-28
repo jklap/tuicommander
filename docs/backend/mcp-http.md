@@ -1556,12 +1556,14 @@ it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
 The inbox retains up to 100 messages per recipient. A new server-authored
-lifecycle notice replaces the older notice for the same child and `type`; the
-newest state stays at the end of the inbox, and replacement does not increase
-`missed_count`. Other messages keep FIFO order. Every send succeeds once the
-recipient is valid; at capacity without a matching notice, the oldest retained
-message is evicted. `missed_count` on the next inbox read reports evictions of
-unread mail; replacement and reclaiming mail already read do not increase it.
+lifecycle notice replaces the older notice for the same child and `type`, except
+an `awaiting_input` state change: each separate question stays available to the
+parent. The newest coalesced state stays at the end of the inbox, and replacement
+does not increase `missed_count`. Other messages keep FIFO order. Every send
+succeeds once the recipient is valid; at capacity without a matching notice,
+the oldest retained message is evicted. `missed_count` on the next inbox read
+reports evictions of unread mail; replacement and reclaiming mail already read
+do not increase it.
 An inbox read returns the oldest messages after `since` first. With no `limit`,
 it returns all retained fresh mail (up to 100). With `limit`, the server clamps
 the page size to 1–100 and returns `has_more=true` while newer unread mail
