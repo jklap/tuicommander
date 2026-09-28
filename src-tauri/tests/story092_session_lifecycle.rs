@@ -20,7 +20,7 @@ use tuicommander_lib::acp::{
 
 mod acp_support;
 
-use acp_support::{Fixture, authority, text};
+use acp_support::{Fixture, authority, chunk, text, until};
 
 /// The session ids the scenarios answer with, spelled once.
 const FIRST: &str = "01932d5e-0000-7000-8000-0000000000aa";
@@ -206,6 +206,38 @@ async fn a_loaded_session_attaches_under_the_id_that_was_asked_for() {
         .disconnect(connection.connection_id)
         .await
         .unwrap();
+}
+
+/// A replay is already on the wire while session/load is awaiting its reply.
+/// Dropping those early chunks makes the first assistant answer start midway.
+#[tokio::test]
+async fn load_preserves_the_first_replayed_assistant_chunks() {
+    let fixture = Fixture::with("session-load-early-chunks");
+    let connection = fixture.connect().await;
+
+    fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Load,
+            session(FIRST),
+            authority(fixture.root()),
+        )
+        .await
+        .expect("session/load");
+
+    let mut stream = fixture.manager.subscribe(connection.connection_id, 0).expect("journal");
+    let events = until(&mut stream, |event| {
+        matches!(event, tuicommander_lib::acp::AcpClientEvent::AttachmentState { state: AcpAttachmentState::Idle })
+    })
+    .await;
+    let answer: String = events.iter().filter_map(chunk).collect();
+    assert_eq!(
+        answer,
+        "TUICommander v1.7.7 is connected.\nintent: Checking active agents (Agents)"
+    );
+
+    fixture.manager.disconnect(connection.connection_id).await.unwrap();
 }
 
 /// A fork is a second session, and the original keeps its own attachment.
