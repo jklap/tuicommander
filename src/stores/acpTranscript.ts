@@ -246,6 +246,11 @@ export const acpTranscript = {
 		setState(
 			produce((s: TranscriptState) => {
 				const entries = (s.sessions[sessionId] ??= []);
+				if (event.kind === "promptSent") {
+					entries.push({ id: `e${s.nextId}`, kind: "user", text: event.text });
+					s.nextId += 1;
+					return;
+				}
 				if (event.kind === "sessionUpdate") {
 					reduceUpdate(s, sessionId, entries, event.update);
 					return;

@@ -2263,6 +2263,7 @@ pub fn run() {
             acp_commands::acp_session_close,
             acp_commands::acp_session_prompt,
             acp_commands::acp_session_cancel,
+            acp_commands::acp_queued_prompt_cancel,
             acp_commands::acp_session_set_config_option,
             acp_commands::acp_turn_pause,
             acp_commands::acp_turn_resume,

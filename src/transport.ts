@@ -355,6 +355,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/cancel`,
 		}),
 	},
+	acp_queued_prompt_cancel: {
+		map: (_args, p) => ({
+			method: "DELETE",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/queue/${p("turnId")}`,
+		}),
+	},
 	acp_session_set_config_option: {
 		map: (args, p) => ({
 			method: "POST",
