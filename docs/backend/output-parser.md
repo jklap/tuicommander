@@ -234,6 +234,14 @@ ParsedEvent::Intent {
 
 Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
 
+AI Chat receives ACP markdown chunks in both desktop and browser mode, without
+terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
+for that UI: it removes the connection acknowledgement, presents anchored
+`intent:` as status, and exposes bounded bracketed `suggest:` items as replies.
+It leaves fenced or indented code and prose mentions literal. This is a separate
+logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
+a new backend ACP projection and wire contract, including HTTP/IPC parity.
+
 Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
 
 - **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.
