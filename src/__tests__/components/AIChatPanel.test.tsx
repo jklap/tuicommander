@@ -301,6 +301,35 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
+	// Catches: a permanently visible Copy label or a button removed from keyboard focus.
+	it("hides message Copy at rest while keeping it keyboard focusable", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Question" });
+			feed({
+				kind: "sessionUpdate",
+				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } },
+			});
+			await settle();
+			for (const label of ["Copy user message", "Copy assistant message"]) {
+				const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+				expect(getComputedStyle(button).opacity, label).toBe("0");
+				button.focus();
+				expect(document.activeElement, label).toBe(button);
+				button.blur();
+			}
+		} finally {
+			style.remove();
+		}
+	});
+
 	it("makes message text, tool output, and code selectable under the global no-selection rule", async () => {
 		const style = document.createElement("style");
 		style.textContent = ["src/global.css", "src/components/AIChatPanel/AIChatPanel.module.css"]
@@ -708,6 +737,41 @@ describe("AIChatPanel: a turn", () => {
 		(choices[1] as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta");
+	});
+
+	// Catches: an inline token at the end of the answer remaining visible as raw text.
+	it("turns a trailing inline suggestion into reply actions", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "The checks are active. suggest: [ Retry | Show status | Diagnose ]" },
+			},
+		});
+		await settle();
+		expect(container.querySelector(".assistantMsg")?.textContent).toContain("The checks are active.");
+		expect(container.querySelector(".assistantMsg")?.textContent).not.toContain("suggest:");
+		expect(
+			[...container.querySelectorAll('[aria-label="Suggested replies"] button')].map((button) => button.textContent),
+		).toEqual(["Retry", "Show status", "Diagnose"]);
+	});
+
+	// Catches: parsing a protocol-looking phrase before the end of the answer.
+	it("keeps an inline suggestion before further prose as answer text", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "The syntax is suggest: [ A | B ] in this example.\nMore explanation follows." },
+			},
+		});
+		await settle();
+		expect(container.querySelector(".assistantMsg")?.textContent).toContain("suggest: [ A | B ] in this example.");
+		expect(container.querySelector('[aria-label="Suggested replies"]')).toBeNull();
 	});
 
 	it("leaves mentions of protocol words inside prose and fenced code unchanged", async () => {

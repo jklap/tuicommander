@@ -78,8 +78,9 @@ its own terminals and repositories rather than the default install's.
 ## During a turn
 
 Select text in user messages, answers, code blocks, and tool output and use
-`Cmd/Ctrl+C` to copy it. **Copy** on a message or code block copies its raw
-text through the same clipboard adapter as the terminal. Web links open in the
+`Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
+keyboard focus. It copies the raw message text. Code blocks have their own
+Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
 system browser; file links and plain source paths are resolved by the backend
 and opened in TUICommander's file viewer or editor, as they are from a terminal.
 With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
@@ -96,7 +97,8 @@ in total. Text paste works as usual.
   a *Thinking* disclosure, kept apart from the answer.
 - **Turn markers.** AI Chat hides ego's TUICommander connection acknowledgement,
   shows `intent:` as a labelled status, and turns a `suggest: [ A | B | C ]`
-  line into reply buttons. Choosing one sends that text as the next prompt.
+  line or trailing token at the end of an answer into reply buttons. Choosing
+  one sends that text as the next prompt.
   Mentions in ordinary prose and code examples remain in the answer.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
