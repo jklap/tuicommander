@@ -1,6 +1,7 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { createMemo, createSignal } from "solid-js";
 import { invoke } from "../invoke";
+import { closePanel } from "../panelRouter";
 import { appLogger } from "../stores/appLogger";
 import { diffTabsStore } from "../stores/diffTabs";
 import { editorTabsStore } from "../stores/editorTabs";
@@ -10,8 +11,10 @@ import { currentBranchKey, repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { tabOrderingStore } from "../stores/tabManager";
 import { terminalsStore } from "../stores/terminals";
+import { uiStore } from "../stores/ui";
 import { readClipboard, writeClipboard } from "../utils/clipboard";
 import { getFocusedFrameSelection } from "../utils/focusedSelection";
+import { markdownDocumentPanelId } from "../utils/markdownDocumentPanelId";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { filterValidTerminals } from "../utils/terminalFilter";
@@ -136,6 +139,15 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 		}
 
 		if (id.startsWith("md-")) {
+			const panelId = markdownDocumentPanelId(id);
+			if (uiStore.isDetached(panelId)) {
+				uiStore.clearDetached(panelId);
+				try {
+					await closePanel(panelId);
+				} catch (error) {
+					appLogger.warn("app", "Failed to close detached Markdown window", error);
+				}
+			}
 			selectAfterNonTerminalClose(mdTabsStore, id);
 			mdTabsStore.remove(id);
 			removeTabFromPane(id);
