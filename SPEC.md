@@ -626,6 +626,7 @@ Some frontend-only stores persist to localStorage:
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile Companion PWA (sessions, live output, question reply, activity feed)
 - [~] Managed-agent blocked questions alert the mobile PWA through encrypted Web Push when the desktop is away; a phone reply returns through atomic session submission with a receipt (real-phone verification pending)
+- [~] Pending ego permissions and form requests alert a subscribed phone when the desktop is away, linking to the matching mobile Chat conversation with a 30-second limit per conversation (real-phone verification pending; ego card notices await a defined wire shape)
 - [x] MCP Proxy Hub (aggregate upstream MCP servers via HTTP and stdio, tool namespace prefixing, circuit breaker, hot-reload, OS keyring credentials, tool filtering, session-local Grok compatibility through lazy meta-tools)
 - [x] Copy Path in Markdown panel
 - [x] Claude Usage Dashboard (native SolidJS component with API polling, session analytics, usage timeline)

@@ -26,7 +26,9 @@ it("keeps different session pushes actionable while replacing repeats of one ses
 		},
 		clients: {
 			matchAll: async () => [],
-			openWindow: async (url: string) => { opened.push(url); },
+			openWindow: async (url: string) => {
+				opened.push(url);
+			},
 		},
 	});
 
@@ -53,8 +55,18 @@ it("keeps different session pushes actionable while replacing repeats of one ses
 	await push("/mobile", "Updated general alert");
 	expect(notices.size).toBe(3);
 	expect([...notices.values()].map((notice) => notice.body).sort()).toEqual([
-		"A new question", "B question", "Updated general alert",
+		"A new question",
+		"B question",
+		"Updated general alert",
 	]);
+	await push("/mobile?repo=%2Frepo&session=chat-a", "First chat question");
+	await push("/mobile?repo=%2Frepo&session=chat-b", "Second chat question");
+	expect(notices.size).toBe(5);
+	expect(notices.has("tuic-acp-chat-a")).toBe(true);
+	expect(notices.has("tuic-acp-chat-b")).toBe(true);
+	expect([...notices.values()].map((notice) => notice.body)).toEqual(
+		expect.arrayContaining(["First chat question", "Second chat question"]),
+	);
 
 	for (const notice of surviving) {
 		await dispatch("notificationclick", { notification: notice });
