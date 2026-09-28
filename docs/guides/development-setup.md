@@ -56,6 +56,14 @@ Produces platform-specific installers:
 
 ## Testing
 
+Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. If the
+checkout's test path exceeds the Unix socket limit, the helper uses a short
+checkout-specific directory under `~/Gits/.tmp/tuic-tests/socket-*`. The
+`scripts/with-test-tmp.sh` wrapper removes abandoned socket directories and
+test-run directories there (and in the checkout's `.tmp/tuic-tests`) after they
+have been unused for more than seven days. Run standalone Rust tests through
+that wrapper.
+
 ### Live peer-mail wake canary
 
 After a Rust rebuild, run this against the isolated test instance, not the

@@ -1,5 +1,18 @@
 //! Platform-neutral helpers shared by Rust tests.
 
+fn checkout_root() -> std::path::PathBuf {
+    // A cached test-support crate may have been compiled in another worktree.
+    // Find the checkout running this test, not its build path.
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            cwd.ancestors()
+                .find(|dir| dir.join(".git").exists() && dir.join("src-tauri/Cargo.toml").is_file())
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
+}
+
 // Cargo's libtest runner has no per-binary setup hook. This crate is linked
 // only into test binaries, so install their temp root before the harness starts.
 #[ctor::ctor]
@@ -19,22 +32,7 @@ fn install_test_temp_root() {
 pub fn test_temp_root() -> std::path::PathBuf {
     let root = std::env::var_os("TUIC_TEST_TMP_ROOT")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            // A cached test-support crate may have been compiled in another
-            // worktree. Find the checkout running this test, not its build path.
-            let checkout = std::env::current_dir().ok().and_then(|cwd| {
-                cwd.ancestors()
-                    .find(|dir| {
-                        dir.join(".git").exists() && dir.join("src-tauri/Cargo.toml").is_file()
-                    })
-                    .map(std::path::Path::to_path_buf)
-            });
-            checkout
-                .unwrap_or_else(|| {
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
-                })
-                .join(".tmp/tuic-tests")
-        });
+        .unwrap_or_else(|| checkout_root().join(".tmp/tuic-tests"));
     std::fs::create_dir_all(&root).expect("create repository test temp root");
     root
 }
@@ -51,11 +49,15 @@ pub fn short_socket_test_temp_root() -> std::path::PathBuf {
     {
         return requested;
     }
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest
+    use std::hash::{Hash, Hasher};
+
+    let checkout = checkout_root();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    checkout.hash(&mut hasher);
+    let root = checkout
         .ancestors()
         .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(".tmp/tuic-tests"))
+        .map(|gits| gits.join(format!(".tmp/tuic-tests/socket-{:016x}", hasher.finish())))
         .unwrap_or(requested);
     std::fs::create_dir_all(&root).expect("create short socket test root");
     root
