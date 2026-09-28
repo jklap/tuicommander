@@ -6,6 +6,7 @@ import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { getSessionConnection } from "../../transportRuntime";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
@@ -3187,6 +3188,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				sessionId: props.sessionId,
 				error: e,
 			});
+			toastsStore.add(
+				"Terminal stream failed",
+				e instanceof Error ? e.message : String(e),
+				"error",
+				false,
+				undefined,
+				0,
+				undefined,
+				props.sessionId,
+			);
 			// `unsubscribe` already covers this on unmount; drop the session-event
 			// listeners now rather than keeping them alive on a terminal that will
 			// never paint.

@@ -30,7 +30,7 @@ VtLogBuffer (TerminalGrid — the patched alacritty_terminal fork)
 
 ## 1. VtLogBuffer — VT Parsing Engine
 
-**File:** `src-tauri/src/state.rs` (buffer) · `src-tauri/src/terminal_grid.rs` (grid)
+**File:** `src-tauri/crates/tuic-terminal/src/vt_log.rs` (buffer) · `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` (grid)
 
 There is **no `vt100` crate**. `VtLogBuffer` wraps a `TerminalGrid`, TUIC's patched
 `alacritty_terminal` fork — see [`alacritty-integration.md`](./alacritty-integration.md).

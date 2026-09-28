@@ -29,9 +29,11 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
+import { markdownDocumentPanelId } from "../../utils/markdownDocumentPanelId";
 import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 // Named for its first caller; it is a plain `file://` → path parser and returns
 // null for every other scheme, which is exactly the guard needed here.
@@ -207,6 +209,19 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					action: () => mdTabsStore.setPinned(id, !isPinned),
 				},
 				{ label: t("tabBar.print", "Print…"), action: () => window.print() },
+				...(tab?.type === "file"
+					? [
+							uiStore.isDetached(markdownDocumentPanelId(id))
+								? {
+										label: t("tabBar.reattachTab", "Reattach to Main Window"),
+										action: () => props.onReattachTab?.(id),
+									}
+								: {
+										label: t("tabBar.detachToWindow", "Detach to Window"),
+										action: () => props.onDetachTab?.(id),
+									},
+						]
+					: []),
 				{ label: "", separator: true, action: () => {} },
 				{
 					label: t("tabBar.closeTab", "Close Tab"),
@@ -466,7 +481,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	// Branch key for filtering non-terminal tabs. A legitimate use of focus: this
 	// asks "what should be on screen for the repo the user is looking at", not
 	// "which repo owns this tab".
-	const activeBranchKey = () => currentBranchKey() ?? null;
+	const activeBranchKey = () => {
+		const repoPath = repositoriesStore.state.activeRepoPath;
+		// A repo may be active before workspace discovery completes. Keep its
+		// repo-scoped, branchless tabs visible when they stop being active.
+		return currentBranchKey() ?? (repoPath ? `${repoPath}|` : null);
+	};
 
 	const visibleDiffIds = () => diffTabsStore.getVisibleIds(activeBranchKey());
 	const visibleMdIds = () => mdTabsStore.getVisibleIds(activeBranchKey());
@@ -496,15 +516,15 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			activeBranchKey,
 			() => {
 				const diffActive = diffTabsStore.state.activeId;
-				if (diffActive && !visibleDiffIds().includes(diffActive)) {
+				if (diffActive && !diffTabsStore.getVisibleIds(activeBranchKey(), false).includes(diffActive)) {
 					diffTabsStore.setActive(null);
 				}
 				const mdActive = mdTabsStore.state.activeId;
-				if (mdActive && !visibleMdIds().includes(mdActive)) {
+				if (mdActive && !mdTabsStore.getVisibleIds(activeBranchKey(), false).includes(mdActive)) {
 					mdTabsStore.setActive(null);
 				}
 				const editActive = editorTabsStore.state.activeId;
-				if (editActive && !visibleEditIds().includes(editActive)) {
+				if (editActive && !editorTabsStore.getVisibleIds(activeBranchKey(), false).includes(editActive)) {
 					editorTabsStore.setActive(null);
 				}
 			},
@@ -512,11 +532,36 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		),
 	);
 
-	// Evict non-pinned plugin-panel tabs from other repos on repo switch — they
-	// would otherwise pile up forever, invisible but still holding HTML in memory.
+	// Unpinning a cross-repo MCP tab restores its opening-repo scope immediately.
+	let previousMdPin: { id: string | null; pinned: boolean | undefined } | null = null;
 	createEffect(() => {
-		const current = repositoriesStore.state.activeRepoPath;
-		mdTabsStore.evictNonPinnedPluginPanelsForOtherRepos(current);
+		const id = mdTabsStore.state.activeId;
+		const pinned = id ? mdTabsStore.get(id)?.pinned : undefined;
+		if (
+			id &&
+			previousMdPin?.id === id &&
+			previousMdPin.pinned &&
+			!pinned &&
+			!mdTabsStore.getVisibleIds(activeBranchKey(), false).includes(id)
+		) {
+			mdTabsStore.setActive(null);
+		}
+		previousMdPin = { id, pinned };
+	});
+	let previousEditPin: { id: string | null; pinned: boolean | undefined } | null = null;
+	createEffect(() => {
+		const id = editorTabsStore.state.activeId;
+		const pinned = id ? editorTabsStore.get(id)?.pinned : undefined;
+		if (
+			id &&
+			previousEditPin?.id === id &&
+			previousEditPin.pinned &&
+			!pinned &&
+			!editorTabsStore.getVisibleIds(activeBranchKey(), false).includes(id)
+		) {
+			editorTabsStore.setActive(null);
+		}
+		previousEditPin = { id, pinned };
 	});
 
 	const tabTypeOf = (tabId: string): "terminal" | "markdown" | "diff" | "editor" | null => {
@@ -865,6 +910,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 									onPointerDown={handleMouseDrag}
 									showPinned={true}
 									richIcon={true}
+									onFocusDetached={props.onFocusDetachedTab}
 								/>
 							)}
 						</For>
@@ -946,6 +992,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												onPointerDown={handleMouseDrag}
 												showPinned={false}
 												richIcon={false}
+												onFocusDetached={props.onFocusDetachedTab}
 											/>
 										</Match>
 										<Match when={type() === "editor"}>

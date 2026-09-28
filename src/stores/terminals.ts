@@ -89,6 +89,7 @@ export interface TerminalData {
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
 	lastDataAt: number | null; // Timestamp of last PTY output
+	lastActivityAt: number | null; // Backend timestamp of last semantic session activity
 	idleSince: number | null; // Timestamp when shellState transitioned to idle
 	lastPrompt: string | null; // Last relevant user prompt (>= 10 words), set by Rust
 	ptyDescription: string | null; // Orchestrator-supplied description of assigned PTY work
@@ -131,6 +132,7 @@ type TerminalCreateData = Omit<
 	| "pendingInitCommand"
 	| "usageLimit"
 	| "lastDataAt"
+	| "lastActivityAt"
 	| "idleSince"
 	| "lastPrompt"
 	| "ptyDescription"
@@ -441,6 +443,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				lastActivityAt: null,
 				idleSince: null,
 				lastPrompt: null,
 				ptyDescription: null,
@@ -493,6 +496,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				lastActivityAt: null,
 				idleSince: null,
 				lastPrompt: null,
 				ptyDescription: null,
@@ -877,7 +881,7 @@ function createTerminalsStore() {
 			return sessionToTerminal.get(sessionId) ?? null;
 		},
 
-		/** Tag for a sub-agent PTY: the spawning agent's tab name, "sub" when that
+		/** Tag for a sub-agent PTY: the spawning agent's tab name, "external agent" when that
 		 *  parent has no tab here (external caller, closed tab), null when the
 		 *  terminal was not spawned by an agent. Read live, so a parent rename follows. */
 		getSubAgentTag(id: string): string | null {
@@ -886,7 +890,7 @@ function createTerminalsStore() {
 			const parentTerm = Object.values(state.terminals).find(
 				(t) => t.sessionId === parent || t.tuicSession === parent,
 			);
-			return parentTerm?.name ?? "sub";
+			return parentTerm?.name ?? "external agent";
 		},
 
 		/** Get the agentType for a PTY session, or null if not found */

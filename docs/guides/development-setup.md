@@ -24,6 +24,8 @@ pnpm tauri dev
 ```
 
 Starts the Vite dev server and Tauri app. Frontend files use Vite HMR; Rust changes require restarting the development process.
+Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
+The watch allowlist and Tauri version are resolved from the directory containing `vite.config.ts`, so starting Vite from another working directory still uses this checkout's inputs.
 
 ### Browser Mode
 
@@ -55,6 +57,35 @@ Produces platform-specific installers:
 
 ## Testing
 
+Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. If the
+checkout's test path exceeds the Unix socket limit, the helper uses a short
+checkout-specific directory under `~/Gits/.tmp/tuic-tests/socket-*`. The
+`scripts/with-test-tmp.sh` wrapper removes abandoned socket directories and
+test-run directories there (and in the checkout's `.tmp/tuic-tests`) after they
+have been unused for more than seven days. Run standalone Rust tests through
+that wrapper.
+
+### Live peer-mail wake canary
+
+After a Rust rebuild, run this against the isolated test instance, not the
+orchestrator instance. The script starts a disposable managed peer through MCP
+`agent action=spawn`, waits for its idle composer, sends mail from a separate
+MCP identity, checks that `PEER_MAIL_WAKE` appears in the PTY within 20 seconds,
+then closes the PTY and its MCP connections. It exits with an error if readiness,
+delivery, or cleanup fails.
+
+```bash
+TUIC_APP_INSTANCE=peer-mail-canary make dev  # in a separate terminal; use its reported HTTP port
+TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude
+TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude --capacity
+```
+
+`--capacity` sends 100 messages to the disposable agent, reads them through a
+second MCP connection bound to that agent, then checks that the next send and
+read succeed. Use `codex` instead of `claude` for the optional Codex check. The
+agent CLI must already be installed and authenticated. Run the script only
+after the test instance is listening on the URL you supply.
+
 ```bash
 pnpm test              # Run all tests
 pnpm test:coverage     # Coverage report
@@ -69,6 +100,45 @@ pnpm test:coverage     # Coverage report
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
 **Coverage:** ~80%+
+
+### Rust tests in linked worktrees
+
+Run standalone Rust tests through `scripts/with-test-tmp.sh`. In a linked
+worktree, the wrapper clears an inherited `CARGO_TARGET_DIR`, so Cargo selects
+that checkout's artifacts instead of a target supplied by the parent
+TUICommander process. The worktrees' `tuic-terminal` builds have the same Cargo
+fingerprint key, while [Cargo checks path sources by file mtime](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/fingerprint/index.html);
+sharing one target can therefore make an older checkout look fresh against an
+artifact from another checkout. The wrapper also keeps test scratch files under
+`~/Gits`.
+
+### TypeScript mutation testing
+
+Run Stryker on the changed source files and their relevant Vitest files. Keep both
+lists narrow; a mutation run executes the selected tests for each mutant.
+
+```bash
+node scripts/ts-mutants.mjs \
+  'src/utils/pathUtils.ts:65-65' -- \
+  'src/__tests__/utils/pathUtils.test.ts'
+```
+
+List the changed source files or line ranges before `--`, and the tests that
+exercise them after it. Read
+`reports/mutation/mutation.json` and the console verdicts. A known behavior
+change, such as inverting the `pathBasename` condition above, must be reported
+`Killed` before treating the other verdicts as evidence. Install this checkout's
+dependencies with `pnpm install --offline --frozen-lockfile` when its local
+`node_modules/.bin/stryker` is missing; linked worktrees do not share the main
+checkout's executables. The checked-in Stryker config copies frontend inputs,
+Rust `.rs` files under `src-tauri/src/`, the terminal-grid source, and the generated
+`command_table_paths.txt` into its sandbox. Add any new files read directly by a
+Vitest test to that copy policy. It leaves the worktree source untouched and runs
+Vitest as a separate command for each mutant. Stryker 10's
+Vitest runner reports false survivors with this repo's Vitest 5, so it is not
+used. Stryker's TypeScript preprocessor is pointed at an absent file because
+this repo's TypeScript 7 does not expose the compiler API it calls; Vitest still
+transforms and runs the TypeScript tests.
 
 ## Project Structure
 

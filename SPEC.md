@@ -226,16 +226,25 @@ Full agent configuration (binary, resume command, session discovery, detection p
 Two transports carry an assistant, and a session belongs to exactly one of them.
 There is no hybrid route and no fallback between them.
 
-- **PTY.** Every member of `AgentType` above. TUICommander allocates a terminal,
+- **PTY.** Every member of `AgentType` above, and a separately launched terminal
+  `ego` CLI when its PTY integration is enabled. TUICommander allocates a terminal,
   runs the CLI executable, and infers state by parsing the rendered rows into
   `ParsedEvent`. Session state is recovered from the agent's own session files
   on disk (see AGENTS.md, "Agent Session Management").
-- **ACP.** `ego` only, through the Agent Client Protocol v1 client in
-  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly and
+- **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
+  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
+  adding `--profile <name>` only when a user selected an ego profile, and
   owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
-  invoked, and no output is scraped.
+  invoked, and no output is scraped. The host issues a durable `TUIC_SESSION`
+  peer UUID for the repository conversation, persists it beside the selected
+  conversation binding, and passes it to ego and its MCP bridge. Mail and child
+  parentage use that peer identity without a PTY wake.
 
-`ego` is deliberately **not** an `AgentType`. `AgentType` describes a CLI
+Standalone `ego` outside TUIC is a third face: it has neither a TUIC peer
+identity nor a TUIC transport. A terminal `ego` and an ACP-hosted `ego` are
+separate processes and sessions; neither falls back to the other's transport.
+
+The ACP-hosted `ego` is deliberately **not** an `AgentType`. `AgentType` describes a CLI
 executable, its launch arguments and its parser behaviour; it carries no
 negotiated protocol version, connection lifetime, capability snapshot, reverse
 request, or durable ACP session ID. Adding `ego` to it would make the ACP
@@ -332,8 +341,8 @@ Features:
 | Cmd+O | Open file… |
 | Cmd+N | New file… |
 | Cmd+1-9 | Switch to tab N |
-| Cmd++/- | Zoom in/out |
-| Cmd+0 | Reset zoom |
+| Cmd++/- | Zoom in/out in the active terminal, Markdown tab or code editor |
+| Cmd+0 | Reset zoom in the active terminal, Markdown tab or code editor |
 | Cmd+F | Find in terminal |
 | Cmd+E | Toggle file browser |
 | Cmd+[ | Toggle sidebar |
@@ -374,26 +383,39 @@ new worktree.
 
 After `git worktree add`, TUICommander warms Git-ignored directories such as
 `node_modules`, `target`, and `.venv` with copy-on-write filesystem copies.
-Ignored files are never copied, and tracked files remain Git's responsibility.
+Only selected ignored build directories are copied; tracked files remain Git's responsibility.
 The capability probe and copy primitive share the same clonefile/reflink flags;
 unsupported filesystems produce one cold-worktree warning rather than one per
 directory. Warming is best-effort and never invalidates an otherwise complete
-worktree.
+worktree. After cloning, owner write permission is restored on the copies in
+the new worktree, without following symlinks or changing the source checkout.
 
 Lifecycle state is one backend verdict keyed by workspace id: working-tree
 dirtiness, whether `HEAD` is merged into the default branch, and removal safety.
+A missing registered checkout has no dirty fingerprint; its preflight identifies
+the missing directory and requires explicit force confirmation. Cleanup preserves
+its submodule refs before pruning and checks separately before overriding a lock.
+Merged GitHub PR state can also prove a squash-merged branch safe when its local
+tip is contained in the PR head; ancestry in the checked-out integration branch
+is sufficient even when the remote default branch has not advanced. The MCP
+`repo branch_delete` action applies the same proof to a local branch with no
+worktree, and refuses current, default, checked-out, or unmerged branches.
 Any inspection failure is `Unknown` and cannot authorize removal. Destructive
 UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
 confirmation cannot authorize changed state.
 
 ## Project Progress
 
-Native plan and story records have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The desktop and browser UI exposes plan and story lists, criteria, dependencies, and manual transitions. WontFix is terminal for plan aggregation but does not satisfy a dependency or promote a dependent; a nonempty plan with only Done/WontFix stories is Done, while an empty plan is Draft. A human can remove a direct WontFix dependency only from a Backlog story with a current revision. That story becomes Ready only after every remaining dependency is Done, and an explicitly Blocked story is never auto-unblocked. Rust derives direct and transitive abandoned dependency indicators and the WontFix count on `plan_view` reads; the UI renders them. Human approval is available through desktop IPC until HTTP has an authenticated human identity. HTTP without a managed session records `local_api` provenance and cannot approve. The optional workflow engine described in `plans/native-story-workflows.md` remains in development; import/export is excluded.
+Native plan and story records have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The desktop and browser UI exposes plan and story lists, criteria, dependencies, and manual transitions. WontFix is terminal for plan aggregation but does not satisfy a dependency or promote a dependent; a nonempty plan with only Done/WontFix stories is Done, while an empty plan is Draft. A human can remove a direct WontFix dependency only from a Backlog story with a current revision. That story becomes Ready only after every remaining dependency is Done, and an explicitly Blocked story is never auto-unblocked. Rust derives direct and transitive abandoned dependency indicators and the WontFix count on `plan_view` reads; the UI renders them. A coordinator or independent reviewer may approve after checking the acceptance criteria; a managed session cannot approve a story it claimed. Desktop, browser, and sessionless HTTP approval record the acting session or `local_api` provenance. The optional workflow engine described in `plans/native-story-workflows.md` remains in development; import/export is excluded.
 
-Workflow definitions have their own config-directory database (`workflows.sqlite3`): editable drafts and immutable published revisions. Graph validation gates publication; the seeded `Resolve plan` definition pins a published `Story delivery` revision. The closure policy defaults to human approval; automatic closure cannot be published until a TUIC-owned evidence gate exists. Definitions pin bounded direct-executable check commands. TUIC runs them in the assigned story worktree and records durable commit/tree-bound check receipts, then verifies an operator-created merge on the canonical branch and runs the checks again on its result before recording `StoryIntegrated`. A later canonical commit requires a TUIC-computed `CanonicalRecertified` event with successful checks at the clean new tip and ancestry of every integrated source. Durable run records and event projections exist in `workflow_runs.sqlite3`, with idempotent actions and recovery of uncertain effects after restart. Explicit story dispatch enforces bounded concurrency and conservative file-scope exclusion, while a managed coordinator assigns registered isolated worktrees before spawn. Dependents and final run completion require a current integration receipt at each accepted story revision. The Plans and Stories dialog reads a plan's run list and ordered event timeline. A coordinator does not yet execute definitions automatically.
+Workflow definitions have their own config-directory database (`workflows.sqlite3`): editable drafts and immutable published revisions. Graph validation gates publication; the seeded `Resolve plan` definition pins a published `Story delivery` revision. The existing `human` closure policy requires an explicit approval transition, which may come from an independent reviewer agent; `automatic` closure cannot be published until a TUIC-owned evidence gate exists. Definitions pin bounded direct-executable check commands. TUIC runs them in the assigned story worktree and records durable commit/tree-bound check receipts, then verifies an operator-created merge on the canonical branch and runs the checks again on its result before recording `StoryIntegrated`. A later canonical commit requires a TUIC-computed `CanonicalRecertified` event with successful checks at the clean new tip and ancestry of every integrated source. Durable run records and event projections exist in `workflow_runs.sqlite3`, with idempotent actions and recovery of uncertain effects after restart. Explicit story dispatch enforces bounded concurrency and conservative file-scope exclusion, while a managed coordinator assigns registered isolated worktrees before spawn. Dependents and final run completion require a current integration receipt at each accepted story revision. The Plans and Stories dialog reads a plan's run list and ordered event timeline. A coordinator does not yet execute definitions automatically.
 
 Progress is one append-only journal per project, read from a dialog. The dialog
 opens on the active PTY and can switch to another PTY or the repository aggregate.
+On mobile, where there is no desktop active repository, the journal supplies a
+newest-first project list; selecting one loads that project's entries.
+The toolbar bell entry stays visible with zero unread updates; the command palette
+and `Cmd/Ctrl+Shift+P` open the same dialog.
 It answers "what happened while I was not watching?" and nothing else.
 
 Five entry kinds. Agents report `done` and `blocked` through the compact MCP
@@ -452,6 +474,17 @@ remote-synchronization integrations, scheduled or manual Markdown export, and
 Markdown import stay outside this version by decision, not by omission. The
 delegation structure the Flow view draws is observed from spawns and sends; it
 is not inferred, and nothing groups entries into workstreams.
+
+## Native plans and stories
+
+The story service stores plan and story records outside the repository. It discovers
+existing Markdown plan documents from the project's top-level `plans/` and
+`.claude/plans/` directories on each `list_plan_sources` call. The Plans and Stories
+dialog uses this action through the same story service as MCP, HTTP, IPC, and CLI.
+Selecting a document calls `add_plan_source`, which derives the title from
+front matter or the first Markdown heading and reuses an existing record for
+the same source. Nested archives are not offered. A path or link can still be
+added through the secondary dialog control.
 
 ## Settings navigation
 
@@ -513,9 +546,9 @@ and an invalid ID or unavailable named release vault terminates before network
 bind. Runtime switching is unsupported.
 
 Production black-box consumers pin and verify the digest of the exact
-`tuic-remote` artifact they launch. That consumer-side artifact identity is the
-capability proof for this contract; the daemon exposes no additional capability
-or version endpoint.
+`tuic-remote` artifact they launch. The daemon also reports its running build's
+version, target triple and SHA-256 in `/health`; the desktop uses that identity
+to detect an outdated remote and to verify an update after restart.
 
 Ordinary `config.json` and `mcp-upstreams.json` mutations use delta-under-lock
 semantics: after taking the cross-process file lock, the backend reloads the
@@ -583,6 +616,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Context menu submenus and "New Group..." via PromptDialog
 - [x] File Browser panel (`Cmd+E`) with content search (`Cmd+Shift+F`, case/regex/whole-word, streaming results)
 - [x] CodeMirror code editor
+- [x] Modified click on editor links and paths opens the matching browser or TUICommander view
 - [x] Editor line wrapping toggle with separate saved defaults for text and code
 - [x] Find in terminal (`Cmd+F`)
 - [x] Configurable keybindings system
@@ -594,6 +628,8 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile Companion PWA (sessions, live output, question reply, activity feed)
+- [~] Managed-agent blocked questions alert the mobile PWA through encrypted Web Push when the desktop is away; a phone reply returns through atomic session submission with a receipt (real-phone verification pending)
+- [~] Pending ego permissions and form requests alert a subscribed phone when the desktop is away, linking to the matching mobile Chat conversation with a 30-second limit per conversation (real-phone verification pending; ego card notices await a defined wire shape)
 - [x] MCP Proxy Hub (aggregate upstream MCP servers via HTTP and stdio, tool namespace prefixing, circuit breaker, hot-reload, OS keyring credentials, tool filtering, session-local Grok compatibility through lazy meta-tools)
 - [x] Copy Path in Markdown panel
 - [x] Claude Usage Dashboard (native SolidJS component with API polling, session analytics, usage timeline)
@@ -605,7 +641,12 @@ Some frontend-only stores persist to localStorage:
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
-- [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own
+- [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
+- [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
+- [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
+- [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
+- [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
+- [x] AI Chat composer polish — text grows to a bounded height and pastes over 200 words stay compact until the full text is sent
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
 - [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
@@ -652,13 +693,16 @@ Some frontend-only stores persist to localStorage:
 
 ### Agent Configuration (Done)
 - [x] Settings > Agents tab with per-agent run configurations
+- [x] MCP spawn accepts caller environment overrides and an overrideable run-config model while preserving legacy model arguments
 - [x] MCP bridge install/remove for every MCP-capable agent in the canonical registry
 - [x] Terminal context menu > Agents submenu with run configs
 - [x] Agent binary detection and version display
+- [x] Per-agent native scrollback preference applies to supported CLI launches and commands typed in TUIC shells
+- [x] Managed Claude and direct Codex spawns accept new workspace trust by default without editing the agents' saved trust files; per-agent opt-out leaves their normal question in place
 - [x] agents.json persistence for run configurations
 
 ### Completed (P3)
-- [x] Markdown rendering (MarkdownPanel, not inline terminal)
+- [x] Markdown rendering (MarkdownPanel, not inline terminal), with in-app local links and guarded WebView navigation
 - [x] Task queue UI
 - [x] Advanced keyboard shortcuts
 

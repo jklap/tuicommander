@@ -1,3 +1,7 @@
+## Crate split restart
+
+- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout.
+
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP
      comment body (free text, may span multiple lines)
@@ -7,6 +11,257 @@
      then remove the tweak markers. -->
 
 # To Test
+
+## AI Chat layout and composer (story 1166-ef2f)
+
+- [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
+
+## AI Chat message Copy and trailing suggestions (story 1150-4042)
+
+- [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus.
+- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`.
+- [ ] Send a typed AI Chat message and choose a suggested reply; confirm each user bubble shows the text once after ego replies. Targeted reducer and panel tests cover both paths.
+
+## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open a disposable ego chat and send a prompt that fails before producing a reply. Confirm its diagnostic appears in the transcript and the composer returns to Send. Answer a two-choice trust elicitation using its direct button and confirm the turn then shows a reply or a failure. The live backend cannot load the ACP failure event until restart; targeted Rust and frontend tests cover the wire and rendering behavior.
+
+## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths.
+
+## ACP ego peer identity (story 1073-3431) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego configured and verify its MCP bridge appears in `agent list_peers` as an `ego` peer without a terminal; send mail, reconnect, restart, and verify the same peer UUID can read it with `agent wait`.
+- [ ] Spawn a child from that ACP bridge and verify `parent_session_id` equals the AI Chat peer UUID. Submit blocked progress and verify the desktop progress event carries the ACP conversation ID and the away-state mobile push is emitted when push is configured.
+
+## Codex approval cancellation (story 1125-f4ea) — Rust restart required
+
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, create a disposable Codex session and trigger a shell approval. Confirm its tab reports awaiting input; press Esc and confirm the badge clears when the idle composer returns. Trigger another approval and confirm the badge appears again. The running backend cannot load this Rust change until restart.
+
+## AI Chat ACP session details (story 1072-6787)
+
+- [ ] In an isolated test instance running this frontend, open a disposable ego conversation and confirm its updated title fits the panel header and picker. After a usage update, confirm the context percentage and optional cost remain readable above the panel edge. The targeted component tests cover the values; no instance running this worktree was available for a screenshot.
+
+## AI Chat ego profile (story 1074-9373) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. Capture the Settings row to verify its layout. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart; the browser wrapper timed out twice while opening the worktree's Vite page, and maccontrol returned circuit open.
+
+## AI Chat image paste (story 1085-fa65)
+
+- [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified.
+
+## AI Chat conversation recovery (story 1071-46c9) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego, send a turn, create a second conversation, then restart the app. Confirm the last conversation and its history return; select the older title in the newest-first picker and confirm its history appears once. The running Rust backend cannot load the new `AppConfig` field until restart.
+
+## Windows Codex npm launcher — Rust restart required (story 987-c0ca)
+
+- [ ] On a Windows build with npm's adjacent `codex` and `codex.cmd` shims, restart TUICommander and launch Codex from the agent menu. Confirm the help probe selects `codex.cmd`, reports `--no-alt-screen` support, and the new session stays on the primary screen. The targeted Rust test passed for the adjacent shims; native Windows execution remains to be checked.
+
+## Agent Enter gap (stories 974-254a, 975-1de1) — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send text plus `special_key=enter` to a disposable Claude MCP session and confirm it submits. Launch Codex through a wrapper that foreground detection does not recognize, then send a long prompt from a suggestion or dictation while the tab still has no agent type; confirm it submits and check app logs for one unknown-foreground warning. The current backend cannot load the Rust change until restart.
+
+## Managed Codex wrapper trust (story 1047-c41c) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, configure a Codex run config whose launcher forwards `"$@"` to Codex. Spawn a throwaway managed peer in a new directory and confirm it reaches Ready and receives its initial task without a trust answer. Turn off **Accept workspace trust for managed spawns** and repeat in another new directory; the ordinary Codex trust question must remain. The current live backend cannot load this Rust change until restart.
+
+## Missing registered worktree cleanup — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove the checkout directory of a throwaway linked worktree. Ask for its lifecycle by workspace id, confirm `missing_checkout=true` and no dirty fingerprint, then confirm removal in the desktop dialog or HTTP with `confirmMissingCheckout=true`. Confirm the Git registration is pruned and the branch remains when branch deletion is disabled. Repeat with a locked registration: cleanup must stop until a separate lock override is confirmed. The running Rust backend cannot load this change until restart.
+
+## AI Chat pending ACP badge and notification (story 1070-38ce)
+
+- [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge.
+
+## Child lifecycle inbox coalescing — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, let a throwaway managed child ask a confident question, answer it, then have it ask another. Confirm the parent inbox contains both question notices while ordinary state updates still coalesce. The current live backend cannot load this Rust change until restart.
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart.
+
+## Agent inbox FIFO and paging — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send 101 messages to a throwaway recipient without reading. Confirm every send succeeds, the inbox reports `missed_count=1`, and the oldest message is absent. Read with `limit=2` and repeat while `has_more=true`; each page must start after the prior `next_since`. The live Rust backend cannot load this change until restart.
+
+## AI Chat ACP pause settlement (story 1069-97bd) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, pause a disposable ego conversation while its turn streams. When ego stops at the pause boundary, Resume must remain visible and a new prompt must work after Resume. The running backend cannot load this Rust change until restart; the targeted ACP fixture test covers the state transition and the resumed prompt.
+
+## Urgent agent mail — Rust restart required
+
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start throwaway Claude Code and Codex sessions and send `agent action=send urgency=urgent` while each is busy. Check that the notice appears after the current tool call and before the agent's next planned step, the peer body remains in the inbox, and the sender receives `urgent_delivered=true`. Repeat with a draft and a confident dialog; each must return `urgent_delivered=false` with a fallback reason and must preserve the composer. Boss's current backend cannot load this Rust change without a manual restart.
+
+## Progress journal paging — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, call `repo action=progress_list` on a journal with more than 10 entries. The first page returns 10 entries, `total`, and `nextCursor`; follow the cursor to the end without duplicates. Open Progress and confirm the dialog still shows the complete journal. The current live backend cannot load this Rust change until restart.
+
+## Headless MCP voice binding (story 1006-2729) — remote daemon rebuild required
+
+- [ ] After replacing a disposable `tuic-remote` daemon with this build, call MCP `voice action=status` from a connection without a live terminal and from one bound to a live terminal. The first must be refused as unbound; the second must report that this build has no audio support. The running daemon cannot load the Rust change until it restarts. Targeted headless and desktop tests cover both binding paths.
+
+## MCP agent spawn environment and model — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set an Agents run config model and environment value, then spawn a throwaway MCP child with overriding `model` and `env` values. Confirm the child sees the caller environment, the override model reaches its argv, and `TUIC_SESSION` and `TUIC_PARENT` still identify the peer. The running backend cannot load this Rust change without a restart.
+
+## Push-to-talk native release — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.
+
+## Managed Claude mail wake — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send mail to a throwaway managed Claude peer while its turn is busy and its MCP SSE stream is connected. Let it become idle without reading the inbox during the turn. Confirm one payload-free `[TUIC] message available` notice starts a new turn and `agent action=inbox` returns the mail. Repeat with an inbox read before idle and confirm no stale notice is submitted. The current live backend cannot load this Rust change until restart.
+
+## Claude awaiting badge — Rust restart required
+
+- [ ] After a `make dev` restart, let a Claude tab finish an ordinary prose reply with the Activity Dashboard open. The generic desktop notification must not flash Waiting input; an Ink picker or explicit permission request must still show it. The running backend cannot load this Rust change without a restart.
+
+## Detached CLI wake status — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `queued` when the queue takes the request. For an unbound caller, confirm MCP mail surfaces `BG DONE` with the queue error and `.wake` says `mailed`; when both channels fail, `.wake` says `failed` with both reasons. The installed CLI cannot load this Rust change until rebuilt.
+
+## Queued agent command diagnostics — Rust restart required
+
+- [ ] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it.
+- [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`,
+      queue a command for a throwaway Codex session while it is busy. Confirm it
+      runs once when Codex reaches Ready and the queue reaches zero. If the shell
+      first becomes idle without confirmed readiness, logs must name
+      `defer_reason=idle_unconfirmed`, then `Ready confirmed after shell became
+      idle` before the successful flush. The current backend cannot load this
+      fix without a restart.
+
+## Consumed MCP agent inbox mail (story 1105-966b) — Rust restart required
+
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, fill a throwaway peer inbox, read it, and send one more message. Confirm the new send succeeds and the next inbox call returns it without `missed_count`. The current live backend still has the old Rust code; targeted unit tests cover pagination, capacity, and delivery leases.
+
+## MCP tab caller repository (story 1102-0945)
+
+- [x] An MCP caller in repository A opens an unpinned external Markdown tab while repository B is visible: the focused tab switches to A and remains in A's tab bar; `focus=false` leaves B visible and the tab appears on return to A. Inline HTML/URL tabs use the same caller scope. _(verified: targeted `useAppInit` and `mdTabs` Vitest tests cover focused/background external files and caller-scoped HTML.)_
+
+## Sequential Markdown comments (story 1103-d5ae)
+
+- [x] Add block comments to several different numbered Markdown items in one open file. Each marker stays beside its item, the convention header appears once, and each highlight reopens its own comment. _(verified: `MarkdownTab.test.tsx` exercises four sequential saves through the tab, source positions, parsed comments, highlights, and reopen; `ContentRenderer.test.tsx` verifies source-only updates refresh block metadata.)_
+
+## Mobile remote sessions, Progress, and Activity — Rust restart required
+
+- [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone.
+- [ ] [HUMAN] A connected remote session should show live output through WebSocket; create and close only a throwaway remote session from mobile, then confirm it disappears on its owner. Disconnect that machine and confirm the stale session shows unavailable rather than a misleading local 404.
+- [ ] [HUMAN] Open mobile Progress with no desktop repository selected. It should select the newest journal project, show saved done/blocked entries, and allow switching projects. Open Activity and confirm persisted active events appear while dismissed events stay hidden. The backend routes and store shape have targeted automated tests; the real phone remains to be checked.
+
+## Progress toast dismissal (story 1061-7694) — after the fixed frontend loads
+
+- [ ] Tap a Progress toast body on desktop while another repository is active; it should close without changing the repository or terminal. On a second toast, use **Go to repo** and confirm it opens the reporting workspace. On mobile, tapping the toast body should close it without opening its action. Targeted component tests verify these paths; check the loaded UI after this branch is integrated.
+
+## Embedded external links (story 989-63fa) — after Rust rebuild
+
+- [ ] After the next `make dev` restart, use an isolated `TUIC_APP_INSTANCE` test instance to click an HTTPS link in an HTML preview and an inline plugin panel: each should open outside the app. Open a cross-origin dashboard URL in a tab, attempt an external navigation, and confirm the blocked-link toast directs users to the tab menu's Open in Browser action. The live Boss backend has not restarted for the Rust navigation event.
+
+## Mobile repository files (story 1063-3fe1) — real phone
+
+- [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, open a `.md` file in rendered View, switch to Edit, change its source and save, then confirm the updated rendered View and saved content from the desktop. Check another text file stays plain text and that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior.
+
+## Editor links and external Markdown tabs (2026-09-27)
+
+- [x] MCP file tabs remain visible after selecting a terminal in a repository with no active workspace; distinct MCP ids coexist and a repeated id updates its native file tab. A terminal link to an existing external Markdown path under `~/Gits/.tmp/` opens in the Markdown viewer. _(verified: targeted TabBar, useAppInit, and terminal file opening Vitest tests.)_
+- [x] Unpinned MCP native file and HTML/URL tabs hide in another repository and return when their opening repository is selected again; pinned MCP tabs stay visible across repositories. _(verified: targeted `useAppInit`, `mdTabs`, `tabManager`, and `TabBar` Vitest cases exercise scope, visibility, pinning, and retention.)_
+- [x] Cmd/Ctrl+click opens editor web links in the system browser, local paths in the matching TUICommander view, and missing paths with a toast. MCP `tuic://open` opens external Markdown in a Markdown tab. _(verified: targeted editor and MCP tab Vitest cases exercise these routes; browser and native window appearance require a visual check after integration.)_
+## Native MCP action cleanup (story 1091-1d5d) — rebuild Rust server and CLI
+
+- [ ] After rebuilding, use an isolated test instance to confirm `agent register/list_peers` accepts `path`, `repo worktree_lifecycle/worktree_remove` accepts `branch`, and removed actions return errors naming their HTTP routes. Reinstall the CLI before checking `tuic agent list-peers --path` and `tuic agent stats --json`. Restart a live `make dev` session only when ready to end its current PTYs.
+
+## Detached CLI commands (story 1100-96bd) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg <log> -- <cmd>` from an isolated managed session. Confirm the launcher returns before the command, `<log>.exit` records its code, and a busy caller receives the completion wake only after becoming idle. The installed CLI cannot load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. Windows behavior is covered by CI-only tests and remains unverified on this Mac.
+
+## Generic MCP CLI (story 1099-79b8) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to compare `tuic mcp session '{"action":"list"}' | jq length` with the instance's MCP session count. Run `tuic mcp agent '{"action":"wait","timeout_ms":8000}'` and confirm it waits for the server reply without a three-second socket failure. The installed CLI cannot load the Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.
+
+## CLI blocking waits (story 1060-df82) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic agent wait --timeout-ms 8000 --json` and `tuic session wait <busy-session> --until exited --timeout-ms 8000 --json` against an isolated test instance. Confirm each returns after the server's response rather than failing after three seconds. The running app and installed CLI do not load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.
+
+## Mobile notification tags (story 1042-f5ca) — updated service worker
+
+- [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.
+
+## Rust test temp root (story 980-420e) — Rust, needs `make dev` restart
+
+- [x] Bare `cargo test` test binaries and Nextest setup scripts route Rust scratch directories through the repository test root. _(verified: `src-tauri/crates/tuic-test-support/src/lib.rs` initializes the libtest environment; `src-tauri/.config/nextest.toml` runs platform setup scripts; targeted subprocess test confirms `tempfile` and `std::env::temp_dir` stay under `test_temp_root()`.)_ No live-app behavior changes; the current backend cannot load the Rust test-support code until a restart.
+
+## Mobile completion push limit (story 1041-cdc7) — Rust, needs `make dev` restart
+
+- [ ] [HUMAN] After restarting `make dev` when Boss is ready to end the current sessions, use a real subscribed phone while the desktop is away. Trigger a titled question followed immediately by session completion; confirm the phone displays one notification. Real phone delivery and display cannot be verified by the local HTTP push receiver. The targeted Rust test verifies accepted push requests, expiry after 30 seconds, and independent session limits.
+
+## Managed agent workspace trust (2026-09-26) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use `agent action=spawn` to start Claude and direct Codex in never-trusted folders under `~/Gits/.tmp/`. Confirm each reaches the agent prompt and receives the task without a manual trust keypress. Turn **Accept workspace trust for managed spawns** off for each agent and confirm its normal trust question remains. User-opened agent terminals must retain normal trust behavior. The current running backend cannot load this Rust change until restart.
+
+## MCP config ownership (story 988-d1a1) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, confirm startup leaves a sandboxed agent MCP config unchanged. The current live backend cannot load the ownership guard without a restart. Do not restart Boss's running instance or use his real agent configs for this check.
+
+## Plan picker (2026-09-26) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, open Plans and Stories in a repository with `plans/*.md`. Confirm the document choices are visible, the selected plan title matches its heading or front matter, and **Add from path or link** stays collapsed until opened. The running backend cannot serve `list_plan_sources` or `add_plan_source` until restart. Targeted Rust and Vitest tests cover discovery and dialog behavior; the visual layout needs the rebuilt app.
+
+## Remote repository browsing and terminal attach (stories 1025-8103, 1026-7633) — Rust restart and remote daemon update
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance and updating its test remote daemon, open the remote repository picker. Confirm it starts at the remote host's home directory, a denied directory shows a readable error while manual path entry and Up remain usable, and a terminal in a remote repository renders its prompt. Opening a terminal with a missing cwd must show a readable error instead of a blank pane; a failed grid stream must show an error toast. Use only disposable test connections and sessions; the live `make dev` backend cannot load the new home-directory route or cwd validation without a restart.
+
+## Claude question state after wrapped suggestions (story 1023-dcc9) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, run a Claude turn that ends in a wrapped `suggest: [ … ]` item containing `?`. Confirm the idle tab does not show a question badge. A real AskUserQuestion must still show one. The existing live backend cannot load this Rust change without a restart.
+
+## Remote update and restart — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections.
+
+## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, inspect a clean squash-merged worktree whose local tip is contained in its merged GitHub PR head. Confirm the lifecycle badge says Merged and removal with branch deletion succeeds. Check that a branch contained in the main checkout's current integration branch also removes when the remote default branch is behind. A read-only ignored build tree should arrive writable only in the new worktree and should not block removal. The current live backend cannot load this Rust change without a restart.
+
+## MCP local branch deletion (story 1033-1796) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use MCP `repo action=branch_delete` on an integrated local branch with no worktree. Confirm only the local ref disappears; a checked-out or unmerged branch must be refused. The current live backend cannot load this Rust action without a restart.
+
+## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart.
+
+## Hidden iframe unload (story 979-3d7f) — live instance required
+
+- [ ] In a disposable test instance, open a URL tab pointing to a page that runs a 1 s busy loop every 5 s. Hide it by switching tabs, repositories, and pane groups, including a pinned tab and a split pane covered by an orphan tab. Verify `document.querySelectorAll('iframe[src="<test-url>"]').length === 0` while hidden and that showing the tab loads the same URL again. While hidden, run a read-only 30 s main-thread probe with 100 ms `setTimeout` ticks; require 0 gaps over 150 ms. Do not use Boss's live instance. _(Deferred: this requires the changed frontend in a running test instance; targeted Vitest proves DOM removal and remount.)_
+
+  Run this in the test instance's frontend console while the tab is hidden (a gap is measured delay beyond the intended 100 ms):
+
+  ```js
+  const gaps = [];
+  let last = performance.now();
+  const end = last + 30000;
+  const tick = () => {
+    const now = performance.now();
+    if (now - last > 250) gaps.push(Math.round(now - last - 100));
+    last = now;
+    if (now < end) setTimeout(tick, 100);
+    else console.log({ gapsOver150ms: gaps.length, gaps });
+  };
+  setTimeout(tick, 100);
+  ```
+
+## Linked-worktree warming excludes MDKB (2026-09-26) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a disposable worktree from a repository that ignores and contains `.mdkb/`. Confirm the new worktree has no `.mdkb` while an ignored build directory still arrives warm. The live backend cannot load this Rust change without a restart.
+
+## Native scrollback capture fixtures (2026-09-25) — after mcp-config-guard lands
+
+- [x] In an isolated `tuic-remote` instance with `TUIC_CAPTURE_DIR` under `~/Gits/.tmp/`, captured Codex 0.157.1 with `--no-alt-screen` (approval prompt, resize, idle footer) and OpenCode 1.18.30 with `--mini` (idle resize). Both `.tcap` fixtures are in `src-tauri/src/fixtures/agent_prompts/`. Targeted Rust replay tests verify primary-screen mode, the Codex chrome-cutoff anchor, and no BUSY edge from the OpenCode resize repaint (story 939-475b). _(verified: `pty::tests::live_native_scrollback_captures_never_enter_alternate_screen`, `codex_native_scrollback_capture_keeps_approval_and_idle_composer_visible`, `opencode_mini_resize_repaint_does_not_reopen_an_idle_turn`; 3/3 passed)_
+
+## Codex dictation auto-send (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check.
 
 ## File browser default (2026-09-25) — Rust, needs `make dev` restart
 
@@ -23,11 +278,39 @@
 - [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction.
 - [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state.
 - [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story.
+## Agent native scrollback (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout.
+- [ ] After a `make dev` restart, open a **new** TUIC shell and type `codex`, `grok`, and `opencode` in separate throwaway tabs. Confirm each supported installed CLI stays in native scrollback; repeat with its per-agent **Prevent alternate screen** setting off, then restore the setting. Existing shells retain the previous PTY environment and cannot verify this change.
+- [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch.
+- [ ] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled.
+## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
+- [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_
+## Streaming Progress intents (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `make dev` instance, stream an `intent:` line in a narrow Codex or Ink terminal. The Progress journal gets the complete text and title once, including an indented hard-wrap row; closing a tab with a title-less open intent preserves one final entry. Check that a token in a done/blocked report is redacted in the journal.
+## MCP bridge config guard (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical.
+## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `make dev` instance, deinitialize a disposable worktree submodule with a local-only commit and a Git module name different from its checkout path; repeat with a nested named submodule. Removal must refuse and leave each module Git store and commit recoverable.
+- [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository.
+- [ ] After restarting an isolated `make dev` instance, remove a disposable worktree whose submodule has two stash entries and a reflog-only commit. Confirm all three OIDs remain reachable in the main checkout module after removal, including when a separate missing checkout is force-pruned.
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep.
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly.
+
+- [ ] After an isolated `TUIC_APP_INSTANCE=<id>` Rust restart, confirm a refused dirty non-force removal leaves the worktree's pending warm state visible. Remove a different worktree while another registered checkout directory is missing; the missing checkout's submodule Git state must remain available for later safe removal.
+- [ ] After a `make dev` restart, verify a missing registered worktree refuses removal without force, and a separately confirmed lock override is needed if that registration is locked. After force removal, its submodule-only refs must remain in the main checkout's module repository.
+- [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins. Remove the worktree and check its warm status is no longer retained. A clean squash-merged branch removes without force and the response names `patch_equivalence`.
+- [ ] After that restart, create a worktree through desktop IPC and confirm its instructions report `pending` until warming completes. Confirm non-force removal preserves a dirty worktree with `delete_branch` both on and off; when an archive script adds a commit, the branch remains and the response includes `branch_delete_warning`.
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error.
-- [ ] Orchestrator inbox under load: while children finish, a parent that does not read its inbox keeps every peer RESULT. When the inbox holds 100 peer messages, `agent send` returns `inbox is full`, and lifecycle notices appear as `missed_count` instead of pushing peer mail out.
+- [ ] Orchestrator inbox under load: while children finish, a parent that does not read its inbox retains the newest 100 messages in FIFO order. The 101st send succeeds and the next inbox read reports the unread eviction in `missed_count`.
 - [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
 
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
@@ -37,7 +320,7 @@
 
 - [ ] After rebuilding an isolated instance, save a direct-executable check with `update_checks`, publish the workflow, and confirm the published revision keeps its check set after the draft changes. A shell command or stale draft revision must be rejected.
 - [ ] After rebuilding an isolated instance, read an existing workflow definition and confirm its closure is `human`. Try publishing an `automatic` draft and confirm the API rejects it; switch back to `human` and publish at the current draft revision.
-- [ ] After rebuilding an isolated instance, transition a throwaway story through review and approve it through desktop IPC. Read `transition_history` through HTTP and confirm the approval records a human actor; approval through managed MCP or sessionless HTTP must be refused without a new history row. A non-approval sessionless HTTP transition must record `local_api`.
+- [ ] After rebuilding an isolated instance, transition a throwaway story through review and approve it through desktop IPC. Read `transition_history` through HTTP and confirm the approval records a human actor. Claim a second story with one managed session, submit it for review, and confirm that session's approval fails with `a story cannot be approved by its implementer` without a new history row; a different managed reviewer can approve and records its session ID. Approve a third story through sessionless HTTP and confirm it records `local_api`.
 - [ ] After a Rust restart in an isolated instance, launch a coordinator attempt into a registered throwaway worktree with `workflow_launch`, inspect its prompt and event timeline, create a story with `workflow_story_create` and retry its proposal key, submit `workflow_report` from that managed PTY, and verify a different PTY cannot report the attempt. Exit a second agent without reporting and confirm its attempt becomes interrupted and the run pauses. Do this only when losing the current dev sessions is acceptable.
 - [ ] **[VISUAL]** In an isolated rebuilt instance, edit and publish a seeded workflow draft in the Plans and Stories Designer tab; verify backend graph validation errors and the saved revision. The component layout was visually checked with a temporary Vite harness at normal and narrow widths (`~/Gits/.tmp/workflow-designer-visual.png`, `~/Gits/.tmp/workflow-designer-narrow.png`).
 
@@ -197,11 +480,12 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
+- [ ] [VISUAL] After the restart, the in-window Activity Dashboard stays close to the detached window's width; a long terminal name remains readable beside the robot marker and project badge, and a narrow main window has no horizontal overflow.
 - [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
-- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows `↳ <parent tab name>`, and the parent row shows no tag. Rename the parent tab: the tag follows.
-- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same `↳ <parent>` tag; with a long parent name, the tab title stays readable.
-- [ ] Pop out the Activity Dashboard: the detached window shows the same tag.
-- [ ] After the restart, with a child tagged `↳ <parent>`, run `curl -X POST http://localhost:9876/debug/reload_webview`: the tag is still there. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload.
+- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows.
+- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable.
+- [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip.
+- [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload.
 
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
@@ -260,6 +544,11 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
 
+- [x] An MCP-opened absolute Markdown file outside the active repository writes tweak comments through the external file route; a rejected write shows an error and leaves the draft available to retry. _(verified: `MarkdownTab.test.tsx` exercises external save and rejected-then-successful retry.)_
+- [x] A terminal file path with `:line` opens the built-in editor at that line; a numbered Markdown path does the same while an unnumbered Markdown path opens the viewer. _(verified: `terminalFileOpen.test.ts` covers the numbered routes and unnumbered viewer route.)_
+- [x] Clicking a later `:line` or `:line:col` terminal link for a file already open in the editor moves the cursor there and retains unsaved edits. _(verified: `editorOpenLinks.test.tsx` checks repeat navigation, oversized column clamping, and retained edits.)_
+
+- [ ] In a Markdown file with plain, task, and nested bullets, hover each bullet's gutter and save a comment. Confirm each highlight stays on its chosen bullet and the file contains an indented `tweak:item` marker directly below that bullet's own content. _(Automated: `MarkdownTab.test.tsx` writes the selected task marker; `ContentRenderer.test.tsx` checks nested source targets; `tweakComments.test.ts` checks nested anchors and list rendering.)_
 - [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block.
 - [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line.
 - [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition.
@@ -563,7 +852,7 @@ that already has one is dropped.
 - [x] `curl -s localhost:9876/health | jq .instance_id` returns a UUID, and it
       changes after a restart.
       _(verified 2026-09-23: :9876 returned `a53f203e-7e81-4d47-a0a8-6c3ec9a4d8ca`;
-      `app_instance.rs:152-155` mints it with `Uuid::new_v4()` in a process-local
+      `crates/tuic-core/src/app_instance.rs:152-155` mints it with `Uuid::new_v4()` in a process-local
       `OnceLock`, never persisted, so each process gets a new one.)_
 
 ## Workspace badge: file count instead of "Dirty", `in_sync` instead of "Merged" (2026-09-20) — **Rust, needs a `make dev` restart**
@@ -585,6 +874,11 @@ reads `dirty_files` off an old backend that does not send it, so every count is
 - [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown.
 
 ## Progress dialog and journal (2026-09-19)
+
+- [ ] **Rust, needs a `make dev` restart.** In an isolated agent session, print an `intent:` that soft-wraps over at least 12 rows in a 40-column terminal. Confirm the complete title appears once and Progress records a capped entry. Scroll a title-less intent under capped history and confirm it stays open until the next prose line. Composer chrome must not extend the intent, and an unfinished `(` title fragment must be removed when the intent closes.
+- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, print a title-less `intent:` followed by indented prose in a wide agent terminal. Progress must keep only the intent text; the prose must not become a tab title. In a narrow terminal, print a title after three hard-wrap rows, then another intent: both entries and both titles must appear. A long intent must keep its full tab-title event while its journal text ends at 500 characters.
+
+- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, have Codex stream a long `intent:` in a narrow terminal while it redraws and moves the cursor to its composer. Progress should receive one full entry with its title; a later identical repaint must add none. Restart when current PTY sessions may be lost.
 
 - [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically.
 - [ ] **Rust, needs a `make dev` restart.** With an agent tab open, let it print `intent: …` and let the screen repaint (spinner running). `sqlite3 "<config dir>/progress.sqlite3" "select count(*) from entries where kind='intent' and created_at_ms > <restart ms>"` must grow by one per distinct intent, not per repaint. Then call the `progress` tool twice with the same `done` text and confirm both rows land. _(NOTE 2026-09-23: FAILS on :9876 — no row at all has landed since the restart (newest `created_at_ms` is 12:04, restart 13:08) because every `ProgressStore::open()` fails with `no such table: sqlite_sequence`; see Progress Flow view, first item.)_
@@ -690,7 +984,7 @@ test can reach is the live process: these are the checks that need one.
 - [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes.
 - [ ] Let ego ask for permission. The buttons must be the ones ego published, and answering must clear the card in every open window — not only the one that answered.
 - [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there.
-- [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. The panel writes the message locally, so if ego echoes it the bubble appears twice and `acpTranscript.noteUserMessage` has to go.
+- [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_
 
 ## Launch-scoped native agent status signals (story `746-30a9`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
@@ -1074,7 +1368,7 @@ cleared eventually.
 ## Terminal answers OSC 10/11/12 colour queries
 
 **LIVE since the 2026-09-07 07:42 `make dev` — but NOT because it was committed.**
-The answering code is still uncommitted: `git show HEAD:src-tauri/src/terminal_grid.rs`
+The answering code is still uncommitted: `git show HEAD:src-tauri/crates/tuic-terminal/src/terminal_grid.rs`
 has `Event::ColorRequest(..)` in the **ignore list** and no `palette_color_for_index`
 at all. `make dev` builds the *working tree*, so the rebuilt binary contains it.
 
@@ -1106,13 +1400,13 @@ The code below is **working-tree code**, reviewed by inspection (ladder rungs
 1–2). It describes what will run once this is committed and rebuilt — not what
 runs now:
 
-- the reply is built at `terminal_grid.rs:196-202` and pushed as
+- the reply is built at `tuic-terminal/src/terminal_grid.rs:196-202` and pushed as
   `TermEvent::PtyWrite`, drained unconditionally on the chunk path at
   `pty.rs:5106-5119` — so it does NOT depend on a frontend being attached;
-- `palette_color_for_index` (`terminal_grid.rs:94-103`) resolves foreground,
+- `palette_color_for_index` (`tuic-terminal/src/terminal_grid.rs:94-103`) resolves foreground,
   background and cursor off a global `PALETTE` that always has a value, so the
   `None` branch cannot swallow a 10/11/12 query;
-- reply content is asserted by `terminal_grid.rs:2360-2415`.
+- reply content is asserted by `tuic-terminal/src/terminal_grid.rs:2360-2415`.
 
 **A live CLI probe of the reply was attempted and is NOT a usable check — do not
 retry it the obvious ways.** Two traps, both hit on 2026-09-07:
@@ -1593,7 +1887,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
 - [ ] [HUMAN] Copy a long Claude message out of the terminal and paste it into Slack:
   no `▎` gutter and no gutter NBSPs, while lists, blank lines, indentation, `:wave:`
   and the body spacing survive unchanged. The text itself is asserted by nine Rust
-  tests (`cargo nextest -E 'test(copied_selection)'`, `terminal_grid.rs:1687`); the
+  tests (`cargo nextest -E 'test(copied_selection)'`, `tuic-terminal/src/terminal_grid.rs:1687`); the
   paste is not. Tried twice from automation — `agent-browser clipboard read` fails
   with `Resource temporarily unavailable (os error 35)`.
 - [ ] [HUMAN] Drag a file out of the file browser onto Finder, and drop a large folder
@@ -1933,6 +2227,12 @@ Needs a `make dev` restart — these are Rust changes and `make dev` runs
    If `accounted_bytes` tracks the footprint, the named structure is the leak.
    If the footprint climbs far above `accounted_bytes`, the growth is outside
    `AppState` and the next suspect is the wry event-loop message queue.
+7. **Only app URLs become recovery targets.** After restarting `make dev`,
+   navigate among in-app routes, then verify that a blocked navigation to a
+   different localhost port or external host does not replace the URL returned
+   by `POST /debug/reload_webview`. The Rust origin guard is covered by
+   `webview_recovery::tests::recovery_keeps_the_last_app_url_when_other_documents_are_observed`;
+   this checks the native WebView path after rebuild.
 
 ## Workspace identity migration (725-b343) — needs a `make dev` restart
 
@@ -2291,7 +2591,7 @@ build`, or `tuic install-cli` after a `cargo build -p tuic-cli`).
 
 ## Stale-temp repository classifier + repair, and `TUIC_APP_INSTANCE` (story `763-d219`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-Both live in `src-tauri/src/config.rs` / `lib.rs` / `app_instance.rs`, so
+Both live in `src-tauri/src/config.rs` / `lib.rs` / `crates/tuic-core/src/app_instance.rs`, so
 neither is loaded by Vite HMR — `make dev` must be restarted (or `make build`
 for release) before any of this is observable.
 
@@ -2692,6 +2992,21 @@ build has the old behaviour until restart.
       own HTTP instance — creating a throwaway session, reporting, listing and
       deleting — rather than against the orchestrator on `:9876`.
 
+## TypeScript mutation tooling (story `944-15f3`, 2026-09-25)
+
+- [x] Run the narrow canary from `docs/guides/development-setup.md` and confirm
+      Stryker reports the `pathBasename` condition mutant as `Killed`, with at
+      least one Vitest test executed against it. _(verified: 2026-09-25;
+      `scripts/ts-mutants.mjs` on `pathUtils.ts:65-65` reported 6 Killed, 0
+      Survived, and 1.00 tests per mutant; JSON saved under
+      `~/Gits/.tmp/results/ts-mutation-gate/mutation.json`.)_
+- [ ] On the next changed TypeScript source/test pair, run the same scoped
+      command before using its mutation score as a story gate.
+- [ ] After the StoriesDialog dependency-removal change is present in this
+      checkout, run its targeted test through `scripts/ts-mutants.mjs` and
+      verify the previously false-surviving click-handler mutant is `Killed`
+      (story `944-15f3`).
+
 ## File pickers moved off `tauri-plugin-dialog` — needs a `make dev` restart
 
 The app died on 2026-09-18 when `+[NSOpenPanel openPanel]` returned NULL after
@@ -2994,6 +3309,10 @@ restart, not before.
       instead of being dropped entirely; the same for an intent long enough that
       the agent's own wrapping pushes the `(Title)` onto the next row. Prose is
       still rejected — `Ready when you are. intent: x` must NOT set a title.
+- [ ] **Needs a `make dev` restart (Rust).** In a 120-column agent tab, a long
+      `intent:` soft-wrapped across five rows still sets its final `(Title)` and
+      writes one truncated journal row. A following different intent must not
+      silently erase a previous titleless line ending in an unfinished `(`.
 
 ## Remote repo browser (2026-09-20) — frontend only, Vite HMR picks it up
 
@@ -3738,6 +4057,16 @@ or credential is touched.
       port 9877. _(verified 2026-09-22 from the worktree build; proof in
       `.tmp/visual-proof/remote-machines-fields.png`)_
 
+## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated test instance, connect the Installed-service
+      `aws-graviton` remote (56481148) over SSH. It should progress from
+      Connecting to Connected once the local forward listens and `/health`
+      answers, without an intermediate "installed daemon not answering" error.
+      Record the elapsed time and the tunnel status transitions. Use only the
+      configured host and credentials; the targeted Rust tests cover delayed
+      local ports and delayed health independently.
+
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting the desktop dev build, `GET http://127.0.0.1:9876/config/defaults`
@@ -3782,3 +4111,84 @@ or credential is touched.
 ## CircleCI failure logs — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting the worktree build, open a failed CircleCI check on a remote-only PR, including a PR with a failed GitHub Actions job. Its Log button shows only that CircleCI check's log and the end of a long failed step, with a truncation marker when the beginning was dropped; a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart.
+
+## Safe linked-worktree removal — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart.
+- [ ] After the same restart, confirm a forced removal with a dirty submodule, then change its HEAD before the request completes. Removal must stop with a changed-state message; retry after a fresh review. A clean merged submodule commit must remain accessible from the main checkout after removal.
+
+## Vite watcher scope and native reload attribution — needs a `make dev` restart
+
+- [ ] Restart `make dev` when live PTY sessions can be interrupted. In an isolated dev instance, create and delete a checkout with HTML files under repository `.tmp/`; verify document age continues increasing and no full reload occurs. Call `POST /debug/reload_webview` and verify the native log records caller address, trigger, action, and target URL while frontend startup records navigation type and document start. The Vite watch config and Rust backend require a restart to take effect.
+## Desktop Progress entry (2026-09-26)
+
+- [x] With zero unread Progress updates, open the toolbar bell and select Terminal Progress for the active repository. The bell badge remains absent; a new update restores the count. The command palette and `Cmd/Ctrl+Shift+P` open the same dialog. _(verified: targeted Toolbar, keyboard shortcut, and action registry tests; rendered bell screenshot at `~/Gits/.tmp/tuic-progress-entry/progress-bell.png`.)_
+
+## Ask Boss from the mobile PWA (2026-09-26) — Rust, needs a `make dev` restart
+
+- [ ] **[HUMAN]** After restarting the desktop app when its current PTY sessions can be interrupted, enable Remote Access and Tailscale HTTPS, then open the shown HTTPS `/mobile` URL on the phone. On iPhone, launch the installed Home Screen PWA. In mobile Settings, turn Push notifications off and on to replace the old subscription, grant permission, and confirm a test push appears on the phone. Do not change Tailscale/network configuration as part of this check.
+- [ ] **[HUMAN]** With the desktop window left focused but no Mac HID input for two minutes, have a managed agent report `progress type=blocked` with an identifiable question. Confirm one phone notification contains the question, opens that exact session, and one typed reply reaches it once. During a confident free-text question, leave an automated peer message queued: the phone answer must reach the question first and the peer message must remain parked until the question clears. Repeat with the desktop actively used: no duplicate push. The running app cannot load these Rust changes until restart.
+- [ ] **[HUMAN]** After the separate question-state change is integrated, trigger a real Claude AskUserQuestion with a visible title. Confirm the phone push contains that title rather than the hook's empty awaiting signal or an Ink footer, then answer it from the opened session.
+
+## PTY build environment — Rust, needs a `make dev` restart
+
+- [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart.
+- [ ] After restarting an isolated `make dev` build, open a new terminal and run `env | grep -E 'CARGO_INCREMENTAL|RUSTC_WRAPPER|^MBX_'`; expect no matches. In a managed agent PTY, check that `HOST_CC` and `HOST_CXX` are also unset. Confirm a configured per-agent `CARGO_INCREMENTAL=1` still reaches its PTY. The current Rust backend requires a restart before this can be checked.
+
+## Peer mail wake after Rust restart
+
+- [ ] After restarting an isolated `make dev` build, send a 10 KiB message to a disposable external Claude client subscribed to MCP SSE. Confirm the channel shows the sender UUID, message ID, size, and first-line preview without the body; `agent action=inbox` returns the complete message once. The running Rust backend cannot load this change until restart.
+- [ ] After restarting `make dev`, spawn one disposable agent through MCP
+      `agent action=spawn` and one through `POST /sessions/agent`. Confirm each
+      `GET /sessions` row reports `tuic_session` equal to its `session_id` before
+      the agent calls MCP, then close both sessions. The current backend cannot
+      load this Rust binding change until restart.
+- [ ] Restart the isolated `make dev` test instance and run
+      `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude`.
+      Confirm the disposable Claude PTY shows `PEER_MAIL_WAKE` within 20 seconds.
+      See `docs/guides/development-setup.md` for the instance setup; the Rust
+      change does not hot reload into the current process.
+- [ ] On that rebuilt isolated instance, run
+      `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude --capacity`.
+      Confirm mail 101 is accepted and returned after the first 100 were read.
+
+## Activity Dashboard window after Rust restart
+
+- [ ] After restarting an isolated `make dev` build, restore Activity Dashboard with saved geometry larger than 550×650. The detached OS window opens at 550×650 while retaining its saved position; a smaller saved size remains unchanged. The running Rust backend cannot load this fix until restart.
+
+## Rust dead-code warning cleanup after restart
+
+- [ ] On the next `make dev` Rust rebuild, confirm no dead-code warning names Design Mode `status`, `to_prompt`, or `on_script_parsed`, Progress `mark_viewed`, AppState `resolve_session_ref` or `resolve_peer_ref`, or StoryStore `transition`. The targeted test build has already compiled without these warnings; the current backend cannot hot reload the source change.
+
+## CLI build after Rust rebuild
+
+- [ ] After rebuilding `tuic`, verify `tuic repo worktree-list`, `worktree-create`, and `worktree-remove` still accept their existing names and `tuic agent spawn` accepts its positional prompt and launcher flags. The current binary does not hot reload the Rust CLI change.
+
+## Claude transcript activity after restart
+
+- [ ] After restarting `make dev` with the story 1121 Rust build, put a throwaway Claude session in detailed transcript view after a hook idle, then deliver a peer mail wake. If Claude does not begin a turn, confirm the session returns to idle after the five-minute stale submission window and the app log contains both shell transitions. The current running backend cannot load this Rust change without a restart.
+
+## WebView reload resource cleanup — Rust, needs a `make dev` restart
+
+- [ ] After restarting an isolated `make dev` instance, open two desktop terminal panes and register a plugin output watcher. Reload the main WebView, then inspect `/diagnostics/memory`: the old document's grid channels, gates and output watcher clients must be gone before the panes remount. Leave one pane unmounted; it must produce no desktop `grid frame gate stuck` warnings. Two minutes later, a 30-second app-log window must contain no `Couldn't find callback id` or `Output watcher clients exceeded 8` warnings. The running backend cannot load this Rust change until restart.
+- [ ] Detach a terminal into a floating window, reload the main WebView, and confirm the floating terminal keeps painting. Close the floating window and confirm its grid subscription disappears while terminals in the main window keep painting.
+
+## Mobile ego chat (story 1077-0c08) — real phone after `make dev`
+
+- [ ] [HUMAN] After restarting the test instance with `make dev`, open its HTTPS `/mobile` URL on a real phone. In Chat, choose a disposable repository and send a prompt; confirm the answer and collapsed tool activity remain readable above the keyboard. Disconnect and reconnect the phone, then confirm the answer has no duplicate or missing lines. Start a permission request, tap one option twice, and confirm the desktop conversation records one answer. Start a second conversation, then use the titled picker to return to the first and confirm its history loads. This check requires real touch and mobile keyboard behavior; targeted Vitest covers the module behavior.
+
+## Detached Markdown document window
+
+- [ ] After restarting an isolated test build, open a Markdown file tab and a `tuic://open` Markdown tab. Detach each from its context menu, resize the document window, edit each file on disk, and confirm the detached content updates. Clicking either tab should focus its window; closing the window should restore the document in the tab. Check an inline comment and a relative Markdown link in the detached view.
+
+## ACP mobile interaction push (story 1078-05cf) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, subscribe a phone to push. With desktop unfocused, have ego ask permission or a form question and confirm one notification opens mobile Chat. Answer the next request on desktop before delivery and confirm no stale notification; ordinary activity must not notify. The running backend cannot load this Rust change until restart.
+
+## Push-to-talk Italian hallucination filter — Rust restart required
+
+- [ ] After restarting `make dev`, use a disposable terminal to verify that a bare “Grazie a tutti.” recognition does not reach the composer, while a genuine instruction containing those words does. The current backend cannot load the Rust change until restart. The sustained-speech activity gate remains pending real quiet-speech recordings (story 1135-b600).
+
+## MCP initialize storm — Rust restart required (#1148-c25f)
+
+- [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.

@@ -98,7 +98,9 @@ fi
 choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
 case "$choice" in
   e|edit)
-    TMPFILE=$(mktemp /tmp/release-notes-XXXXXX.txt)
+    mkdir -p .tmp
+    TMPFILE=$(mktemp .tmp/release-notes-XXXXXX.txt)
+    trap 'rm -f "$TMPFILE"' EXIT
     echo "$NOTES" > "$TMPFILE"
     ${EDITOR:-vim} "$TMPFILE"
     NOTES=$(cat "$TMPFILE")

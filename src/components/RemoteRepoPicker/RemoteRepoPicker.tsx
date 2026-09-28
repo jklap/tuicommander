@@ -1,7 +1,7 @@
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
-import { rpc } from "../../transport";
+import { HttpRpcError, rpc } from "../../transport";
 import type { DirEntry } from "../../types/fs";
 import d from "../shared/dialog.module.css";
 import s from "./RemoteRepoPicker.module.css";
@@ -70,7 +70,11 @@ export const RemoteRepoPicker: Component<RemoteRepoPickerProps> = (props) => {
 			// The message is the daemon's own. A path that is not there and a
 			// machine that stopped answering are different failures, and the user
 			// can only tell them apart if we do not rewrite them.
-			setError(e instanceof Error ? e.message : String(e));
+			// Keep the attempted location so Up can escape even when its first
+			// directory listing was denied.
+			setCwd(path);
+			setDraft(path);
+			setError(e instanceof HttpRpcError ? e.detail : e instanceof Error ? e.message : String(e));
 			setEntries([]);
 		} finally {
 			setLoading(false);
@@ -79,8 +83,22 @@ export const RemoteRepoPicker: Component<RemoteRepoPickerProps> = (props) => {
 
 	createEffect(() => {
 		if (!props.visible) return;
-		const start = lastVisited.get(props.connectionId) ?? "/";
-		void load(start);
+		const connectionId = props.connectionId;
+		const remembered = lastVisited.get(connectionId);
+		if (remembered) {
+			void load(remembered);
+			return;
+		}
+		setLoading(true);
+		void rpc<string>("get_home_directory", {}, connectionId)
+			.then((home) => {
+				if (props.visible && props.connectionId === connectionId) void load(home);
+			})
+			.catch((e) => {
+				if (!props.visible || props.connectionId !== connectionId) return;
+				setError(`Could not find this machine's home directory: ${e instanceof HttpRpcError ? e.detail : String(e)}`);
+				setLoading(false);
+			});
 	});
 
 	createEffect(() => {

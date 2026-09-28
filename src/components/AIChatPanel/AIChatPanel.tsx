@@ -1,10 +1,17 @@
-import { type Component, createMemo, Show } from "solid-js";
+import { emitTo } from "@tauri-apps/api/event";
+import { type Component, createEffect, createMemo, For, Show } from "solid-js";
+import { invoke } from "../../invoke";
+import { acpTranscript } from "../../stores/acpTranscript";
+import { appLogger } from "../../stores/appLogger";
+import { isTauri } from "../../transport";
 import { cx } from "../../utils";
+import { openTerminalFilePath } from "../../utils/filePreview";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import s from "./AIChatPanel.module.css";
 import { Composer } from "./Composer";
+import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
 import { SessionControls } from "./SessionControls";
 import { Transcript } from "./Transcript";
@@ -46,6 +53,46 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	// looking at, not on the repository's main checkout.
 	const root = createMemo(() => props.fsRoot || props.repoPath || null);
 	const chat = createAcpChat(root, () => props.visible);
+	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
+	const keyDown = (event: KeyboardEvent) => {
+		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
+		const key = event.key.toLowerCase();
+		if (key === "t" && (isTauri() || event.altKey)) {
+			event.preventDefault();
+			event.stopPropagation();
+			void chat.startSession();
+		} else if (key === "w" && (isTauri() || event.altKey) && chat.sessionId()) {
+			event.preventDefault();
+			event.stopPropagation();
+			void chat.closeTab(chat.sessionId() as string);
+		}
+	};
+	const openFile = async (href: string) => {
+		const cwd = root();
+		if (!cwd) return;
+		try {
+			const resolved = await invoke<{ absolute_path: string } | null>("resolve_terminal_path", {
+				cwd,
+				candidate: href,
+			});
+			if (resolved) {
+				const position = href.match(/:(\d+)(?::(\d+))?$/);
+				const line = position ? Number(position[1]) : undefined;
+				const col = position?.[2] ? Number(position[2]) : undefined;
+				if (isPanelMode() && isTauri()) {
+					await emitTo("main", "panel-action", {
+						panelId: "ai-chat",
+						action: "open-file",
+						data: { path: resolved.absolute_path, ...(line ? { line } : {}), ...(col ? { col } : {}) },
+					});
+					await invoke("focus_main_window");
+				} else if (line) openTerminalFilePath(resolved.absolute_path, undefined, line, col);
+				else openTerminalFilePath(resolved.absolute_path);
+			}
+		} catch (error) {
+			appLogger.error("ai-chat", "Failed to resolve file link", error);
+		}
+	};
 
 	const emptyMessage = () => {
 		switch (chat.phase()) {
@@ -61,7 +108,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	};
 
 	return (
-		<div id="ai-chat-panel" class={cx(s.panel, !props.visible && s.hidden)}>
+		<div id="ai-chat-panel" class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
 			<PanelResizeHandle panelId="ai-chat-panel" minWidth={300} maxWidth={700} />
 
 			<div class={p.header}>
@@ -82,6 +129,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						AI Chat
 					</span>
 					<Show when={root()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
+					<Show when={chat.title()}>{(title) => <span class={s.terminalName}>{title()}</span>}</Show>
 				</div>
 				<div class={s.headerActions}>
 					<PanelWindowControls
@@ -91,6 +139,49 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					/>
 				</div>
 			</div>
+			<Show when={chat.tabs().length > 0}>
+				<div class={s.chatTabs} role="tablist" aria-label="AI Chat tabs">
+					<For each={chat.tabs()}>
+						{(session, index) => (
+							<div class={cx(s.chatTab, chat.sessionId() === session && s.chatTabActive)}>
+								<button
+									type="button"
+									role="tab"
+									data-chat-session={session}
+									aria-selected={chat.sessionId() === session}
+									onClick={() => void chat.selectSession(session)}
+								>
+									{acpTranscript.title(session) ||
+										chat.sessions().find((item) => item.sessionId === session)?.title ||
+										`Chat ${index() + 1}`}
+								</button>
+								<Show when={chat.tabs().length > 1}>
+									<button
+										type="button"
+										aria-label={`Close chat tab ${session}`}
+										onClick={() => void chat.closeTab(session)}
+									>
+										<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+											<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
+										</svg>
+									</button>
+								</Show>
+							</div>
+						)}
+					</For>
+					<button
+						type="button"
+						class={s.newChatTab}
+						aria-label="New chat tab"
+						title="New chat tab (⌘T)"
+						onClick={() => void chat.startSession()}
+					>
+						<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+							<path d="M6.4 1h1.2v5.4H13v1.2H7.6V13H6.4V7.6H1V6.4h5.4z" />
+						</svg>
+					</button>
+				</div>
+			</Show>
 
 			{/* A gap is not a transport hiccup: the journal no longer holds the
 			    sequence this window asked for, so the conversation on screen has a
@@ -130,7 +221,17 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				<SessionControls chat={chat} />
 			</Show>
 
-			<Transcript entries={chat.entries} busy={chat.busy} emptyMessage={emptyMessage()}>
+			<Transcript
+				entries={chat.entries}
+				busy={chat.busy}
+				emptyMessage={emptyMessage()}
+				onSuggestion={(text) => void chat.send(text)}
+				onOpenFile={(href) => void openFile(href)}
+				onClear={() => {
+					const session = chat.sessionId();
+					if (session) acpTranscript.clear(session);
+				}}
+			>
 				<Interactions
 					interactions={chat.interactions}
 					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}
@@ -145,6 +246,20 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 
 			<Show when={chat.phase() === "live"}>
 				<Composer chat={chat} />
+			</Show>
+			<Show when={chat.usage()}>
+				{(usage) => (
+					<div class={s.usageFooter}>
+						<span>Context {Math.round((usage().used / usage().size) * 100)}%</span>
+						<Show when={usage().cost}>
+							{(cost) => (
+								<span>
+									{cost().currency} {cost().amount}
+								</span>
+							)}
+						</Show>
+					</div>
+				)}
 			</Show>
 		</div>
 	);

@@ -8,6 +8,7 @@ pub(super) struct HealthResponse {
     pub uptime_secs: u64,
     pub session_count: usize,
     pub protocol_version: u32,
+    pub build: Option<&'static crate::remote_deploy::assets::BuildIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub survive_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,6 +50,10 @@ pub(crate) struct SessionInfo {
     /// reload: `term-alias-assigned` fires once, at spawn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// Live agent identity bound to this PTY; differs from session_id for a
+    /// locally launched tab that registered its own TUIC_SESSION.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tuic_session: Option<String>,
     /// Session (or `$TUIC_SESSION`) of the agent that spawned this one. Published
     /// once on `session-created`, so a reload or a late browser client needs it
     /// here. Never a `pending-mcp:` placeholder: no tab can match one.
@@ -238,6 +243,7 @@ pub(super) struct PostPrReviewRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SpawnAgentRequest {
     pub rows: Option<u16>,
     pub cols: Option<u16>,
@@ -249,6 +255,17 @@ pub(super) struct SpawnAgentRequest {
     pub agent_type: Option<String>,
     pub binary_path: Option<String>,
     pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PrepareAgentLaunchArgsRequest {
+    pub agent_type: String,
+    pub binary_path: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -268,14 +285,20 @@ pub(super) struct CreateWorktreeRequest {
 pub(super) struct RemoveWorktreeQuery {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
-    /// When true, also delete the local branch. Defaults to true.
+    /// When true, also delete the local branch. Defaults to true unless force is true.
     #[serde(rename = "deleteBranch", default)]
     pub delete_branch: Option<bool>,
-    /// When true, force-remove a locked worktree (mirrors the desktop
-    /// confirmation dialog). Also switches the branch deletion from `git
-    /// branch -d` (safe) to `-D` (force). Defaults to false.
+    /// Permit discarding dirty workspace files. Does not override a lock or
+    /// bypass branch deletion proof.
     #[serde(default)]
     pub force: Option<bool>,
+    /// Explicit confirmation to remove a locked worktree.
+    #[serde(rename = "overrideLock", default)]
+    pub override_lock: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
+    #[serde(rename = "confirmMissingCheckout", default)]
+    pub confirm_missing_checkout: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -440,6 +463,14 @@ pub(super) struct FsResolveTerminalPathsRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FsResolveMarkdownLinkRequest {
+    pub root: String,
+    pub current_file: String,
+    pub href: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsWarmIndexRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
@@ -482,6 +513,8 @@ pub(super) struct FinalizeMergeRequest {
     /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
     #[serde(default)]
     pub force: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
 }
 
 /// One workspace, addressed by id, for the read-only queries.
@@ -535,6 +568,8 @@ pub(super) struct MergeArchiveRequest {
     /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
     #[serde(default)]
     pub force: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]

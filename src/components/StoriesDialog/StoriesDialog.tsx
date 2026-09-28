@@ -15,6 +15,10 @@ interface Plan {
 	title: string;
 	source: string;
 }
+interface PlanSource {
+	title: string;
+	source: string;
+}
 type Status = "backlog" | "ready" | "in_progress" | "review" | "done" | "blocked" | "wontfix";
 interface Story {
 	id: string;
@@ -34,6 +38,7 @@ interface Story {
 type Reply =
 	| { type: "plan"; value: Plan }
 	| { type: "plans"; value: Plan[] }
+	| { type: "plan_sources"; value: PlanSource[] }
 	| { type: "plan_state"; value: "draft" | "active" | "done" }
 	| {
 			type: "plan_view";
@@ -104,6 +109,7 @@ export interface StoriesDialogProps {
 export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	registerModal(props.onClose);
 	const [plans, setPlans] = createSignal<Plan[]>([]);
+	const [planSources, setPlanSources] = createSignal<PlanSource[]>([]);
 	const [stories, setStories] = createSignal<Story[]>([]);
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
@@ -114,6 +120,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [newPlan, setNewPlan] = createSignal(false);
+	const [sourcesLoading, setSourcesLoading] = createSignal(false);
 	const [newStory, setNewStory] = createSignal(false);
 	const [planTitle, setPlanTitle] = createSignal("");
 	const [planSource, setPlanSource] = createSignal("");
@@ -276,6 +283,12 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			await ensureCapabilities();
 			const list = await call({ action: "list_plans" });
 			if (list.type !== "plans") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
+			let available: PlanSource[] | undefined;
+			if (list.value.length === 0) {
+				const sources = await call({ action: "list_plan_sources" });
+				if (sources.type !== "plan_sources") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
+				available = sources.value;
+			}
 			const nextPlan = list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null;
 			let nextStories: Story[] = [];
 			let nextState = "draft";
@@ -290,6 +303,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				nextAllCancelled = view.value.allCancelled;
 			}
 			if (current !== request) return;
+			if (available) {
+				setPlanSources(available);
+				if (available.length > 0) setNewPlan(true);
+			}
 			setPlans(list.value);
 			setPlanId(nextPlan);
 			setStories(nextStories);
@@ -325,20 +342,40 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	async function createPlan(event: Event): Promise<void> {
 		event.preventDefault();
-		const result = await callMutationPlan();
+		const source = planSource().trim();
+		const result = await addPlanSource(source, /^https?:\/\//i.test(source) ? planTitle().trim() : undefined);
 		if (result) {
 			setNewPlan(false);
 			setPlanTitle("");
 			setPlanSource("");
 		}
 	}
-	async function callMutationPlan(): Promise<boolean> {
+	async function loadPlanSources(): Promise<void> {
+		setSourcesLoading(true);
+		setError("");
+		try {
+			const reply = await call({ action: "list_plan_sources" });
+			if (reply.type !== "plan_sources") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
+			setPlanSources(reply.value);
+		} catch (cause) {
+			fail(cause);
+		} finally {
+			setSourcesLoading(false);
+		}
+	}
+	async function addPlanSource(source: string, linkTitle?: string): Promise<boolean> {
 		setBusy(true);
 		setError("");
 		try {
-			const reply = await call({ action: "create_plan", title: planTitle().trim(), source: planSource().trim() });
+			const reply = await call(
+				linkTitle === undefined
+					? { action: "add_plan_source", source }
+					: { action: "create_plan", title: linkTitle, source },
+			);
 			if (reply.type !== "plan") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			await refresh(reply.value.id, null);
+			setPlanSources((sources) => sources.filter((candidate) => candidate.source !== source));
+			setNewPlan(false);
 			return true;
 		} catch (cause) {
 			fail(cause);
@@ -507,7 +544,13 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					<aside class={s.planColumn} aria-label={t("stories.plans", "Plans")}>
 						<div class={s.columnHeader}>
 							<h3>{t("stories.plans", "Plans")}</h3>
-							<button type="button" onClick={() => setNewPlan(!newPlan())}>
+							<button
+								type="button"
+								onClick={() => {
+									if (!newPlan()) void loadPlanSources();
+									setNewPlan(!newPlan());
+								}}
+							>
 								{t("stories.newPlan", "New plan")}
 							</button>
 						</div>
@@ -519,24 +562,52 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 							</p>
 						</Show>
 						<Show when={newPlan()}>
-							<form class={s.form} onSubmit={(event) => void createPlan(event)}>
-								<label>
-									{t("stories.titleLabel", "Title")}
-									<input
-										required
-										maxlength="200"
-										value={planTitle()}
-										onInput={(event) => setPlanTitle(event.currentTarget.value)}
-									/>
-								</label>
-								<label>
-									{t("stories.planSource", "Plan document or link")}
-									<input required value={planSource()} onInput={(event) => setPlanSource(event.currentTarget.value)} />
-								</label>
-								<button type="submit" disabled={busy()}>
-									{t("stories.createPlan", "Create plan")}
-								</button>
-							</form>
+							<div class={s.form}>
+								<div class={s.sourceHeader}>
+									<span>{t("stories.existingPlans", "Plans in this project")}</span>
+									<button type="button" disabled={sourcesLoading()} onClick={() => void loadPlanSources()}>
+										{t("stories.refreshPlans", "Refresh")}
+									</button>
+								</div>
+								<Show when={sourcesLoading()}>
+									<span>{t("stories.loading", "Loading plans and stories…")}</span>
+								</Show>
+								<For each={planSources().filter((source) => !plans().some((plan) => plan.source === source.source))}>
+									{(candidate) => (
+										<button type="button" disabled={busy()} onClick={() => void addPlanSource(candidate.source)}>
+											{candidate.title}
+											<small>{candidate.source}</small>
+										</button>
+									)}
+								</For>
+								<details>
+									<summary>{t("stories.addFromPath", "Add from path or link")}</summary>
+									<form class={s.manualForm} onSubmit={(event) => void createPlan(event)}>
+										<label>
+											{t("stories.planSource", "Plan document or link")}
+											<input
+												required
+												value={planSource()}
+												onInput={(event) => setPlanSource(event.currentTarget.value)}
+											/>
+										</label>
+										<Show when={/^https?:\/\//i.test(planSource())}>
+											<label>
+												{t("stories.titleLabel", "Title")}
+												<input
+													required
+													maxlength="200"
+													value={planTitle()}
+													onInput={(event) => setPlanTitle(event.currentTarget.value)}
+												/>
+											</label>
+										</Show>
+										<button type="submit" disabled={busy()}>
+											{t("stories.createPlan", "Create plan")}
+										</button>
+									</form>
+								</details>
+							</div>
 						</Show>
 						<Show when={!loading() && plans().length === 0}>
 							<p class={s.empty}>{t("stories.emptyPlans", "Create a plan to begin.")}</p>
@@ -758,11 +829,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											</button>
 										</Show>
 										<Show when={story().status === "review"}>
-											<Show when={isTauri()} fallback={<span class={s.muted}>Approval requires the desktop app.</span>}>
-												<button type="button" disabled={busy()} onClick={() => transition("approve")}>
-													{t("stories.approve", "Approve")}
-												</button>
-											</Show>
+											<button type="button" disabled={busy()} onClick={() => transition("approve")}>
+												{t("stories.approve", "Approve")}
+											</button>
 											<button type="button" disabled={busy()} onClick={() => transition("reject_review")}>
 												{t("stories.requestChanges", "Request changes")}
 											</button>

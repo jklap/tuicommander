@@ -82,13 +82,25 @@ export interface HttpMapping {
 }
 
 export class HttpRpcError extends Error {
+	public readonly detail: string;
+
 	constructor(
 		public readonly command: string,
 		public readonly status: number,
-		body: string,
+		public readonly body: string,
 	) {
 		super(`RPC ${command} failed: ${status} ${body}`);
 		this.name = "HttpRpcError";
+		let detail = body;
+		try {
+			const parsed: unknown = JSON.parse(body);
+			if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") {
+				detail = parsed.error;
+			}
+		} catch {
+			// Plain-text HTTP errors already carry their useful message in body.
+		}
+		this.detail = detail;
 	}
 }
 
@@ -179,7 +191,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				: "/dictation/speech/status",
 		}),
 	},
-	start_dictation: { map: () => ({ method: "POST", path: "/dictation/start" }) },
+	start_dictation: { map: (args) => ({ method: "POST", path: "/dictation/start", body: { source: args.source } }) },
 	stop_dictation_and_transcribe: { map: () => ({ method: "POST", path: "/dictation/stop" }) },
 	get_correction_map: { map: () => ({ method: "GET", path: "/dictation/corrections" }) },
 	set_correction_map: {
@@ -343,6 +355,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/cancel`,
 		}),
 	},
+	acp_queued_prompt_cancel: {
+		map: (_args, p) => ({
+			method: "DELETE",
+			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/queue/${p("turnId")}`,
+		}),
+	},
 	acp_session_set_config_option: {
 		map: (args, p) => ({
 			method: "POST",
@@ -438,6 +456,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/sessions/${args.sessionId ?? args.id}/write`,
 			body: { data: args.data },
+		}),
+	},
+	submit_agent_reply: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${encodeURIComponent(String(args.sessionId))}/submit`,
+			body: { input: args.input },
 		}),
 	},
 	// Not `write_pty` with the parts joined: the backend runs its per-input
@@ -688,7 +713,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_process_stats: { map: () => ({ method: "GET", path: "/process/stats" }) },
 
 	// --- Claude Usage dashboard ---
-	get_claude_usage_api: { map: () => ({ method: "GET", path: "/claude/usage" }) },
+	get_claude_usage_api: {
+		map: (args, p) => ({
+			method: "GET",
+			path: args.sessionId == null ? "/claude/usage" : `/claude/usage?sessionId=${p("sessionId")}`,
+		}),
+	},
 	get_claude_project_list: { map: () => ({ method: "GET", path: "/claude/projects" }) },
 	get_codex_usage_api: { map: () => ({ method: "GET", path: "/codex/usage" }) },
 	get_codex_usage_stats: { map: () => ({ method: "GET", path: "/codex/stats" }) },
@@ -795,6 +825,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	progress_list: {
 		map: (args, p) => ({ method: "POST", path: `/progress/list?path=${p("project")}`, body: args.input }),
 	},
+	progress_projects: { map: () => ({ method: "GET", path: "/progress/projects" }) },
 	story_action_command: {
 		map: (args, p) => ({
 			method: "POST",
@@ -1023,6 +1054,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				targetBranch: args.targetBranch,
 				afterMerge: args.afterMerge,
 				force: args.force,
+				...(args.expectedFingerprint ? { expectedFingerprint: args.expectedFingerprint } : {}),
 			},
 		}),
 	},
@@ -1488,9 +1520,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	remove_worktree: {
 		map: (args, p) => {
 			const force = args.force === true ? "&force=true" : "";
+			const overrideLock = args.overrideLock === true ? "&overrideLock=true" : "";
+			const expectedFingerprint = args.expectedFingerprint ? `&expectedFingerprint=${p("expectedFingerprint")}` : "";
+			const confirmMissingCheckout = args.confirmMissingCheckout === true ? "&confirmMissingCheckout=true" : "";
+			const deleteBranch = args.deleteBranch ?? args.force !== true;
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${args.deleteBranch ?? true}${force}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}${confirmMissingCheckout}`,
 			};
 		},
 	},
@@ -1510,6 +1546,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				workspaceId: args.workspaceId,
 				action: args.action,
 				force: args.force,
+				...(args.expectedFingerprint ? { expectedFingerprint: args.expectedFingerprint } : {}),
 			},
 		}),
 	},
@@ -1663,7 +1700,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/agents/verify-session",
-			body: { agentType: args.agentType, sessionId: args.sessionId, cwd: args.cwd },
+			body: {
+				agentType: args.agentType,
+				sessionId: args.sessionId,
+				cwd: args.cwd,
+				agentPid: args.agentPid,
+				envOverrides: args.envOverrides,
+			},
 		}),
 	},
 	detect_agents: { map: () => ({ method: "GET", path: "/agents" }) },
@@ -1672,6 +1715,17 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	detect_agent_binary: {
 		map: (_args, p) => ({ method: "GET", path: `/agents/detect?binary=${p("binary")}` }),
+	},
+	prepare_agent_launch_args: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agents/launch-args",
+			body: {
+				agentType: args.agentType,
+				binaryPath: args.binaryPath,
+				args: args.args,
+			},
+		}),
 	},
 	detect_claude_binary: {
 		map: () => ({
@@ -1693,7 +1747,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return {
 				method: "POST",
 				path: "/sessions/agent",
-				body: { ...ptyConfig, ...agentConfig },
+				body: {
+					rows: ptyConfig.rows,
+					cols: ptyConfig.cols,
+					cwd: agentConfig.cwd ?? ptyConfig.cwd,
+					env: ptyConfig.env,
+					prompt: agentConfig.prompt,
+					model: agentConfig.model,
+					print_mode: agentConfig.print_mode,
+					output_format: agentConfig.output_format,
+					agent_type: agentConfig.agent_type,
+					binary_path: agentConfig.binary_path,
+					args: agentConfig.args,
+				},
 				transform: (data) => {
 					if (isRecord(data) && typeof data.session_id === "string") return data.session_id;
 					throw new Error("spawn_agent HTTP response missing session_id");
@@ -1726,6 +1792,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Network ---
 	get_local_ip: { map: () => ({ method: "GET", path: "/system/local-ip" }) },
 	get_local_ips: { map: () => ({ method: "GET", path: "/system/local-ips" }) },
+	get_home_directory: { map: () => ({ method: "GET", path: "/system/home-directory" }) },
 
 	// --- File browser ---
 	list_directory: {
@@ -1808,6 +1875,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: "/fs/resolve-terminal-paths",
 			body: { cwd: args.cwd, candidates: args.candidates },
+		}),
+	},
+	resolve_markdown_link: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/resolve-markdown-link",
+			body: { root: args.root, currentFile: args.currentFile, href: args.href },
 		}),
 	},
 	stat_path: {
@@ -1901,6 +1975,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// there, so these three are the whole client surface (#790-ef85).
 	remote_connection_statuses: {
 		map: () => ({ method: "GET", path: "/config/remote-connections/status" }),
+	},
+	prepare_remote_update: {
+		map: (_args, p) => ({ method: "GET", path: `/config/remote-connections/${p("id")}/update` }),
+	},
+	update_and_restart_remote: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/update`,
+			body: {
+				confirmedSessions: args.confirmedSessions,
+				expectedSha256: args.expectedSha256,
+			},
+		}),
 	},
 	connect_remote_connection: {
 		map: (_args, p) => ({ method: "POST", path: `/config/remote-connections/${p("id")}/connect` }),

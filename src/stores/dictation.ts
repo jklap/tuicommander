@@ -855,10 +855,10 @@ function createDictationStore() {
 		},
 
 		/** Start recording (sets loading=true while model initializes on first use) */
-		async startRecording(): Promise<void> {
+		async startRecording(source = "ui"): Promise<void> {
 			setState("loading", true);
 			try {
-				await invoke("start_dictation");
+				await invoke("start_dictation", { source });
 				setState("recording", true);
 				setState("audioLevel", 0);
 				startAudioLevelPolling();

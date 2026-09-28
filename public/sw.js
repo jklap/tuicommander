@@ -67,12 +67,15 @@ self.addEventListener("push", (event) => {
     }
   }
   const title = data.title || "TUICommander";
+  const url = data.url || "/mobile";
+  const sessionId = /^\/mobile\/session\/([^/?#]+)\/?(?:[?#]|$)/.exec(url)?.[1];
+  const chatSessionId = /(?:[?&])session=([^&#]+)/.exec(url)?.[1];
   const options = {
     body: data.body || "",
     icon: "/mobile-icon.svg?v=2",
     badge: "/mobile-icon.svg?v=2",
-    data: { url: data.url || "/mobile" },
-    tag: "tuic-push",
+    data: { url },
+    tag: sessionId ? `tuic-session-${sessionId}` : chatSessionId ? `tuic-acp-${chatSessionId}` : "tuic-push",
     renotify: true,
   };
   event.waitUntil(self.registration.showNotification(title, options));
@@ -194,4 +197,3 @@ const OFFLINE_SPLASH_HTML = `<!DOCTYPE html>
 </script>
 </body>
 </html>`;
-

@@ -75,6 +75,16 @@ pub(crate) fn mirrored_rows(state: &AppState) -> Vec<SessionInfo> {
         .collect()
 }
 
+/// The daemon that owns a mirrored PTY, if the session is still advertised.
+pub(crate) fn owner_connection(state: &AppState, session_id: &str) -> Option<String> {
+    state
+        .remote_sessions
+        .by_connection
+        .iter()
+        .find(|entry| entry.value().contains_key(session_id))
+        .map(|entry| entry.key().clone())
+}
+
 /// Replace one connection's rows with what its daemon just reported.
 ///
 /// A replace rather than a merge: the daemon's answer is the whole truth about
@@ -754,7 +764,12 @@ mod tests {
     /// bus still carries everything.
     #[test]
     fn only_safe_mirrored_events_reach_the_desktop_window() {
-        for event in ["session-state-changed", "session-closed", "progress-recorded", "workflow-run-changed"] {
+        for event in [
+            "session-state-changed",
+            "session-closed",
+            "progress-recorded",
+            "workflow-run-changed",
+        ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
         for event in [

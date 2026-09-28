@@ -668,8 +668,8 @@ mod tests {
         // stdout text is not asserted (macOS /bin/sh may normalise trailing
         // quote artefacts); the security invariant we care about is that the
         // injected `touch` never executed.
-        let marker = std::env::temp_dir().join("tuictest_prompt_shell_safe_inject");
-        let _ = std::fs::remove_file(&marker);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let marker = scratch.path().join("tuictest_prompt_shell_safe_inject");
         let mut vars = HashMap::new();
         vars.insert(
             "branch".into(),

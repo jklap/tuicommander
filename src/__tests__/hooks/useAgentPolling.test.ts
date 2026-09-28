@@ -67,6 +67,20 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.nameIsCustom).toBe(true);
 	});
 
+	it("keeps backend semantic activity time when PTY output is more recent", async () => {
+		const id = store.add(makeTerminal({ name: "Codex", sessionId: "sess-1" }));
+		const now = Date.now();
+		store.touchLastDataAt(id, now - 30_000);
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle", last_activity_ms: now - 70 * 60_000 } },
+		]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.lastActivityAt).toBe(now - 70 * 60_000);
+		expect(store.getLastDataAt(id)).toBe(now - 30_000);
+	});
+
 	it("tracks the queued-command depth, treating an omitted field as an empty queue", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([

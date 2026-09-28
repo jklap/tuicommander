@@ -2,11 +2,25 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_TEXT_CHARS: usize = 500;
 pub const MAX_STEP_CHARS: usize = 80;
+pub const MAX_NAME_CHARS: usize = 80;
 
-/// Newest entries returned by one `list`. There is no cursor and no paging: a
-/// multi-hour session yields tens of entries, so the cap exists to bound a
-/// pathological history, not to be paged through.
+pub(crate) fn bounded_name(name: &str) -> Option<String> {
+    let redacted = crate::redaction::redact_secrets(name);
+    let trimmed = redacted.trim();
+    (!trimmed.is_empty()).then(|| {
+        trimmed
+            .chars()
+            .take(MAX_NAME_CHARS)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    })
+}
+
+/// Maximum number of entries rendered by the Flow view.
 pub const LIST_LIMIT: usize = 500;
+pub const DEFAULT_PAGE_LIMIT: usize = 10;
+pub const MAX_PAGE_LIMIT: usize = 100;
 
 /// What a journal entry is.
 ///
@@ -29,6 +43,14 @@ pub enum ProgressKind {
 }
 
 impl ProgressKind {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Done,
+        Self::Blocked,
+        Self::Intent,
+        Self::Delegated,
+        Self::Message,
+    ];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Done => "done",
@@ -42,14 +64,10 @@ impl ProgressKind {
     /// Parse a kind read back from the database. Accepts the kinds the host
     /// writes; use [`ProgressKind::parse_reportable`] for caller input.
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "done" => Ok(Self::Done),
-            "blocked" => Ok(Self::Blocked),
-            "intent" => Ok(Self::Intent),
-            "delegated" => Ok(Self::Delegated),
-            "message" => Ok(Self::Message),
-            other => Err(format!("unknown progress type '{other}'")),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+            .ok_or_else(|| format!("unknown progress type '{value}'"))
     }
 
     /// Parse a kind an agent may report. A host-written kind is refused here
@@ -109,11 +127,7 @@ impl NewProgressEntry {
     }
 
     pub(crate) fn trimmed_agent_name(&self) -> Option<String> {
-        self.agent_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+        self.agent_name.as_deref().and_then(bounded_name)
     }
 }
 
@@ -165,6 +179,8 @@ pub struct ProgressEntry {
 pub struct ProgressList {
     pub project: String,
     pub entries: Vec<ProgressEntry>,
+    pub total: usize,
+    pub next_cursor: Option<i64>,
     pub pty_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_viewed_ms: Option<u64>,
@@ -179,6 +195,12 @@ pub struct ProgressListInput {
     /// None includes every terminal in the project.
     #[serde(default)]
     pub pty_id: Option<String>,
+    /// Number of entries per page; clamped to 1..=MAX_PAGE_LIMIT.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Return entries older than this id.
+    #[serde(default)]
+    pub cursor: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -314,6 +336,15 @@ mod tests {
                 HAND_OFF_IS_NOT_REPORTABLE
             );
             assert_eq!(ProgressKind::parse(kind).unwrap().as_str(), kind);
+        }
+    }
+
+    #[test]
+    fn every_stored_kind_is_in_the_list_used_by_progress_queries() {
+        let names = ProgressKind::ALL.map(ProgressKind::as_str);
+        assert_eq!(names, ["done", "blocked", "intent", "delegated", "message"]);
+        for kind in ProgressKind::ALL {
+            assert_eq!(ProgressKind::parse(kind.as_str()), Ok(kind));
         }
     }
 

@@ -15,8 +15,8 @@ use std::sync::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// `$TUIC_SESSION` inherited from the parent agent PTY, read once at startup.
-/// `None` when the bridge runs outside a TUIC-managed PTY (e.g. a bare CLI).
+/// `$TUIC_SESSION` inherited from a parent PTY agent or supplied by the ACP
+/// host for ego, read once at startup. `None` for a bare standalone CLI.
 static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
@@ -33,6 +33,9 @@ const MCP_WAIT_MAX_MS: u64 = 300_000;
 const MCP_WAIT_RESPONSE_MARGIN_MS: u64 = 5_000;
 /// How long in-flight requests may keep running after stdin closes.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Retry slowly enough that a failed endpoint cannot be hammered by queued requests.
+const RECONNECT_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+const RECONNECT_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
 fn wait_timeout_ms(request: &Value) -> Option<u64> {
     let name = request.pointer("/params/name").and_then(Value::as_str)?;
@@ -282,8 +285,8 @@ async fn connect_ipc() -> Result<IpcStream, String> {
 // ---------------------------------------------------------------------------
 
 /// HTTP header the bridge asserts so the server can auto-bind this connection to
-/// the agent's PTY session. The value is `$TUIC_SESSION`, inherited from the
-/// parent agent process — the bridge never invents it. Absent env → no header,
+/// the agent's TUIC peer. The value is `$TUIC_SESSION`, inherited from a PTY
+/// or supplied by the ACP host — the bridge never invents it. Absent env → no header,
 /// and the server falls back to explicit `agent register`.
 fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
     match tuic_session {
@@ -472,6 +475,27 @@ async fn server_reinitialize(downstream_initialize: Option<String>) -> Result<St
     Ok(sid)
 }
 
+/// Release the upstream protocol session when the stdio client closes normally.
+async fn server_delete(session_id: &str) -> Result<(), String> {
+    let mut stream = connect_ipc().await?;
+    let request = format!(
+        "DELETE /mcp HTTP/1.1\r\nHost: localhost\r\nmcp-session-id: {session_id}\r\nContent-Length: 0\r\nConnection: close\r\n{}\r\n",
+        tuic_session_header_line(TUIC_SESSION_ENV.as_deref())
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| format!("delete: {e}"))?;
+    let (headers, _) = read_http_response(&mut stream).await?;
+    if !headers.starts_with("HTTP/1.1 200 ") {
+        return Err(format!(
+            "delete: unexpected response {}",
+            headers.lines().next().unwrap_or("")
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // SSE listener
 // ---------------------------------------------------------------------------
@@ -479,6 +503,7 @@ async fn server_reinitialize(downstream_initialize: Option<String>) -> Result<St
 struct BridgeState {
     session_id: Mutex<Option<String>>,
     connected: AtomicBool,
+    shutting_down: AtomicBool,
     /// Handle to the SSE listener task — aborted and restarted on reconnect.
     sse_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Last initialize received from the stdio client. Replayed after an
@@ -486,7 +511,36 @@ struct BridgeState {
     downstream_initialize: Mutex<Option<String>>,
     /// Serializes reconnect attempts. Requests run concurrently, so without this
     /// every task that finds the bridge offline would fire its own `initialize`.
-    reconnect_lock: tokio::sync::Mutex<()>,
+    reconnect_lock: tokio::sync::Mutex<ReconnectBackoff>,
+}
+
+struct ReconnectBackoff {
+    retry_at: Option<std::time::Instant>,
+    delay: std::time::Duration,
+}
+
+impl ReconnectBackoff {
+    fn new() -> Self {
+        Self {
+            retry_at: None,
+            delay: RECONNECT_INITIAL_DELAY,
+        }
+    }
+
+    fn ready(&self) -> bool {
+        self.retry_at
+            .is_none_or(|retry_at| std::time::Instant::now() >= retry_at)
+    }
+
+    fn failed(&mut self) {
+        self.retry_at = Some(std::time::Instant::now() + self.delay);
+        self.delay = (self.delay * 2).min(RECONNECT_MAX_DELAY);
+    }
+
+    fn succeeded(&mut self) {
+        self.retry_at = None;
+        self.delay = RECONNECT_INITIAL_DELAY;
+    }
 }
 
 impl BridgeState {
@@ -494,9 +548,10 @@ impl BridgeState {
         Self {
             session_id: Mutex::new(None),
             connected: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
             sse_handle: Mutex::new(None),
             downstream_initialize: Mutex::new(None),
-            reconnect_lock: tokio::sync::Mutex::new(()),
+            reconnect_lock: tokio::sync::Mutex::new(ReconnectBackoff::new()),
         }
     }
 
@@ -611,16 +666,23 @@ fn emit_offline_response(method: &str, id: &Value) {
 /// lock (plus the re-check after acquiring it) collapses their reconnect attempts
 /// into a single `initialize` instead of one per queued request.
 async fn ensure_connected(state: &Arc<BridgeState>) {
-    let _guard = state.reconnect_lock.lock().await;
-    if state.connected.load(Ordering::Acquire) {
+    let mut reconnect = state.reconnect_lock.lock().await;
+    if state.shutting_down.load(Ordering::Acquire)
+        || state.connected.load(Ordering::Acquire)
+        || !reconnect.ready()
+    {
         return;
     }
-    if let Ok(sid) = server_reinitialize(state.downstream_initialize()).await {
-        eprintln!("tuic-bridge: reconnected to TUIC");
-        *state.session_id.lock().unwrap() = Some(sid);
-        state.connected.store(true, Ordering::Release);
-        start_sse_listener(state);
-        emit_tools_changed();
+    match server_reinitialize(state.downstream_initialize()).await {
+        Ok(sid) => {
+            reconnect.succeeded();
+            eprintln!("tuic-bridge: reconnected to TUIC");
+            *state.session_id.lock().unwrap() = Some(sid);
+            state.connected.store(true, Ordering::Release);
+            start_sse_listener(state);
+            emit_tools_changed();
+        }
+        Err(_) => reconnect.failed(),
     }
 }
 
@@ -687,20 +749,24 @@ async fn proxy_request(state: Arc<BridgeState>, line: String, method: String, id
 /// of session establishment, so a request-triggered reconnect can't open a second
 /// upstream session concurrently and clobber `session_id`.
 async fn handle_initialize(state: &Arc<BridgeState>, line: String, id: Value) {
-    let _guard = state.reconnect_lock.lock().await;
+    let mut reconnect = state.reconnect_lock.lock().await;
     *state.downstream_initialize.lock().unwrap() = Some(line.clone());
     // Proxy to server when connected to get dynamic instructions.
     // The server response includes intent protocol, active sessions, etc.
     // Fall back to a minimal local response only when offline.
     let proxied = if state.connected.load(Ordering::Acquire) || {
         // Try lazy connect if not yet connected
-        if let Ok((sid, _)) = server_initialize().await {
+        if !reconnect.ready() {
+            false
+        } else if let Ok((sid, _)) = server_initialize().await {
+            reconnect.succeeded();
             eprintln!("tuic-bridge: connected to TUIC");
             *state.session_id.lock().unwrap() = Some(sid);
             state.connected.store(true, Ordering::Release);
             start_sse_listener(state);
             true
         } else {
+            reconnect.failed();
             false
         }
     } {
@@ -721,6 +787,7 @@ async fn handle_initialize(state: &Arc<BridgeState>, line: String, id: Value) {
             }
             Err(e) => {
                 eprintln!("tuic-bridge: initialize proxy error: {e}");
+                reconnect.failed();
                 state.connected.store(false, Ordering::Release);
                 *state.session_id.lock().unwrap() = None;
                 None
@@ -774,13 +841,28 @@ async fn dispatch_loop(
         }
     }
 
-    // stdin closed: the client is gone. Give in-flight requests a short grace to
-    // finish writing their responses, then let the JoinSet drop abort the rest —
-    // a pending 300s `agent wait` must not keep the process alive after EOF.
-    let _ = tokio::time::timeout(SHUTDOWN_GRACE, async {
+    // stdin closed: the client is gone. Give in-flight requests a short grace
+    // to finish writing their responses, then abort the rest. A pending 300s
+    // `agent wait` must not keep the process alive or recreate the protocol
+    // session after DELETE.
+    let settled = tokio::time::timeout(SHUTDOWN_GRACE, async {
         while inflight.join_next().await.is_some() {}
     })
     .await;
+    if settled.is_err() {
+        inflight.abort_all();
+        while inflight.join_next().await.is_some() {}
+    }
+    state.shutting_down.store(true, Ordering::Release);
+    // The common ego path opens one stdio client per operation. Without this,
+    // each clean EOF leaves a protocol session until the server's idle sweep.
+    let sid = state.session_id.lock().unwrap().take();
+    if let Some(sid) = sid {
+        let result = tokio::time::timeout(SHUTDOWN_GRACE, server_delete(&sid)).await;
+        if let Err(error) = result.unwrap_or_else(|_| Err("delete timed out".to_string())) {
+            eprintln!("tuic-bridge: upstream session cleanup failed: {error}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +889,7 @@ async fn main() {
         }
         Err(error) => {
             eprintln!("tuic-bridge: MCP endpoint unavailable, will retry in background: {error}");
+            state.reconnect_lock.lock().await.failed();
         }
     }
 
@@ -819,6 +902,9 @@ async fn main() {
         let mut consecutive_failures: u32 = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if bg_state.shutting_down.load(Ordering::Acquire) {
+                break;
+            }
             if bg_state.connected.load(Ordering::Acquire) {
                 let sid = bg_state.session_id.lock().unwrap().clone();
                 let health = post_mcp(
@@ -848,13 +934,11 @@ async fn main() {
                 } else {
                     consecutive_failures = 0;
                 }
-            } else if let Ok(sid) = server_reinitialize(bg_state.downstream_initialize()).await {
-                eprintln!("tuic-bridge: reconnected to TUIC");
-                *bg_state.session_id.lock().unwrap() = Some(sid);
-                bg_state.connected.store(true, Ordering::Release);
-                start_sse_listener(&bg_state);
-                emit_tools_changed();
-                consecutive_failures = 0;
+            } else {
+                ensure_connected(&bg_state).await;
+                if bg_state.connected.load(Ordering::Acquire) {
+                    consecutive_failures = 0;
+                }
             }
         }
     });
@@ -882,18 +966,18 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use super::{BridgeState, dispatch_loop};
+    use super::{BridgeState, dispatch_loop, proxy_request};
     use super::{
         read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
     };
     #[cfg(unix)]
     use std::path::PathBuf;
     #[cfg(unix)]
+    use std::sync::Arc;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicUsize;
     #[cfg(unix)]
     use std::sync::atomic::Ordering;
-    #[cfg(unix)]
-    use std::sync::{Arc, Mutex};
     #[cfg(unix)]
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -940,6 +1024,8 @@ mod tests {
         in_flight: AtomicUsize,
         max_in_flight: AtomicUsize,
         initializes: AtomicUsize,
+        reject_initializes: std::sync::atomic::AtomicBool,
+        deletes: AtomicUsize,
         tool_calls: AtomicUsize,
         /// Every `initialize` body the bridge posted, in order.
         ///
@@ -955,7 +1041,7 @@ mod tests {
     #[cfg(unix)]
     async fn start_mock_ipc(slow_ms: u64) -> MockGuard {
         let lock = TEST_IPC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
         let sock = dir.path().join("mcp.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         *TEST_IPC_PATH.lock().unwrap_or_else(|e| e.into_inner()) = Some(sock);
@@ -982,6 +1068,11 @@ mod tests {
                         }
                     }
                     let text = String::from_utf8_lossy(&buf).to_string();
+                    if text.starts_with("DELETE /mcp ")
+                        && text.contains("\r\nmcp-session-id: test-sid\r\n")
+                    {
+                        stats.deletes.fetch_add(1, Ordering::SeqCst);
+                    }
                     // The SSE listener opens a GET /mcp stream; only count RPC posts.
                     if text.contains("\"initialize\"") {
                         stats.initializes.fetch_add(1, Ordering::SeqCst);
@@ -1002,8 +1093,15 @@ mod tests {
                     stats.in_flight.fetch_sub(1, Ordering::SeqCst);
 
                     let body = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
+                    let session_header = if text.contains("\"initialize\"")
+                        && stats.reject_initializes.load(Ordering::SeqCst)
+                    {
+                        ""
+                    } else {
+                        "mcp-session-id: test-sid\r\n"
+                    };
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nmcp-session-id: test-sid\r\n\r\n{body}",
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{session_header}\r\n{body}",
                         body.len()
                     );
                     let _ = stream.write_all(response.as_bytes()).await;
@@ -1031,6 +1129,58 @@ mod tests {
         format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{{"action":"list"}}}}}}"#
         )
+    }
+
+    /// Catches: every queued request retries a failed upstream initialize at
+    /// full speed, multiplying a temporary endpoint failure into a storm.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn repeated_initialize_failure_waits_before_retrying() {
+        let mock = start_mock_ipc(0).await;
+        mock.stats.reject_initializes.store(true, Ordering::SeqCst);
+        let state = Arc::new(BridgeState::new());
+        let mut requests = tokio::task::JoinSet::new();
+        for _ in 0..5 {
+            requests.spawn(proxy_request(
+                Arc::clone(&state),
+                call("session"),
+                "tools/call".to_string(),
+                serde_json::json!(1),
+            ));
+        }
+        while requests.join_next().await.is_some() {}
+        assert_eq!(
+            mock.stats.initializes.load(Ordering::SeqCst),
+            1,
+            "failed initialize must not be retried once per queued request"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        proxy_request(
+            state,
+            call("session"),
+            "tools/call".to_string(),
+            serde_json::json!(2),
+        )
+        .await;
+        assert_eq!(
+            mock.stats.initializes.load(Ordering::SeqCst),
+            2,
+            "a failed endpoint must be retried after the pause"
+        );
+    }
+
+    /// Catches: a short-lived stdio client leaves its upstream session behind
+    /// for the server's hourly sweep after the bridge receives EOF.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdin_eof_deletes_the_upstream_protocol_session() {
+        let mock = start_mock_ipc(0).await;
+        let state = connected_state();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        drop(tx);
+        dispatch_loop(state, rx).await;
+        assert_eq!(mock.stats.deletes.load(Ordering::SeqCst), 1);
     }
 
     /// The regression: a long request must not hold the reader hostage. Two slow

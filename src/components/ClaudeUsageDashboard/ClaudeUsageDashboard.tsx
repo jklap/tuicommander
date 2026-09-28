@@ -439,7 +439,7 @@ const UsageChart: Component<{ timeline: TimelinePoint[]; days: number }> = (prop
 // Component
 // ---------------------------------------------------------------------------
 
-export const ClaudeUsageDashboard: Component = () => {
+export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => string | undefined) }> = (props) => {
 	const [apiData, setApiData] = createSignal<UsageApiResponse | null>(null);
 	const [apiError, setApiError] = createSignal<string | null>(null);
 	const [sessionStats, setSessionStats] = createSignal<SessionStats | null>(null);
@@ -448,14 +448,19 @@ export const ClaudeUsageDashboard: Component = () => {
 	const [timeline, setTimeline] = createSignal<TimelinePoint[]>([]);
 	const [scope, setScope] = createSignal("all");
 	const [loading, setLoading] = createSignal(true);
+	let apiFetchSeq = 0;
 
 	// Fetch API usage data
-	const fetchApi = async () => {
+	const fetchApi = async (sessionId?: string) => {
+		const seq = ++apiFetchSeq;
 		try {
-			const data = await invoke<UsageApiResponse>("get_claude_usage_api");
+			const data = await invoke<UsageApiResponse>("get_claude_usage_api", sessionId ? { sessionId } : undefined);
+			if (seq !== apiFetchSeq) return;
 			setApiData(data);
 			setApiError(null);
 		} catch (err) {
+			if (seq !== apiFetchSeq) return;
+			setApiData(null);
 			setApiError(String(err));
 		}
 	};
@@ -491,9 +496,15 @@ export const ClaudeUsageDashboard: Component = () => {
 		}
 	};
 
-	// Fetch API usage and project list once on mount (not scope-dependent).
+	const selectedSessionId = () => typeof props.sessionId === "function" ? props.sessionId() : props.sessionId;
+	createEffect(() => {
+		setApiData(null);
+		void fetchApi(selectedSessionId());
+	});
+
+	// Fetch the project list once on mount (not scope-dependent).
 	onMount(() => {
-		void Promise.all([fetchApi(), fetchProjects()]);
+		void fetchProjects();
 	});
 
 	// Sequential by design: fetchStats writes the JSONL cache that fetchTimeline reads.
@@ -512,7 +523,7 @@ export const ClaudeUsageDashboard: Component = () => {
 	// Auto-refresh every 5 minutes
 	const timer = setInterval(
 		() => {
-			void fetchApi();
+			void fetchApi(selectedSessionId());
 			void refreshStatsAndTimeline(scope());
 		},
 		5 * 60 * 1000,
@@ -735,7 +746,7 @@ export const ClaudeUsageDashboard: Component = () => {
 					<Show when={apiError() && rateBuckets().length === 0}>
 						<div class={s.rateLimitHint}>
 							<span>Rate limit data unavailable</span>
-							<button class={s.retryButton} onClick={() => fetchApi()}>
+							<button class={s.retryButton} onClick={() => fetchApi(selectedSessionId())}>
 								Retry
 							</button>
 						</div>

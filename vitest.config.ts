@@ -1,6 +1,23 @@
 import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
 import path from "node:path";
+import { mkdirSync } from "node:fs";
+
+// Vitest workers and their dependencies inherit this path. Vite's dev/build
+// configuration is separate, so normal app processes retain the OS temp dir.
+const repoTmp = path.resolve(import.meta.dirname, ".tmp/tuic-tests");
+const requestedTmp = process.env.TMPDIR;
+const gitsRoot = process.env.HOME && path.join(process.env.HOME, "Gits");
+const testTmp = requestedTmp && (
+  requestedTmp.startsWith(`${import.meta.dirname}${path.sep}`)
+  || (gitsRoot && requestedTmp.startsWith(`${gitsRoot}${path.sep}`))
+)
+  ? requestedTmp
+  : repoTmp;
+mkdirSync(testTmp, { recursive: true });
+process.env.TMPDIR = testTmp;
+process.env.TMP = testTmp;
+process.env.TEMP = testTmp;
 
 export default defineConfig({
   plugins: [solid()],

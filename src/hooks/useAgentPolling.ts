@@ -19,6 +19,7 @@ type BackendSessionState = {
 	question_confident?: boolean;
 	background_work?: boolean;
 	queued_commands?: number;
+	last_activity_ms?: number;
 };
 
 type SessionLifecycleResponse = {
@@ -86,6 +87,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		// Omitted by the backend when zero (serde skips it), so absence is an
 		// empty queue — not "unknown".
 		queuedCommands: state?.queued_commands ?? 0,
+		lastActivityAt: state?.last_activity_ms ?? null,
 		...(shellState !== undefined ? { shellState } : {}),
 	});
 	if (wasAwaiting !== isAwaiting) {

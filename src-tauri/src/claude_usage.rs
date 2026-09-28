@@ -10,6 +10,8 @@
 //! in the app config directory so restarts don't require a full rescan.
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -610,31 +612,16 @@ fn parse_jsonl_file_from_offset(
 // ---------------------------------------------------------------------------
 
 /// Read the Claude OAuth credentials (access token + plan info). On macOS, tries
-/// Keychain first then falls back to `~/.claude/.credentials.json`. On other
-/// platforms, reads the JSON file directly. Both the token and plan may be
-/// absent; callers decide how to react.
-fn read_claude_credentials() -> Result<(Option<String>, Option<PlanInfo>), String> {
-    let raw_json = {
-        #[cfg(target_os = "macos")]
-        {
-            let keychain_result = crate::plugin_credentials::cached_read("Claude Code-credentials");
-            match keychain_result {
-                Ok(Some(json)) => Some(json),
-                _ => {
-                    // Fallback: try ~/.claude/.credentials.json
-                    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-                    let path = home.join(".claude").join(".credentials.json");
-                    std::fs::read_to_string(&path).ok()
-                }
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-            let path = home.join(".claude").join(".credentials.json");
-            std::fs::read_to_string(&path).ok()
-        }
-    };
+/// Read the selected Claude profile's Keychain entry first, then its
+/// `.credentials.json` file. On other platforms, read the file directly.
+/// Both the token and plan may be absent; callers decide how to react.
+fn read_claude_credentials(
+    config_dir: Option<&str>,
+) -> Result<(Option<String>, Option<PlanInfo>), String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let raw_json = read_credential_json(config_dir, &home, |service| {
+        crate::plugin_credentials::cached_read(service)
+    });
 
     let Some(json_str) = raw_json else {
         return Ok((None, None));
@@ -673,6 +660,40 @@ fn read_claude_credentials() -> Result<(Option<String>, Option<PlanInfo>), Strin
     Ok((token, plan))
 }
 
+fn read_credential_json(
+    config_dir: Option<&str>,
+    home: &Path,
+    read_keychain: impl FnOnce(&str) -> Result<Option<String>, String>,
+) -> Option<String> {
+    let credentials_path = config_dir
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+        .join(".credentials.json");
+    {
+        #[cfg(target_os = "macos")]
+        {
+            let service = match config_dir.filter(|dir| !dir.is_empty()) {
+                Some(dir) => {
+                    let hash = Sha256::digest(dir.as_bytes());
+                    format!("Claude Code-credentials-{}", &hex::encode(hash)[..8])
+                }
+                None => "Claude Code-credentials".to_string(),
+            };
+            let keychain_result = read_keychain(&service);
+            match keychain_result {
+                Ok(Some(json)) => Some(json),
+                _ => std::fs::read_to_string(&credentials_path).ok(),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = read_keychain;
+            std::fs::read_to_string(&credentials_path).ok()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // API cache + retry
 // ---------------------------------------------------------------------------
@@ -683,11 +704,59 @@ struct ApiCache {
     fetched_at: Instant,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CredentialProfile {
+    Default,
+    ConfigDir(String),
+}
+
+impl CredentialProfile {
+    fn config_dir(&self) -> Option<&str> {
+        match self {
+            Self::Default => None,
+            Self::ConfigDir(dir) => Some(dir),
+        }
+    }
+}
+
+fn profile_for_session(
+    state: &crate::AppState,
+    session_id: Option<&str>,
+) -> Result<CredentialProfile, String> {
+    let Some(session_id) = session_id else {
+        return Ok(CredentialProfile::Default);
+    };
+    let pid = crate::pty::session_leaf_pid(state, session_id)
+        .ok_or("Cannot resolve Claude session profile")?;
+    let environment = crate::process_env::read_process_environment(pid)
+        .map_err(|_| "Cannot read Claude session profile")?;
+    Ok(profile_from_environment(&environment))
+}
+
+fn profile_from_environment(environment: &[String]) -> CredentialProfile {
+    let config_dir = environment.iter().find_map(|entry| {
+        let (key, value) = entry.split_once('=')?;
+        let matches = if cfg!(windows) {
+            key.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")
+        } else {
+            key == "CLAUDE_CONFIG_DIR"
+        };
+        (matches && !value.is_empty()).then_some(value)
+    });
+    match config_dir {
+        Some(dir) => CredentialProfile::ConfigDir(dir.to_string()),
+        None => CredentialProfile::Default,
+    }
+}
+
 /// In-memory cache for the usage API response.
-static API_CACHE: parking_lot::Mutex<Option<ApiCache>> = parking_lot::Mutex::new(None);
+static API_CACHE: std::sync::LazyLock<parking_lot::Mutex<HashMap<CredentialProfile, ApiCache>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// When set, we're rate-limited and should not hit the API until this instant.
-static RATE_LIMITED_UNTIL: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+static RATE_LIMITED_UNTIL: std::sync::LazyLock<
+    parking_lot::Mutex<HashMap<CredentialProfile, Instant>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Cache TTL: return cached data without hitting the API.
 const API_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
@@ -894,17 +963,20 @@ async fn fetch_usage_from_headers(token: &str) -> Result<UsageApiResponse, Fetch
 }
 
 /// Store a successful response in the cache.
-fn cache_response(data: &UsageApiResponse) {
-    *API_CACHE.lock() = Some(ApiCache {
-        data: data.clone(),
-        fetched_at: Instant::now(),
-    });
+fn cache_response(profile: &CredentialProfile, data: &UsageApiResponse) {
+    API_CACHE.lock().insert(
+        profile.clone(),
+        ApiCache {
+            data: data.clone(),
+            fetched_at: Instant::now(),
+        },
+    );
 }
 
 /// Try to get a cached response. Returns Some if cache exists and is within TTL.
-fn try_get_fresh_cache() -> Option<UsageApiResponse> {
+fn try_get_fresh_cache(profile: &CredentialProfile) -> Option<UsageApiResponse> {
     let guard = API_CACHE.lock();
-    guard.as_ref().and_then(|c| {
+    guard.get(profile).and_then(|c| {
         if c.fetched_at.elapsed() < API_CACHE_TTL {
             Some(c.data.clone())
         } else {
@@ -914,8 +986,8 @@ fn try_get_fresh_cache() -> Option<UsageApiResponse> {
 }
 
 /// Get stale cached data (any age) as fallback on errors.
-fn get_stale_cache() -> Option<UsageApiResponse> {
-    API_CACHE.lock().as_ref().map(|c| c.data.clone())
+fn get_stale_cache(profile: &CredentialProfile) -> Option<UsageApiResponse> {
+    API_CACHE.lock().get(profile).map(|c| c.data.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -924,25 +996,36 @@ fn get_stale_cache() -> Option<UsageApiResponse> {
 
 /// Fetch rate-limit usage from the Anthropic OAuth API.
 /// Uses an in-memory cache (5 min TTL) and retries 429s with exponential backoff.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_claude_usage_api(
+    state: State<'_, Arc<crate::AppState>>,
+    session_id: Option<String>,
+) -> Result<UsageApiResponse, String> {
+    get_claude_usage_api_impl(&state, session_id.as_deref()).await
+}
+
+pub(crate) async fn get_claude_usage_api_impl(
+    state: &crate::AppState,
+    session_id: Option<&str>,
+) -> Result<UsageApiResponse, String> {
+    let profile = profile_for_session(state, session_id)?;
+    let (token_opt, plan) = read_claude_credentials(profile.config_dir())?;
+    let token = token_opt.ok_or_else(|| "No Claude OAuth token found".to_string())?;
     // Return fresh cache if available
-    if let Some(cached) = try_get_fresh_cache() {
+    if let Some(cached) = try_get_fresh_cache(&profile) {
         return Ok(cached);
     }
 
     // If we're in a rate-limit backoff window, return stale cache without hitting the API
-    if let Some(until) = *RATE_LIMITED_UNTIL.lock()
+    if let Some(until) = RATE_LIMITED_UNTIL.lock().get(&profile).copied()
         && Instant::now() < until
     {
-        if let Some(stale) = get_stale_cache() {
+        if let Some(stale) = get_stale_cache(&profile) {
             return Ok(stale);
         }
         return Err("Rate limited — waiting for backoff to expire".to_string());
     }
-
-    let (token_opt, plan) = read_claude_credentials()?;
-    let token = token_opt.ok_or_else(|| "No Claude OAuth token found".to_string())?;
 
     // Attempt fetch with 429 retry
     let mut last_err_msg = String::new();
@@ -951,9 +1034,9 @@ pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
         match fetch_usage_from_api(&token).await {
             Ok(mut data) => {
                 // Clear any rate-limit backoff on success
-                *RATE_LIMITED_UNTIL.lock() = None;
+                RATE_LIMITED_UNTIL.lock().remove(&profile);
                 data.plan = plan.clone();
-                cache_response(&data);
+                cache_response(&profile, &data);
                 return Ok(data);
             }
             Err(e) => {
@@ -986,7 +1069,9 @@ pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
 
     // Set backoff so next poll doesn't hammer a rate-limited endpoint
     if was_rate_limited {
-        *RATE_LIMITED_UNTIL.lock() = Some(Instant::now() + RATE_LIMIT_BACKOFF);
+        RATE_LIMITED_UNTIL
+            .lock()
+            .insert(profile.clone(), Instant::now() + RATE_LIMIT_BACKOFF);
         tracing::warn!(
             source = "claude_usage",
             backoff_secs = RATE_LIMIT_BACKOFF.as_secs(),
@@ -1002,7 +1087,7 @@ pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
                 "Primary API failed, using headers fallback"
             );
             data.plan = plan.clone();
-            cache_response(&data);
+            cache_response(&profile, &data);
             return Ok(data);
         }
         Err(e) => {
@@ -1015,7 +1100,7 @@ pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
     }
 
     // On error, return stale cache if available
-    if let Some(stale) = get_stale_cache() {
+    if let Some(stale) = get_stale_cache(&profile) {
         tracing::info!(
             source = "claude_usage",
             "Returning stale cache after error: {last_err_msg}"
@@ -1413,6 +1498,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_environment_selects_credential_profile() {
+        assert_eq!(profile_from_environment(&[]), CredentialProfile::Default);
+        assert_eq!(
+            profile_from_environment(&["CLAUDE_CONFIG_DIR=/fixture/private".into()]),
+            CredentialProfile::ConfigDir("/fixture/private".into())
+        );
+        assert_eq!(
+            profile_from_environment(&["CLAUDE_CONFIG_DIR=".into()]),
+            CredentialProfile::Default
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_profile_keeps_the_bare_keychain_service() {
+        let home = tempfile::tempdir().unwrap();
+        let mut requested = String::new();
+        let credentials = read_credential_json(None, home.path(), |service| {
+            requested = service.to_string();
+            Ok(Some("default-account".into()))
+        });
+        assert_eq!(requested, "Claude Code-credentials");
+        assert_eq!(credentials.as_deref(), Some("default-account"));
+    }
+
+    #[test]
+    fn custom_profile_reads_its_own_credentials_file() {
+        let home = tempfile::tempdir().unwrap();
+        let default_dir = home.path().join(".claude");
+        let profile = home.path().join(".claude-private");
+        std::fs::create_dir_all(&default_dir).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(default_dir.join(".credentials.json"), "default-account").unwrap();
+        std::fs::write(profile.join(".credentials.json"), "private-account").unwrap();
+
+        let credentials = read_credential_json(profile.to_str(), home.path(), |_| Ok(None));
+        assert_eq!(credentials.as_deref(), Some("private-account"));
+    }
+
+    #[test]
+    fn missing_custom_profile_never_reads_default_credentials_file() {
+        let home = tempfile::tempdir().unwrap();
+        let default_dir = home.path().join(".claude");
+        std::fs::create_dir_all(&default_dir).unwrap();
+        std::fs::write(default_dir.join(".credentials.json"), "default-account").unwrap();
+
+        let missing_profile = home.path().join(".claude-missing");
+        let credentials = read_credential_json(missing_profile.to_str(), home.path(), |_| Ok(None));
+        assert!(credentials.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn custom_profile_reads_its_namespaced_keychain_service() {
+        let home = tempfile::tempdir().unwrap();
+        let mut requested = String::new();
+        let credentials =
+            read_credential_json(Some("/fixture/claude-private"), home.path(), |service| {
+                requested = service.to_string();
+                Ok(Some("private-account".into()))
+            });
+        assert_eq!(requested, "Claude Code-credentials-db8e0363");
+        assert_eq!(credentials.as_deref(), Some("private-account"));
+    }
+
+    #[test]
     fn parse_assistant_line() {
         let line = r#"{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}}"#;
         let mut stats = CachedFileStats::default();
@@ -1564,9 +1715,8 @@ mod tests {
     #[test]
     fn parse_jsonl_file_from_offset_works() {
         // Create a temp file with JSONL content
-        let dir = std::env::temp_dir().join("claude_usage_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("test.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("test.jsonl");
 
         let content = r#"{"type":"user","message":"hello"}
 {"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
@@ -1621,9 +1771,6 @@ mod tests {
         let hourly14 = stats.hourly_tokens.get("2026-02-04T14").unwrap();
         assert_eq!(hourly14.input_tokens, 200);
         assert_eq!(hourly14.output_tokens, 100);
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn transcript(input: u64, output: u64, session: &str, hour: &str) -> String {
@@ -1751,9 +1898,8 @@ mod tests {
         // Simulates an active session: assistant message followed by
         // stop_hook_summary (which has a timestamp but is NOT turn_duration),
         // then the file ends with no turn_duration to flush pending tokens.
-        let dir = std::env::temp_dir().join("claude_usage_orphan_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("orphan.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("orphan.jsonl");
 
         let content = r#"{"type":"user","message":"hello"}
 {"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
@@ -1780,17 +1926,14 @@ mod tests {
             "all tokens should be bucketed in hour 10"
         );
         assert_eq!(h10.output_tokens, 50 + 80 + 60);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn orphan_tokens_at_eof_use_last_timestamp() {
         // File ends with assistant message, no system line after it.
         // There IS a prior turn_duration so last_timestamp is known.
-        let dir = std::env::temp_dir().join("claude_usage_eof_orphan");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("eof.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("eof.jsonl");
 
         let content = r#"{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
 {"type":"system","subtype":"turn_duration","timestamp":"2026-02-25T14:00:00Z","sessionId":"s1","durationMs":5000}
@@ -1805,8 +1948,6 @@ mod tests {
         let h14 = stats.hourly_tokens.get("2026-02-25T14").unwrap();
         assert_eq!(h14.input_tokens, 100 + 300);
         assert_eq!(h14.output_tokens, 50 + 120);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1854,18 +1995,12 @@ mod tests {
         assert!(result.is_none() || result.as_deref() == Some("/"));
     }
 
-    /// Single test for API cache to avoid parallel test race conditions
-    /// on the shared static API_CACHE.
     #[test]
-    fn api_cache_lifecycle() {
-        // Hold the lock for the entire test to prevent parallel interference
-        let mut guard = API_CACHE.lock();
-
-        // Empty cache returns None
-        *guard = None;
-        assert!(guard.is_none());
-
-        // Insert fresh data
+    fn api_cache_isolated_by_profile() {
+        let first = CredentialProfile::ConfigDir("/fixture/first".into());
+        let second = CredentialProfile::ConfigDir("/fixture/second".into());
+        assert!(try_get_fresh_cache(&first).is_none());
+        assert!(get_stale_cache(&second).is_none());
         let data = UsageApiResponse {
             five_hour: Some(RateBucket {
                 utilization: 42.0,
@@ -1873,61 +2008,43 @@ mod tests {
             }),
             ..Default::default()
         };
-        *guard = Some(ApiCache {
-            data: data.clone(),
-            fetched_at: Instant::now(),
-        });
+        cache_response(&first, &data);
+        assert_eq!(
+            try_get_fresh_cache(&first)
+                .unwrap()
+                .five_hour
+                .unwrap()
+                .utilization,
+            42.0
+        );
+        assert!(try_get_fresh_cache(&second).is_none());
+        assert!(get_stale_cache(&second).is_none());
 
-        // Fresh cache returns data
-        let cached = guard.as_ref().and_then(|c| {
-            if c.fetched_at.elapsed() < API_CACHE_TTL {
-                Some(c.data.clone())
-            } else {
-                None
-            }
-        });
-        assert!(cached.is_some(), "fresh cache should return data");
-        assert!((cached.unwrap().five_hour.unwrap().utilization - 42.0).abs() < 0.001);
-
-        // Stale accessor works on fresh data too
-        assert!(guard.as_ref().map(|c| c.data.clone()).is_some());
-
-        // Expired cache: fresh check fails, stale check succeeds
-        *guard = Some(ApiCache {
-            data: UsageApiResponse::default(),
-            fetched_at: Instant::now() - API_CACHE_TTL - Duration::from_secs(1),
-        });
-        let fresh = guard.as_ref().and_then(|c| {
-            if c.fetched_at.elapsed() < API_CACHE_TTL {
-                Some(c.data.clone())
-            } else {
-                None
-            }
-        });
-        assert!(fresh.is_none(), "expired cache should not be fresh");
-        assert!(guard.as_ref().is_some(), "stale cache should still exist");
-
-        // Clean up
-        *guard = None;
+        API_CACHE.lock().insert(
+            first.clone(),
+            ApiCache {
+                data,
+                fetched_at: Instant::now() - API_CACHE_TTL - Duration::from_secs(1),
+            },
+        );
+        assert!(try_get_fresh_cache(&first).is_none());
+        assert!(get_stale_cache(&first).is_some());
+        API_CACHE.lock().remove(&first);
     }
 
     #[test]
-    fn rate_limit_backoff_lifecycle() {
+    fn rate_limit_backoff_isolated_by_profile() {
+        let first = CredentialProfile::ConfigDir("/fixture/first".into());
+        let second = CredentialProfile::ConfigDir("/fixture/second".into());
         let mut guard = RATE_LIMITED_UNTIL.lock();
-
-        // Initially no backoff
-        assert!(guard.is_none());
-
-        // Set backoff in the future — should block
-        *guard = Some(Instant::now() + Duration::from_secs(60));
-        assert!(guard.is_some_and(|until| Instant::now() < until));
-
-        // Set backoff in the past — should not block
-        *guard = Some(Instant::now() - Duration::from_secs(1));
-        assert!(guard.is_none_or(|until| Instant::now() >= until));
-
-        // Clear backoff
-        *guard = None;
+        guard.insert(first.clone(), Instant::now() + Duration::from_secs(60));
+        assert!(
+            guard
+                .get(&first)
+                .is_some_and(|until| Instant::now() < *until)
+        );
+        assert!(!guard.contains_key(&second));
+        guard.remove(&first);
     }
 
     #[test]
@@ -2092,7 +2209,7 @@ mod tests {
     /// Skipped automatically if no token is available.
     #[tokio::test]
     async fn live_usage_api_deserializes() {
-        let token = match read_claude_credentials() {
+        let token = match read_claude_credentials(None) {
             Ok((Some(t), _)) => t,
             _ => {
                 eprintln!("Skipping live API test: no OAuth token available");

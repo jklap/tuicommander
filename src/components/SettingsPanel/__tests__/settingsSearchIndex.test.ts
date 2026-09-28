@@ -55,13 +55,15 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	"remote-machines": { dynamic: 3, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 4, orphans: 11 },
-	// 8th: the per-agent "Native status signals" toggle, which sits in the same
-	// runtime-rendered card as "Install hooks globally" and so cannot have a
-	// static scroll target either.
+	// The per-agent "Native status signals", "Prevent alternate screen", and
+	// "Accept workspace trust for managed spawns" toggles sit in runtime-rendered
+	// cards and have no static scroll target. Workspace trust appears only in the
+	// expanded Claude and Codex cards, so a global search result could not open
+	// the right card or scroll to its control.
 	// The orphan is the machine selector's "Configure agents on" label. It is not
 	// a setting — it scopes every setting below it to one machine — so it sits
 	// above the first heading on purpose and has nothing to scroll to.
-	agents: { dynamic: 8, orphans: 1 },
+	agents: { dynamic: 10, orphans: 1 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

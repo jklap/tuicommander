@@ -18,6 +18,8 @@ export interface CleanupConfig {
 	closeTerminalsForBranch: (repoPath: string, workspaceId: string) => Promise<void>;
 	/** When set, the "worktree" step calls finalize_merged_worktree with this action */
 	worktreeAction?: "archive" | "delete";
+	worktreeDirty?: boolean;
+	worktreeFingerprint?: string;
 	/** When true, pop the stash after switching branches */
 	unstash?: boolean;
 }
@@ -27,6 +29,7 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 	const { repoPath, workspaceId, branchName, baseBranch, steps, onStepStart, onStepDone } = config;
 	let didDeleteLocal = false;
 	let hadError = false;
+	let branchKept = false;
 
 	// When the "worktree" step is present in the list but unchecked, the user
 	// explicitly chose to keep the worktree on disk. The "delete-local" step
@@ -45,19 +48,28 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 			switch (step.id) {
 				case "worktree": {
 					if (!config.worktreeAction) break; // no-op if action not set
-					// `force` because this dialog IS the confirmation: it shows the
-					// uncommitted-work warning under this very step (worktreeDirty)
-					// before the user checks it and presses Execute. Without it the
-					// backend guard would bounce the step back as an opaque failure.
+					// The checked dialog step confirms discarding dirty files only
+					// when the checkout is actually dirty.
 					// Addressed by workspace id: the checkout to dispose of is the row
 					// the user is cleaning up, which a branch cannot name once two
 					// workspaces share one.
-					await invoke("finalize_merged_worktree", {
-						repoPath,
-						workspaceId,
-						action: config.worktreeAction,
-						force: true,
-					});
+					const outcome = await invoke<{ action?: string; branch_delete_warning?: string | null }>(
+						"finalize_merged_worktree",
+						{
+							repoPath,
+							workspaceId,
+							action: config.worktreeAction,
+							force: config.worktreeDirty === true,
+							...(config.worktreeFingerprint ? { expectedFingerprint: config.worktreeFingerprint } : {}),
+						},
+					);
+					if (outcome?.action === "needs_confirmation") {
+						throw new Error("Worktree state changed since confirmation; review it before cleanup");
+					}
+					if (outcome?.branch_delete_warning) {
+						branchKept = true;
+						config.onStepNote?.(step.id, `Branch kept: ${outcome.branch_delete_warning}`);
+					}
 					break;
 				}
 
@@ -85,6 +97,13 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 					break;
 
 				case "delete-local":
+					if (branchKept) {
+						const reason = "Branch kept because worktree cleanup could not prove it safe to delete";
+						config.onStepNote?.(step.id, reason);
+						onStepDone(step.id, "error", reason);
+						hadError = true;
+						continue;
+					}
 					await config.closeTerminalsForBranch(repoPath, workspaceId);
 					try {
 						await invoke("delete_local_branch", {

@@ -19,6 +19,7 @@ import type {
 	AcpConnectionId,
 	AcpConnectionSettlement,
 	AcpConnectionSnapshot,
+	AcpContentBlock,
 	AcpElicitationAction,
 	AcpHostRequestId,
 	AcpPendingInteraction,
@@ -29,6 +30,18 @@ import type {
 } from "../types/acp";
 import { randomUuid } from "../utils/randomId";
 import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
+
+export interface AcpListedSession {
+	sessionId: AcpSessionId;
+	cwd: string;
+	title?: string | null;
+	updatedAt?: string | null;
+}
+
+export interface AcpSessionList {
+	sessions: AcpListedSession[];
+	nextCursor?: string | null;
+}
 
 /**
  * How many times a dropped stream may be reopened before the client stops.
@@ -240,34 +253,34 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			await this.refresh(connectionId);
 		},
 
-		async listSessions(connectionId: AcpConnectionId, cwd?: string) {
-			return invoke<{ sessions: { sessionId: AcpSessionId; cwd: string }[] }>("acp_session_list", {
+		async listSessions(connectionId: AcpConnectionId, cwd?: string, cursor?: string): Promise<AcpSessionList> {
+			return invoke<AcpSessionList>("acp_session_list", {
 				connectionId,
 				cwd,
+				cursor,
 			});
 		},
 
-		/** Send one turn. A person types text; ego reads content blocks. */
-		async prompt(connectionId: AcpConnectionId, sessionId: AcpSessionId, text: string): Promise<string> {
-			// Shown before the agent answers. Ego echoes a user message only when
-			// it replays history, so nothing else would put it on screen — and a
-			// prompt the backend refuses would leave a turn that never happened
-			// sitting in the conversation, reading as one the agent ignored.
-			const entryId = acpTranscript.noteUserMessage(sessionId, text);
-			try {
-				return await invoke<string>("acp_session_prompt", {
-					connectionId,
-					sessionId,
-					prompt: [{ type: "text", text }],
-				});
-			} catch (error) {
-				acpTranscript.dropEntry(sessionId, entryId);
-				throw error;
+		/** Send one turn as ACP content blocks, shared by desktop and remote chat. */
+		async prompt(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			text: string,
+			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
+		): Promise<string> {
+			if (images.length && !acpStore.connection(connectionId)?.capabilities?.promptImage) {
+				throw new Error("This agent does not support images.");
 			}
+			const prompt: AcpContentBlock[] = [...(text.trim() ? [{ type: "text" as const, text }] : []), ...images];
+			return invoke<string>("acp_session_prompt", { connectionId, sessionId, prompt });
 		},
 
 		async cancel(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
 			await invoke("acp_session_cancel", { connectionId, sessionId });
+		},
+
+		async cancelQueued(connectionId: AcpConnectionId, sessionId: AcpSessionId, turnId: string): Promise<void> {
+			await invoke("acp_queued_prompt_cancel", { connectionId, sessionId, turnId });
 		},
 
 		/** Answer with one of the option ids the agent published, never another. */

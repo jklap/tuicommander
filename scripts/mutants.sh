@@ -37,6 +37,16 @@ set -euo pipefail
 
 RANGE="${1:-HEAD~1}"
 ROOT="$(git rev-parse --show-toplevel)"
+case "${TMPDIR:-}" in
+  "$ROOT/"*|"$HOME/Gits/"*) TEST_TMP_BASE="${TMPDIR%/}" ;;
+  *) TEST_TMP_BASE="$ROOT/.tmp/tuic-tests" ;;
+esac
+mkdir -p "$TEST_TMP_BASE"
+TEST_TMP="$(mktemp -d "$TEST_TMP_BASE/tuic-mutants.XXXXXX")"
+trap 'rm -rf "$TEST_TMP"' EXIT
+export TMPDIR="$TEST_TMP/"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+export TUIC_TEST_TMP_ROOT="$TEST_TMP"
 SRC="$ROOT/.tmp/mutants-src"
 DIFF="$ROOT/.tmp/mutants.diff"
 
@@ -85,7 +95,7 @@ ulimit -n 10240
 # the missed.txt dump below only ever printed on a clean run, which is the one
 # case where it has nothing to say.
 STATUS=0
-cargo mutants --in-place --in-diff "$DIFF" "${@:2}" || STATUS=$?
+cargo mutants --workspace --in-place --in-diff "$DIFF" "${@:2}" || STATUS=$?
 echo "--- missed (a surviving mutant is a missing test):"
 cat mutants.out/missed.txt 2>/dev/null || true
 echo "logs: $SRC/src-tauri/mutants.out"

@@ -12,6 +12,9 @@ interface WorktreeRemovalCoordinatorDeps {
 			workspaceId: string,
 			deleteBranch: boolean,
 			force?: boolean,
+			overrideLock?: boolean,
+			expectedFingerprint?: string,
+			confirmMissingCheckout?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
@@ -130,15 +133,31 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		// Stays false when: locked+cancelled, or force-remove failed (worktree still in git).
 		let shouldRemoveFromStore = false;
 		let shouldClearBranchLabel = true;
+		const removeConfirmed = (overrideLock: boolean) => {
+			if (lifecycle.removalSafety === "requires_force") {
+				if (lifecycle.missingCheckout) {
+					return deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true, overrideLock, undefined, true);
+				}
+				if (!lifecycle.dirtyFingerprint) {
+					throw new Error("Cannot verify the confirmed worktree state");
+				}
+				return deps.repo.removeWorktree(
+					repoPath,
+					workspaceId,
+					deleteBranch,
+					true,
+					overrideLock,
+					lifecycle.dirtyFingerprint,
+				);
+			}
+			return overrideLock
+				? deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false, true)
+				: deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false);
+		};
 		try {
 			// The user confirmed knowing the count, so the backend guard would only
 			// bounce a decision that has already been made.
-			const outcome = await deps.repo.removeWorktree(
-				repoPath,
-				workspaceId,
-				deleteBranch,
-				lifecycle.removalSafety === "requires_force",
-			);
+			const outcome = await removeConfirmed(false);
 			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
 			shouldRemoveFromStore = true;
 			shouldClearBranchLabel = !outcome?.branch_delete_warning;
@@ -146,15 +165,14 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
 			if (reason.startsWith("worktree_locked:")) {
-				// Worktree is locked by a Claude agent — ask user to confirm force removal
+				// Worktree is locked by an agent — ask for a separate lock override.
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 				appLogger.warn("git", `handleRemoveWorkspace: worktree locked — showing confirmation dialog`, {
 					workspaceId,
 					reason,
 				});
-				// Pass deleteBranch so the dialog can warn about unmerged-commit loss
-				// when force=true causes `git branch -D` to run on a branch with
-				// unpushed work. Catch dialog rejection so the removingBranches
+				// Pass deleteBranch so the dialog can describe the requested cleanup.
+				// Catch dialog rejection so the removingBranches
 				// lock is released even when the modal subsystem errors out.
 				let forceConfirmed = false;
 				try {
@@ -177,7 +195,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				}
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
 				try {
-					const outcome = await deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true);
+					const outcome = await removeConfirmed(true);
 					appLogger.info("git", `handleRemoveWorkspace: force remove_worktree SUCCESS`, { workspaceId });
 					shouldRemoveFromStore = true;
 					shouldClearBranchLabel = !outcome?.branch_delete_warning;

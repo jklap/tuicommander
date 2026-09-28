@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![cfg_attr(
     not(feature = "desktop"),
     allow(dead_code, unused_imports, unused_variables)
@@ -15,50 +16,51 @@ pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
-pub mod app_instance;
+pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
-pub(crate) mod chrome;
+pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
-pub(crate) mod cli;
+pub(crate) use tuic_core::cli;
 pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
-pub(crate) mod cow;
+pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
-pub(crate) mod credentials;
+pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
 pub(crate) mod ego_cli;
-pub(crate) mod error_classification;
+pub(crate) use tuic_core::error_classification;
 pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
-pub(crate) mod git_cli;
+pub(crate) use tuic_git::git_cli;
 pub(crate) mod git_graph;
-pub(crate) mod git_locks;
-pub(crate) mod git_reads;
+pub(crate) use tuic_git::git_locks;
+pub(crate) use tuic_git::git_reads;
 pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;
-pub(crate) mod github_debug;
+pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;
-pub(crate) mod grid_gate;
+pub(crate) use tuic_terminal::grid_gate;
+pub(crate) mod grid_watch;
 pub(crate) mod grok_usage;
 pub(crate) mod improvement_scan;
-mod input_line_buffer;
-pub(crate) mod jsonc_edit;
+pub(crate) use tuic_core::jsonc_edit;
+pub(crate) use tuic_terminal::input_line_buffer;
 pub(crate) mod mcp_http;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
@@ -81,8 +83,8 @@ mod native_drag;
 mod native_keys;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
-mod output_parser;
-pub(crate) mod output_watchers;
+pub(crate) use tuic_terminal::output_parser;
+pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
 pub(crate) mod plugin_credentials;
@@ -94,13 +96,13 @@ pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
 mod press_and_hold;
-pub(crate) mod process_env;
+pub(crate) use tuic_core::process_env;
 pub(crate) mod progress;
 pub(crate) mod prompt;
 pub(crate) mod pty;
 pub(crate) mod pty_capture;
 pub(crate) mod push;
-pub(crate) mod redaction;
+pub(crate) use tuic_core::redaction;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -110,6 +112,7 @@ pub(crate) mod remote_deploy;
 pub(crate) mod remote_lifetime;
 pub(crate) mod remote_mirror;
 pub(crate) mod remote_runtime;
+pub(crate) mod remote_update;
 pub(crate) mod repo_watcher;
 mod shell_integration;
 #[cfg(feature = "desktop")]
@@ -120,10 +123,12 @@ pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
-pub(crate) mod terminal_grid;
+pub(crate) use tuic_terminal::terminal_grid;
+#[cfg(feature = "desktop")]
+pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod text_rank;
+pub(crate) use tuic_core::text_rank;
 pub(crate) mod themes;
 pub(crate) mod tool_search;
 #[cfg(feature = "desktop")]
@@ -395,6 +400,7 @@ fn report_progress_event(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -405,6 +411,11 @@ fn progress_list(
     input: progress::ProgressListInput,
 ) -> Result<progress::ProgressList, String> {
     progress::progress_list(&project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_projects() -> Result<Vec<String>, String> {
+    progress::progress_projects()
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -1359,6 +1370,57 @@ async fn prewarm_content_indices(state: Arc<AppState>, repos: Vec<String>) {
 }
 
 #[cfg(feature = "desktop")]
+fn is_app_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
+    // Wry invokes this callback for subframes on macOS and Linux. Keep the
+    // origins and schemes used by previews, plugin panels and downloads here;
+    // rendered Markdown links are intercepted before they can navigate a frame.
+    let bundled_origin = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (cfg!(windows)
+            && url.scheme() == "http"
+            && url.host_str() == Some("tauri.localhost")
+            && url.port().is_none());
+    let internal_frame = matches!(url.scheme(), "asset" | "plugin")
+        || (url.scheme() == "http"
+            && matches!(url.host_str(), Some("asset.localhost" | "plugin.localhost")))
+        || (url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc"))
+        || matches!(url.scheme(), "data" | "blob")
+        || (matches!(url.scheme(), "http" | "https")
+            && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")));
+    #[cfg(debug_assertions)]
+    {
+        bundled_origin || internal_frame || dev_url.is_some_and(|dev| url.origin() == dev.origin())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = dev_url;
+        bundled_origin || internal_frame
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn release_webview_document_resources(state: &AppState, webview_label: &str) {
+    let mut removed = Vec::new();
+    state.grid.channels.retain(|session_id, subscription| {
+        if subscription.webview_label == webview_label {
+            removed.push((session_id.clone(), subscription.epoch));
+            false
+        } else {
+            true
+        }
+    });
+    for (session_id, epoch) in removed {
+        state
+            .grid
+            .gates
+            .remove_if(&session_id, |_, gate| gate.epoch() == epoch);
+    }
+    state
+        .plugin_output_watchers
+        .write()
+        .remove_webview(webview_label);
+}
+
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Must run before the first `config::config_dir()` read (below) — see
@@ -1551,37 +1613,29 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
-                .on_navigation(|_webview, url| {
-                    // Allow internal navigation (tauri://, localhost in dev,
-                    // and http://tauri.localhost/ on Windows production builds)
-                    let scheme = url.scheme();
-                    if scheme == "tauri" || scheme == "asset" || scheme == "plugin" {
+                .on_navigation(|webview, url| {
+                    // Wry also calls this for subframes on macOS/Linux; allow
+                    // internal preview/panel origins while refusing external
+                    // top-document navigation. Explicit opens use the opener.
+                    let dev_url = webview.app_handle().config().build.dev_url.as_ref();
+                    if is_app_navigation(url, dev_url) {
                         return true;
                     }
-                    let host = url.host_str().unwrap_or("");
-                    if host == "tauri.localhost" || host == "localhost" || host == "127.0.0.1" {
-                        return true;
+                    // The callback has no user-gesture or frame identity. Tell the
+                    // UI what was blocked, but never open it from here: scripts in
+                    // an embedded dashboard could otherwise spam the OS browser.
+                    if matches!(url.scheme(), "http" | "https" | "mailto") {
+                        let _ = webview.emit("navigation-blocked", url.as_str());
                     }
-                    // External URL — open in system browser, block webview navigation
-                    if scheme == "http" || scheme == "https" {
-                        let url_str = url.to_string();
-                        tracing::info!(url = %url_str, "Opening external URL in browser");
-                        #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(&url_str).spawn();
-                        #[cfg(target_os = "linux")]
-                        let _ = std::process::Command::new("xdg-open").arg(&url_str).spawn();
-                        #[cfg(target_os = "windows")]
-                        {
-                            let mut cmd = std::process::Command::new("cmd");
-                            cmd.args(["/c", "start", &url_str]);
-                            cli::apply_no_window(&mut cmd);
-                            let _ = cmd.spawn();
-                        }
-                        return false;
-                    }
-                    true
+                    tracing::debug!(url = %url, "Blocked implicit WebView navigation");
+                    false
                 })
                 .on_page_load(|webview, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Started
+                        && let Some(state) = webview.try_state::<Arc<AppState>>()
+                    {
+                        release_webview_document_resources(state.inner(), webview.label());
+                    }
                     // A WebContent crash leaves the WebView on about:blank; the
                     // 2026-09-08 standby incident left it on about:srcdoc. Both
                     // are blank top documents with no URL behind them, so both
@@ -1603,7 +1657,8 @@ pub fn run() {
                             // server's address, so this hook could not recover
                             // a `make dev` window at all.
                             let state: tauri::State<'_, Arc<AppState>> = handle.state();
-                            let _ = webview_recovery::navigate_home(state.inner());
+                            let _ =
+                                webview_recovery::navigate_home(state.inner(), "page_load_hook");
                         });
                     }
                 })
@@ -1624,6 +1679,13 @@ pub fn run() {
         )
         .manage(state)
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed)
+                && let Some(state) = window.try_state::<Arc<AppState>>()
+            {
+                release_webview_document_resources(state.inner(), window.label());
+            }
+        })
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
@@ -1693,11 +1755,17 @@ pub fn run() {
             // suppressed while the user is at their machine.
             if let Some(window) = app.get_webview_window("main") {
                 let push_flag = Arc::clone(app_state);
+                #[cfg(target_os = "macos")]
+                let focus_app = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(focused) = event {
                         push_flag
                             .desktop_window_focused
                             .store(*focused, std::sync::atomic::Ordering::Relaxed);
+                        #[cfg(target_os = "macos")]
+                        if !focused {
+                            dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
+                        }
                     }
                 });
             }
@@ -1810,6 +1878,8 @@ pub fn run() {
             remote_runtime::connect_remote_connection,
             remote_runtime::disconnect_remote_connection,
             remote_runtime::remote_connection_statuses,
+            remote_update::prepare_remote_update,
+            remote_update::update_and_restart_remote,
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
@@ -1902,6 +1972,7 @@ pub fn run() {
             agent::open_in_custom,
             agent::detect_claude_binary,
             agent::detect_agent_binary,
+            agent_hook_launch::prepare_agent_launch_args,
             agent::detect_all_agent_binaries,
             agent::spawn_agent,
             agent_session::discover_agent_session,
@@ -2005,6 +2076,7 @@ pub fn run() {
             clear_repo_caches,
             report_progress_event,
             progress_list,
+            progress_projects,
             progress_delete,
             progress_mark_viewed,
             progress_flow,
@@ -2125,7 +2197,9 @@ pub fn run() {
             sleep_prevention::unblock_sleep,
             fs::resolve_terminal_path,
             fs::resolve_terminal_paths,
+            fs::resolve_markdown_link,
             fs::list_directory,
+            fs::get_home_directory,
             fs::stat_path,
             fs::search_files,
             fs::warm_content_index,
@@ -2178,7 +2252,7 @@ pub fn run() {
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
             grok_usage::get_grok_usage_api,
-            terminal_grid::set_terminal_theme_colors,
+            terminal_grid_commands::set_terminal_theme_colors,
             screenshot_response,
             mcp_confirm_response,
             app_logger::push_log,
@@ -2186,7 +2260,7 @@ pub fn run() {
             app_logger::clear_logs,
             notification_sound::play_notification_sound,
             notification_sound::list_audio_output_devices,
-            git_graph::get_commit_graph,
+            git::get_commit_graph,
             tuic_cli::get_cli_status,
             tuic_cli::install_cli,
             tuic_cli::uninstall_cli,
@@ -2222,6 +2296,7 @@ pub fn run() {
             acp_commands::acp_session_close,
             acp_commands::acp_session_prompt,
             acp_commands::acp_session_cancel,
+            acp_commands::acp_queued_prompt_cancel,
             acp_commands::acp_session_set_config_option,
             acp_commands::acp_turn_pause,
             acp_commands::acp_turn_resume,
@@ -2575,7 +2650,17 @@ pub struct RemoteOptions {
     pub survive_secs: Option<u64>,
     /// Whether startup writes MCP configuration for local agents.
     pub agent_configs: bool,
+    /// Exit with failure after an update so the installed service restarts us.
+    pub supervised: bool,
+    /// Allow the old process a short grace period to release its TCP port.
+    pub wait_for_restart: bool,
     pairing_token: Option<String>,
+}
+
+/// Read-only metadata for selecting a locally built daemon binary.
+pub fn remote_build_info_json() -> Result<String, String> {
+    let build = remote_deploy::assets::running_build_identity()?;
+    serde_json::to_string(build).map_err(|error| error.to_string())
 }
 
 impl Default for RemoteOptions {
@@ -2585,6 +2670,8 @@ impl Default for RemoteOptions {
             bind: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             survive_secs: None,
             agent_configs: true,
+            supervised: false,
+            wait_for_restart: false,
             pairing_token: None,
         }
     }
@@ -2617,6 +2704,10 @@ impl RemotePidFile {
 #[cfg(any(not(feature = "desktop"), test))]
 impl Drop for RemotePidFile {
     fn drop(&mut self) {
+        if std::fs::read_to_string(&self.0).ok().as_deref() != Some(&std::process::id().to_string())
+        {
+            return;
+        }
         if let Err(error) = std::fs::remove_file(&self.0)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -2645,6 +2736,7 @@ async fn remote_shutdown_signal() -> std::io::Result<()> {
 
 #[cfg(not(feature = "desktop"))]
 pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
+    crate::remote_deploy::assets::running_build_identity().map_err(anyhow::Error::msg)?;
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("Failed to install rustls CryptoProvider"))?;
@@ -2700,6 +2792,13 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
+    let restart = Arc::new(tokio::sync::Notify::new());
+    app_state.remote_update = Some(remote_update::RemoteUpdateState {
+        executable: std::env::current_exe()?,
+        restart: restart.clone(),
+        in_progress: tokio::sync::Mutex::new(()),
+        installed: std::sync::atomic::AtomicBool::new(false),
+    });
     *app_state.github.token.get_mut() = github_token;
     *app_state.github.token_source.get_mut() = github_token_source;
 
@@ -2795,8 +2894,24 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     );
 
     let bind_addr = options.bind_addr();
-    let listener = std::net::TcpListener::bind(bind_addr)
-        .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?;
+    let listener = if options.wait_for_restart {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match std::net::TcpListener::bind(bind_addr) {
+                Ok(listener) => break listener,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AddrInUse
+                        && std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(error) => anyhow::bail!("Fatal: failed to bind TCP on {bind_addr}: {error}"),
+            }
+        }
+    } else {
+        std::net::TcpListener::bind(bind_addr)
+            .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?
+    };
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
@@ -2808,6 +2923,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     );
     tokio::pin!(lifetime);
 
+    let mut updated = false;
     tokio::select! {
         result = axum::serve(listener, svc) => {
             if let Err(e) = result {
@@ -2821,17 +2937,259 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         () = &mut lifetime => {
             tracing::info!(source = "remote", "Remote daemon survive time expired");
         }
+        () = restart.notified() => {
+            updated = true;
+            tracing::info!(source = "remote", "Restarting after remote binary update");
+        }
     }
 
     // Flush the last buffered log lines to disk before the process exits
     // (story #672-c1a3) — the lines a shutdown bug needs most.
     app_logger::flush_logs_on_exit();
+    if updated {
+        if options.supervised {
+            anyhow::bail!("Remote update installed; exiting for supervisor restart");
+        }
+        let mut child = std::process::Command::new(std::env::current_exe()?);
+        child.args(
+            std::env::args()
+                .skip(1)
+                .filter(|arg| arg != "--wait-for-restart"),
+        );
+        child.arg("--wait-for-restart");
+        child.env(
+            "TUIC_PAIRING_TOKEN",
+            &app_config.services.auth.session_token,
+        );
+        child
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Updated remote failed to restart: {e}"))?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    fn register_document_grid(state: &AppState, session_id: &str, webview_label: &str) -> u64 {
+        let gate = Arc::new(crate::grid_gate::GridGate::new());
+        let epoch = gate.epoch();
+        state.grid.gates.insert(session_id.to_string(), gate);
+        state.grid.channels.insert(
+            session_id.to_string(),
+            crate::state::DesktopGridChannel {
+                channel: tauri::ipc::Channel::new(|_| Ok(())),
+                webview_label: webview_label.to_string(),
+                epoch,
+            },
+        );
+        epoch
+    }
+
+    #[cfg(feature = "desktop")]
+    fn watcher(id: &str, pattern: &str) -> output_watchers::WatcherSpec {
+        output_watchers::WatcherSpec {
+            id: id.to_string(),
+            pattern: pattern.to_string(),
+            flags: String::new(),
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn reload_releases_every_old_grid_channel_and_watcher() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "one", "main");
+        register_document_grid(&state, "two", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "old-document",
+            1,
+            &[watcher("w", "old document")],
+        );
+
+        release_webview_document_resources(&state, "main");
+
+        assert!(state.grid.channels.is_empty());
+        assert!(state.grid.gates.is_empty());
+        assert!(!crate::pty::grid_has_subscriber(&state, "one"));
+        assert!(!crate::pty::grid_has_subscriber(&state, "two"));
+        assert!(
+            state
+                .plugin_output_watchers
+                .read()
+                .matching_ids("old document")
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn closing_a_panel_releases_only_its_watcher_set() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "main-terminal", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "main-client",
+            1,
+            &[watcher("w", "main line")],
+        );
+        state.plugin_output_watchers.write().sync_for_webview(
+            "panel-activity",
+            "panel-client",
+            1,
+            &[watcher("w", "panel line")],
+        );
+
+        release_webview_document_resources(&state, "panel-activity");
+
+        assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        let watchers = state.plugin_output_watchers.read();
+        assert_eq!(watchers.matching_ids("main line"), vec!["main-client/w"]);
+        assert!(watchers.matching_ids("panel line").is_empty());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn main_reload_preserves_a_floating_terminals_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_document_grid(&state, "main-terminal", "main");
+        let floating_epoch = register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "main");
+
+        assert!(!crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert!(crate::pty::grid_has_subscriber(&state, "floating-terminal"));
+        assert_eq!(
+            state.grid.gates.get("floating-terminal").unwrap().epoch(),
+            floating_epoch
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn destroying_a_floating_window_releases_only_its_grid_subscription() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let main_epoch = register_document_grid(&state, "main-terminal", "main");
+        register_document_grid(&state, "floating-terminal", "floating-tab-1");
+
+        release_webview_document_resources(&state, "floating-tab-1");
+
+        assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
+        assert_eq!(
+            state.grid.gates.get("main-terminal").unwrap().epoch(),
+            main_epoch
+        );
+        assert!(!crate::pty::grid_has_subscriber(
+            &state,
+            "floating-terminal"
+        ));
+        assert!(!state.grid.gates.contains_key("floating-terminal"));
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn reload_keeps_browser_watchers_and_accepts_fresh_document() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .plugin_output_watchers
+            .write()
+            .sync("browser", 1, &[watcher("w", "browser line")]);
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "old-document",
+            1,
+            &[watcher("w", "old line")],
+        );
+        release_webview_document_resources(&state, "main");
+
+        let new_epoch = register_document_grid(&state, "one", "main");
+        state.plugin_output_watchers.write().sync_for_webview(
+            "main",
+            "new-document",
+            1,
+            &[watcher("w", "new line")],
+        );
+
+        assert_eq!(state.grid.gates.get("one").unwrap().epoch(), new_epoch);
+        let watchers = state.plugin_output_watchers.read();
+        assert_eq!(watchers.matching_ids("browser line"), vec!["browser/w"]);
+        assert_eq!(watchers.matching_ids("new line"), vec!["new-document/w"]);
+        assert!(watchers.matching_ids("old line").is_empty());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn repeated_reloads_leave_only_the_latest_document_watchers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        for i in 0..10 {
+            release_webview_document_resources(&state, "main");
+            let client = format!("document-{i}");
+            state.plugin_output_watchers.write().sync_for_webview(
+                "main",
+                &client,
+                1,
+                &[watcher("w", &format!("line-{i}"))],
+            );
+        }
+        let watchers = state.plugin_output_watchers.read();
+        for i in 0..9 {
+            assert!(watchers.matching_ids(&format!("line-{i}")).is_empty());
+        }
+        assert_eq!(watchers.matching_ids("line-9"), vec!["document-9/w"]);
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn navigation_guard_preserves_internal_frames_and_blocks_external_targets() {
+        let dev = tauri::Url::parse("http://dev.example:1421/").unwrap();
+        for allowed in [
+            "tauri://localhost/index.html",
+            "asset://localhost/file.pdf",
+            "http://asset.localhost/file.pdf",
+            "plugin://localhost/panel",
+            "plugin://custom/panel",
+            "http://plugin.localhost/panel",
+            "about:blank",
+            "about:srcdoc#/3",
+            "data:text/html,hello",
+            "blob:tauri://localhost/id",
+            "http://localhost:9877/panel",
+            "http://127.0.0.1:14319/",
+            "http://[::1]:9877/",
+        ] {
+            assert!(
+                is_app_navigation(&tauri::Url::parse(allowed).unwrap(), Some(&dev)),
+                "{allowed}"
+            );
+        }
+        assert_eq!(
+            is_app_navigation(
+                &tauri::Url::parse("http://dev.example:1421/docs").unwrap(),
+                Some(&dev)
+            ),
+            cfg!(debug_assertions)
+        );
+        for blocked in [
+            "http://dev.example:1422/docs",
+            "https://example.com/",
+            "http://localhost@evil.com/",
+            "tauri://localhost.evil/",
+            "file:///tmp/secret",
+            "javascript:alert(1)",
+        ] {
+            assert!(
+                !is_app_navigation(&tauri::Url::parse(blocked).unwrap(), Some(&dev)),
+                "{blocked}"
+            );
+        }
+        assert_eq!(
+            is_app_navigation(&tauri::Url::parse("http://tauri.localhost/").unwrap(), None),
+            cfg!(windows)
+        );
+    }
 
     #[cfg(feature = "desktop")]
     #[tokio::test]
@@ -3031,6 +3389,16 @@ mod tests {
             );
         }
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn remote_restart_old_pid_guard_preserves_successor_pid() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tuic-remote.pid");
+        let old = RemotePidFile::create(dir.path()).expect("old pid file");
+        std::fs::write(&path, "424242").expect("successor pid");
+        drop(old);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "424242");
     }
 
     #[test]

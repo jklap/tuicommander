@@ -91,13 +91,25 @@ pub fn request_with_headers(
     body: Option<&str>,
     extra_headers: &[(&str, &str)],
 ) -> io::Result<Response> {
+    request_with_headers_and_timeout(method, path, body, extra_headers, None)
+}
+
+pub fn request_with_headers_and_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    extra_headers: &[(&str, &str)],
+    read_timeout: Option<std::time::Duration>,
+) -> io::Result<Response> {
     let mut stream = connect()?;
     #[cfg(unix)]
     {
-        let timeout = Some(std::time::Duration::from_secs(3));
+        let timeout = Some(read_timeout.unwrap_or(std::time::Duration::from_secs(3)));
         stream.set_read_timeout(timeout)?;
-        stream.set_write_timeout(timeout)?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(3)))?;
     }
+    #[cfg(windows)]
+    let _ = read_timeout;
 
     let content = body.unwrap_or("");
     let mut extra = String::new();

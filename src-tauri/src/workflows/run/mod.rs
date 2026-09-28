@@ -453,17 +453,40 @@ mod tests {
                 },
             )
             .unwrap();
-        let mut story = stories.get_story(&story_id).unwrap();
-        for command in [
-            StoryCommand::StartManual,
-            StoryCommand::CheckCriterion(0),
-            StoryCommand::SubmitReview,
-            StoryCommand::Approve,
-        ] {
-            story = stories
-                .transition(&story_id, story.revision, command)
-                .unwrap();
-        }
+        let initial_story = stories.get_story(&story_id).unwrap();
+        let claimed = stories
+            .claim(&story_id, "implementer", initial_story.revision)
+            .unwrap();
+        let checked = stories
+            .transition_for_actor(
+                &story_id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("implementer"),
+            )
+            .unwrap();
+        let reviewed = stories
+            .transition_for_actor(
+                &story_id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                Some("implementer"),
+            )
+            .unwrap();
+        let story = stories
+            .transition_for_actor(
+                &story_id,
+                reviewed.revision,
+                StoryCommand::Approve,
+                Some("reviewer"),
+            )
+            .unwrap();
+        assert_eq!(
+            stories.transition_history(&story_id).unwrap().last().unwrap().actor,
+            crate::stories::StoryTransitionActor::ManagedSession {
+                session_id: "reviewer".into(),
+            }
+        );
         let accepted = store
             .command(
                 &run.id,

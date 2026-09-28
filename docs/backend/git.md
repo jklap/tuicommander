@@ -1,12 +1,14 @@
 # Git Operations
 
-**Modules:** `src-tauri/src/git.rs`, `src-tauri/src/git_cli.rs`, `src-tauri/src/git_reads.rs`
+**Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
+
+The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches merged GitHub PR evidence through `gh` and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
 
 ## Async Execution & Caching
 
-All Tauri git commands are `async` and run git subprocesses inside `tokio::task::spawn_blocking`. This prevents blocking Tokio worker threads during I/O-heavy operations like `git diff`, `git log`, or `git fetch`.
+The root Git adapters run blocking domain operations inside `tokio::task::spawn_blocking`; the domain crate does not own a runtime. All Tauri git commands are `async` and run git subprocesses inside `tokio::task::spawn_blocking`. This prevents blocking Tokio worker threads during I/O-heavy operations like `git diff`, `git log`, or `git fetch`.
 
 Git data is cached with a 60s TTL in `GitCacheState` (`state.rs`), one `moka::sync::Cache<String, Arc<T>>` per result type keyed by repo path. `moka`'s `get_with`/`try_get_with` **coalesce concurrent identical loads to a single computation** — replacing the previous hand-rolled `DashMap<String,(T,Instant)>` whose check-then-compute-then-set pattern had a TOCTOU race that let a `repo-changed` burst fan out N duplicate computes. `sync::Cache` is used (not `future::Cache`) because every loader is blocking git work run on the blocking pool; the sync `*_cached` helpers keep working without async (`git.rs::cached_get`/`cached_try` wrap the pattern). `github_repo_cooldown` stays a plain `DashMap` — it is a cooldown set, not a TTL value cache.
 
@@ -18,7 +20,7 @@ Internal callers that need synchronous access use `_impl` suffixes (e.g. `get_di
 
 ## GitReads Port (gix migration)
 
-Read operations go through a reversible `GitReads` port (`src-tauri/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
+Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
 
 **An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix 0.84 cannot match git's exact output, the op stays on the CLI.
 
@@ -26,7 +28,7 @@ Read operations go through a reversible `GitReads` port (`src-tauri/src/git_read
 |----|---------|-------|
 | `branches_detail` | **gix** | `references()` → shorten / peel / committer ISO8601 / author / summary / upstream. ahead/behind via the `ahead_behind` backend. |
 | `ahead_behind` | **gix** | `rev_parse_single`, then **identical tips short-circuit to `(0, 0)` with no walk**; otherwise two `with_hidden` revwalks (counts are order-independent; handles no-common-ancestor). `branches_detail` asks this once per branch, and a branch level with its upstream is the common case, so the short-circuit is what keeps that fan-out off `O(branches x history)`. |
-| `worktree_paths` | **gix** | `worktrees()` + main worktree; paths canonicalized to match `git worktree list` real paths. |
+| `worktree_paths` | **gix** | `worktrees()` + main worktree; paths canonicalized to match `git worktree list` real paths. Warm status is attached after backend selection so CLI and gix return the same checkout data. |
 | `blame` | **gix** | `blame_file()`; **renamed-history files fall back to CLI** (gix blame lacks `-C`/`-M` rename following). |
 | `commit_log`, `graph_commits` | **gix** | gix has no built-in topo sort, so `gix_topo_order` reproduces `git log --topo-order` (Kahn seeded by commit-date) and `gix_decorations` reproduces `%D` byte-for-byte (reverse-refname order, `tag:` prefix, `HEAD -> branch`). `author_date` UTC is normalized to git's `Z`. |
 | `status_counts` | **gix** | `repo.status()` items mapped to staged/changed counts (TreeIndex = staged; IndexWorktree Change/IntentToAdd/untracked/conflict = changed; `NeedsUpdate` skipped). **sparse-checkout / submodule → CLI fallback.** |
@@ -152,9 +154,82 @@ the probe does on unix.
 
 Every managed workspace is a linked Git worktree. After Git creates the clean
 checkout, `cow.rs` asks Git for ignored directories and copy-on-write copies
-those directories from the parent. Tracked paths and ignored files are never
-copied; nested repositories and any directory containing the destination are
-skipped.
+those directories from the parent. It excludes every `.tmp` or `.mdkb` path component,
+tracked paths, ignored files, nested repositories, and any directory containing
+the destination. Tauri `bundle.externalBin` entries additionally select their
+target-triple sidecar files by configuration, rather than by hard-coded names.
+Submodules initialise from the parent checkout first (with the configured remote
+as fallback), so unpublished pinned objects remain usable; failures are returned
+as workspace warnings.
+
+HTTP, MCP, and desktop IPC creation return while copy-on-write warming is pending. Their
+instructions say to wait before running a build; `GET /worktrees/paths?path=<repo>`
+and IPC `get_worktree_paths` report each workspace's `warm_artifacts.status`
+(`pending`, `done`, or `failed`). HTTP and MCP run a configured setup script
+before warming. Desktop IPC currently starts warming before its frontend setup
+script, so those two operations can overlap. Pending is recorded before
+the setup script starts. If creation is cancelled during setup, the status
+becomes `failed` instead of remaining `pending`. Removing or archiving a
+worktree waits for an active copy, clears its warm state, and prevents a queued
+copy from recreating the old path.
+
+Archiving refuses a locked or missing checkout before moving it. It renames the
+checkout into `__archived`, runs `git worktree repair`, and repairs initialized
+submodule gitfiles and `core.worktree` paths. The Git administration directory,
+HEAD, and reflogs remain registered; the workspace mapper hides archived paths
+from active UI listings. A repair failure rolls the checkout back to its old
+path. The archive path is never unlocked and never pruned.
+
+Orphan pruning accepts only a registered detached linked checkout with no Git
+operation in progress. Immediately before removal it checks detached HEAD
+reachability against all durable refs with `git for-each-ref --contains`; a
+commit reachable only from the worktree HEAD/reflog is kept for recovery.
+
+Non-force removal first requires a clean checkout and submodules, no Git
+operation in progress, and a HEAD matching the captured branch tip. Git needs
+one `--force` to remove a populated submodule even when it is clean; TUICommander
+uses it only after checking submodule status and rechecking dirtiness immediately
+before removal. A separate, confirmed lock override bypasses the lock during
+removal; dirty-file `force` alone does not bypass a lock. Before removal, every
+initialized submodule's HEAD and refs are copied into preserved refs in the
+main checkout's module repository under a unique namespace. Before fetching,
+the destination must resolve as that initialized module's Git root inside the
+main checkout, with a Git directory distinct from the superproject's. An
+uninitialized module or a misplaced `.git` file stops removal without deleting
+the source checkout. Every stash and
+reflog tip also gets a durable preserved ref, including older stash entries and
+commits that have fallen off a branch. A missing checkout's module bundle
+includes reflog objects before Git removes its registration. If preservation
+fails, removal stops. For a deinitialized module, the leftover Git directory is
+located by its configured `.gitmodules` name, including nested names that
+differ from checkout paths; any retained admin state stops removal. The checkout is checked again after preservation,
+immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing registered checkout requires force confirmation before preserving module refs and pruning its registration; a lock still needs a separate override. The normal workspace list hides missing checkouts. An
+uninitialized submodule without Git state is safe to remove. The lifecycle preflight identifies a missing registered checkout explicitly; desktop and HTTP removal require a separate missing-checkout confirmation and recheck that the directory has not reappeared. Force confirmation
+can carry a fingerprint of checkout status per path, HEAD, and submodule refs, rechecked
+under the removal lock. The status portion records Git's per-path porcelain
+entries, not the contents of a file that was already dirty. Branch deletion in
+either mode uses the captured OID in a compare-and-delete operation. If proof
+fails or the branch moves, removal reports a warning and keeps the ref. For
+branch deletion, it checks the default branch's ancestry. A clean branch
+whose commits were squash- or rebase-merged can also pass when `git cherry`
+reports no unique patches. A branch with an unmerged merge commit is refused:
+`git cherry` does not compare changes made by merge resolution. The removal
+result names the matching rule.
+
+The checked-out main worktree branch is another integration target: if it
+contains the candidate tip, removal records `integration_ancestry` even when
+the remote default branch is behind. Otherwise, a merged GitHub PR can prove
+a squash merge when its fetched head contains the local tip. Open or closed
+unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
+Keeping the branch skips branch-deletion proof while retaining dirty-work,
+submodule, operation, and lock checks.
+
+MCP `repo action=branch_delete` applies the same merge classification to a
+local branch with no checkout. It refuses the current and default branches,
+checks every worktree record, and accepts ancestry in the checked-out
+integration branch or patch equivalence against that branch when GitHub PR
+proof is unavailable. The ref is removed with its captured OID as the expected
+old value, so an advanced branch remains intact. Remote refs are untouched.
 
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per
@@ -162,6 +237,9 @@ ignored directory. The probe and copy primitive share `COW_COPY_FLAGS` (macOS
 `cp -c`, then GNU `cp --reflink=always`); neither may silently fall back to a
 byte-for-byte recursive copy. Warming is best-effort: failure leaves a complete,
 valid, cold linked worktree.
+After each copy, warming adds owner write permission to cloned files and
+directories. It does not follow symlinks or change the source checkout, so
+sealed ignored evidence remains available and the new worktree stays removable.
 
 ## Tauri Commands
 
@@ -194,9 +272,11 @@ valid, cold linked worktree.
 Lifecycle is backend-authored from the exact checkout `HEAD`. Linked worktrees
 report dirty state, default-branch ancestry, and removal safety. Any failed check
 serializes as `unknown`, never as clean or safe.
-When branch deletion is requested without force, worktree removal checks this
-verdict before touching the checkout. An unmerged branch or unknown verdict
-stops the combined operation and leaves the worktree in place.
+When branch deletion is requested, worktree removal checks this verdict before
+touching the checkout. Without force, an unmerged branch or unknown verdict
+stops the combined operation and leaves the worktree in place. With force,
+removal may discard dirty checkout files, but an unmerged branch is retained
+with a warning.
 
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 

@@ -16,6 +16,7 @@ interface SessionDetailScreenProps {
 	session: SessionInfo;
 	sessionExists: boolean;
 	onBack: () => void;
+	onOpenFiles: () => void;
 }
 
 function projectName(cwd: string | null): string {
@@ -91,6 +92,11 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					<span class={styles.agentName}>{sessionState()?.agent_type ?? "Terminal"}</span>
 					<span class={styles.project}>{projectName(props.session.cwd)}</span>
 				</div>
+				<button class={styles.searchToggle} onClick={props.onOpenFiles} aria-label="Browse session files">
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+					</svg>
+				</button>
 				<Show when={sessionState()?.usage_limit_pct != null}>
 					<span class={styles.usageLabel} classList={{ [styles.danger]: (sessionState()!.usage_limit_pct ?? 0) > 80 }}>
 						{sessionState()!.usage_limit_pct}%
@@ -235,6 +241,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			/>
 			<CommandInput
 				sessionId={props.session.session_id}
+				managedSession={!!sessionState()?.agent_type}
+				awaitingInput={sessionState()?.awaiting_input}
+				sessionExists={props.sessionExists}
 				prefillValue={inputPrefill()}
 				ptyInputLine={ptyInputLine()}
 				agentType={sessionState()?.agent_type ?? null}

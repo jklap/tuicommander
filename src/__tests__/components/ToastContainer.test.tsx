@@ -1,19 +1,21 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastContainer } from "../../components/ToastContainer/ToastContainer";
+import { appLogger } from "../../stores/appLogger";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 
 /**
  * An agent's `ui action=toast` names the repo it came from, but a repo holds
- * many tabs. The toast carries the originating TUIC session id so a click can
- * land on the exact terminal that raised it instead of leaving the user to hunt
- * for it across every open session.
+ * many tabs. The toast carries the originating TUIC session id so the explicit
+ * Go to repo button can land on the exact terminal. Tapping the body dismisses.
  */
 describe("ToastContainer", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		progressStore.resetForTests();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		vi.restoreAllMocks();
@@ -38,20 +40,20 @@ describe("ToastContainer", () => {
 		});
 	}
 
-	it("focuses the terminal that produced the toast", () => {
+	it("keeps the current terminal when dismissing another terminal's toast", () => {
 		const other = addTerminal("session-other");
-		const origin = addTerminal("session-origin");
+		addTerminal("session-origin");
 		terminalsStore.setActive(other);
 
 		toastsStore.add("done", "tuicommander · built", "info", false, undefined, undefined, undefined, "session-origin");
 		render(() => <ToastContainer />);
 		fireEvent.click(screen.getByText("done"));
 
-		expect(terminalsStore.state.activeId).toBe(origin);
+		expect(terminalsStore.state.activeId).toBe(other);
 		expect(toastsStore.toasts).toHaveLength(0);
 	});
 
-	it("takes the repo and the tab strip along when the speaker is in another repo", () => {
+	it("keeps the current repo and tab strip when dismissing a toast from another repo", () => {
 		repositoriesStore.add({ path: "/here", displayName: "Here" });
 		repositoriesStore.setWorkspace("/here", "main", { worktreePath: "/here" });
 		repositoriesStore.add({ path: "/there", displayName: "There" });
@@ -69,9 +71,8 @@ describe("ToastContainer", () => {
 
 		// Focusing the terminal without its repo left the sidebar and the tab strip
 		// on the old repo while the pane drew the new terminal — no tab for it.
-		expect(terminalsStore.state.activeId).toBe(there);
-		expect(repositoriesStore.state.activeRepoPath).toBe("/there");
-		expect(repositoriesStore.get("/there")?.activeWorkspaceId).toBe("feature");
+		expect(terminalsStore.state.activeId).toBe(here);
+		expect(repositoriesStore.state.activeRepoPath).toBe("/here");
 	});
 
 	it("offers a repo action when the registered origin differs and focuses its live session", () => {
@@ -106,6 +107,95 @@ describe("ToastContainer", () => {
 		expect(toastsStore.toasts).toHaveLength(0);
 	});
 
+	it("opens the reporting terminal in its worktree from a progress toast", () => {
+		repositoriesStore.add({ path: "/progress-current", displayName: "Current" });
+		repositoriesStore.setWorkspace("/progress-current", "main", { worktreePath: "/progress-current" });
+		repositoriesStore.add({ path: "/progress-repo", displayName: "Progress" });
+		repositoriesStore.setWorkspace("/progress-repo", "main", { worktreePath: "/progress-repo" });
+		repositoriesStore.setWorkspace("/progress-repo", "feature", { worktreePath: "/progress-worktree" });
+		const current = addTerminal("pty-current");
+		const origin = addTerminal("pty-reporting");
+		repositoriesStore.addTerminalToWorkspace("/progress-current", "main", current);
+		repositoriesStore.addTerminalToWorkspace("/progress-repo", "feature", origin);
+		repositoriesStore.setActive("/progress-current");
+		terminalsStore.setActive(current);
+
+		progressStore.presentLive({
+			repo_path: "/progress-repo",
+			payload: {
+				entry: {
+					id: 1, project: "/progress-repo", ptyId: "pty-reporting", createdAtMs: 1,
+					type: "done", text: "Build complete", step: "Build",
+				},
+			},
+		});
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-repo");
+		expect(repositoriesStore.get("/progress-repo")?.activeWorkspaceId).toBe("feature");
+		expect(terminalsStore.state.activeId).toBe(origin);
+	});
+
+	it("dismisses a Progress toast body without switching to the reporting repository", () => {
+		repositoriesStore.add({ path: "/progress-dismiss-current", displayName: "Current" });
+		repositoriesStore.add({ path: "/progress-dismiss-origin", displayName: "Origin" });
+		repositoriesStore.setWorkspace("/progress-dismiss-current", "main", { worktreePath: "/progress-dismiss-current" });
+		repositoriesStore.setWorkspace("/progress-dismiss-origin", "main", { worktreePath: "/progress-dismiss-origin" });
+		const current = addTerminal("pty-dismiss-current");
+		const origin = addTerminal("pty-dismiss-origin");
+		repositoriesStore.addTerminalToWorkspace("/progress-dismiss-current", "main", current);
+		repositoriesStore.addTerminalToWorkspace("/progress-dismiss-origin", "main", origin);
+		repositoriesStore.setActive("/progress-dismiss-current");
+		terminalsStore.setActive(current);
+
+		progressStore.presentLive({
+			repo_path: "/progress-dismiss-origin",
+			payload: {
+				entry: {
+					id: 17,
+					project: "/progress-dismiss-origin",
+					ptyId: "pty-dismiss-origin",
+					createdAtMs: 17,
+					type: "done",
+					text: "Build complete",
+				},
+			},
+		});
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByText("Build complete"));
+
+		expect(toastsStore.toasts).toHaveLength(0);
+		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-dismiss-current");
+		expect(terminalsStore.state.activeId).toBe(current);
+	});
+
+	it("lands in the repository and logs when a progress terminal has closed", () => {
+		repositoriesStore.add({ path: "/progress-before", displayName: "Before" });
+		repositoriesStore.add({ path: "/progress-gone", displayName: "Gone" });
+		repositoriesStore.setActive("/progress-before");
+		const current = addTerminal("pty-still-open");
+		terminalsStore.setActive(current);
+		const closed = addTerminal("pty-closed");
+		terminalsStore.remove(closed);
+		const warn = vi.spyOn(appLogger, "warn");
+		progressStore.presentLive({
+			repo_path: "/progress-gone",
+			payload: {
+				entry: {
+					id: 2, project: "/progress-gone", ptyId: "pty-closed", createdAtMs: 2,
+					type: "blocked", text: "Review needed", step: "Review",
+				},
+			},
+		});
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-gone");
+		expect(terminalsStore.state.activeId).toBe(current);
+		expect(warn).toHaveBeenCalledWith("app", expect.stringContaining("terminal"), expect.objectContaining({ sessionId: "pty-closed" }));
+	});
+
 	it("places the repo action before the primary toast action", () => {
 		repositoriesStore.add({ path: "/toast-current-order", displayName: "Current" });
 		repositoriesStore.add({ path: "/toast-origin-order", displayName: "Origin" });
@@ -132,6 +222,20 @@ describe("ToastContainer", () => {
 		fireEvent.click(buttons[1]);
 		expect(openProgress).toHaveBeenCalledOnce();
 		expect(repositoriesStore.state.activeRepoPath).toBe("/toast-current-order");
+	});
+
+	it("switches a plain UI toast's repository without claiming a missing terminal", () => {
+		repositoriesStore.add({ path: "/plain-before", displayName: "Before" });
+		repositoriesStore.add({ path: "/plain-origin", displayName: "Origin" });
+		repositoriesStore.setActive("/plain-before");
+		const warn = vi.spyOn(appLogger, "warn");
+		toastsStore.add("Plain notice", "No PTY binding", "info", false, undefined, undefined, "/plain-origin");
+
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Go to repo" }));
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/plain-origin");
+		expect(warn).not.toHaveBeenCalled();
 	});
 
 	it("does not offer a repo action for the active repository", () => {
@@ -246,8 +350,7 @@ describe("ToastContainer", () => {
 		render(() => <ToastContainer />);
 		fireEvent.click(screen.getByText("stale"));
 
-		// No warning either: the toast resolves the session before asking the
-		// store to focus it, so a closed tab is a silent no-op, not a log line.
+		// A missing origin cannot make dismiss navigate or warn.
 		expect(terminalsStore.state.activeId).toBe(survivor);
 		expect(toastsStore.toasts).toHaveLength(0);
 	});

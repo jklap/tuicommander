@@ -4,13 +4,60 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
-static WARM_STATES: LazyLock<dashmap::DashMap<String, serde_json::Value>> =
-    LazyLock::new(dashmap::DashMap::new);
+struct PendingWarmGuard {
+    destination: std::path::PathBuf,
+    token: u64,
+    armed: bool,
+}
+
+impl Drop for PendingWarmGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            crate::worktree::finish_warm(
+                &self.destination,
+                self.token,
+                serde_json::json!({"status": "failed", "reason": "creation request cancelled before warming started"}),
+            );
+        }
+    }
+}
+
+async fn run_setup_then_warm(
+    script: Option<String>,
+    source: std::path::PathBuf,
+    destination: std::path::PathBuf,
+    token: u64,
+    warm: impl FnOnce(&std::path::Path, &std::path::Path) -> crate::cow::WarmingReport + Send + 'static,
+) -> (
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    tokio::task::JoinHandle<()>,
+) {
+    let mut pending_guard = PendingWarmGuard {
+        destination: destination.clone(),
+        token,
+        armed: true,
+    };
+    let mut setup_result = None;
+    let mut setup_error = None;
+    if let Some(script) = script {
+        let cwd = destination.to_string_lossy().into_owned();
+        match tokio::task::spawn_blocking(move || crate::worktree::run_setup_script(script, cwd))
+            .await
+        {
+            Ok(Ok(result)) => setup_result = Some(result),
+            Ok(Err(error)) => setup_error = Some(serde_json::json!(error)),
+            Err(error) => setup_error = Some(serde_json::json!(format!("task panic: {error}"))),
+        }
+    }
+    let task = crate::worktree::spawn_background_warm(source, destination, token, warm);
+    pending_guard.armed = false;
+    (setup_result, setup_error, task)
+}
 
 pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
@@ -42,9 +89,7 @@ pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> i
                     "path": wt.path.to_string_lossy(),
                     "branch": wt.branch,
                     "base_repo": wt.base_repo.to_string_lossy(),
-                    "warm_artifacts": WARM_STATES.get(&wt.path.to_string_lossy().to_string())
-                        .map(|state| state.clone())
-                        .unwrap_or_else(|| serde_json::json!({"status": "done"})),
+                    "warm_artifacts": crate::worktree::warm_status(&wt.path),
                 })
             })
         })
@@ -147,7 +192,11 @@ pub(super) async fn create_worktree_shared(
     let config_bg = config.clone();
     let worktrees_dir_bg = worktrees_dir.clone();
     let result = match tokio::task::spawn_blocking(move || {
-        crate::worktree::create_workspace_unwarmed(&worktrees_dir_bg, &config_bg, base_ref.as_deref())
+        crate::worktree::create_workspace_unwarmed(
+            &worktrees_dir_bg,
+            &config_bg,
+            base_ref.as_deref(),
+        )
     })
     .await
     {
@@ -164,11 +213,16 @@ pub(super) async fn create_worktree_shared(
             let wt_path = workspace.path.to_string_lossy().to_string();
             let branch_name = workspace.branch.clone();
             let workspace_id = workspace.workspace_id.clone();
+            let warm_token = crate::worktree::begin_warm(&workspace.path);
+            let mut pending_guard = PendingWarmGuard {
+                destination: workspace.path.clone(),
+                token: warm_token,
+                armed: true,
+            };
             // Built before the setup script runs: the payload describes what the
             // workspace ARRIVED with, and a script that installs something does
             // not change what was already warm.
-            let mut instructions = workspace.instruction_payload();
-            instructions["warm_artifacts"]["status"] = serde_json::json!("pending");
+            let instructions = workspace.instruction_payload_pending();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
                 repo_path: base_repo.clone(),
                 workspace_id: workspace_id.clone(),
@@ -178,49 +232,22 @@ pub(super) async fn create_worktree_shared(
             });
             let warm_source = std::path::PathBuf::from(&base_repo);
             let warm_destination = workspace.path.clone();
-            WARM_STATES.insert(
-                warm_destination.to_string_lossy().to_string(),
-                serde_json::json!({"status": "pending"}),
-            );
-            tokio::task::spawn_blocking(move || {
-                let report = crate::cow::warm_worktree(&warm_source, &warm_destination);
-                let key = warm_destination.to_string_lossy().to_string();
-                if report.warnings.is_empty() {
-                    WARM_STATES.insert(key, serde_json::json!({"status": "done"}));
-                } else {
-                    WARM_STATES.insert(key, serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")}));
-                }
-                for warning in report.warnings {
-                    tracing::warn!(source = "worktree", worktree = %warm_destination.display(), "background warm failed: {warning}");
-                }
-            });
-            let mut setup_script = None;
-            let mut setup_script_error = None;
             let repo_for_script = base_repo.clone();
-            let cwd_for_script = wt_path.clone();
-            if let Some(script) = tokio::task::spawn_blocking(move || {
+            let script = tokio::task::spawn_blocking(move || {
                 crate::config::resolve_effective_setup_script(&repo_for_script)
             })
             .await
             .ok()
-            .flatten()
-            {
-                match tokio::task::spawn_blocking(move || {
-                    crate::worktree::run_setup_script(script, cwd_for_script)
-                })
-                .await
-                {
-                    Ok(Ok(result)) => {
-                        setup_script = Some(result);
-                    }
-                    Ok(Err(e)) => {
-                        setup_script_error = Some(serde_json::json!(e));
-                    }
-                    Err(e) => {
-                        setup_script_error = Some(serde_json::json!(format!("task panic: {e}")));
-                    }
-                }
-            }
+            .flatten();
+            pending_guard.armed = false;
+            let (setup_script, setup_script_error, _warm_task) = run_setup_then_warm(
+                script,
+                warm_source,
+                warm_destination,
+                warm_token,
+                crate::cow::warm_worktree,
+            )
+            .await;
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
@@ -256,16 +283,30 @@ pub(super) async fn remove_worktree_http(
         return e.into_response();
     }
     let repo_path = q.repo_path.clone();
-    let delete_branch = q.delete_branch.unwrap_or(true);
     let force = q.force.unwrap_or(false);
+    let delete_branch = q.delete_branch.unwrap_or(!force);
+    let override_lock = q.override_lock.unwrap_or(false);
+    let expected_fingerprint = q.expected_fingerprint.clone();
+    let confirm_missing_checkout = q.confirm_missing_checkout.unwrap_or(false);
+    if force && expected_fingerprint.is_none() && !confirm_missing_checkout {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"})),
+        )
+            .into_response();
+    }
     let id_for_event = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::remove_worktree_by_workspace_id(
+        let archive = crate::worktree::resolve_archive_script(&repo_path);
+        crate::worktree::remove_worktree_with_presence_confirmation(
             &repo_path,
             &workspace_id,
             delete_branch,
-            None,
+            archive.as_deref(),
             force,
+            override_lock,
+            expected_fingerprint.as_deref(),
+            confirm_missing_checkout,
         )
     })
     .await;
@@ -284,6 +325,7 @@ pub(super) async fn remove_worktree_http(
             Json(serde_json::json!({
                 "ok": true,
                 "branch_delete_warning": outcome.branch_delete_warning,
+                "removal_rule": outcome.removal_rule,
             })),
         )
             .into_response(),
@@ -440,16 +482,21 @@ pub(super) async fn finalize_merged_worktree_http(
         workspace_id,
         action,
         force,
+        expected_fingerprint,
     } = body;
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"}))).into_response();
+    }
     // Shares `finalize_merged_worktree_impl` with the Tauri command: the dirty-worktree
     // gate and the "worktree removed" notification live there, once, for both transports.
     let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::finalize_merged_worktree_impl(
+        crate::worktree::finalize_merged_worktree_impl_with_confirmation(
             &state,
             repo_path,
             workspace_id,
             action,
             force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
         )
     })
     .await;
@@ -496,9 +543,13 @@ pub(super) async fn merge_and_archive_worktree_http(
         target_branch,
         after_merge,
         force,
+        expected_fingerprint,
     } = body;
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"}))).into_response();
+    }
     let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::merge_and_archive_worktree_impl(
+        crate::worktree::merge_and_archive_worktree_impl_with_confirmation(
             &state,
             repo_path,
             branch_name,
@@ -506,6 +557,7 @@ pub(super) async fn merge_and_archive_worktree_http(
             target_branch,
             after_merge,
             force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
         )
     })
     .await;
@@ -535,5 +587,252 @@ pub(super) async fn run_setup_script_http(
     match res {
         Ok(r) => json_result(r),
         Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod warm_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = crate::git_cli::git_cmd(&repo);
+        git.args(["init"]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "base"])
+            .run()
+            .unwrap();
+        repo
+    }
+
+    #[cfg(unix)]
+    fn set_gated_setup_script(started: &std::path::Path, gate: &std::path::Path) {
+        let mut defaults = crate::config::RepoDefaultsConfig::default();
+        let finished = gate.with_extension("finished");
+        let pid = gate.with_extension("pid");
+        defaults.setup_script = format!(
+            "echo $$ > '{}'; echo started > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo finished > '{}'",
+            pid.display(),
+            started.display(),
+            gate.display(),
+            finished.display()
+        );
+        crate::config::save_repo_defaults(defaults).unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_file(path: &std::path::Path, failure: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while !path.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{failure}"));
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_setup_exit(pid_file: &std::path::Path) {
+        wait_for_file(pid_file, "setup script did not record its PID").await;
+        let pid: i32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("detached setup shell did not exit");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn create_worktree_shared_reports_pending_while_the_setup_script_runs() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let started = temp.path().join("setup.started");
+        let gate = temp.path().join("setup.release");
+        set_gated_setup_script(&started, &gate);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().into_owned();
+        let state_for_create = Arc::clone(&state);
+        let repo_for_create = repo_path.clone();
+        let create = tokio::spawn(async move {
+            create_worktree_shared(
+                &state_for_create,
+                repo_for_create,
+                "pending-setup".into(),
+                None,
+            )
+            .await
+        });
+
+        wait_for_file(&started, "setup script did not start").await;
+        let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
+        assert_eq!(
+            paths["pending-setup"].warm_artifacts.as_ref().unwrap()["status"],
+            "pending"
+        );
+        std::fs::write(&gate, "release").unwrap();
+        let created = create
+            .await
+            .unwrap()
+            .unwrap_or_else(|(status, body)| panic!("{status}: {:?}", body.0));
+        assert_eq!(created.instructions["warm_artifacts"]["status"], "pending");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while crate::worktree::warm_status(&created.worktree.path)["status"] == "pending" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::worktree::warm_status(&created.worktree.path)["status"],
+            "done"
+        );
+        crate::worktree::clear_warm(&created.worktree.path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_create_marks_pending_warm_failed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let started = temp.path().join("setup.started");
+        let gate = temp.path().join("setup.release");
+        set_gated_setup_script(&started, &gate);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().into_owned();
+        let state_for_create = Arc::clone(&state);
+        let repo_for_create = repo_path.clone();
+        let create = tokio::spawn(async move {
+            create_worktree_shared(
+                &state_for_create,
+                repo_for_create,
+                "cancelled-setup".into(),
+                None,
+            )
+            .await
+        });
+
+        wait_for_file(&started, "setup script did not start").await;
+        let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
+        let path = std::path::PathBuf::from(&paths["cancelled-setup"].path);
+        assert_eq!(crate::worktree::warm_status(&path)["status"], "pending");
+        create.abort();
+        let _ = create.await;
+        std::fs::write(&gate, "release").unwrap();
+        wait_for_file(
+            &gate.with_extension("finished"),
+            "setup script did not finish",
+        )
+        .await;
+        wait_for_setup_exit(&gate.with_extension("pid")).await;
+        assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
+        crate::worktree::clear_warm(&path);
+    }
+
+    #[tokio::test]
+    async fn a_slow_warm_keeps_the_returned_workspace_pending_until_it_finishes() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("workspace");
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+
+        let token = crate::worktree::begin_warm(&destination);
+        let task = crate::worktree::spawn_background_warm(
+            source,
+            destination.clone(),
+            token,
+            move |_, _| {
+                wait.recv().unwrap();
+                crate::cow::WarmingReport::default()
+            },
+        );
+
+        assert!(!task.is_finished());
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        crate::worktree::clear_warm(&destination);
+    }
+
+    #[tokio::test]
+    async fn setup_finishes_before_warm_reads_the_workspace() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        let (setup, error, warm_task) = run_setup_then_warm(
+            Some("echo ready > setup.marker".into()),
+            source,
+            destination.clone(),
+            token,
+            |_, destination| {
+                assert!(destination.join("setup.marker").exists());
+                crate::cow::WarmingReport::default()
+            },
+        )
+        .await;
+        assert!(setup.is_some(), "setup result: {error:?}");
+        assert!(error.is_none(), "{error:?}");
+        warm_task.await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        crate::worktree::clear_warm(&destination);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_script_observes_pending_before_warm_starts() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let (setup, error, task) = run_setup_then_warm(
+            Some("sleep 2; echo setup > setup.marker".into()),
+            temp.path().to_path_buf(),
+            destination.clone(),
+            token,
+            |_, dest| {
+                assert_eq!(crate::worktree::warm_status(dest)["status"], "pending");
+                assert!(dest.join("setup.marker").exists());
+                crate::cow::WarmingReport::default()
+            },
+        )
+        .await;
+        assert!(setup.is_some(), "{error:?}");
+        task.await.unwrap();
+        crate::worktree::clear_warm(&destination);
     }
 }

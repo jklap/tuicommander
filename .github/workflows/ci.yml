@@ -98,7 +98,7 @@ jobs:
         run: pnpm exec tsc --noEmit
 
       - name: Tests
-        run: pnpm exec vitest run --reporter=verbose
+        run: bash scripts/with-test-tmp.sh pnpm exec vitest run --reporter=verbose
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
@@ -179,7 +179,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests
         working-directory: src-tauri
@@ -192,7 +192,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo nextest run --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci
 
 
       # nextest does not run doctests — run them separately so doc examples stay
@@ -208,7 +208,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo test --doc
+        run: bash ../scripts/with-test-tmp.sh cargo test --doc --workspace
 
   # Verify tuic-remote compiles without the desktop feature (catches missing cfg
   # gates) AND run the headless test suite. The `#[cfg(not(feature = "desktop"))]`
@@ -272,7 +272,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo nextest run --no-default-features --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --profile ci
 
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:
@@ -408,7 +408,7 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # Windows runs the suite too. It used to be skipped, which is why Windows
       # regressions only ever surfaced in a user's build.
@@ -422,4 +422,4 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: cargo nextest run --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci

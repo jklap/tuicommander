@@ -118,6 +118,86 @@ describe("notificationsStore", () => {
 		});
 	});
 
+	describe("ACP interaction notifications", () => {
+		function stubNotification(permission: NotificationPermission = "granted", requestPermission = vi.fn()) {
+			const created = vi.fn();
+			const close = vi.fn();
+			class FakeNotification {
+				static permission = permission;
+				static requestPermission = requestPermission;
+				onclick = null;
+				close = close;
+				constructor() {
+					created();
+				}
+			}
+			vi.stubGlobal("Notification", FakeNotification);
+			return { created, close };
+		}
+
+		it("notifies once per hidden interaction, including after an unrelated refresh", async () => {
+			const { created } = stubNotification();
+			try {
+				const pending = [{ id: "connection-1:permission-1", kind: "permission" as const }];
+				store.syncAcpAttention(pending, true);
+				store.syncAcpAttention([...pending], true);
+				await Promise.resolve();
+				expect(created).toHaveBeenCalledTimes(1);
+				store.syncAcpAttention([...pending, { id: "connection-1:permission-2", kind: "permission" }], true);
+				await Promise.resolve();
+				expect(created).toHaveBeenCalledTimes(2);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it("closes a pending notification when the interaction is answered", async () => {
+			const { close } = stubNotification();
+			try {
+				store.syncAcpAttention([{ id: "connection-1:form-1", kind: "elicitation" }], true);
+				await Promise.resolve();
+				store.syncAcpAttention([], true);
+				expect(close).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it("does not notify after a question settles while desktop permission is pending", async () => {
+			let grant!: (value: NotificationPermission) => void;
+			const { created } = stubNotification(
+				"default",
+				vi.fn(
+					() =>
+						new Promise<NotificationPermission>((resolve) => {
+							grant = resolve;
+						}),
+				),
+			);
+			try {
+				store.syncAcpAttention([{ id: "connection-1:permission-1", kind: "permission" }], true);
+				store.syncAcpAttention([], true);
+				grant("granted");
+				await Promise.resolve();
+				await Promise.resolve();
+				expect(created).not.toHaveBeenCalled();
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it("does not interrupt an already visible AI Chat panel", async () => {
+			const { created } = stubNotification();
+			try {
+				store.syncAcpAttention([{ id: "connection-1:permission-1", kind: "permission" }], false);
+				await Promise.resolve();
+				expect(created).not.toHaveBeenCalled();
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+	});
+
 	describe("setEnabled()", () => {
 		it("enables/disables notifications", () => {
 			testInScope(() => {

@@ -38,6 +38,7 @@ interface TerminalData {
   pendingInitCommand: string | null;   // Setup/run script to auto-execute on first shell idle
   usageLimit: { percentage: number; limitType: string } | null;
   lastDataAt: number | null;        // Timestamp of last PTY output
+  lastActivityAt: number | null;    // Backend timestamp of last semantic session activity
   lastPrompt: string | null;        // Last relevant user prompt (>= 10 words), set by Rust
   agentIntent: string | null;       // LLM-declared intent via intent: token
   currentTask: string | null;       // Current agent task from status-line parsing
@@ -420,11 +421,33 @@ sets a per-busy-cycle latch before playback so idle and exit cannot both chime.
 The playback manager applies one 500 ms gate across every sound type, because
 all types share the same audio output and separate per-type gates allowed tones
 from a notification burst to overlap.
+ACP interaction notifications are keyed by connection and request ID, so a
+re-render cannot send a duplicate. Settlement closes the matching notification.
+
+`acpTranscript` also projects ACP session titles and usage by session ID. The
+AI Chat header, conversation picker and usage footer read that projection.
+`aiChatTabs` is the single per-root store for open chat session IDs and the
+selected tab. It mirrors its state to localStorage so a detached WebView can
+restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
+The existing `ai_chat_sessions` app config value remains the last selected
+conversation for older documents and clients.
+`acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
+on each `promptQueueChanged` event, so desktop and browser views share the
+same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host
+has sent it to ego; a queued prompt cancelled before dispatch never enters
+the transcript.
+`turnFailed` carries an ACP error diagnostic into the transcript and restores
+the attachment state. A completed turn with no agent message receives an
+explicit no-reply entry.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state — plus the speech
 assets, the hands-free conversation and the spoken-reply status the Dictation
 settings panel renders.
+The backend crate split leaves its IPC and HTTP response shapes unchanged.
+`startRecording(source)` sends the same origin over IPC or HTTP. A native Fn
+release stops capture before the frontend's `stopRecording()` awaits the final
+transcription; blur releases a held hotkey if its key-up event was lost.
 
 - `speechAssets` / `speechDownloads` — the installable languages and ONNX
   runtime, and a percent per asset **keyed by asset id**, because the runtime
@@ -491,6 +514,8 @@ Active prompt overlay state and agent stats buffer.
 
 ### diffTabsStore (`diffTabs.ts`) / mdTabsStore (`mdTabs.ts`)
 Open diff and markdown tab management (identical API patterns).
+
+`mdTabsStore.openUiTab` treats URL and HTML content as alternatives. Updating an existing URL tab with HTML clears its URL; updating an HTML tab with a URL clears its HTML. Visibility is decided by the tab renderers, which unload hidden plugin and URL iframes.
 
 ### updaterStore (`updater.ts`)
 App update check, download, and install. Supports stable (Tauri built-in), beta, and nightly channels.
@@ -599,9 +624,12 @@ The list is read in both views because it carries the divider and deletion.
 
 A Progress toast opts out of the generic MESSAGES mirror because the bell has its
 own aggregate row, and it is silent — a blocked entry is not automatically a
-demand for attention. `intent`, `delegated` and `message` entries toast nothing:
-they are what an agent set out to do or said to another agent, not a result. Failures stay on the affected project as one line
-instead of being rendered as an empty feed.
+demand for attention. Its source PTY id lets the repo action activate the
+reporting terminal and its workspace; if that terminal has closed, the action
+opens the repository and logs why it could not focus the terminal. `intent`,
+`delegated` and `message` entries toast nothing: they are what an agent set out
+to do or said to another agent, not a result. Failures stay on the affected
+project as one line instead of being rendered as an empty feed.
 
 ### errorLog (`errorLog.ts`)
 Error ring buffer and error panel state.
@@ -656,7 +684,7 @@ wrote the same value, fired nothing, and left the other pane rendered underneath
 Pinned by `src/__tests__/stores/paneExclusivity.test.ts`.
 
 ### appLogger (`appLogger.ts`)
-Centralized logging — replaces direct `console.*` calls. Writes to ring buffer, forwards to console, and surfaces in ErrorLogPanel.
+Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`.
 
 ### debugRegistry (`debugRegistry.ts`)
 Dynamic snapshot registry for MCP `invoke_js` introspection. Stores self-register a snapshot function at init time, exposed on `window.__TUIC__` as `stores()` (list names) and `store(name)` (get snapshot).

@@ -118,11 +118,11 @@ Terminal escape sequences that carry structured metadata:
 
 ### Unified `chrome.rs` module
 
-All chrome detection is centralized in `src-tauri/src/chrome.rs`. The three
+All chrome detection is centralized in `src-tauri/crates/tuic-terminal/src/chrome.rs`. The three
 pipelines (pty.rs, session.rs, state.rs) all import from this single module:
 
 ```
-src-tauri/src/chrome.rs
+src-tauri/crates/tuic-terminal/src/chrome.rs
 ├── is_separator_line()    — run-of-4 box-drawing chars (─ ━ ═ — ╌ ╍)
 ├── is_prompt_line()       — all agent prompt chars: ❯ › >
 ├── is_agent_prompt_row()  — BARE prompt only (no echoed user message, no `> quote`)

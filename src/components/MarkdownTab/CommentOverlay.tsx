@@ -18,15 +18,15 @@ export interface CommentOverlayProps {
 	/** Called with the new or updated comment when the user saves. `occurrenceIndex`
 	 *  is the 0-based ordinal of the selected text among identical rendered
 	 *  occurrences, used to anchor the correct instance in the source. */
-	onSave: (comment: TweakComment, occurrenceIndex: number) => void;
+	onSave: (comment: TweakComment, occurrenceIndex: number) => Promise<boolean> | boolean | undefined;
 	/** Save a whole rendered Markdown block using its exact raw-source range.
 	 *  `comment.highlighted` is the raw source `blockSource` returned when the
 	 *  popover opened, so the caller can refuse a range the file moved under. */
-	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => void;
+	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => Promise<boolean> | boolean | undefined;
 	/** Raw source of a block range in the document currently rendered. */
 	blockSource?: (range: { start: number; end: number }) => string;
 	/** Called with the comment id when the user deletes a comment. */
-	onDelete: (id: string) => void;
+	onDelete: (id: string) => Promise<boolean> | boolean | undefined;
 }
 
 interface PopoverState {
@@ -64,6 +64,22 @@ function blockInGutter(blocks: ArrayLike<HTMLElement>, clientX: number, clientY:
 		if (clientY < rect.top) high = mid - 1;
 		else if (clientY > rect.bottom) low = mid + 1;
 		else return clientX >= rect.left - 36 && clientX <= rect.left + 8 ? blocks[mid] : null;
+	}
+	return null;
+}
+
+/** Find the deepest list item under the pointer; ancestor items may overlap it. */
+function listItemInGutter(items: HTMLElement[], clientX: number, clientY: number): HTMLElement | null {
+	let low = 0;
+	let high = items.length;
+	while (low < high) {
+		const mid = (low + high) >> 1;
+		if (items[mid].getBoundingClientRect().top <= clientY) low = mid + 1;
+		else high = mid;
+	}
+	for (let item: HTMLElement | null = items[low - 1] ?? null; item; item = item.parentElement?.closest("li") ?? null) {
+		const rect = item.getBoundingClientRect();
+		if (clientY <= rect.bottom && clientX >= rect.left - 36 && clientX <= rect.left + 8) return item;
 	}
 	return null;
 }
@@ -164,6 +180,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		if (target.closest("a, button, input, select, textarea, label")) return;
 		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
+		if (span.tagName === "LI" && target.closest("li") !== span) return;
 		// The click that ends a drag-select must leave the selection to the inline comment button.
 		if (window.getSelection()?.isCollapsed === false) return;
 
@@ -193,6 +210,10 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const target = e.target as HTMLElement;
 		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
+		if (span.tagName === "LI" && target.closest("li") !== span) {
+			setTooltip(null);
+			return;
+		}
 		const comment = span.dataset["tweakComment"];
 		if (!comment) return;
 		const rect = span.getBoundingClientRect();
@@ -214,12 +235,22 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 	const handleBlockGutterMove = (e: MouseEvent) => {
 		if (popover() || btnPos()) return;
-		const block = blockInGutter(
-			props.contentRef.querySelectorAll<HTMLElement>("[data-comment-source-start][data-comment-source-end]"),
+		const targets = props.contentRef.querySelectorAll<HTMLElement>(
+			"[data-comment-source-start][data-comment-source-end]",
+		);
+		const listItems = Array.from(targets).filter((target) => target.tagName === "LI");
+		let block = blockInGutter(
+			listItems.length ? Array.from(targets).filter((target) => target.tagName !== "LI") : targets,
 			e.clientX,
 			e.clientY,
 		);
-		if (!block || block.classList.contains("tweak-block-highlight") || block.querySelector(".tweak-highlight")) {
+		block = listItemInGutter(listItems, e.clientX, e.clientY) ?? block;
+		const inlineCommentInBlock =
+			block &&
+			Array.from(block.querySelectorAll(".tweak-highlight")).some(
+				(span) => block!.tagName !== "LI" || span.closest("li") === block,
+			);
+		if (!block || block.classList.contains("tweak-block-highlight") || inlineCommentInBlock) {
 			clearBlockTarget();
 			return;
 		}
@@ -309,14 +340,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		});
 	};
 
-	const handleSave = () => {
+	const handleSave = async () => {
 		const state = popover();
 		if (!state) return;
 
 		if (state.mode === "new") {
 			if (state.sourceStart !== undefined && state.sourceEnd !== undefined) {
 				if (!draft().trim()) return;
-				props.onSaveBlock?.(
+				const saved = await props.onSaveBlock?.(
 					{
 						id: generateTweakCommentId(),
 						highlighted: state.sourceSnapshot ?? "",
@@ -326,12 +357,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 					},
 					{ start: state.sourceStart, end: state.sourceEnd },
 				);
-				closePopover();
+				if (saved !== false) closePopover();
 				return;
 			}
 			const highlighted = pendingSelection;
 			if (!highlighted || !draft().trim()) return;
-			props.onSave(
+			const saved = await props.onSave(
 				{
 					id: generateTweakCommentId(),
 					highlighted,
@@ -340,11 +371,12 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 				},
 				pendingOccurrence,
 			);
+			if (saved !== false) closePopover();
 		} else {
 			// Edit existing — preserve original createdAt, update only the comment text.
 			// Occurrence ordinal is irrelevant for edits (matched by id).
 			if (!state.existingId || !state.existingHighlighted) return;
-			props.onSave(
+			const saved = await props.onSave(
 				{
 					id: state.existingId,
 					highlighted: state.existingHighlighted,
@@ -353,15 +385,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 				},
 				0,
 			);
+			if (saved !== false) closePopover();
 		}
-		closePopover();
 	};
 
-	const handleDelete = () => {
+	const handleDelete = async () => {
 		const state = popover();
 		if (!state?.existingId) return;
-		props.onDelete(state.existingId);
-		closePopover();
+		if ((await props.onDelete(state.existingId)) !== false) closePopover();
 	};
 
 	const closePopover = () => {

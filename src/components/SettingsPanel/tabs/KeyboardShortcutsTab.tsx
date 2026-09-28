@@ -199,6 +199,7 @@ export function getShortcutSections(): ShortcutSection[] {
 					keys: keyFor("command-palette"),
 					description: t("helpPanel.commandPalette", "Command palette"),
 				},
+				{ action: "progress", keys: keyFor("progress"), description: "Open Terminal Progress" },
 				{
 					action: "activity-dashboard",
 					keys: keyFor("activity-dashboard"),

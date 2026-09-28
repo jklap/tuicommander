@@ -276,6 +276,81 @@ impl speaker::Output for BrowserOutput {
 mod tests {
     use super::*;
 
+    /// A closed browser socket ends the conversation it owned through the
+    /// same runtime path as a released desktop microphone.
+    #[test]
+    fn a_browser_client_that_closed_its_socket_disarms_the_conversation_it_owned() {
+        use super::super::{continuous, echo};
+
+        struct AcceptingTarget;
+        impl continuous::TargetProbe for AcceptingTarget {
+            fn accepts(&self, _session_id: &str) -> bool {
+                true
+            }
+        }
+
+        struct UnusedSink;
+        impl continuous::VoiceSink for UnusedSink {
+            fn write(
+                &self,
+                _session_id: &str,
+                _text: &str,
+            ) -> Result<continuous::VoiceWrite, String> {
+                panic!("no transcript is expected before the browser disconnects")
+            }
+        }
+
+        let endpoints = BrowserEndpoints::default();
+        let link = endpoints.connect("browser-42");
+        let mut endpoint = BrowserVoiceEndpoint::new(
+            link.clone(),
+            Arc::new(SilentTranscriber),
+            None,
+            transcribe::VoiceGates::default(),
+        );
+        let mut hands_free = continuous::HandsFree::new(1_000);
+        hands_free.arm("target", "browser-42", true).expect("arm");
+        let mode = Mutex::new(hands_free);
+        let echo = Arc::new(Mutex::new(echo::EchoGuard::new(Box::new(
+            echo::PassThrough,
+        ))));
+        let mut capture = continuous::Capture::new(
+            continuous::SegmenterConfig::default(),
+            continuous::DEVICE_SILENCE_TIMEOUT_MS,
+            0,
+            echo,
+            None,
+        );
+
+        assert!(matches!(
+            continuous::tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &AcceptingTarget,
+                &UnusedSink,
+                0
+            ),
+            continuous::Tick::Running { .. }
+        ));
+        endpoints.disconnect("browser-42", &link);
+
+        match continuous::tick(
+            &mut capture,
+            &mode,
+            &mut endpoint,
+            &AcceptingTarget,
+            &UnusedSink,
+            0,
+        ) {
+            continuous::Tick::Disarmed(disarmed) => {
+                assert_eq!(disarmed.reason, continuous::DisarmReason::OwnerDisconnected);
+            }
+            other => panic!("a closed browser socket must disarm, got {other:?}"),
+        }
+        assert!(mode.lock().binding().is_none());
+    }
+
     /// Recognises nothing. The recogniser is not what any test here is about —
     /// what matters is that a browser endpoint reaches one at all.
     struct SilentTranscriber;

@@ -1,6 +1,6 @@
 use super::model::{
-    LIST_LIMIT, NewProgressEntry, ProgressDeleteReceipt, ProgressEntry, ProgressKind, ProgressList,
-    ProgressListInput, ProgressViewedReceipt,
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, NewProgressEntry, ProgressDeleteReceipt, ProgressEntry,
+    ProgressKind, ProgressList, ProgressListInput, ProgressViewedReceipt,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::PathBuf;
@@ -250,7 +250,13 @@ impl ProgressStore {
         target_pty_id: Option<&str>,
         target_name: Option<&str>,
     ) -> Result<ProgressEntry, String> {
+        let mut entry = entry.clone();
+        entry.text = crate::redaction::redact_secrets(&entry.text);
+        if let Some(step) = entry.step.as_mut() {
+            *step = crate::redaction::redact_secrets(step);
+        }
         entry.validate()?;
+        let target_name = target_name.and_then(super::model::bounded_name);
         let mut conn = self.connect()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -286,7 +292,7 @@ impl ProgressStore {
                 &agent_name,
                 pty_id,
                 target_pty_id,
-                target_name,
+                &target_name,
             ],
         )
         .map_err(db_error("insert progress entry"))?;
@@ -302,7 +308,7 @@ impl ProgressStore {
             step,
             agent_name,
             target_pty_id: target_pty_id.map(str::to_string),
-            target_name: target_name.map(str::to_string),
+            target_name,
         })
     }
 
@@ -357,7 +363,27 @@ impl ProgressStore {
     }
 
     pub fn list(&self, project: &str, input: &ProgressListInput) -> Result<ProgressList, String> {
-        self.list_limited(project, input, LIST_LIMIT)
+        self.list_limited(
+            project,
+            input,
+            input
+                .limit
+                .unwrap_or(DEFAULT_PAGE_LIMIT)
+                .clamp(1, MAX_PAGE_LIMIT),
+        )
+    }
+
+    /// Projects with journal entries, ordered by their most recent entry.
+    pub fn recent_projects(&self) -> Result<Vec<String>, String> {
+        let conn = self.connect()?;
+        let mut statement = conn
+            .prepare("SELECT project FROM entries GROUP BY project ORDER BY MAX(id) DESC")
+            .map_err(db_error("prepare recent progress projects"))?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_error("read recent progress projects"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error("read a progress project"))
     }
 
     /// `list` with an explicit row cap. The Flow reads one row past
@@ -371,20 +397,45 @@ impl ProgressStore {
     ) -> Result<ProgressList, String> {
         let conn = self.connect()?;
         let blocked_only = input.blocked_only.unwrap_or(false);
+        let known_kinds = ProgressKind::ALL
+            .map(|kind| format!("'{}'", kind.as_str()))
+            .join(",");
+        let total: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM entries
+                  WHERE project = ?1 AND (?2 = 0 OR kind = 'blocked')
+                    AND (?3 IS NULL OR pty_id = ?3)
+                    AND kind IN ({known_kinds})"
+                ),
+                params![project, i64::from(blocked_only), input.pty_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error("count the progress list"))?;
+        let total =
+            usize::try_from(total).map_err(|error| format!("invalid progress count: {error}"))?;
         let mut statement = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT id, created_at_ms, kind, text, step, agent_name, pty_id,
                         target_pty_id, target_name
                    FROM entries
                   WHERE project = ?1 AND (?2 = 0 OR kind = 'blocked')
                     AND (?3 IS NULL OR pty_id = ?3)
+                    AND kind IN ({known_kinds})
+                    AND (?4 IS NULL OR id < ?4)
                   ORDER BY id DESC
-                  LIMIT ?4",
-            )
+                  LIMIT ?5"
+            ))
             .map_err(db_error("prepare the progress list"))?;
         let entries = statement
             .query_map(
-                params![project, i64::from(blocked_only), input.pty_id, limit as i64],
+                params![
+                    project,
+                    i64::from(blocked_only),
+                    input.pty_id,
+                    input.cursor,
+                    (limit + 1) as i64
+                ],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -402,13 +453,9 @@ impl ProgressStore {
             .map_err(db_error("read the progress list"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error("read a progress entry"))?;
-        // A kind this build does not know was written by a newer one sharing
-        // the journal (debug and release share the config dir). Skipping it
-        // costs that row; failing would cost the whole project's list.
-        let mut unknown = 0usize;
-        let entries = entries
+        let mut entries = entries
             .into_iter()
-            .filter_map(
+            .map(
                 |(
                     id,
                     created_at_ms,
@@ -420,12 +467,10 @@ impl ProgressStore {
                     target_pty_id,
                     target_name,
                 )|
-                 -> Option<ProgressEntry> {
-                    let Ok(kind) = ProgressKind::parse(&kind) else {
-                        unknown += 1;
-                        return None;
-                    };
-                    Some(ProgressEntry {
+                 -> ProgressEntry {
+                    let kind =
+                        ProgressKind::parse(&kind).expect("SQL selected a known progress kind");
+                    ProgressEntry {
                         id,
                         project: project.to_string(),
                         pty_id,
@@ -436,18 +481,13 @@ impl ProgressStore {
                         agent_name,
                         target_pty_id,
                         target_name,
-                    })
+                    }
                 },
             )
             .collect::<Vec<_>>();
-        if unknown > 0 {
-            tracing::warn!(
-                source = "progress",
-                project,
-                skipped = unknown,
-                "Progress list skipped entries of a kind this build does not know"
-            );
-        }
+        let has_more = entries.len() > limit;
+        entries.truncate(limit);
+        let next_cursor = has_more.then(|| entries.last().expect("nonempty page").id);
         let pty_ids = conn
             .prepare("SELECT DISTINCT pty_id FROM entries WHERE project = ?1 AND pty_id IS NOT NULL ORDER BY pty_id")
             .map_err(db_error("prepare the terminal list"))?
@@ -459,6 +499,8 @@ impl ProgressStore {
         Ok(ProgressList {
             project: project.to_string(),
             entries,
+            total,
+            next_cursor,
             pty_ids,
             last_viewed_ms: self.last_viewed_ms(&conn, project, input.pty_id.as_deref())?,
         })
@@ -488,11 +530,6 @@ impl ProgressStore {
         }
         tx.commit().map_err(db_error("commit progress delete"))?;
         Ok(ProgressDeleteReceipt { deleted })
-    }
-
-    /// Record that the user has seen the repository aggregate up to now.
-    pub fn mark_viewed(&self, project: &str) -> Result<ProgressViewedReceipt, String> {
-        self.mark_viewed_for_pty(project, None)
     }
 
     pub fn mark_viewed_for_pty(
@@ -773,6 +810,7 @@ mod tests {
                 &ProgressListInput {
                     blocked_only: Some(true),
                     pty_id: None,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -851,6 +889,105 @@ mod tests {
     }
 
     #[test]
+    fn progress_default_page_bounds_history_and_reports_remaining_entries() {
+        let (_guard, store, _dir) = isolated_store();
+        for index in 0..75 {
+            store
+                .record("/p", &entry(ProgressKind::Done, &format!("event {index}")))
+                .unwrap();
+        }
+        let page = store.list("/p", &ProgressListInput::default()).unwrap();
+        let wire = serde_json::to_value(&page).unwrap();
+        assert_eq!(wire["total"], 75);
+        assert_eq!(page.entries.len(), 10, "default response must be bounded");
+        assert!(
+            wire["nextCursor"].is_number(),
+            "remaining history needs a cursor"
+        );
+        assert_eq!(page.entries.first().unwrap().text, "event 74");
+    }
+
+    #[test]
+    fn progress_cursor_reaches_each_entry_once_in_newest_first_order() {
+        let (_guard, store, _dir) = isolated_store();
+        for index in 0..7 {
+            store
+                .record("/p", &entry(ProgressKind::Done, &format!("event {index}")))
+                .unwrap();
+        }
+        let mut cursor: Option<i64> = None;
+        let mut texts = Vec::new();
+        loop {
+            let mut input = serde_json::json!({"limit": 3});
+            if let Some(value) = cursor {
+                input["cursor"] = serde_json::json!(value);
+            }
+            let page = store
+                .list("/p", &serde_json::from_value(input).unwrap())
+                .unwrap();
+            let wire = serde_json::to_value(&page).unwrap();
+            assert_eq!(wire["total"], 7);
+            texts.extend(page.entries.into_iter().map(|entry| entry.text));
+            cursor = wire["nextCursor"].as_i64();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            texts,
+            (0..7)
+                .rev()
+                .map(|i| format!("event {i}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn progress_filters_before_paging_and_clamps_oversized_limit() {
+        let (_guard, store, _dir) = isolated_store();
+        for index in 0..12 {
+            let kind = if index % 2 == 0 {
+                ProgressKind::Blocked
+            } else {
+                ProgressKind::Done
+            };
+            let pty = if index % 3 == 0 { "a" } else { "b" };
+            store
+                .record_for_pty("/p", &entry(kind, &format!("event {index}")), Some(pty))
+                .unwrap();
+        }
+        let input = serde_json::from_value(
+            serde_json::json!({"blockedOnly": true, "ptyId": "b", "limit": 2}),
+        )
+        .unwrap();
+        let page = store.list("/p", &input).unwrap();
+        let wire = serde_json::to_value(&page).unwrap();
+        assert_eq!(wire["total"], 4);
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["event 10", "event 8"]
+        );
+        assert!(wire["nextCursor"].is_number());
+
+        for index in 12..122 {
+            store
+                .record("/p", &entry(ProgressKind::Done, &format!("event {index}")))
+                .unwrap();
+        }
+        let input = serde_json::from_value(serde_json::json!({"limit": 1000000})).unwrap();
+        let page = store.list("/p", &input).unwrap();
+        assert_eq!(serde_json::to_value(&page).unwrap()["total"], 122);
+        assert_eq!(page.entries.len(), 100);
+        assert!(serde_json::to_value(&page).unwrap()["nextCursor"].is_number());
+
+        let input = serde_json::from_value(serde_json::json!({"limit": 0})).unwrap();
+        assert_eq!(store.list("/p", &input).unwrap().entries.len(), 1);
+    }
+
+    #[test]
     fn viewing_one_pty_does_not_mark_another_pty_or_the_repo_aggregate_as_seen() {
         let (_guard, store, _dir) = isolated_store();
         store
@@ -877,7 +1014,7 @@ mod tests {
         assert_eq!(select(Some("pty-b")), None);
         assert_eq!(select(None), None);
 
-        store.mark_viewed("/p").unwrap();
+        store.mark_viewed_for_pty("/p", None).unwrap();
         assert!(select(None).is_some());
         assert_eq!(select(Some("pty-b")), None);
     }
@@ -911,7 +1048,7 @@ mod tests {
             "another project's delete must not reach this entry"
         );
 
-        store.mark_viewed("/mine").unwrap();
+        store.mark_viewed_for_pty("/mine", None).unwrap();
         assert!(
             store
                 .list("/theirs", &ProgressListInput::default())
@@ -975,7 +1112,10 @@ mod tests {
         store
             .record("/p", &entry(ProgressKind::Done, "one"))
             .unwrap();
-        let first = store.mark_viewed("/p").unwrap().last_viewed_ms;
+        let first = store
+            .mark_viewed_for_pty("/p", None)
+            .unwrap()
+            .last_viewed_ms;
         assert_eq!(
             store
                 .list("/p", &ProgressListInput::default())
@@ -984,7 +1124,10 @@ mod tests {
             Some(first)
         );
         std::thread::sleep(Duration::from_millis(2));
-        let second = store.mark_viewed("/p").unwrap().last_viewed_ms;
+        let second = store
+            .mark_viewed_for_pty("/p", None)
+            .unwrap()
+            .last_viewed_ms;
         assert!(second >= first, "the timestamp is not allowed to go back");
     }
 
@@ -1121,6 +1264,47 @@ mod tests {
         let list = store.list("/p", &ProgressListInput::default()).unwrap();
         let texts: Vec<&str> = list.entries.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, vec!["known"]);
+    }
+
+    #[test]
+    fn progress_paging_skips_future_kinds_without_losing_known_history() {
+        let (_guard, store, _dir) = isolated_store();
+        for index in 0..12 {
+            store
+                .record("/p", &entry(ProgressKind::Done, &format!("known {index}")))
+                .unwrap();
+        }
+        let conn = Connection::open(store.database_path()).unwrap();
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             INSERT INTO entries (project, created_at_ms, kind, text)
+             VALUES ('/p', 20, 'from_the_future', 'unknown one'),
+                    ('/p', 21, 'from_the_future', 'unknown two');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let first = store.list("/p", &ProgressListInput::default()).unwrap();
+        assert_eq!(first.total, 12);
+        assert_eq!(first.entries.len(), 10);
+        let older = store
+            .list(
+                "/p",
+                &ProgressListInput {
+                    cursor: first.next_cursor,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            older
+                .entries
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["known 1", "known 0"]
+        );
+        assert_eq!(older.next_cursor, None);
     }
 
     /// The first journals were created with a bare `INTEGER PRIMARY KEY` (the

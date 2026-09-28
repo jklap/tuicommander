@@ -9,6 +9,7 @@ import {
 import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
 import { setToastBellMirrorResolver } from "./toasts";
+import { uiStore } from "./ui";
 
 interface PlayOptions {
 	terminalId?: string;
@@ -85,6 +86,7 @@ interface NotificationsState {
 function createNotificationsStore() {
 	const defaults = copyDefaults();
 	notificationManager.updateConfig(defaults);
+	const acpNotifications = new Map<string, Notification | null>();
 
 	const [state, setState] = createStore<NotificationsState>({
 		config: defaults,
@@ -93,6 +95,35 @@ function createNotificationsStore() {
 	});
 
 	const actions = {
+		/** Keep one desktop notification per pending ACP question until it settles. */
+		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[], panelHidden: boolean): void {
+			const pending = new Set(interactions.map((interaction) => interaction.id));
+			for (const [id, notification] of acpNotifications) {
+				if (pending.has(id)) continue;
+				notification?.close();
+				acpNotifications.delete(id);
+			}
+			if (!panelHidden || !isTauri()) return;
+			for (const interaction of interactions) {
+				if (acpNotifications.has(interaction.id)) continue;
+				acpNotifications.set(interaction.id, null);
+				void ensureNotificationPermission()
+					.then((allowed) => {
+						if (!allowed || !acpNotifications.has(interaction.id)) return;
+						const notification = new Notification("AI Chat needs input", {
+							body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
+							silent: true,
+						});
+						acpNotifications.set(interaction.id, notification);
+						notification.onclick = () => {
+							notification.close();
+							void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setFocus());
+							uiStore.setAiChatPanelVisible(true);
+						};
+					})
+					.catch((error) => appLogger.debug("ai-chat", "Could not show ACP notification", error));
+			}
+		},
 		/** Load config from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {

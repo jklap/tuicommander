@@ -33,15 +33,27 @@ export type AcpTranscriptEntry =
 	| { id: string; kind: "tool"; call: AcpToolCall }
 	| { id: string; kind: "plan"; entries: AcpPlanEntry[] }
 	/** A turn that ended as something other than a finished answer. */
-	| { id: string; kind: "settled"; stopReason: string };
+	| { id: string; kind: "settled"; stopReason: string }
+	| { id: string; kind: "failed"; message: string };
 
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
+	titles: Record<AcpSessionId, string>;
+	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
+	turnHasReply: Record<AcpSessionId, boolean>;
+	pendingUserEcho: Record<AcpSessionId, { entryId: string; received: string }>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
 
-const [state, setState] = createStore<TranscriptState>({ sessions: {}, nextId: 1 });
+const [state, setState] = createStore<TranscriptState>({
+	sessions: {},
+	titles: {},
+	usage: {},
+	turnHasReply: {},
+	pendingUserEcho: {},
+	nextId: 1,
+});
 
 /**
  * The text inside a content block, or "" for a block that carries none.
@@ -77,6 +89,33 @@ function appendChunk(
 	}
 	entries.push({ id: `e${draft.nextId}`, kind, text });
 	draft.nextId += 1;
+}
+
+/** Reconcile ego's streamed echo with the prompt already shown by promptSent. */
+function appendUserChunk(
+	draft: TranscriptState,
+	sessionId: AcpSessionId,
+	entries: AcpTranscriptEntry[],
+	text: string,
+): void {
+	if (!text) return;
+	const pending = draft.pendingUserEcho[sessionId];
+	if (pending) {
+		const entry = entries.find((item) => item.id === pending.entryId);
+		if (entry?.kind === "user") {
+			const received = pending.received + text;
+			if (entry.text.startsWith(received)) {
+				if (received === entry.text) delete draft.pendingUserEcho[sessionId];
+				else pending.received = received;
+				return;
+			}
+			entry.text = received;
+			delete draft.pendingUserEcho[sessionId];
+			return;
+		}
+		delete draft.pendingUserEcho[sessionId];
+	}
+	appendChunk(draft, entries, "user", text);
 }
 
 /** Fold a tool call, or an update to one, into the single card that shows it. */
@@ -116,20 +155,68 @@ function stripUndefined(fields: Partial<AcpToolCall>): Partial<AcpToolCall> {
 	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
-function reduceUpdate(draft: TranscriptState, entries: AcpTranscriptEntry[], update: AcpSessionUpdate): void {
+/** A terminal turn cannot leave its tool indicators showing work in progress. */
+function settleToolCalls(entries: AcpTranscriptEntry[], status: "completed" | "failed"): void {
+	for (const entry of entries) {
+		if (
+			entry.kind === "tool" &&
+			(!entry.call.status || entry.call.status === "pending" || entry.call.status === "in_progress")
+		) {
+			entry.call.status = status;
+		}
+	}
+}
+
+function reduceUpdate(
+	draft: TranscriptState,
+	sessionId: AcpSessionId,
+	entries: AcpTranscriptEntry[],
+	update: AcpSessionUpdate,
+): void {
 	const record = update as unknown as Record<string, unknown>;
 	switch (update.sessionUpdate) {
+		case "session_info_update":
+			if (typeof record.title === "string" && record.title.trim()) draft.titles[sessionId] = record.title;
+			break;
+		case "usage_update": {
+			if (
+				typeof record.used !== "number" ||
+				!Number.isFinite(record.used) ||
+				record.used < 0 ||
+				typeof record.size !== "number" ||
+				!Number.isFinite(record.size) ||
+				record.size <= 0
+			)
+				break;
+			const cost = record.cost;
+			draft.usage[sessionId] = {
+				used: record.used,
+				size: record.size,
+				...(cost &&
+				typeof cost === "object" &&
+				typeof (cost as { amount?: unknown }).amount === "number" &&
+				Number.isFinite((cost as { amount: number }).amount) &&
+				typeof (cost as { currency?: unknown }).currency === "string"
+					? { cost: cost as { amount: number; currency: string } }
+					: {}),
+			};
+			break;
+		}
 		case "user_message_chunk":
-			appendChunk(draft, entries, "user", textOf(record.content));
+			appendUserChunk(draft, sessionId, entries, textOf(record.content));
 			break;
 		case "agent_message_chunk":
+			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "agent", textOf(record.content));
+			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
 		case "agent_thought_chunk":
+			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "thought", textOf(record.content));
 			break;
 		case "tool_call":
 		case "tool_call_update":
+			delete draft.pendingUserEcho[sessionId];
 			foldToolCall(draft, entries, record);
 			break;
 		case "plan": {
@@ -146,10 +233,8 @@ function reduceUpdate(draft: TranscriptState, entries: AcpTranscriptEntry[], upd
 			break;
 		}
 		default:
-			// `config_option_update`, `usage_update` and anything a later protocol
-			// version adds are not conversation. They reach the panel through the
-			// connection snapshot, which is refetched, so dropping them here loses
-			// nothing.
+			// `config_option_update` and anything a later protocol
+			// version adds are not rendered by the transcript projection.
 			break;
 	}
 }
@@ -159,7 +244,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, nextId: 1 });
 	},
 
 	/**
@@ -179,6 +264,8 @@ export const acpTranscript = {
 		setState(
 			produce((s: TranscriptState) => {
 				delete s.sessions[sessionId];
+				delete s.turnHasReply[sessionId];
+				delete s.pendingUserEcho[sessionId];
 			}),
 		);
 		return removed;
@@ -214,15 +301,46 @@ export const acpTranscript = {
 		setState(
 			produce((s: TranscriptState) => {
 				const entries = (s.sessions[sessionId] ??= []);
-				if (event.kind === "sessionUpdate") {
-					reduceUpdate(s, entries, event.update);
+				if (event.kind === "turnStarted") {
+					s.turnHasReply[sessionId] = false;
 					return;
 				}
-				if (event.kind === "turnSettled" && event.stopReason !== "end_turn") {
+				if (event.kind === "promptSent") {
+					s.turnHasReply[sessionId] = false;
+					const id = `e${s.nextId}`;
+					entries.push({ id, kind: "user", text: event.text });
+					if (event.text) s.pendingUserEcho[sessionId] = { entryId: id, received: "" };
+					s.nextId += 1;
+					return;
+				}
+				if (event.kind === "sessionUpdate") {
+					reduceUpdate(s, sessionId, entries, event.update);
+					return;
+				}
+				if (event.kind === "turnFailed") {
+					delete s.pendingUserEcho[sessionId];
+					settleToolCalls(entries, "failed");
+					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
+					s.nextId += 1;
+					return;
+				}
+				if (event.kind === "turnSettled") {
+					delete s.pendingUserEcho[sessionId];
+					settleToolCalls(entries, event.stopReason === "end_turn" ? "completed" : "failed");
+				}
+				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {
 					// A turn that ended because it was cancelled, refused or ran
 					// out of room ended without answering, and a transcript that
 					// just stops there reads as the agent falling silent.
-					entries.push({ id: `e${s.nextId}`, kind: "settled", stopReason: event.stopReason });
+					entries.push({
+						id: `e${s.nextId}`,
+						kind: "settled",
+						stopReason: s.turnHasReply[sessionId]
+							? event.stopReason
+							: event.stopReason === "end_turn"
+								? "empty"
+								: event.stopReason,
+					});
 					s.nextId += 1;
 				}
 			}),
@@ -268,5 +386,13 @@ export const acpTranscript = {
 
 	entries(sessionId: AcpSessionId): AcpTranscriptEntry[] {
 		return state.sessions[sessionId] ?? [];
+	},
+
+	title(sessionId: AcpSessionId): string | null {
+		return state.titles[sessionId] ?? null;
+	},
+
+	usage(sessionId: AcpSessionId): { used: number; size: number; cost?: { amount: number; currency: string } } | null {
+		return state.usage[sessionId] ?? null;
 	},
 };

@@ -4,15 +4,26 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::process::{Command, Output};
 
-fn run_against_stub(status: u16, response_body: &str) -> (Output, String, String) {
-    let socket = std::path::Path::new("/tmp").join(format!(
-        "tuic-story-{}-{}.sock",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+fn assert_repository_socket(socket: &std::path::Path) {
+    let requested = tuic_test_support::test_temp_root();
+    let gits_scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
+        .map(|gits| gits.join(".tmp"));
+    assert!(
+        socket.starts_with(&requested) || gits_scratch.is_some_and(|root| socket.starts_with(root)),
+        "socket escaped repository test scratch: {}",
+        socket.display()
+    );
+}
+
+fn run_against_stub(
+    status: u16,
+    response_body: &str,
+) -> (Output, String, String, std::path::PathBuf) {
+    let scratch = tempfile::tempdir_in(tuic_test_support::short_socket_test_temp_root())
+        .expect("socket scratch");
+    let socket = scratch.path().join("story.sock");
     let listener = UnixListener::bind(&socket).expect("stub socket");
     let response_body = response_body.to_owned();
     let server = std::thread::spawn(move || {
@@ -58,13 +69,15 @@ fn run_against_stub(status: u16, response_body: &str) -> (Output, String, String
         .output()
         .expect("run tuic story");
     let (request_line, body) = server.join().expect("stub server");
-    std::fs::remove_file(socket).expect("remove stub socket");
-    (output, request_line, body)
+    std::fs::remove_file(&socket).expect("remove stub socket");
+    (output, request_line, body, socket)
 }
 
 #[test]
 fn story_command_sends_encoded_project_and_prints_reply() {
-    let (output, request_line, body) = run_against_stub(200, r#"{"type":"plans","value":[]}"#);
+    let (output, request_line, body, socket) =
+        run_against_stub(200, r#"{"type":"plans","value":[]}"#);
+    assert_repository_socket(&socket);
     assert!(
         output.status.success(),
         "{}",
@@ -85,11 +98,21 @@ fn story_command_sends_encoded_project_and_prints_reply() {
 
 #[test]
 fn story_command_reports_http_failure_with_nonzero_exit() {
-    let (output, _, _) = run_against_stub(403, r#"{"error":"denied"}"#);
+    let (output, _, _, socket) = run_against_stub(403, r#"{"error":"denied"}"#);
+    assert_repository_socket(&socket);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
         "tuic: Story request failed (HTTP 403): {\"error\":\"denied\"}\n"
     );
+}
+
+#[test]
+fn story_command_uses_distinct_cleaned_sockets_for_consecutive_requests() {
+    let (_, _, _, first) = run_against_stub(200, "{}");
+    let (_, _, _, second) = run_against_stub(200, "{}");
+    assert_ne!(first, second);
+    assert!(!first.exists());
+    assert!(!second.exists());
 }

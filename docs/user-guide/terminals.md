@@ -47,7 +47,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - **Double-click** a tab to rename it (inline editing)
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
-- Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
+- Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
 
@@ -86,6 +86,9 @@ the backend even if a browser or event-stream client temporarily falls behind.
 Current Claude and Codex status lines are also recognized when their interface
 keeps an empty composer visible or freezes during a long tool. Completed timing
 summaries are not treated as work, so the indicator can still return to idle.
+If a mail wake reaches Claude while its detailed transcript hides the composer
+and Claude produces no response, the indicator returns to idle after five minutes
+without output, provided the last lifecycle hook reported idle.
 Grok keeps its composer visible while responding, so TUICommander waits for the
 animated status row to disappear before treating that composer as ready.
 
@@ -117,6 +120,8 @@ Resizing or switching between the primary and alternate screen also clears the
 selection because the row layout changes.
 
 ### Scrollback in fullscreen apps
+
+Agents launched through TUICommander, including supported agents typed into a new TUIC shell, use native scrollback where their CLI supports it (see [AI Agents](ai-agents.md#native-scrollback-on-launch)). This keeps past conversation lines available after the agent exits. The separate alternate-screen history below remains for programs that use fullscreen mode, such as `vim` and `less`, and for agents that enter it despite their launch defaults.
 
 Apps that take over the screen (`gh run watch`, `less`, `man`, TUIs) run on the terminal's *alternate screen*, which by the original terminal spec has no scrollback at all — anything printed past the bottom of the window is gone. TUICommander enables an isolated alternate-screen history, giving the same user-visible result as iTerm2's save-to-scrollback option: the scrollbar stays available and you can reach what rolled off the top.
 
@@ -236,9 +241,11 @@ The bell behavior when receiving BEL character (\x07) is set by `bell_style` in 
 File paths appearing in terminal output are automatically detected and become clickable links. Hover over a path to see the link underline, then click to open it.
 
 - `.md` / `.mdx` files open in the Markdown viewer panel
-- All other code files open in your configured IDE, at the line number if a `:line` or `:line:col` suffix is present
+- Other source files open in the built-in editor
+- A `:line` or `:line:col` suffix opens the built-in editor at that position, including for Markdown files. Clicking another position in an already-open file moves its cursor without replacing unsaved edits
 
 Paths are validated against the filesystem before becoming clickable — only real files show as links.
+Absolute paths can point outside a registered repository, including files in hidden directories.
 
 Recognized extensions include: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.java`, `.css`, `.html`, `.json`, `.yaml`, `.toml`, `.sql`, and many more.
 
@@ -247,6 +254,10 @@ Recognized extensions include: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`
 When an AI agent emits a plan file path (e.g., `PLAN.md`), a button appears in the toolbar showing the file name. Click it to open the plan — Markdown files open in the viewer panel, others open in the IDE. Click the dismiss button (x) to hide it.
 
 ## Working with AI Agents
+
+When TUICommander sends text followed by Enter to an agent, it leaves a short
+pause so terminal-based agent interfaces can process the text first. An agent
+whose type is still unknown uses the longer Codex-safe pause.
 
 TUICommander detects rate limits, prompts, and status messages from AI agents:
 
@@ -263,6 +274,8 @@ Generic desktop notifications such as “needs your attention” do not by
 themselves mark the tab as awaiting input; TUICommander requires explicit
 permission, approval, or waiting-for-input wording, an agent hook, or a verified
 question on screen.
+Questions inside a wrapped suggested follow-up action do not mark the tab as awaiting input.
+Canceling a Codex approval with Esc clears its question indicator when Codex returns to its composer.
 
 ### Queueing Follow-up Commands
 

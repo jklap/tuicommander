@@ -9,6 +9,7 @@ import "./markdown-content.css";
 import { type Component, createEffect, createMemo, Index, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
+import { handleOpenUrl } from "../../utils/openUrl";
 import { stripAnsi } from "../../utils/stripAnsi";
 import {
 	findTweakCommentBlocks,
@@ -18,6 +19,7 @@ import {
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
+import { filePathRegex } from "../Terminal/linkProvider";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -27,15 +29,14 @@ import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
 const ALLOWED_URI_REGEXP =
 	/^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset|tauri):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
-/** File extensions that can be previewed inline when clicked as relative links.
- *  .md files open in a markdown tab; all others open in the file preview tab. */
-const PREVIEWABLE_RE =
-	/\.(md|pdf|html?|png|jpe?g|gif|webp|svg|avif|ico|bmp|mp4|webm|mov|ogg|mp3|wav|flac|aac|m4a|txt|json|csv|log|xml|ya?ml|toml|ini|cfg|conf)$/i;
-
 export interface ContentRendererProps {
 	content: string;
+	/** Opt-in copy action for fenced code blocks. Receives the original source text. */
+	onCodeCopy?: (text: string) => void;
+	/** Turn plain file paths into links; the caller still resolves and validates them. */
+	autoLinkFiles?: boolean;
 	emptyMessage?: string;
-	/** Called when a relative file link is clicked (href passed as argument) */
+	/** Called for local file, directory, and heading links (raw href passed as argument). */
 	onLinkClick?: (href: string) => void;
 	/**
 	 * Called when a checkbox is clicked (source line, new mark, and — for a
@@ -49,7 +50,7 @@ export interface ContentRendererProps {
 	contentRef?: (el: HTMLDivElement) => void;
 	/** Override the root font size in pixels (children use em, so everything scales). */
 	fontSize?: number;
-	/** Add exact raw-source ranges to top-level Markdown blocks for gutter comments. */
+	/** Add exact raw-source ranges to Markdown blocks and individual list items for gutter comments. */
 	commentableBlocks?: boolean;
 	/**
 	 * Render a growing answer as a committed prefix plus a live tail, so a tick
@@ -72,18 +73,26 @@ export function applyCommentBlockMetadata(container: HTMLElement, source: string
 	const comments = parseTweakComments(source, blocks).filter((comment) => comment.anchor === "block");
 	const renderRoot = container.firstElementChild ?? container;
 	const elements = Array.from(renderRoot.children) as HTMLElement[];
+	const listItems = Array.from(renderRoot.querySelectorAll<HTMLElement>("li"));
 	let elementIndex = 0;
+	let itemIndex = 0;
 	// DEFERRED (2026-09-23) — pairing is by tag only. A raw HTML token (e.g.
 	// `<p align="center">`) renders an element with no entry in `blocks`, so the
 	// next same-tag block binds to it and every later one shifts by one. The fix
 	// needs per-token element counts for `html` tokens (after DOMPurify), which
 	// is more than a local change; the save path already refuses a stale range.
 	for (const block of blocks) {
-		while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
-		const element = elements[elementIndex++];
+		let element: HTMLElement | undefined;
+		if (block.tag === "LI") element = listItems[itemIndex++];
+		else {
+			while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
+			element = elements[elementIndex++];
+		}
 		if (!element) break;
-		element.dataset.commentSourceStart = String(block.start);
-		element.dataset.commentSourceEnd = String(block.end);
+		if (block.tag !== "UL" && block.tag !== "OL") {
+			element.dataset.commentSourceStart = String(block.start);
+			element.dataset.commentSourceEnd = String(block.end);
+		}
 		const comment = comments.find(
 			(candidate) => candidate.sourceStart === block.start && candidate.sourceEnd === block.end,
 		);
@@ -110,12 +119,13 @@ marked.use({
 		code(token: Tokens.Code) {
 			const lang = token.lang ?? "";
 			const baseCls = lang ? `language-${lang}` : "";
+			const raw = encodeURIComponent(token.text);
 			if (ANSI_CSI_RE.test(token.text)) {
 				const cls = [baseCls, "ansi-block"].filter(Boolean).join(" ");
-				return `<pre><code class="${cls}">${ansiConverter.toHtml(token.text)}</code></pre>\n`;
+				return `<pre data-raw-code="${raw}"><code class="${cls}">${ansiConverter.toHtml(token.text)}</code></pre>\n`;
 			}
 			const escaped = token.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-			return `<pre><code${baseCls ? ` class="${baseCls}"` : ""}>${escaped}</code></pre>\n`;
+			return `<pre data-raw-code="${raw}"><code${baseCls ? ` class="${baseCls}"` : ""}>${escaped}</code></pre>\n`;
 		},
 	},
 });
@@ -346,8 +356,25 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 			return `<${tag}${attrs}><input type="checkbox"${checked}${tilde} data-source-line="${opts.lineOffset + site.line}" data-source-col="${site.col}"></${tag}>`;
 		});
 
+		// Preserve the source href in an inert attribute. DOMPurify strips unsafe
+		// href schemes, including useful `file.rs:42` line links; the click
+		// dispatcher still needs their text to block or route them explicitly.
+		// Remove any source-supplied copy first so raw HTML cannot dispatch a
+		// different destination from the link shown to the user.
+		if (/<a\b/i.test(html)) {
+			const template = document.createElement("template");
+			template.innerHTML = html;
+			for (const anchor of template.content.querySelectorAll("a")) {
+				const href = anchor.getAttribute("href");
+				anchor.removeAttribute("data-tuic-href");
+				if (href !== null) anchor.setAttribute("data-tuic-href", href);
+			}
+			html = template.innerHTML;
+		}
 		return DOMPurify.sanitize(stripEventHandlers(html), {
+			FORBID_TAGS: ["form", "map", "area"],
 			ADD_ATTR: [
+				"data-tuic-href",
 				"data-tweak-id",
 				"data-tweak-at",
 				"data-tweak-comment",
@@ -419,6 +446,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 
 	const handleClick = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
+		if (target.closest("button[data-copy-code]") && props.onCodeCopy) {
+			const raw = target.closest("pre")?.getAttribute("data-raw-code");
+			if (raw !== null && raw !== undefined) props.onCodeCopy(decodeURIComponent(raw));
+			return;
+		}
 
 		// GFM task-list checkbox toggle (tri-state: [ ] → [x] → [~] → [ ])
 		if (target instanceof HTMLInputElement && target.type === "checkbox" && target.dataset.sourceLine != null) {
@@ -448,14 +480,47 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			return;
 		}
 
-		// Relative file link navigation
-		if (!props.onLinkClick) return;
 		const anchor = target.closest("a");
 		if (!anchor) return;
-		const href = anchor.getAttribute("href");
-		if (href && !href.startsWith("http") && PREVIEWABLE_RE.test(href)) {
-			e.preventDefault();
+		const href = anchor.getAttribute("data-tuic-href") ?? anchor.getAttribute("href");
+		// All rendered links are untrusted document content. Nothing may fall
+		// through to WebView navigation, including links without a host handler.
+		e.preventDefault();
+		e.stopPropagation();
+		if (!href) {
+			appLogger.debug("app", "Blocked Markdown link without a safe href");
+			return;
+		}
+		if (/^(https?:|mailto:)/i.test(href)) {
+			handleOpenUrl(href);
+		} else if (
+			// A bare name:42 can be an extensionless file; Rust resolves the target.
+			// Keep known URL schemes out of that ambiguous file-line form.
+			/^[a-z][a-z\d+.-]*:/i.test(href) &&
+			!/^[a-z]:[\\/]/i.test(href) &&
+			!(
+				/^[^:/\\]+:[1-9]\d*$/.test(href) &&
+				!/^(?:javascript|vbscript|data|file|blob|about|ftp|https?|mailto|tel|sms|callto|cid|xmpp|asset|tauri|wss?):/i.test(
+					href,
+				)
+			)
+		) {
+			appLogger.debug("app", "Blocked Markdown link scheme", { href });
+		} else if (props.onLinkClick) {
 			props.onLinkClick(href);
+		} else if (href.startsWith("#")) {
+			const heading = Array.from(containerRef?.querySelectorAll("h1,h2,h3,h4,h5,h6") ?? []).find(
+				(el) =>
+					el.id === href.slice(1) ||
+					el.textContent
+						?.trim()
+						.toLowerCase()
+						.replace(/[^\p{L}\p{N}\s-]/gu, "")
+						.replace(/\s+/g, "-") === href.slice(1).toLowerCase(),
+			);
+			heading?.scrollIntoView({ block: "start" });
+		} else {
+			appLogger.debug("app", "Markdown link has no file handler", { href });
 		}
 	};
 
@@ -470,7 +535,54 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// that survive a tick are simply skipped.
 		processedContent();
 		incrementalContent();
+		// Comment markers are invisible in the rendered HTML. A source-only edit
+		// still moves block ranges and must refresh their DOM metadata.
+		if (props.commentableBlocks && !props.incremental) props.content;
 		if (!containerRef) return;
+		if (props.autoLinkFiles) {
+			queueMicrotask(() => {
+				if (!containerRef) return;
+				const walker = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT);
+				const nodes: Text[] = [];
+				while (walker.nextNode()) {
+					const node = walker.currentNode as Text;
+					if (!node.parentElement?.closest("a, code, pre, button, textarea, input")) nodes.push(node);
+				}
+				for (const node of nodes) {
+					const source = node.textContent ?? "";
+					const regex = filePathRegex();
+					const fragment = document.createDocumentFragment();
+					let end = 0;
+					for (const match of source.matchAll(regex)) {
+						const path = match[1];
+						const start = match.index + match[0].indexOf(path);
+						fragment.append(document.createTextNode(source.slice(end, start)));
+						const anchor = document.createElement("a");
+						anchor.href = path;
+						anchor.dataset.tuicHref = path;
+						anchor.textContent = path;
+						fragment.append(anchor);
+						end = start + path.length;
+					}
+					if (!end) continue;
+					fragment.append(document.createTextNode(source.slice(end)));
+					node.replaceWith(fragment);
+				}
+			});
+		}
+		if (props.onCodeCopy) {
+			queueMicrotask(() => {
+				containerRef?.querySelectorAll<HTMLPreElement>("pre[data-raw-code]").forEach((pre) => {
+					if (pre.querySelector("button[data-copy-code]")) return;
+					const button = document.createElement("button");
+					button.type = "button";
+					button.dataset.copyCode = "";
+					button.setAttribute("aria-label", "Copy code");
+					button.textContent = "Copy";
+					pre.append(button);
+				});
+			});
+		}
 		const raf = requestAnimationFrame(() => {
 			if (!containerRef) return;
 			containerRef.querySelectorAll<HTMLInputElement>(`input[${TILDE_SENTINEL}]`).forEach((cb) => {

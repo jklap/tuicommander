@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -21,7 +21,7 @@ import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
-import { displayTask, effectiveActivityState } from "../../utils/activitySnapshot";
+import { displayTask } from "../../utils/activitySnapshot";
 import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
@@ -35,6 +35,7 @@ import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";
 import { ChevronIcon } from "../ui/ChevronIcon";
+import { SubAgentIcon } from "../ui/SubAgentIcon";
 import { PrStateBadge } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
@@ -190,9 +191,9 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
-function compactActivityAge(timestamp: number | null): string {
+function compactActivityAge(timestamp: number | null, now: number): string {
 	if (!timestamp) return "";
-	const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+	const minutes = Math.max(0, Math.floor((now - timestamp) / 60_000));
 	if (minutes < 1) return "<1m";
 	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
@@ -202,6 +203,9 @@ function compactActivityAge(timestamp: number | null): string {
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+	const [now, setNow] = createSignal(Date.now());
+	const clock = setInterval(() => setNow(Date.now()), 60_000);
+	onCleanup(() => clearInterval(clock));
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={props.terminalIds}>
@@ -224,18 +228,12 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 					const dotClass = () => {
 						const t = term();
 						if (!t) return s.branchTabDot;
-						const state = effectiveActivityState(
-							t.shellState,
-							t.awaitingInput,
-							!!(t.sessionId && rateLimitStore.isRateLimited(t.sessionId)),
-							t.agentState,
-							t.backgroundWork,
-						);
-						if (state === "error") return cx(s.branchTabDot, s.branchTabDotError);
-						if (state === "awaiting_input") return cx(s.branchTabDot, s.branchTabDotQuestion);
-						if (state === "working" || state === "rate_limited") return cx(s.branchTabDot, s.branchTabDotBusy);
+						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
+						if (t.awaitingInput) return cx(s.branchTabDot, s.branchTabDotQuestion);
+						if ((t.sessionId && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id))
+							return cx(s.branchTabDot, s.branchTabDotBusy);
 						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
-						if (state === "idle" || state === "completed") return cx(s.branchTabDot, s.branchTabDotIdle);
+						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
 						return s.branchTabDot;
 					};
 
@@ -268,26 +266,10 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
 									<Show when={terminalsStore.getSubAgentTag(id)}>
 										{(parent) => (
-											<span
-												class={s.branchSubAgentTag}
-												role="img"
-												aria-label={`Spawned by ${parent()}`}
-												title={`Spawned by ${parent()}`}
-											>
-												<svg
-													class={s.branchSubAgentIcon}
-													viewBox="0 0 16 16"
-													width="11"
-													height="11"
-													fill="currentColor"
-													aria-hidden="true"
-												>
-													<path d="M7.25 1h1.5v2H12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.25V1zM4 4.5a.5.5 0 0 0-.5.5v6a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V5a.5.5 0 0 0-.5-.5H4zm1.5 2h1.75v1.75H5.5V6.5zm3.25 0h1.75v1.75H8.75V6.5zM6 9.5h4V11H6V9.5zM0 6.5h1V10H0V6.5zm15 0h1V10h-1V6.5zM5 14h6v1.5H5V14z" />
-												</svg>
-											</span>
+											<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 										)}
 									</Show>
-									<span class={s.branchAgentTime}>{compactActivityAge(t().lastDataAt)}</span>
+									<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
 								</button>
 							)}
 						</Show>

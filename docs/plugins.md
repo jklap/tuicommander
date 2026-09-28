@@ -220,7 +220,7 @@ host.registerOutputWatcher({
 
 **Where the matching runs.** The registry sends the pattern source and flags of every
 watcher to Rust (`set_plugin_output_watchers`). The PTY reader thread assembles the
-lines, cleans them (`output_watchers.rs`, a port of `stripAnsi` plus the backtick strip),
+lines, cleans them (`tuic-terminal/src/output_watchers.rs`, a port of `stripAnsi` plus the backtick strip),
 and tests them against the compiled patterns. Rust is the only line assembler: the
 WebView reassembles nothing, so a watcher that registers halfway through a line still
 sees that line whole. The WebView is only woken for a line that matched: it receives that
@@ -707,6 +707,8 @@ Alias for `clearTicker`.
 
 Open an HTML panel in a sandboxed iframe tab. Returns a handle for updating content or closing the panel. If a panel with the same id is already open, it will be activated and updated. **Requires `"ui:panel"` capability.**
 
+When the panel is hidden, its iframe is unloaded; showing it loads the page again. Keep state that must survive tab switches outside the iframe. This also applies to URL tabs.
+
 ```typescript
 const panel = host.openPanel({
   id: "my-dashboard",
@@ -922,6 +924,7 @@ if (window.tuic) {
 |--------|-------------|
 | `tuic.version` | SDK version string (e.g. `"1.0"`) |
 | `tuic.open(path, opts?)` | Open a markdown file in a new tab. `path` is absolute. `opts.pinned` pins the tab. |
+| `tuic.openUrl(url)` | Open an `http`, `https`, or `mailto` URL outside TUICommander. Other schemes are rejected by the host. |
 | `tuic.edit(path, opts?)` | Open a file in the code editor. `opts.line` (1-based) jumps to a line; omit for the top. |
 | `tuic.terminal(repoPath)` | Open a new terminal in the given repository. |
 
@@ -934,9 +937,14 @@ tuic.open("/Users/me/myrepo/docs/guide.md", { pinned: true });
 
 // Open a terminal in a repo
 tuic.terminal("/Users/me/myrepo");
+
+// Open a website in the system browser
+tuic.openUrl("https://example.com/docs");
 ```
 
 **Link interception:** Standard HTML links with `tuic://` scheme are intercepted automatically — no JavaScript required:
+
+Absolute `http`, `https`, and `mailto` links in inline plugin HTML also open through the host when clicked. Relative links remain blocked so an inline panel cannot navigate into the TUICommander app. A panel loading a cross-origin URL cannot have its clicks inspected by the host; use the tab menu's **Open in Browser** action if that page needs external links.
 
 ```html
 <!-- Opens a markdown file -->

@@ -59,6 +59,10 @@ describe("extractTab — client gating", () => {
 });
 
 describe("extractTab — text read from source", () => {
+	it("ignores accessible names on form controls while indexing setting labels", () => {
+		const src = `<input aria-label="Model" /><h3>Agents</h3><SettingToggle label="Show agent intent as tab title" />`;
+		expect(extractTab(src).settings).toEqual([{ text: "Show agent intent as tab title", section: "Agents" }]);
+	});
 	it("counts a label whose text continues into a runtime expression as dynamic", () => {
 		// Rendered as "Discovered tools (3)"; the index could only hold the
 		// prefix, which `scrollToSetting` would never find.

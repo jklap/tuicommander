@@ -6,9 +6,10 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use futures_util::stream::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use portable_pty::PtySize;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,6 +47,7 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         uptime_secs: uptime,
         session_count,
         protocol_version: crate::remote_runtime::REMOTE_PROTOCOL_VERSION as u32,
+        build: crate::remote_deploy::assets::running_build_identity().ok(),
         survive_secs: state.remote_survive_secs,
         socket_path,
         instance_id: crate::app_instance::instance_identity(),
@@ -59,12 +61,32 @@ pub(super) async fn app_version() -> Json<super::types::VersionResponse> {
     })
 }
 
+/// Resolve live agent identities in one pass for all session-list consumers.
+pub(crate) fn live_tuic_sessions_by_pty(
+    state: &AppState,
+) -> std::collections::HashMap<String, String> {
+    // A session opened without a caller identity is bound under its own PTY
+    // key. A later registered identity must win regardless of map iteration.
+    let mut by_pty = std::collections::HashMap::new();
+    for entry in state.session_maps.live_pty_by_tuic_session.iter() {
+        let (identity, pty) = (entry.key(), entry.value());
+        let bound = by_pty
+            .entry(pty.clone())
+            .or_insert_with(|| identity.clone());
+        if bound == pty && identity != pty {
+            *bound = identity.clone();
+        }
+    }
+    by_pty
+}
+
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
 /// Tauri command return the same rows, so a mirrored remote row (#791-055e) lands
 /// in both lists the same way.
 pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
+    let tuic_by_pty = live_tuic_sessions_by_pty(state);
     state
         .session_maps
         .sessions
@@ -93,6 +115,7 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .term_aliases
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                tuic_session: tuic_by_pty.get(&session_id).cloned(),
                 parent_session: state
                     .session_maps
                     .session_parent
@@ -234,13 +257,42 @@ pub(crate) fn write_pty_input_parts(
 /// order. Closes the interleave window a concurrent writer (peer injection,
 /// desktop `write_pty`) could otherwise land in between the text write and
 /// the Enter keystroke when the two writes took the PTY mutex separately.
+/// Agent Enter flushes the text and shares the injection scheduling gap;
+/// shell input and other keys remain raw atomic pairs.
 pub(crate) fn write_pty_input_pair(
     state: &Arc<AppState>,
     session_id: &str,
     text: &str,
     key: &str,
+    agent_type: Option<&str>,
 ) -> Result<(), String> {
-    write_pty_input_parts(state, session_id, &[text, key])
+    if key != "\r" || agent_type.is_none() {
+        return write_pty_input_parts(state, session_id, &[text, key]);
+    }
+
+    let writer = state
+        .pty_writer(session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let mut writer = writer.lock();
+    writer
+        .write_all(text.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    crate::pty::sleep_agent_enter_gap(agent_type);
+    writer
+        .write_all(key.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    drop(writer);
+    crate::pty_capture::record_input(session_id, text.as_bytes());
+    crate::pty_capture::record_input(session_id, key.as_bytes());
+    apply_input_bookkeeping(state, session_id, text);
+    apply_input_bookkeeping(state, session_id, key);
+    Ok(())
 }
 
 fn write_pty_input_bytes(
@@ -610,7 +662,7 @@ pub(super) fn register_pty_session(
     state
         .grid
         .watch
-        .insert(session_id.to_string(), crate::grid_gate::new_grid_watch());
+        .insert(session_id.to_string(), crate::grid_watch::new_grid_watch());
 
     // Broadcast to SSE/WebSocket consumers before the reader thread starts.
     state.emit_pty_event(crate::state::AppEvent::SessionCreated {
@@ -651,6 +703,26 @@ pub(super) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    // portable-pty can report a successful spawn even when the child fails to
+    // enter its requested directory. Reject that request before registering a
+    // session that would otherwise render as an empty terminal.
+    if let Some(ref dir) = cwd {
+        let expanded = crate::cli::expand_tilde(dir);
+        let metadata = std::fs::metadata(&expanded).map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Working directory {expanded:?} is unavailable: {error}")})),
+            )
+        })?;
+        if !metadata.is_dir() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": format!("Working directory {expanded:?} is not a directory")}),
+                ),
+            ));
+        }
+    }
     // Honor a client-provided id when it is non-empty and not already taken
     // (browser duplicate-tab fix); otherwise mint a fresh one.
     let session_id = match requested.session_id {
@@ -676,6 +748,7 @@ pub(super) fn spawn_pty_session(
             // path: no caller identity exists here, so the PTY key serves as both.
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
             crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
+            crate::pty::apply_agent_screen_env(&mut cmd, &std::collections::HashMap::new());
             cmd
         },
     )
@@ -1138,7 +1211,40 @@ pub(super) async fn ws_stream(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     if !state.session_maps.sessions.contains_key(&id) {
-        return StatusCode::NOT_FOUND.into_response();
+        let path = format!("/sessions/{id}/stream");
+        let mut params = Vec::new();
+        if let Some(format) = query.format.as_deref() {
+            params.push(("format", format.to_string()));
+        }
+        if let Some(offset) = query.offset {
+            params.push(("offset", offset.to_string()));
+        }
+        let query_string = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+        let Some(owner) =
+            super::remote_session_proxy::owner_url(&state, &id, &path, Some(&query_string))
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let mut url = match owner {
+            Ok(url) => url,
+            Err(status) => return status.into_response(),
+        };
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        if url.set_scheme(scheme).is_err() {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        let upstream = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio_tungstenite::connect_async(url.as_str()),
+        )
+        .await
+        {
+            Ok(Ok((stream, _))) => stream,
+            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        return ws.on_upgrade(move |socket| relay_remote_ws(socket, upstream));
     }
     let format = query.format.as_deref().unwrap_or("raw");
     // A loopback peer is either genuinely on this machine — no link to save —
@@ -1177,6 +1283,41 @@ pub(super) async fn ws_stream(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         handle_ws_session(socket, id, state, log_mode, initial_offset, compression).await;
     })
+}
+
+async fn relay_remote_ws(
+    mut phone: WebSocket,
+    mut owner: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) {
+    use tokio_tungstenite::tungstenite::Message as OwnerMessage;
+    loop {
+        tokio::select! {
+            frame = phone.next() => {
+                let Some(Ok(frame)) = frame else { break };
+                let outgoing = match frame {
+                    Message::Text(value) => OwnerMessage::Text(value.to_string().into()),
+                    Message::Binary(value) => OwnerMessage::Binary(value),
+                    Message::Ping(value) => OwnerMessage::Ping(value),
+                    Message::Pong(value) => OwnerMessage::Pong(value),
+                    Message::Close(_) => break,
+                };
+                if owner.send(outgoing).await.is_err() { break }
+            }
+            frame = owner.next() => {
+                let Some(Ok(frame)) = frame else { break };
+                let outgoing = match frame {
+                    OwnerMessage::Text(value) => Message::Text(value.to_string().into()),
+                    OwnerMessage::Binary(value) => Message::Binary(value),
+                    OwnerMessage::Ping(value) => Message::Ping(value),
+                    OwnerMessage::Pong(value) => Message::Pong(value),
+                    OwnerMessage::Close(_) | OwnerMessage::Frame(_) => break,
+                };
+                if phone.send(outgoing).await.is_err() { break }
+            }
+        }
+    }
 }
 
 /// Handle a WebSocket connection for a PTY session.
@@ -1665,7 +1806,7 @@ async fn handle_ws_grid_session(
                     // subscriber, which is a second piece of per-client state on a
                     // path that only skips frames when the client is already too slow
                     // to keep up. Revisit if a missed bell is ever reported.
-                    let frame = if crate::grid_gate::watch_dropped_frames(last_seq, seq) {
+                    let frame = if crate::grid_watch::watch_dropped_frames(last_seq, seq) {
                         tracing::debug!(
                             session_id = %resync_sid,
                             last_seq,
@@ -1727,7 +1868,7 @@ async fn handle_ws_grid_session(
     if let Some(watch_tx) = state.grid.watch.get(&session_id)
         && watch_tx.receiver_count() == 0
     {
-        crate::grid_gate::release_grid_frame(&watch_tx);
+        crate::grid_watch::release_grid_frame(&watch_tx);
     }
 }
 
@@ -2183,6 +2324,73 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: a remote PTY spawn error is swallowed before the HTTP response.
+    #[tokio::test]
+    async fn remote_create_session_reports_missing_cwd_over_http() {
+        let state = super::super::tests::test_state();
+        let missing = state
+            .data_dir
+            .join(format!("missing-cwd-{}", Uuid::new_v4()));
+        let app = super::super::build_router(state.clone(), false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind isolated test server");
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/sessions"))
+            .json(&serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "shell": tuic_test_support::host_shell().0,
+                "cwd": missing.to_string_lossy(),
+            }))
+            .send()
+            .await
+            .expect("test server answers");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("Working directory"))
+        );
+        assert!(
+            state.session_maps.sessions.is_empty(),
+            "a rejected cwd must not register a PTY"
+        );
+
+        let regular_file = state.data_dir.join(format!("file-cwd-{}", Uuid::new_v4()));
+        std::fs::write(&regular_file, b"file").unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/sessions"))
+            .json(&serde_json::json!({
+                "rows": 24,
+                "cols": 80,
+                "shell": tuic_test_support::host_shell().0,
+                "cwd": regular_file.to_string_lossy(),
+            }))
+            .send()
+            .await
+            .expect("test server answers");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("not a directory"))
+        );
+        assert!(state.session_maps.sessions.is_empty());
+        server.abort();
+    }
 
     /// One WebSocket handshake, start to finish, against a real socket.
     ///
@@ -3028,7 +3236,7 @@ mod tests {
         let sid = "browser-wheel".to_string();
         let stop = browser_session(&state, &sid, 200);
         // What `handle_ws_grid_session` holds for as long as a browser is attached.
-        let watch = crate::grid_gate::new_grid_watch();
+        let watch = crate::grid_watch::new_grid_watch();
         let _browser = watch.subscribe();
         state.grid.watch.insert(sid.clone(), watch);
 
@@ -3310,7 +3518,7 @@ mod tests {
         let tx = state.grid.watch.get(&session_id).unwrap();
         let mut rx = tx.subscribe();
         let first_seq = rx.borrow_and_update().seq;
-        crate::grid_gate::publish_grid_frame(&tx, vec![1, 2, 3]);
+        crate::grid_watch::publish_grid_frame(&tx, vec![1, 2, 3]);
         rx.changed().await.unwrap();
         let slot = rx.borrow_and_update();
         assert_eq!(slot.frame, vec![1, 2, 3]);
@@ -3413,6 +3621,33 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+    }
+
+    #[tokio::test]
+    async fn session_rows_expose_the_live_tuic_identity_that_children_name() {
+        let state = super::super::tests::test_state();
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity {
+                session_id: Some("coordinator-pty".to_string()),
+                ..Default::default()
+            },
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        state.bind_live_pty("coordinator-tuic", &session_id);
+        let row = super::session_rows_including_remote(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .expect("the parent session is listed");
+        let wire = serde_json::to_value(row).expect("session row serializes over both transports");
+        assert_eq!(wire["tuic_session"], "coordinator-tuic");
     }
 
     /// Every OSC 0/2 and intent title is synced back through `PUT name` as a

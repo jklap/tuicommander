@@ -627,8 +627,16 @@ pub fn set_plugin_output_watchers(
     seq: u64,
     watchers: Vec<crate::output_watchers::WatcherSpec>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    webview: tauri::Webview,
 ) -> crate::output_watchers::SyncOutcome {
-    set_plugin_output_watchers_impl(&state, &client_id, seq, &watchers)
+    let outcome = state.plugin_output_watchers.write().sync_for_webview(
+        webview.label(),
+        &client_id,
+        seq,
+        &watchers,
+    );
+    log_rejected_output_watchers(&outcome);
+    outcome
 }
 
 pub(crate) fn set_plugin_output_watchers_impl(
@@ -641,6 +649,11 @@ pub(crate) fn set_plugin_output_watchers_impl(
         .plugin_output_watchers
         .write()
         .sync(client_id, seq, watchers);
+    log_rejected_output_watchers(&outcome);
+    outcome
+}
+
+fn log_rejected_output_watchers(outcome: &crate::output_watchers::SyncOutcome) {
     if !outcome.rejected.is_empty() {
         tracing::info!(
             source = "plugin",
@@ -648,7 +661,6 @@ pub(crate) fn set_plugin_output_watchers_impl(
             outcome.rejected
         );
     }
-    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,8 +1712,6 @@ mod tests {
         // plugins_dir() points to the real config; we test the scanning logic
         // indirectly through validate_manifest above. The list function itself
         // just returns an empty vec when the dir doesn't exist.
-        let dir = std::env::temp_dir().join("tuic-test-nonexistent-plugins");
-        let _ = std::fs::remove_dir_all(&dir);
         // We can't easily override plugins_dir() in tests, but we can verify
         // the function doesn't panic
         let _ = list_user_plugins();

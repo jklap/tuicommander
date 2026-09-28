@@ -2,7 +2,9 @@
 set -euo pipefail
 
 project_root="$(git rev-parse --show-toplevel)"
-scratch="$(mktemp -d)"
+test_tmp="${TUIC_TEST_TMP_ROOT:-$project_root/.tmp/tuic-tests}"
+mkdir -p "$test_tmp"
+scratch="$(mktemp -d "$test_tmp/install-hooks.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
 git -C "$scratch" init -q repo

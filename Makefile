@@ -46,7 +46,7 @@ SHELL_TEST_DIR ?= scripts
 # Run every repository shell test. New scripts named test-*.sh below scripts/
 # join this target automatically; local scripts git ignores do not.
 test-shell:
-	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
+	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" scripts/with-test-tmp.sh bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
 
 # Install tracked git hooks. Idempotent.
 #   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
@@ -119,18 +119,18 @@ fmt:
 # Type-check, lint, format, and test (no Tauri build)
 check: test-shell
 	@echo "Running checks..."
-	@$(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
-	@$(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
-	@$(RTK) pnpm architecture:cycles && $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
-	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
-	@bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
-	@cd src-tauri && $(RTK) cargo fmt --check && echo "  rustfmt ✓"
-	@cd src-tauri && $(RTK) cargo clippy --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo nextest run --workspace && $(RTK) cargo test --doc -q && echo "  rust tests ✓"
-	@bash -o pipefail -c '$(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
-	@bash -o pipefail -c '$(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
-	@$(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
-	@cd src-tauri && $(RTK_ERR) cargo audit -q && echo "  cargo audit ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles && scripts/with-test-tmp.sh $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
+	@scripts/with-test-tmp.sh bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
+	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --release -- -D warnings && echo "  clippy ✓"
+	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
+	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
+	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
+	@scripts/with-test-tmp.sh $(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK_ERR) cargo audit -q && echo "  cargo audit ✓"
 
 # Rust coverage: cargo-llvm-cov + nextest. Terminal summary + HTML report.
 # Instrumented artifacts live in target/llvm-cov-target — the normal build
@@ -138,9 +138,9 @@ check: test-shell
 # included), so expect several minutes. Doctests are not measured
 # (doctest coverage requires nightly).
 cov:
-	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo llvm-cov nextest
-	@cd src-tauri && $(RTK) cargo llvm-cov report --html
-	@cd src-tauri && $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
+	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov nextest --workspace
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --html
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"
 
 # Mutation testing over the Rust changes of a git range (default: last
@@ -148,8 +148,14 @@ cov:
 # a full-tree run is not offered. Runs --in-place in a disposable worktree
 # under .tmp/ — see scripts/mutants.sh for why not the default tree copy.
 RANGE?=HEAD~1
+MUTANTS_ARGS?=
+ifneq ($(filter mutants,$(MAKECMDGOALS)),)
+MUTANTS_TRAILING_ARGS := $(filter-out mutants,$(MAKECMDGOALS))
+.PHONY: $(MUTANTS_TRAILING_ARGS)
+$(MUTANTS_TRAILING_ARGS):
+endif
 mutants:
-	@scripts/mutants.sh $(RANGE)
+	@scripts/mutants.sh $(RANGE) $(MUTANTS_ARGS) $(MUTANTS_TRAILING_ARGS)
 
 # CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
 # from `make cov`. Thresholds and exclusions live in src-tauri/.cargo-crap.toml.

@@ -10,6 +10,27 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Parallel AI Chats",
+		description: "With AI Chat focused, open another tab for a separate conversation and draft in the same repository.",
+		shortcut: `${mod}+T`,
+	},
+	{
+		feature: "AI Chat Images",
+		description: "Paste an image into AI Chat, review its preview, then send it with or without text.",
+		shortcut: `${mod}+V`,
+	},
+	{
+		feature: "Open Editor Links",
+		description: `Hold ${mod} and click a web link or file path in the code editor to open it.`,
+		shortcut: `${mod}+Click`,
+	},
+	{
+		feature: "Remote Machine Updates",
+		description:
+			"Remote Machines shows when a connected daemon is out of date. Update & restart confirms the live sessions that will close.",
+		shortcut: null,
+	},
+	{
 		feature: "Editor Line Wrapping",
 		description: "Press Alt+Z in the editor to wrap long lines. Text and code files remember separate choices.",
 		shortcut: "Alt+Z",
@@ -39,6 +60,12 @@ export const TIPS: Tip[] = [
 		feature: "Open an Agent Tab",
 		description:
 			"Hold the + in the tab bar to pick an agent. The new tab starts it directly instead of opening a shell.",
+		shortcut: null,
+	},
+	{
+		feature: "Agent Scrollback",
+		description:
+			"Agent commands in new terminals keep native scrollback when supported. Change Prevent alternate screen per agent in Settings.",
 		shortcut: null,
 	},
 	{
@@ -135,8 +162,8 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Project Progress",
 		description:
-			"The Progress dialog draws a line where your last visit ended, so you can see what agents did while you were away without reading it all again.",
-		shortcut: null,
+			"Open Terminal Progress from the toolbar bell to see what agents did while you were away, even when there are no unread updates.",
+		shortcut: "Cmd+Shift+P",
 	},
 	{
 		feature: "Plan Panel",
@@ -368,6 +395,11 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+Shift+= / ${mod}+Shift+- / ${mod}+Shift+0`,
 	},
 	{
+		feature: "Code Editor Zoom",
+		description: "Zoom the open code editor without changing your terminal or another editor tab.",
+		shortcut: `${mod}+= / ${mod}+- / ${mod}+0`,
+	},
+	{
 		feature: "Global Workspace",
 		description:
 			"Promote terminals from different repos into a single cross-repo view. Right-click a tab → Promote, then toggle the workspace with the shortcut. Tabs show a globe icon when promoted.",
@@ -418,6 +450,12 @@ export const TIPS: Tip[] = [
 		feature: "tuic CLI",
 		description:
 			"Control TUICommander from the terminal. Open files, manage sessions, spawn agents, and use it as a tmux replacement. Install from Settings > General.",
+		shortcut: null,
+	},
+	{
+		feature: "Managed Agent Workspace Trust",
+		description:
+			"Agents spawned by another agent can start in a new folder without a trust question. Change this for Claude or direct Codex in Settings > Agents.",
 		shortcut: null,
 	},
 	{

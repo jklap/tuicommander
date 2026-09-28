@@ -16,9 +16,9 @@ The `command` action also accepts `answer_input {attempt_id,answer}` for a pause
 
 `GET /stories/capabilities` returns JSON `true` when the running backend supports the native stories dialog. The frontend probes it once per dialog opening, recognizes a missing route by HTTP 404, and preserves other HTTP failures as errors.
 
-`POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `get_plan`, `plan_state`, `plan_view`, `create_story`, `list_stories`, `get_story`, `transition_history`, `add_dependency`, `remove_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `get_plan`, `plan_state`, `plan_view`, and `list_stories` take `plan_id`; `get_story` and `transition_history` take `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; both dependency actions take `story_id`, `dependency_id`, and `expected_revision`. `transition_history` returns committed transitions with their resulting revisions, commands, and actor provenance.
+`POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `list_plan_sources`, `add_plan_source`, `get_plan`, `plan_state`, `plan_view`, `create_story`, `list_stories`, `get_story`, `transition_history`, `add_dependency`, `remove_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `add_plan_source` takes a local document `source` and derives its title from front matter or the first heading. `list_plan_sources` reads top-level Markdown files in `plans/` and `.claude/plans/`, so a new file appears on the next call. It returns `{type:"plan_sources",value:[{title,source}]}`. `get_plan`, `plan_state`, `plan_view`, and `list_stories` take `plan_id`; `get_story` and `transition_history` take `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; both dependency actions take `story_id`, `dependency_id`, and `expected_revision`. `transition_history` returns committed transitions with their resulting revisions, commands, and actor provenance.
 
-HTTP access authentication does not identify a person: a request without `sessionId` records `local_api` and cannot approve. Desktop IPC is the human approval path in this slice.
+HTTP access authentication does not identify a person: a request without `sessionId` records `local_api` provenance, including for approval. A managed session may approve only a story claimed by a different session. The claiming session receives `a story cannot be approved by its implementer`.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
 
@@ -26,20 +26,24 @@ The project path is resolved to its canonical owner, so a managed worktree share
 
 ## Project Progress
 
-Six routes, all `POST`, and normal route authentication. All but
-`/progress/flow/detail` require an explicit `path` query naming a registered
-project.
+Six `POST` routes and one `GET` route, all with normal route authentication.
+The mobile PWA uses `GET /progress/projects` to discover journal projects,
+newest activity first. The `POST` routes other than `/progress/flow/detail`
+require an explicit `path` query naming a registered project.
 
 | Route | Body | Response |
 |---|---|---|
 | `/progress/report` | `{ type, text, step? }`, `type` is `done` or `blocked` | `{ id }` |
-| `/progress/list` | `{ blockedOnly?, ptyId? }` | `{ project, entries, ptyIds, lastViewedMs? }` |
+| `/progress/list` | `{ blockedOnly?, ptyId?, limit?, cursor? }` | `{ project, entries, total, nextCursor, ptyIds, lastViewedMs? }` |
+| `GET /progress/projects` | none | Array of project paths with journal entries, newest first |
 | `/progress/delete` | `{ ids }` | `{ deleted }` |
 | `/progress/viewed?ptyId=<id>` | none | `{ lastViewedMs }` |
 | `/progress/flow` | `{ ptyId? }` | `ProgressFlow` |
 | `/progress/flow/detail` | `{ ptyId, agentId, part }`, `part` is `prompt` or `report` | `{ text }` |
 
 Unknown fields are rejected. `text` is capped at 500 characters and `step` at 80.
+All Progress entry kinds redact secret-shaped text and step fields before
+storage; agent and target names are redacted and capped at 80 characters.
 Omit `ptyId` on `/progress/viewed` to mark the repository aggregate; supply it
 to mark one PTY. Each scope keeps a separate last-visit timestamp.
 `intent` is a valid entry *kind* but not a reportable one — TUIC writes those
@@ -49,8 +53,10 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
 lists the PTYs with stored history, including closed PTYs. The list is
-newest-first and capped at 500 entries per request. There is no paging, no
-cursor and no revision: the journal is append-only, so an entry is written once
+newest-first in pages of 10 entries by default. `limit` is clamped to 1–100;
+`total` counts entries matching the filters before the cursor, and `nextCursor`
+is `null` after the last page. Pass it back as `cursor` to read older entries.
+There is no revision: the journal is append-only, so an entry is written once
 and either kept or deleted. The one exception is a host-written `intent` that
 repeats that PTY's newest intent (same text, same agent): it returns the
 existing entry, because a screen repaint is not a new intent. `delete` is scoped
@@ -229,11 +235,14 @@ GET /sessions
 Returns array of active session info (ID, cwd, worktree path, branch,
 `display_name`, `display_name_is_custom`, `display_name_from_spawn`,
 `is_remote`, optional `pty_description`, optional terminal `alias`, optional
-`parent_session`, and nested state). The
+`parent_session`, optional `tuic_session`, and nested state). The
 `alias` field is the only record of a tab's alias after a WebView reload, because
 `term-alias-assigned` fires once, at spawn; `parent_session` is the same for the
 sub-agent tag, which `session-created` publishes once. It holds only a resolved
-parent, never a `pending-mcp:` placeholder. `display_name_from_spawn` is true when
+parent, never a `pending-mcp:` placeholder.
+`tuic_session` identifies the live agent bound to this PTY, which may differ from
+`session_id`; clients use it to name a spawned child's parent. It is omitted
+when no live identity is bound. `display_name_from_spawn` is true when
 `agent action=spawn` named the session and no user rename has replaced it; a
 non-custom name synced back from an OSC or intent title does not set it. The
 origin fields let browser and desktop clients preserve manual-title protection
@@ -268,6 +277,8 @@ Content-Type: application/json
 
 Returns `{ "session_id": "..." }`.
 
+When `cwd` is missing or names a file, the server returns `400` with `{ "error": "Working directory ..." }` before registering a PTY session.
+
 `alias` lets a client restore the short address a tab had before a restart. The server
 honours it only when it still has the `<prefix>-<number>` shape and no live session
 holds it, and then raises the per-prefix counter past that number so the next
@@ -291,10 +302,18 @@ Creates a git worktree and a PTY session in one call.
 POST /sessions/agent
 Content-Type: application/json
 
-{ "pty_config": { ... }, "agent_config": { ... } }
+{ "agent_type": "codex", "prompt": "Fix the bug", "args": ["resume"] }
 ```
 
-Spawns an AI agent (Claude, etc.) in a PTY session.
+Spawns an AI agent in a PTY session. The request is flat; browser transport sends
+only the HTTP spawn fields from the desktop `pty_config` and `agent_config` objects.
+It uses `agent_config.cwd` when present, otherwise `pty_config.cwd`. Desktop-only
+PTY fields such as `shell`, `tuic_session`, and `alias` are omitted. The optional
+`env` map and `model` string use the same field names as desktop IPC spawn. By default,
+supported interactive CLIs use native scrollback according to the agent's
+`prevent_alt_screen` setting.
+The child receives its own `TUIC_SESSION`, equal to the returned `session_id`,
+and `GET /sessions` exposes that identity as `tuic_session` immediately.
 
 ### Write to Session
 
@@ -304,6 +323,25 @@ Content-Type: application/json
 
 { "data": "ls -la\n" }
 ```
+
+### Submit One Managed-Agent Reply
+
+```
+POST /sessions/:id/submit
+Content-Type: application/json
+
+{ "input": "Please wait for my approval" }
+```
+
+Authenticated browser/PWA counterpart of `session action=submit`. It checks the
+managed agent's idle state and empty composer, writes the whole reply and Enter
+atomically, and returns the same submission receipt. A closed session returns
+HTTP 404 with `submitted: false` and `reason: "session_not_found"`; another
+rejection returns HTTP 409 and its precise `reason`. A successful write can
+still have `acknowledged: false`: the client must not retry blindly. While a
+confident question is open, a human reply can pass queued automated messages;
+those messages remain parked until the question clears. Automated `session
+action=submit` cannot answer the question.
 
 ### Write Several Inputs at Once
 
@@ -1107,7 +1145,7 @@ under `/repo/`.
 
 `install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
 
-`GET`/`PUT /config/agents` read and write `agents.json`. The route is in `shared_routes()`, so the `tuic-remote` daemon serves it too: a remote repository's agents run with that machine's `agents.json`, and the frontend loads it per connection. The `/config/agents/{agent}/…` sub-routes below stay desktop-only.
+`GET`/`PUT /config/agents` read and write `agents.json`, including each agent's optional `prevent_alt_screen` override (`false` disables TUIC's screen control; absent means enabled). The route is in `shared_routes()`, so the `tuic-remote` daemon serves it too: a remote repository's agents run with that machine's `agents.json`, and the frontend loads it per connection. The `/config/agents/{agent}/…` sub-routes below stay desktop-only.
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
@@ -1269,6 +1307,8 @@ GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
 POST   /config/remote-connections/{id}/install
 DELETE /config/remote-connections/{id}/install
+GET    /config/remote-connections/{id}/update
+POST   /config/remote-connections/{id}/update
 ```
 
 The configured remote machines and their vault password. The password is write
@@ -1282,6 +1322,17 @@ binary, installs and starts a systemd user unit or launchd agent, and persists
 `deploy = "installed"`. `DELETE .../install` stops and removes the service
 files and persists `deploy = "on_connect"`. Pairing tokens stay in the credential
 vault; neither response nor the connection document contains them.
+
+`GET .../update` previews the selected daemon binary: `remote_build`,
+`desktop_build` (version, target triple, SHA-256), `source` (`release` or
+`local`), `session_count`, and `out_of_date`. The release asset is preferred;
+when it is absent, a locally built sibling `tuic-remote` is accepted only for
+the same target triple. `POST .../update` takes
+`{ "confirmedSessions": N, "expectedSha256": "..." }`. A changed count or
+binary after confirmation is rejected. Direct connections upload over the
+authenticated daemon route; SSH connections use the existing SCP deployment.
+The call returns after `/health` reports the new SHA-256, or an error if the
+restart cannot be verified. Live remote PTY sessions are lost.
 
 `DELETE /config/remote-connections/{id}` tears the live connection down before it
 rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
@@ -1299,7 +1350,7 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, error?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error?, step? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
@@ -1395,6 +1446,7 @@ POST /fs/copy          { "repoPath": "...", "from": "...", "to": "..." }
 POST /fs/gitignore     { "repoPath": "...", "pattern": "..." }
 GET  /fs/resolve-terminal-path?cwd=/repo&candidate=src/x.ts   -> ResolvedFilePath | null
 POST /fs/resolve-terminal-paths { "cwd": "/repo", "candidates": [...] } -> (ResolvedFilePath | null)[]
+POST /fs/resolve-markdown-link { "root": "/repo", "currentFile": "docs/readme.md", "href": "../guide.md#intro" } -> MarkdownLinkTarget
 GET  /fs/stat?path=/absolute/path                              -> PathStat (exists/is_dir/size/modified_at)
 POST /fs/warm-index    { "repoPath": "..." }                   -> { "ok": true } (fire-and-forget BM25 build; strategy-gated, see below)
 POST /fs/write-external { "path": "/abs", "content": "..." }   -> { "ok": true }
@@ -1426,7 +1478,7 @@ Sandboxed filesystem operations for the file manager panel. `/fs/read-external` 
 ## Agent Usage Endpoints
 
 ```
-GET /claude/usage                              -> UsageApiResponse (rate-limit usage, 5-min cached)
+GET /claude/usage?sessionId=<id>               -> UsageApiResponse (session profile rate limits, 5-min cache per profile; omitted id selects default)
 GET /claude/projects                           -> ProjectEntry[]
 GET /claude/timeline?scope=all&days=7          -> TimelinePoint[] (hourly token aggregation)
 GET /claude/session-stats?scope=current        -> SessionStats
@@ -1476,6 +1528,8 @@ not expose a Gemini account-usage route.
 
 **Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots** for the HTTP boundary (a 403 otherwise), mirroring `/fs/read-external`. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
 
+`/fs/resolve-markdown-link` returns a tagged `kind` (`heading`, `file`, `missing`, or `blocked`). It decodes path and fragment separately, resolves relative to the source file, permits local symlinks outside the root, and refuses UNC/network paths before filesystem access.
+
 ## Monitoring Endpoints
 
 ### Health Check
@@ -1484,13 +1538,22 @@ not expose a Gemini account-usage route.
 GET /health
 ```
 
-Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "socket_path"?: "...", "instance_id": "<uuid>", "survive_secs"?: N }`.
+Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "build": { "version": "...", "target": "...", "sha256": "..." }, "socket_path"?: "...", "instance_id": "<uuid>", "survive_secs"?: N }`.
 
 The one route served without a credential. `instance_id` identifies the running
 **process** (minted at startup, not derived from the instance id or the config
 directory): a remote connection compares it against its own before mirroring and
 refuses a base URL that resolves back to itself. A daemon that omits the field is
 older than the check and still connects.
+
+The daemon hashes its running executable once at startup, so `build.sha256`
+identifies the process that answered even after an update stages a new file.
+`POST /remote/update` exists only on the daemon router. It needs the same
+session token as PTY access and the `x-tuic-target`, `x-tuic-sha256`, and
+`x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
+daemon executable's own directory, verifies the hash and current session
+count, and atomically promotes the file before restarting. Windows currently
+returns 501 because a running executable cannot be replaced there.
 
 `survive_secs` is present when `tuic-remote` was launched with an idle lifetime.
 Desktop-managed SSH deployment sets the vault pairing token as this daemon's
@@ -1513,6 +1576,16 @@ GET /metrics
 
 Returns `{ "total_spawned": N, "failed_spawns": N, "bytes_emitted": N, "pauses_triggered": N }`.
 
+### Raw PTY Capture
+
+`POST /diagnostics/capture` accepts `{ "enabled": true, "session_id"?: "<id>" }`
+to start recording one or all sessions; `{ "enabled": false }` stops it.
+`GET /diagnostics/capture` reports the active directory, session filter and
+bytes recorded. Captures default to `<config dir>/captures/<id>.tcap`.
+Set the process environment variable `TUIC_CAPTURE_DIR` to an absolute path
+before launch to select another directory. A relative value returns
+`{ "enabled": false, "error": "TUIC_CAPTURE_DIR must be absolute" }` on enable.
+
 ### Local IPs
 
 ```
@@ -1528,6 +1601,14 @@ GET /system/local-ip
 ```
 
 Returns the preferred local IP address (single value).
+
+### Home Directory
+
+```
+GET /system/home-directory
+```
+
+Returns the serving machine's home directory as a JSON string. The remote repository picker uses this route through the selected connection.
 
 ## Watcher Endpoints
 
@@ -1588,6 +1669,17 @@ by `ego_executable` in `app_config.json` and holds no API key.
 
 ## Agent Endpoints
 
+### Verify Agent Session
+
+```
+POST /agents/verify-session
+Content-Type: application/json
+
+{ "agentType": "claude", "sessionId": "af467730-5e79-49d9-8a17-ebd94c99f262", "cwd": "/work/project", "agentPid": null, "envOverrides": { "CLAUDE_CONFIG_DIR": "/profiles/work" } }
+```
+
+Returns a JSON boolean. `agentPid` is a live process ID when available and `null` after restart; `envOverrides` carries the saved launch profile so verification reads the same session store the agent used. The same fields apply to Codex (`CODEX_HOME`) and Gemini (`GEMINI_CLI_HOME`).
+
 ### Detect All Agents
 
 ```
@@ -1602,7 +1694,18 @@ Returns detected agent binaries and installed IDEs.
 GET /agents/detect?binary=claude
 ```
 
-Returns detection result for a specific agent binary.
+Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary name or absolute executable path. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. Successful help results are cached per executable version. A failed probe warns once and is retried after a short cooldown; each attempt has a two-second deadline. An absolute path checks that exact installed version.
+
+### Prepare Agent Launch Arguments
+
+```
+POST /agents/launch-args
+Content-Type: application/json
+
+{ "agentType": "codex", "binaryPath": "codex", "args": ["resume"] }
+```
+
+Returns the argument array with the agent's supported native-scrollback option inserted before an interactive subcommand. An explicit option, a disabled per-agent `prevent_alt_screen` setting, or a non-interactive subcommand leaves the array unchanged. The removed `allowAltScreen` request field is rejected, as is `allow_alt_screen` on HTTP agent spawn. The desktop `prepare_agent_launch_args` command uses the same Rust builder. Remote HTTP callers must authenticate.
 
 ### Detect Installed IDEs
 
@@ -1621,7 +1724,7 @@ Content-Type: application/json
 { "binaries": ["claude", "codex"] }
 ```
 
-Returns `{ "<binary>": { "path": string|null, "version": string|null }, ... }`.
+Returns `{ "<binary>": { "path": string|null, "version": string|null, "supports_no_alt_screen": false }, ... }`.
 Detection runs in parallel and skips version lookup for speed; use
 `GET /agents/detect` when the version matters. Blank names are dropped, so a name
 that was sent may be absent from the map.
@@ -1640,6 +1743,8 @@ and only used by editors that support them. An unknown `app` is rejected before
 anything is spawned. Returns `null` on success, matching the `open_in_app` command.
 
 ## Dictation Endpoints
+
+The HTTP routes and Tauri commands share the root dictation adapter. The `tuic-dictation` crate supplies the audio and speech domain without changing these route shapes.
 
 Desktop-only: audio capture and the whisper model live behind the `desktop`
 feature, so the remote daemon serves none of these. Every response is exactly what
@@ -1671,7 +1776,7 @@ POST /dictation/speech/speak     { "text": "...", "turn": 3 }
                                                     -> SpokenReply
 POST /dictation/speech/stop                         -> SpeechStatus
 GET  /dictation/speech/status?utterance=7           -> SpeechStatus
-POST /dictation/start                               -> null
+POST /dictation/start          { "source": "fn" | "hotkey" | "ui" } -> null
 POST /dictation/stop                                -> TranscribeResponse
 GET  /dictation/corrections                         -> { "<from>": "<to>", ... }
 PUT  /dictation/corrections      { "map": { ... } } -> null
@@ -2079,6 +2184,10 @@ not carried over, lists warm artifact directories with their sizes and
 parent. It is byte-identical to
 what MCP `repo action=worktree_create` returns — one value, two carriers — and
 it is the ONLY instruction channel: there is no enforcement layer behind it.
+Its `warm_artifacts.status` starts as `pending`; wait for `done` or `failed`
+in `GET /worktrees/paths?path=<base_repo>` before installing or building.
+The setup script completes before warming begins. Desktop IPC creation also
+returns `pending` and warms in the background.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,
@@ -2107,7 +2216,7 @@ Returns the base directory where worktrees are created.
 GET /worktrees/paths?path=/path/to/repo
 ```
 
-Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path", "kind": "worktree" }, ... }`.
+Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path", "kind": "worktree", "warm_artifacts": { "status": "pending" } }, ... }`.
 
 The map is keyed by workspace id and carries the branch explicitly as display
 data. Linked-worktree ids currently equal their branches, but clients should
@@ -2119,15 +2228,17 @@ use the returned id for later calls.
 GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
 ```
 
-Returns a fresh `{ dirty_files, commit_status, removal_safety, error? }` verdict
+Returns a fresh `{ dirty_files, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
 for one exact workspace. `dirty_files` counts the staged, unstaged and untracked
 files a removal would discard; `null` means the inspection failed and is not the
-same answer as `0`. `commit_status` is `unmerged`, `in_sync`, `merged`, or
-`unknown` — `in_sync` is HEAD sitting on the default branch's tip, which
+same answer as `0`. `dirty_fingerprint` identifies checkout status, HEAD, and submodule refs for
+revalidation. `submodule_unpushed_commits` lists counts per initialized module
+for commits absent from its remote-tracking branches. `commit_status` is
+`unmerged`, `in_sync`, `merged`, or `unknown` — `in_sync` is HEAD sitting on the default branch's tip, which
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -2153,7 +2264,7 @@ Finalizes a merged worktree, addressed by workspace id. The merge already
 happened, so no branch is needed here — only which checkout to dispose of. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
 
-`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true`. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl` with the Tauri command, so both transports pass the identical gate.
+`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true` and `"expectedFingerprint"` from the confirmed lifecycle verdict. A changed fingerprint aborts cleanup. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl_with_confirmation` with the Tauri command, so both transports pass the identical gate.
 
 ### Run Setup Script
 
@@ -2176,14 +2287,27 @@ DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 
 Query parameters:
 - `repoPath` (required) -- base repository path
-- `deleteBranch` (optional, default `true`) -- when `true`, also deletes the local git branch
-- `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree state and uses forced worktree removal and branch deletion
+- `deleteBranch` (optional, default `true`, or `false` when `force=true`) -- when `true`, also requests deletion of the local git branch
+- `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
+- `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
+- `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
+- `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
-Returns `{ "ok": true, "branch_delete_warning": null }` on full success. When
-`deleteBranch=true` and `git branch -d`
-refuses to delete the branch after a linked worktree is removed, the request
+Returns `{ "ok": true, "branch_delete_warning": null, "removal_rule": "ancestry" }`
+on full success. `removal_rule` names the rule that allowed removal:
+`in_sync`, `ancestry`, `patch_equivalence`, `kept_branch`, or `force`.
+A non-force request requires a clean worktree and submodules with no Git
+operation in progress, even when `deleteBranch=false`. A populated submodule
+requires one `git worktree remove --force` after a fresh clean-state check.
+Initialized submodule refs are preserved in the main module repository; an
+uninitialized submodule without Git state does not block removal. A clean
+branch whose commits were squash- or rebase-merged can use
+`patch_equivalence` when `git cherry` finds no unique patches. Merge commits
+are refused because `git cherry` does not compare their resolution changes. When
+`deleteBranch=true` and the branch fails proof or moves after the preflight,
+the compare-and-delete operation keeps the branch and the request
 still succeeds with `branch_delete_warning` set so clients can report the
 partial outcome.
 
@@ -2212,7 +2336,12 @@ Content-Type: application/json
 
 Register a push subscription. Idempotent (same endpoint updates keys).
 
-Push delivery is gated by desktop window focus: notifications for `question` and session completion events are sent whenever the desktop window is **not** focused (including when the app is minimized or the user is on another workspace). This avoids duplicate alerts while the user is actively at the desktop, and still wakes the PWA service worker when the phone is locked.
+Question and completion pushes are sent when the desktop window is unfocused or,
+on macOS, HID input has been idle for at least 120 seconds. The idle threshold
+also covers a focused window left in front when Boss walks away. Other platforms
+use focus when HID idle time is unavailable. A committed `progress type=blocked`
+report supplies the question text to the same session event and 30-second push
+limit as a parsed question. Empty blocked text is rejected by Progress validation.
 
 ### Unsubscribe
 
@@ -2224,6 +2353,21 @@ Content-Type: application/json
 ```
 
 Remove a push subscription by endpoint.
+
+### Test Push Delivery
+
+```
+POST /api/push/test
+Content-Type: application/json
+
+{}
+```
+
+Returns `{ "sent": 1, "failed": 0, "stale_removed": 0 }`, where `sent` counts
+push-service acceptance, not display on the phone. HTTP 404 means no saved
+subscription. HTTP 503 with `sent: 0` means push is disabled or the private
+VAPID key is unavailable. A 410 Gone response removes the stale subscription
+and increments `stale_removed`; Boss must re-subscribe from the phone PWA.
 
 ## ACP (ego)
 
@@ -2257,6 +2401,7 @@ DELETE /acp/connections/{cid}/sessions/{session_id}                             
 POST   /acp/connections/{cid}/sessions/{session_id}/close                                  -> null
 POST   /acp/connections/{cid}/sessions/{session_id}/prompt       {prompt:[ContentBlock]}   -> AcpTurnId
 POST   /acp/connections/{cid}/sessions/{session_id}/cancel                                 -> null
+DELETE /acp/connections/{cid}/sessions/{session_id}/queue/{turn_id}                       -> null
 POST   /acp/connections/{cid}/sessions/{session_id}/config       {configId, value}         -> [SessionConfigOption]
 POST   /acp/connections/{cid}/sessions/{session_id}/pause        {requestId}               -> EgoHoldResponse
 POST   /acp/connections/{cid}/sessions/{session_id}/resume-turn  {requestId}               -> EgoHoldResponse
@@ -2271,6 +2416,18 @@ POST   /acp/one-shot                                            {root, prompt}  
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+`prompt` returns an ID immediately. When the session already has a turn, the
+host queues the prompt and sends it only after the current ACP response leaves
+the session idle; a paused session keeps its queue until resume succeeds. It
+never puts two prompts in flight on that session. Each attachment snapshot has
+`queuedPrompts: [{turnId, summary}]`, and `promptQueueChanged` replaces that
+list on both streams. A `promptSent` event records the user-visible text when
+ego actually receives the prompt. Image data stays in the actor until dispatch,
+not in queue snapshots or journal events. An accepted prompt that later fails
+publishes `turnFailed {message, state}` on the ACP stream with its session and
+turn in the frame. Either transport can remove a queued
+ID with the DELETE route; `cancel` stops the active turn for every view.
 
 ### One-shot (`POST /acp/one-shot`)
 

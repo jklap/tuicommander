@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
+import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { ideasStore } from "../stores/ideas";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
@@ -13,10 +14,14 @@ import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
 import { useVersionCheck } from "./useVersionCheck";
 
-// Both screens sit behind a bottom-tab tap; the app always opens on "sessions".
+// Screens behind a bottom-tab tap stay out of the initial mobile graph.
 // Eager imports dragged the settings store and the whole i18n string table into
 // the initial mobile graph, which is what pushed mobile.html over its gzip budget.
 const ActivityScreen = lazy(() => import("./screens/ActivityScreen").then((m) => ({ default: m.ActivityScreen })));
+const MobileChatScreen = lazy(() =>
+	import("./screens/MobileChatScreen").then((m) => ({ default: m.MobileChatScreen })),
+);
+const FilesScreen = lazy(() => import("./screens/FilesScreen").then((m) => ({ default: m.FilesScreen })));
 const ProgressDialog = lazy(() => import("../components/ProgressDialog").then((m) => ({ default: m.ProgressDialog })));
 const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
 
@@ -69,8 +74,29 @@ export default function MobileApp() {
 		});
 	});
 
-	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
+	const [activeTab, setActiveTab] = createSignal<TabId>("chat");
+	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
+	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
+	createEffect(() => {
+		if (activeTab() !== "progress") return;
+		let cancelled = false;
+		setProgressProjects(undefined);
+		setProgressProjectsError(null);
+		void invoke<string[]>("progress_projects")
+			.then((projects) => {
+				if (!cancelled) setProgressProjects(projects);
+			})
+			.catch((error: unknown) => {
+				if (cancelled) return;
+				setProgressProjectsError("Progress projects are unavailable.");
+				appLogger.warn("network", "Could not list Progress projects", error);
+			});
+		onCleanup(() => {
+			cancelled = true;
+		});
+	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
+	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
 	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
@@ -103,6 +129,7 @@ export default function MobileApp() {
 	}
 
 	function handleBack() {
+		setSessionFilesOpen(false);
 		setSelectedSessionId(null);
 		setLastKnownSession(null);
 	}
@@ -136,6 +163,9 @@ export default function MobileApp() {
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
 							<Switch>
+								<Match when={activeTab() === "chat"}>
+									<MobileChatScreen />
+								</Match>
 								<Match when={activeTab() === "sessions"}>
 									<SessionsScreen
 										sessions={sessions()}
@@ -149,8 +179,15 @@ export default function MobileApp() {
 								<Match when={activeTab() === "activity"}>
 									<ActivityScreen onNavigateSession={navigateToSession} />
 								</Match>
+								<Match when={activeTab() === "files"}>
+									<FilesScreen />
+								</Match>
 								<Match when={activeTab() === "progress"}>
-									<ProgressDialog embedded />
+									<ProgressDialog
+										embedded
+										projects={progressProjects()}
+										projectsError={progressProjectsError() ?? undefined}
+									/>
 								</Match>
 								<Match when={activeTab() === "settings"}>
 									<SettingsScreen isConnected={error() === null} />
@@ -161,7 +198,25 @@ export default function MobileApp() {
 					</>
 				}
 			>
-				<SessionDetailScreen session={lastKnownSession()!} sessionExists={sessionExists()} onBack={handleBack} />
+				<div class={styles.sessionPane} classList={{ [styles.sessionPaneHidden]: sessionFilesOpen() }}>
+					<SessionDetailScreen
+						session={lastKnownSession()!}
+						sessionExists={sessionExists()}
+						onBack={handleBack}
+						onOpenFiles={() => setSessionFilesOpen(true)}
+					/>
+				</div>
+				<Show when={sessionFilesOpen()}>
+					<main class={styles.content}>
+						<FilesScreen
+							initialRepo={{
+								worktreePath: lastKnownSession()!.worktree_path,
+								cwd: lastKnownSession()!.cwd,
+							}}
+							onExit={() => setSessionFilesOpen(false)}
+						/>
+					</main>
+				</Show>
 			</Show>
 			<MobileToastContainer />
 			<McpConfirmHost />

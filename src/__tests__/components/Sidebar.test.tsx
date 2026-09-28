@@ -1724,7 +1724,8 @@ describe("Sidebar", () => {
 						agentIntent: "coordinating checkout validation",
 						currentTask: null,
 						lastPrompt: null,
-						lastDataAt: Date.now() - 8 * 60_000,
+						lastDataAt: Date.now() - 30_000,
+						lastActivityAt: Date.now() - 70 * 60_000,
 						shellState: "busy",
 						agentState: "working",
 						backgroundWork: false,
@@ -1739,6 +1740,7 @@ describe("Sidebar", () => {
 						currentTask: "running EU tax validation",
 						lastPrompt: null,
 						lastDataAt: Date.now() - 14 * 60_000,
+						lastActivityAt: Date.now() - 14 * 60_000,
 						shellState: "busy",
 						agentState: "working",
 						backgroundWork: false,
@@ -1753,6 +1755,7 @@ describe("Sidebar", () => {
 						currentTask: null,
 						lastPrompt: "preparing the checkout handoff",
 						lastDataAt: Date.now() - 31 * 60_000,
+						lastActivityAt: Date.now() - 31 * 60_000,
 						shellState: "idle",
 						agentState: "idle",
 						backgroundWork: false,
@@ -1795,14 +1798,55 @@ describe("Sidebar", () => {
 				"Gemini handoff: preparing the checkout handoff",
 			]);
 			expect(Array.from(container.querySelectorAll(".branchAgentTime"), (el) => el.textContent)).toEqual([
-				"8m",
+				"1h",
 				"14m",
 				"31m",
+			]);
+			vi.setSystemTime(Date.now() + 60 * 60_000);
+			vi.advanceTimersByTime(60_000);
+			expect(Array.from(container.querySelectorAll(".branchAgentTime"), (el) => el.textContent)).toEqual([
+				"2h",
+				"1h",
+				"1h",
 			]);
 			expect(container.querySelectorAll(".branchAgentIcon svg")).toHaveLength(3);
 
 			fireEvent.click(container.querySelectorAll(".branchTabItem")[1]);
 			expect(mockNavigateToTerminal).toHaveBeenCalledWith("t2");
+		});
+
+		it("shows an idle session row when the tab is finished despite stale working agent state", () => {
+			mockTerminalsGet.mockReturnValue({
+				name: "tuic-backlog",
+				agentType: "codex",
+				sessionId: "089ffa34",
+				shellState: "idle",
+				agentState: "working",
+				backgroundWork: false,
+				awaitingInput: null,
+				unseen: false,
+				lastActivityAt: Date.now() - 70 * 60_000,
+			});
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const dot = container.querySelector(".branchTabItem .branchTabDot");
+			expect(dot?.classList.contains("branchTabDotIdle")).toBe(true);
+			expect(dot?.classList.contains("branchTabDotBusy")).toBe(false);
 		});
 
 		it("tags a sub-agent row with its parent and leaves other rows untagged", () => {

@@ -11,6 +11,15 @@ const { actions, connections } = vi.hoisted(() => ({
 		disconnect: vi.fn(() => Promise.resolve()),
 		install: vi.fn(() => Promise.resolve()),
 		uninstall: vi.fn(() => Promise.resolve()),
+		prepareUpdate: vi.fn(() =>
+			Promise.resolve({
+				session_count: 3,
+				source: "release",
+				remote_build: { version: "1.0", target: "aarch64-apple-darwin" },
+				desktop_build: { version: "1.1", target: "aarch64-apple-darwin", sha256: "known-digest" },
+			}),
+		),
+		updateAndRestart: vi.fn(() => Promise.resolve()),
 		probeSshHosts: vi.fn<
 			() => Promise<Array<{ host: string; auth: "shell" | "no_shell" | "auth_failed" | "unreachable" }>>
 		>(() => Promise.resolve([])),
@@ -60,7 +69,44 @@ describe("RemoteMachinesPanel", () => {
 		for (const action of Object.values(actions)) action.mockClear();
 	});
 
-	afterEach(cleanup);
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
+	});
+
+	it("confirms the live session loss before an update of a Direct remote", async () => {
+		connections["machine-1"] = {
+			...sshConnection(),
+			connection: {
+				...sshConnection().connection,
+				transport: { type: "Direct", url: "http://builder.local:9877" },
+			},
+			status: "connected",
+			outOfDate: true,
+		};
+		const confirm = vi.fn(() => true);
+		vi.stubGlobal("confirm", confirm);
+		const { getByText } = render(() => <RemoteMachinesPanel />);
+		expect(getByText("Remote out of date")).toBeTruthy();
+		fireEvent.click(getByText("Update & restart remote"));
+		await waitFor(() => expect(actions.updateAndRestart).toHaveBeenCalledWith("machine-1", 3, "known-digest"));
+		expect(confirm).toHaveBeenCalledWith(expect.stringContaining("3 live sessions will be lost"));
+		expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Remote: 1.0 (aarch64-apple-darwin)"));
+		expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Selected: 1.1 (aarch64-apple-darwin, release)"));
+	});
+
+	it("offers the same update on SSH and keeps sessions when confirmation is cancelled", async () => {
+		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true };
+		vi.stubGlobal(
+			"confirm",
+			vi.fn(() => false),
+		);
+		const { getByText } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(getByText("Update & restart remote"));
+		await waitFor(() => expect(actions.prepareUpdate).toHaveBeenCalledWith("machine-1"));
+		expect(actions.updateAndRestart).not.toHaveBeenCalled();
+	});
 
 	it("persists deployment mode and survive minutes when saving an SSH machine", async () => {
 		const { getByTitle, getByPlaceholderText, getByText, container } = render(() => <RemoteMachinesPanel />);

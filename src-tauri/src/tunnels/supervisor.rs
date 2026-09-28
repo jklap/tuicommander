@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 use tokio::process::Command;
 
 use super::agent::discover_agent_socket;
@@ -26,6 +27,11 @@ pub enum TunnelStatus {
     Stopped { reason: String },
     Error { message: String },
 }
+
+/// Shared budget for a forwarded socket to become usable and for its caller to wait.
+pub(crate) const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const FORWARD_POLL: Duration = Duration::from_millis(250);
+const MIN_SSH_SURVIVAL: Duration = Duration::from_millis(500);
 
 pub struct TunnelSupervisor {
     profile: TunnelProfile,
@@ -203,13 +209,19 @@ async fn supervision_loop(
         // Connected even though ssh is effectively hung.
         let stderr_tail = child.stderr.take().map(spawn_stderr_drainer);
 
-        // Brief health check — if the process dies within 500ms it never connected.
-        let health_check = tokio::time::sleep(Duration::from_millis(500));
-        tokio::pin!(health_check);
-
-        let died_early = tokio::select! {
+        // A running SSH process needs a brief survival window, and its -L
+        // sockets may take longer to listen across a WAN. Require both.
+        let ready = tokio::select! {
+            biased;
             result = child.wait() => Some(result),
-            () = &mut health_check => None,
+            result = tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, wait_until_ready(&profile)) => {
+                if result.is_err() {
+                    graceful_kill(&mut child).await;
+                    set_status(&status, TunnelStatus::Error { message: "SSH local forward did not listen in time".to_string() }, &callback);
+                    return;
+                }
+                None
+            },
             _ = &mut shutdown_rx => {
                 graceful_kill(&mut child).await;
                 set_status(&status, TunnelStatus::Stopped { reason: "shutdown requested".to_string() }, &callback);
@@ -217,8 +229,8 @@ async fn supervision_loop(
             }
         };
 
-        if let Some(wait_result) = died_early {
-            // Process died during health check.
+        if let Some(wait_result) = ready {
+            // Process died before its forwards were ready.
             let stderr = stderr_tail_snapshot(&stderr_tail);
             let code = wait_result.ok().and_then(|s| s.code());
             let reason = classify_exit(&stderr, code);
@@ -247,7 +259,7 @@ async fn supervision_loop(
             return;
         }
 
-        // Process survived 500ms — consider it connected.
+        // SSH survived startup and all local forwards accept TCP connections.
         backoff.reset();
         set_status(&status, TunnelStatus::Connected, &callback);
 
@@ -290,6 +302,29 @@ async fn supervision_loop(
 
         // Non-retryable — already set by handle_exit.
         return;
+    }
+}
+
+async fn wait_until_ready(profile: &TunnelProfile) {
+    tokio::time::sleep(MIN_SSH_SURVIVAL).await;
+    loop {
+        let mut all_ready = true;
+        for forward in &profile.forwards {
+            if let ForwardSpec::Local { bind_port, .. } = forward {
+                let addr = (std::net::Ipv4Addr::LOCALHOST, *bind_port);
+                if !matches!(
+                    tokio::time::timeout(FORWARD_POLL, TcpStream::connect(addr)).await,
+                    Ok(Ok(_))
+                ) {
+                    all_ready = false;
+                    break;
+                }
+            }
+        }
+        if all_ready {
+            return;
+        }
+        tokio::time::sleep(FORWARD_POLL).await;
     }
 }
 
@@ -479,8 +514,8 @@ mod tests {
     /// Poll until the supervisor settles on `Stopped`.
     ///
     /// The bound covers the supervisor's own state machine and nothing else:
-    /// the 500ms health check, the child's exit, and at worst the first two
-    /// backoffs (~1s and ~2s). It is not sized for process startup — that cost
+    /// the 500ms survival check, child's exit and at worst the first two backoffs (~1s and ~2s).
+    /// It is not sized for process startup — that cost
     /// is paid up front by [`fake_ssh_script`], deliberately, because it is the
     /// one term here that the OS can stretch without limit. Keep it that way:
     /// if this bound ever needs raising, the cause is a supervisor change or a
@@ -513,16 +548,13 @@ mod tests {
             TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
 
         // Poll for the terminal state rather than sampling once after a fixed
-        // sleep. The script exits at ~0.2s, but whether that lands inside the
-        // 500ms health check is genuinely racy, so Stopped may arrive directly
-        // or via Connected — both are correct and only the terminal state is.
+        // sleep. This child exits inside the minimum survival window.
         let final_status = wait_for_stopped(&sup).await;
 
         let history = statuses.lock().clone();
-        // Should see Starting, then either Connected or Stopped (process exits
-        // quickly — if it exits before 500ms health check, it goes straight to
-        // Stopped; if after, Connected then Stopped).
+        // An early exit must never be reported as a connection.
         assert!(!history.is_empty(), "should have status updates");
+        assert!(!history.contains(&TunnelStatus::Connected));
 
         // Final status should be Stopped with a non-error reason.
         match &final_status {
@@ -534,6 +566,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_only_forward_exiting_during_startup_never_connects() {
+        let script = fake_ssh_script(
+            "remote_only_forward_exiting_during_startup_never_connects",
+            "sleep 0.2; exit 255",
+            &format!(
+                "{} -n 1 127.0.0.1 >nul & exit /b 255",
+                system32_exe("ping.exe")
+            ),
+        );
+        let mut profile = test_profile();
+        profile.forwards.push(ForwardSpec::Remote {
+            bind_port: 9877,
+            local_host: "127.0.0.1".to_string(),
+            local_port: 9877,
+        });
+        let (cb, statuses) = status_collector();
+        let mut sup = TunnelSupervisor::start_with_binary(profile, script, cb).await;
+
+        assert!(matches!(
+            wait_for_stopped(&sup).await,
+            TunnelStatus::Stopped { .. }
+        ));
+        let history = statuses.lock().clone();
+        assert!(
+            !history.contains(&TunnelStatus::Connected),
+            "an SSH process that dies during startup cannot be connected: {history:?}"
+        );
+        sup.stop();
+    }
+
+    #[tokio::test]
     async fn auth_failure_no_retry() {
         let script = fake_ssh_script(
             "auth_failure_no_retry",
@@ -542,8 +605,13 @@ mod tests {
         );
         let (cb, statuses) = status_collector();
 
-        let mut sup =
-            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        let mut profile = test_profile();
+        profile.forwards.push(ForwardSpec::Local {
+            bind_port: super::super::port::find_free_port().await.unwrap(),
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 9877,
+        });
+        let mut sup = TunnelSupervisor::start_with_binary(profile, script.to_path_buf(), cb).await;
 
         // The script exits immediately, but the stderr drainer has to deliver
         // "Permission denied" before classify_exit can call it AuthFailed. Wait
@@ -559,6 +627,10 @@ mod tests {
         assert!(
             !has_reconnecting,
             "auth failure should not trigger reconnect, history: {history:?}"
+        );
+        assert!(
+            !history.contains(&TunnelStatus::Connected),
+            "a child that exits before its forward listens was never connected: {history:?}"
         );
 
         // Final status should be Stopped with AuthFailed reason.
@@ -649,7 +721,7 @@ mod tests {
         let mut sup =
             TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
 
-        // Wait for health check to pass.
+        // Allow the no-forward tunnel to survive startup.
         tokio::time::sleep(Duration::from_millis(800)).await;
 
         // Should be Connected.
@@ -671,6 +743,57 @@ mod tests {
             }
             other => panic!("expected Stopped after shutdown, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn local_forward_stays_starting_until_its_port_accepts_connections() {
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second_port = second.local_addr().unwrap().port();
+        drop(first);
+        drop(second);
+        let mut profile = test_profile();
+        profile.forwards.push(ForwardSpec::Local {
+            bind_port: port,
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 9877,
+        });
+        profile.forwards.push(ForwardSpec::Local {
+            bind_port: second_port,
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 9878,
+        });
+        // The long-lived SSH stub and the delayed listener together model an
+        // SSH process that is alive before its -L forwarding socket is ready.
+        let script = fake_ssh_script(
+            "local_forward_stays_starting_until_its_port_accepts_connections",
+            "sleep 3600",
+            &format!("{} -n 3601 127.0.0.1 >nul", system32_exe("ping.exe")),
+        );
+        let (cb, _) = status_collector();
+        let mut sup = TunnelSupervisor::start_with_binary(profile, script, cb).await;
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_eq!(sup.status(), TunnelStatus::Starting);
+
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+        let listener = TcpListener::bind(addr).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(sup.status(), TunnelStatus::Starting);
+
+        let second_addr: SocketAddr = ([127, 0, 0, 1], second_port).into();
+        let second_listener = TcpListener::bind(second_addr).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while sup.status() == TunnelStatus::Starting && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(sup.status(), TunnelStatus::Connected);
+        assert!(tokio::net::TcpStream::connect(addr).await.is_ok());
+        assert!(tokio::net::TcpStream::connect(second_addr).await.is_ok());
+        sup.stop();
+        drop(listener);
+        drop(second_listener);
     }
 
     #[tokio::test]

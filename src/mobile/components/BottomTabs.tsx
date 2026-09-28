@@ -1,6 +1,6 @@
 import styles from "./BottomTabs.module.css";
 
-export type TabId = "sessions" | "progress" | "activity" | "settings";
+export type TabId = "chat" | "sessions" | "files" | "progress" | "activity" | "settings";
 
 interface BottomTabsProps {
 	active: TabId;
@@ -9,10 +9,20 @@ interface BottomTabsProps {
 
 const tabs: Array<{ id: TabId; label: string; icon: string }> = [
 	{
+		id: "chat",
+		label: "Chat",
+		icon: `<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M3 2h14a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H7.4l-4.8 3.6A1 1 0 0 1 1 17.8V3a1 1 0 0 1 1-1zm1 2v11.8L6.7 13H16V4H4z"/></svg>`,
+	},
+	{
 		id: "sessions",
 		label: "Sessions",
 		// Terminal/list icon
 		icon: `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="3" width="16" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l3 2-3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="12" x2="15" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+	},
+	{
+		id: "files",
+		label: "Files",
+		icon: `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.5 5.5h5l1.5 2h8.5v8.5h-15z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
 	},
 	{
 		id: "progress",

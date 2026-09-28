@@ -59,6 +59,12 @@ file-backed credential adapter, scoped below the selected instance directory.
 Instance selection precedes `--set-password`, so password setup writes only to
 the selected namespace.
 
+`TUIC_CAPTURE_DIR` overrides only the raw PTY capture directory. Set it to an
+absolute path before starting TUICommander to write `.tcap` files outside the
+instance config directory. A relative value rejects capture activation; it
+does not fall back to the default directory. `GET /diagnostics/capture` reports
+the selected directory while recording.
+
 Desktop verification may also set `TUIC_PORT=<port>` to choose the process-local
 HTTP listener port without changing `config.json`; an occupied port still uses the
 existing next-port retry.
@@ -247,7 +253,10 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
-| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > AI Chat` and written through `save_config` like any other field |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
+| `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. |
+| `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
+| `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
@@ -329,9 +338,18 @@ private key to disk in cleartext.
 
 ### MCP Bridge Auto-Install
 
-On every launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
-entry into each supported agent's own MCP config, and repairs the path when the
-sidecar moves. Each target is written in the format its tool reads:
+On launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
+entry into each supported agent's own MCP config only when a non-empty,
+executable `tuic-bridge` is beside the running executable. Launches from a
+temporary directory, App Translocation, a mounted volume or an AppImage mount
+do not write agent configs. A test binary without that sidecar also leaves the
+configs untouched. Launch-time installation and repair belong to the unnamed
+default instance outside a linked Git worktree. Named instances and worktree
+builds leave agent configs unchanged, including integrations disabled in the
+default instance. Set `TUIC_MCP_CONFIG_OWNER=1` on a launch only when that
+instance is deliberately assigned ownership of global agent configs. Explicit
+Install and Remove actions in Settings remain user-requested edits.
+Each target uses the format its tool reads:
 
 | Agent | Config file | Shape |
 |---|---|---|
@@ -344,7 +362,7 @@ sidecar moves. Each target is written in the format its tool reads:
 | Gemini CLI | `~/.gemini/settings.json` | JSON `mcpServers` |
 | Droid | `~/.factory/mcp.json` | JSON `mcpServers` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON `mcp`, `{type:"local", command:[…]}` |
-| Codex | `~/.codex/config.toml` | TOML `[mcp_servers]` + `env_vars` allowlist |
+| Codex | `$CODEX_HOME/config.toml` or `~/.codex/config.toml` | TOML `[mcp_servers]` + `env_vars` allowlist |
 | Grok | `~/.grok/config.toml` | TOML `[mcp_servers]` |
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
@@ -367,12 +385,18 @@ support comes from the optional pi-mcp-adapter extension, which owns
 `~/.pi/agent/mcp.json` — with no such file there is no adapter, so an
 auto-written entry would configure nothing.
 
-A target that already holds a `tuicommander` entry keeps getting path repairs
-even when presence no longer resolves, so a stale bridge path is never left
-behind. All gates live in `auto_install_allowed`, which only the launch pass
-consults: Settings → Agents installs on demand through `ensure_spec_entry`
-directly, because pressing Install states that the target is there — that is an
-explicit request, not a guess.
+A target that already holds a `tuicommander` entry gets a path repair only when
+its command is the bare `tuic-bridge` name or a broken absolute executable path.
+Wrapper and templated commands, and HTTP entries with a URL or URI, belong to
+the user and are left unchanged at launch. An explicit install rejects a custom
+command or HTTP transport until the user removes that entry. An explicit
+install may use the bare `tuic-bridge` name for a new entry when no bridge is
+located; it reports an error rather than using that fallback to repair an
+existing entry. A working absolute command is preserved. All target-presence
+gates live in `auto_install_allowed`,
+which only the launch pass consults: Settings → Agents installs on demand
+through `ensure_spec_entry` directly, because pressing Install states that the
+target is there — that is an explicit request, not a guess.
 
 **Shared settings files need an explicit install.** Zed, Amp and Gemini keep
 their MCP server list inside the `settings.json` that also holds every other
@@ -380,7 +404,8 @@ user preference, not a dedicated `mcp.json`. Those three carry
 `shared_settings_file: true` and the launch pass never creates or edits them:
 TUICommander being on the machine is not consent to rewrite the user's editor
 configuration. Settings → Agents installs them on request, and once installed
-they receive path repairs like any other target. `get_agent_mcp_status` returns
+their missing or unusable bridge commands can be repaired like any other target.
+`get_agent_mcp_status` returns
 the flag so the UI can say why the entry is missing.
 
 ### Never Reserializing a Third-Party Config
@@ -390,7 +415,7 @@ YAML alike). Treating a parse failure as an empty document is what reduced a
 user's 400-line Zed `settings.json` to our single entry
 ([#115](https://github.com/sstraus/tuicommander/issues/115)).
 
-JSON targets go further: they are never reserialized at all. `jsonc_edit`
+JSON targets are never reserialized as a whole. `jsonc_edit`
 parses the document into a concrete syntax tree, splices exactly one member,
 and prints it back, so text outside that member is byte-identical. This matters
 three times over — `serde_json` rejects the comments and trailing commas Zed,
@@ -401,7 +426,14 @@ VS Code and opencode all document as supported; `serde_json::Map` is a
 Only the documented dialect is accepted. Comments and trailing commas parse;
 single-quoted strings, unquoted keys and hexadecimal numbers do not, because a
 file using them is one the owning tool cannot read either — writing it back as
-if it were fine would be worse than refusing.
+if it were fine would be worse than refusing. TOML edits preserve comments and
+formatting through `toml_edit`. Goose YAML edits splice the bridge command or
+entry with the section's indentation and compare the parsed document before
+and after to verify that other extensions and fields remain unchanged;
+unsupported YAML layouts are left untouched.
+Existing config files are backed up once under TUICommander's `mcp-backups`
+directory before any edit. Atomic replacements preserve the file's permissions
+and follow config symlinks to their targets.
 
 Guard rails around the write:
 
@@ -672,7 +704,7 @@ directory on first debug run so a dev instance wouldn't start with an empty
 repo list. That seeding path is gone now that both builds share one
 directory for `repositories.json` and all other config domains covered by
 this document. (`~/.tuicommander-dev/` itself still exists for an unrelated
-purpose — see `credentials.rs`'s debug-only credential store.)
+purpose — see `crates/tuic-core/src/credentials.rs`'s debug-only credential store.)
 
 **Commands:** `load_repositories()`, `save_repositories(config)`
 
@@ -774,21 +806,28 @@ Custom keyboard shortcut overrides.
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
+Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
+
+Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent value means `true`. The setting applies only to MCP `agent spawn`: Codex receives a launch-only project trust override for the canonical working directory, including through custom launchers that forward arguments, while Claude's first exact startup picker is answered through the managed PTY. A false value leaves the CLI's normal trust question in place. TUICommander does not modify either CLI's saved trust file.
+
 **Type:** `AgentsConfig`
 
-Per-agent run configurations (custom commands, arguments, environment variables).
+Per-agent run configurations (custom commands, arguments, model, environment variables).
 
 ```rust
 struct AgentRunConfig {
     name: String,
     command: String,
     args: Vec<String>,
+    model: Option<String>, // MCP spawn default; the spawn parameter overrides it
     env: HashMap<String, String>,
     is_default: bool,
 }
 
 struct AgentSettings {
     run_configs: Vec<AgentRunConfig>,
+    prevent_alt_screen: Option<bool>, // absent = true
+    skip_trust_dialog: Option<bool>, // absent = true; MCP spawns only
 }
 
 struct AgentsConfig {
@@ -797,6 +836,12 @@ struct AgentsConfig {
 ```
 
 **Commands:** `load_agents_config()`, `save_agents_config(config)`
+
+The optional `model` field adds `--model <value>` when MCP `agent spawn`
+selects the run config. A model passed on the spawn call overrides it. Existing
+`--model` entries in `args` remain unchanged; they still conflict with an
+explicit spawn model. Set the model in Settings > Agents when a run config needs
+an overrideable default.
 
 **This file belongs to a machine, not to the app.** Every backend reads its own copy, and
 the frontend keeps one per machine: a tab opened on a repository registered against a
@@ -809,6 +854,11 @@ up. `set_agent_hook_instrumentation`, `set_agent_native_status_signals` and the 
 MCP config follow the same rule; `install_agent_mcp`, `get_agent_config_path` and the
 upstream OAuth flow do not, having no HTTP route and nothing to open a browser with.
 
+If a machine fails to load `agents.json`, its frontend store records the error and stays
+unloaded so the next read can retry. The error names the connection and `/config/agents`
+endpoint. Saves are refused until a load succeeds, preventing an empty fallback from
+overwriting that machine's config. A daemon that predates this route must be updated.
+
 The families that stay local are the ones describing this app rather than a machine:
 `config.json`, `keybindings.json`, the pane layout, the notification config and
 `repositories.json` — the last definitionally so, since it is the list deciding which
@@ -818,13 +868,15 @@ repository maps to which machine.
 
 **Type:** `DictationConfig`
 
+Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation command adapter. It is desktop-gated; the audio and speech domain lives in `tuic-dictation`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `false` | Dictation enabled |
-| `hotkey` | `String` | `"CommandOrControl+Shift+D"` | Push-to-talk hotkey |
-| `language` | `String` | `"en"` | Transcription language |
+| `hotkey` | `String` | `"F5"` | Push-to-talk hotkey |
+| `language` | `String` | `"auto"` | Transcription language |
 | `model` | `String` | `"large-v3-turbo"` | Whisper model name |
-| `auto_send` | `bool` | `false` | Auto-submit after transcription |
+| `auto_send` | `bool` | `true` | Auto-submit after transcription |
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(config)`
 
@@ -874,6 +926,8 @@ object as the default `null`.
 Persistent cache for incremental JSONL parsing of Claude session transcripts. Stored in the config directory. The cache maps `project_slug -> (filename -> CachedFileStats)` and tracks per-file byte offsets so only newly appended data is parsed on subsequent scans.
 
 This is an internal cache file, not user-editable. It is automatically pruned when projects or session files are deleted.
+
+The separate Anthropic rate-limit API cache is in memory only. Its responses and rate-limit backoff are keyed by the Claude session's credential profile directory, so switching `CLAUDE_CONFIG_DIR` cannot reuse another account's quota.
 
 ## Repo-Local Config (`.tuic.json`)
 
@@ -929,6 +983,10 @@ TUIC at `agent action=spawn` and `agent action=send`, with nullable
 `target_pty_id` and `target_name` columns naming the other terminal. All three
 host-written kinds are refused on every reporting path — they are observed, not
 claimed.
+Every journal insert redacts secret-shaped text and step fields before SQLite
+stores them. Agent and target display names are also redacted and capped at 80
+characters. Reads therefore return the stored redacted values in both the list
+and Flow view.
 
 A journal created before the hand-off kinds has a `CHECK` constraint that
 refuses them. SQLite cannot alter a `CHECK`, so opening such a database copies

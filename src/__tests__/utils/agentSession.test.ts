@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENTS } from "../../agents";
-import { buildAgentLaunchCommand, buildResumeCommand, verifyAndBuildResumeCommand } from "../../utils/agentSession";
+import {
+	buildAgentLaunchCommand,
+	buildResumeCommand,
+	prepareAgentLaunchCommand,
+	verifyAndBuildResumeCommand,
+} from "../../utils/agentSession";
 
 const { mockAgentConfigsStore } = vi.hoisted(() => ({
 	mockAgentConfigsStore: {
@@ -25,6 +30,10 @@ vi.mock("../../transport", () => ({
 }));
 
 describe("buildAgentLaunchCommand", () => {
+	it("leaves screen policy to the Rust launch-args builder", () => {
+		expect(buildAgentLaunchCommand("codex", null, "codex")).toBe("codex");
+		expect(buildAgentLaunchCommand("opencode run", null, "opencode")).toBe("opencode run");
+	});
 	it("injects --session-id for claude when UUID provided", () => {
 		expect(buildAgentLaunchCommand("claude", "abc-123")).toBe("claude --session-id abc-123");
 	});
@@ -58,6 +67,47 @@ describe("buildAgentLaunchCommand", () => {
 	});
 });
 
+describe("prepareAgentLaunchCommand", () => {
+	beforeEach(() => mockRpc.mockReset());
+
+	it("uses Rust's decision for a supported interactive launch", async () => {
+		mockRpc.mockResolvedValueOnce(["--no-alt-screen", "resume"]);
+		expect(await prepareAgentLaunchCommand("codex resume", null, "codex")).toBe("codex --no-alt-screen resume");
+		expect(mockRpc).toHaveBeenCalledWith("prepare_agent_launch_args", {
+			agentType: "codex",
+			binaryPath: "codex",
+			args: ["resume"],
+			repoPath: undefined,
+		});
+	});
+
+	it("preserves non-interactive subcommands and excludes other agents", async () => {
+		mockRpc.mockResolvedValueOnce(["run"]).mockResolvedValueOnce(["exec"]).mockResolvedValueOnce([]);
+		expect(await prepareAgentLaunchCommand("opencode run", null, "opencode")).toBe("opencode run");
+		expect(await prepareAgentLaunchCommand("codex exec", null, "codex")).toBe("codex exec");
+		expect(await prepareAgentLaunchCommand("gemini", null, "gemini")).toBe("gemini");
+	});
+
+	it("preserves an inline environment assignment while Rust chooses the screen flag", async () => {
+		mockRpc.mockResolvedValueOnce(["--no-alt-screen"]).mockResolvedValueOnce(["--no-alt-screen"]);
+		expect(await prepareAgentLaunchCommand("PROFILE=work codex", null, "codex")).toBe(
+			"PROFILE=work codex --no-alt-screen",
+		);
+		expect(await prepareAgentLaunchCommand("PROFILE='work' codex", null, "codex")).toBe(
+			"PROFILE='work' codex --no-alt-screen",
+		);
+		expect(mockRpc).toHaveBeenCalledWith(
+			"prepare_agent_launch_args",
+			{
+				agentType: "codex",
+				binaryPath: "codex",
+				args: [],
+				repoPath: undefined,
+			},
+		);
+	});
+});
+
 describe("buildResumeCommand", () => {
 	it("returns --resume <uuid> for claude with UUID", () => {
 		expect(buildResumeCommand("claude", "abc-123")).toBe("claude --resume abc-123");
@@ -82,7 +132,6 @@ describe("buildResumeCommand", () => {
 	it("returns id-based resume for codex with UUID", () => {
 		expect(buildResumeCommand("codex", "abc-123")).toBe("codex resume abc-123");
 	});
-
 	it("falls back to static resume for codex without UUID", () => {
 		expect(buildResumeCommand("codex", null)).toBe("codex resume --last");
 	});
@@ -186,6 +235,18 @@ describe("verifyAndBuildResumeCommand", () => {
 		expect(result).toBe("claude --resume discovered-session-id");
 	});
 
+	it("prepares a verified Codex resume through the Rust argument builder", async () => {
+		mockRpc.mockResolvedValueOnce(true).mockResolvedValueOnce(["--no-alt-screen", "resume", "codex-session"]);
+		const result = await verifyAndBuildResumeCommand("codex", "/repo", "tuic-uuid-1", "codex-session");
+		expect(mockRpc).toHaveBeenCalledWith("prepare_agent_launch_args", {
+			agentType: "codex",
+			binaryPath: "codex",
+			args: ["resume", "codex-session"],
+			repoPath: "/repo",
+		});
+		expect(result).toBe("codex --no-alt-screen resume codex-session");
+	});
+
 	it("returns null when claude agentSessionId not verified (session gone)", async () => {
 		mockRpc.mockResolvedValueOnce(false);
 		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "stale-session");
@@ -194,7 +255,7 @@ describe("verifyAndBuildResumeCommand", () => {
 
 	it("returns null when claude has no agentSessionId", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", null);
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("claude --continue");
 	});
 
@@ -206,13 +267,13 @@ describe("verifyAndBuildResumeCommand", () => {
 
 	it("uses agentSessionId directly when cwd is null (no verification)", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", null, "tuic-uuid-1", "old-session-id");
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("claude --resume old-session-id");
 	});
 
 	it("skips verification for agents without sessionDiscovery", async () => {
 		const result = await verifyAndBuildResumeCommand("aider", "/tmp/repo", "tuic-uuid-1", null);
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("aider --restore-chat-history");
 	});
 
@@ -237,7 +298,7 @@ describe("verifyAndBuildResumeCommand", () => {
 	it("does not verify a stale Gemini tuicSession when discovery has no agentSessionId", async () => {
 		const result = await verifyAndBuildResumeCommand("gemini", "/tmp/repo", "stale-tuic-uuid", null);
 
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("gemini --resume");
 	});
 

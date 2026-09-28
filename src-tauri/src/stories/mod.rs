@@ -1,5 +1,6 @@
 mod api;
 mod model;
+mod sources;
 mod store;
 
 pub use api::*;
@@ -199,18 +200,28 @@ mod tests {
                 .is_err()
         );
         let started = store
-            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .transition_for_actor(&story.id, story.revision, StoryCommand::StartManual, None)
             .expect("start");
         assert_eq!(started.status, StoryStatus::InProgress);
         assert_eq!(started.claim_session, None);
         let checked = store
-            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .transition_for_actor(
+                &story.id,
+                started.revision,
+                StoryCommand::CheckCriterion(0),
+                None,
+            )
             .expect("check");
         let review = store
-            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                None,
+            )
             .expect("review");
         let done = store
-            .transition(&story.id, review.revision, StoryCommand::Approve)
+            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, None)
             .expect("approve");
         assert!(
             store
@@ -259,13 +270,23 @@ mod tests {
             .claim(&story.id, "tab", story.revision)
             .expect("claim");
         let checked = reopened
-            .transition(&story.id, claimed.revision, StoryCommand::CheckCriterion(0))
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                None,
+            )
             .expect("check criterion");
         let review = reopened
-            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                None,
+            )
             .expect("submit review");
         reopened
-            .transition(&story.id, review.revision, StoryCommand::Approve)
+            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, None)
             .expect("approve story");
         assert_eq!(
             reopened.plan_state(&plan.id).expect("state"),
@@ -306,10 +327,11 @@ mod tests {
             .add_dependency(&dependent.id, &prerequisite.id, dependent.revision)
             .expect("dependency");
         store
-            .transition(
+            .transition_for_actor(
                 &prerequisite.id,
                 prerequisite.revision,
                 StoryCommand::WontFix,
+                None,
             )
             .expect("cancel prerequisite");
         assert_eq!(
@@ -330,7 +352,12 @@ mod tests {
             .expect("remove cancelled edge");
         assert_eq!(dependent.status, StoryStatus::Ready);
         store
-            .transition(&dependent.id, dependent.revision, StoryCommand::WontFix)
+            .transition_for_actor(
+                &dependent.id,
+                dependent.revision,
+                StoryCommand::WontFix,
+                None,
+            )
             .expect("cancel dependent");
         assert_eq!(
             store.plan_state(&plan.id).expect("cancelled state"),
@@ -388,7 +415,12 @@ mod tests {
                 .is_err()
         );
         store
-            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .transition_for_actor(
+                &cancelled.id,
+                cancelled.revision,
+                StoryCommand::WontFix,
+                None,
+            )
             .expect("cancel");
         assert!(
             store
@@ -411,28 +443,36 @@ mod tests {
                 .is_err()
         );
         let outstanding = store
-            .transition(
+            .transition_for_actor(
                 &outstanding.id,
                 outstanding.revision,
                 StoryCommand::StartManual,
+                None,
             )
             .expect("start");
         let outstanding = store
-            .transition(
+            .transition_for_actor(
                 &outstanding.id,
                 outstanding.revision,
                 StoryCommand::CheckCriterion(0),
+                None,
             )
             .expect("check");
         let outstanding = store
-            .transition(
+            .transition_for_actor(
                 &outstanding.id,
                 outstanding.revision,
                 StoryCommand::SubmitReview,
+                None,
             )
             .expect("review");
         store
-            .transition(&outstanding.id, outstanding.revision, StoryCommand::Approve)
+            .transition_for_actor(
+                &outstanding.id,
+                outstanding.revision,
+                StoryCommand::Approve,
+                None,
+            )
             .expect("done");
         store
             .reconcile_integrated_dependencies(&plan.id)
@@ -474,24 +514,34 @@ mod tests {
             .create_story(make_story("Cancelled"))
             .expect("cancelled");
         let done = store
-            .transition(&done.id, done.revision, StoryCommand::StartManual)
+            .transition_for_actor(&done.id, done.revision, StoryCommand::StartManual, None)
             .expect("start");
         let done = store
-            .transition(&done.id, done.revision, StoryCommand::CheckCriterion(0))
+            .transition_for_actor(
+                &done.id,
+                done.revision,
+                StoryCommand::CheckCriterion(0),
+                None,
+            )
             .expect("check");
         let done = store
-            .transition(&done.id, done.revision, StoryCommand::SubmitReview)
+            .transition_for_actor(&done.id, done.revision, StoryCommand::SubmitReview, None)
             .expect("review");
         let done = store
-            .transition(&done.id, done.revision, StoryCommand::Approve)
+            .transition_for_actor(&done.id, done.revision, StoryCommand::Approve, None)
             .expect("done");
         assert!(
             store
-                .transition(&done.id, done.revision, StoryCommand::WontFix)
+                .transition_for_actor(&done.id, done.revision, StoryCommand::WontFix, None)
                 .is_err()
         );
         store
-            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .transition_for_actor(
+                &cancelled.id,
+                cancelled.revision,
+                StoryCommand::WontFix,
+                None,
+            )
             .expect("cancel");
         assert_eq!(store.plan_state(&plan.id).expect("state"), PlanState::Done);
     }
@@ -523,12 +573,12 @@ mod tests {
         assert!(store.add_dependency(&a.id, &b.id, a.revision).is_err());
         assert!(
             store
-                .transition(&a.id, a.revision, StoryCommand::Approve)
+                .transition_for_actor(&a.id, a.revision, StoryCommand::Approve, None)
                 .is_err()
         );
         assert!(
             store
-                .transition(&b.id, b.revision, StoryCommand::SubmitReview)
+                .transition_for_actor(&b.id, b.revision, StoryCommand::SubmitReview, None)
                 .is_err()
         );
         assert_eq!(
@@ -537,13 +587,13 @@ mod tests {
         );
         let a = store.claim(&a.id, "tab", a.revision).expect("claim A");
         let a = store
-            .transition(&a.id, a.revision, StoryCommand::CheckCriterion(0))
+            .transition_for_actor(&a.id, a.revision, StoryCommand::CheckCriterion(0), None)
             .expect("check A");
         let a = store
-            .transition(&a.id, a.revision, StoryCommand::SubmitReview)
+            .transition_for_actor(&a.id, a.revision, StoryCommand::SubmitReview, None)
             .expect("review A");
         store
-            .transition(&a.id, a.revision, StoryCommand::Approve)
+            .transition_for_actor(&a.id, a.revision, StoryCommand::Approve, None)
             .expect("approve A");
         assert_eq!(
             store.get_story(&b.id).expect("B").status,
@@ -552,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_records_human_provenance_and_rejects_managed_agents() {
+    fn desktop_approval_records_human_provenance() {
         let dir = tempfile::tempdir().expect("temporary config");
         let db = dir.path().join("stories.sqlite3");
         let store = StoryStore::open_at(&db).expect("store");
@@ -582,20 +632,6 @@ mod tests {
         let review = store
             .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
             .expect("review");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    review.revision,
-                    StoryCommand::Approve,
-                    Some("managed-pty")
-                )
-                .is_err()
-        );
-        assert_eq!(
-            store.get_story(&story.id).expect("unchanged").status,
-            StoryStatus::Review
-        );
         let done = store
             .transition(&story.id, review.revision, StoryCommand::Approve)
             .expect("approve");
@@ -617,7 +653,51 @@ mod tests {
     }
 
     #[test]
-    fn unauthenticated_local_http_transition_is_not_human_approval() {
+    fn claiming_session_cannot_approve_but_a_different_reviewer_can() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let claimed = store.claim(&story.id, "implementer", story.revision).expect("claim");
+        let checked = store
+            .transition_for_actor(&story.id, claimed.revision, StoryCommand::CheckCriterion(0), Some("implementer"))
+            .expect("check criterion");
+        let review = store
+            .transition_for_actor(&story.id, checked.revision, StoryCommand::SubmitReview, Some("implementer"))
+            .expect("submit review");
+
+        let error = store
+            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, Some("implementer"))
+            .expect_err("implementer cannot approve their own story");
+        assert_eq!(error, "a story cannot be approved by its implementer");
+        assert_eq!(store.get_story(&story.id).expect("unchanged").status, StoryStatus::Review);
+
+        let done = store
+            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, Some("reviewer"))
+            .expect("independent reviewer approves");
+        assert_eq!(done.status, StoryStatus::Done);
+        assert_eq!(done.claim_session, None);
+        assert_eq!(store.transition_history(&story.id).expect("history").last().expect("approval").actor,
+            StoryTransitionActor::ManagedSession { session_id: "reviewer".into() });
+    }
+
+    #[test]
+    fn local_http_approval_records_its_own_provenance() {
         let dir = tempfile::tempdir().expect("config");
         let db = dir.path().join("stories.sqlite3");
         let store = StoryStore::open_at(&db).expect("store");
@@ -656,11 +736,12 @@ mod tests {
         let review = store
             .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
             .unwrap();
-        assert!(
-            store
-                .transition_from_local_api(&story.id, review.revision, StoryCommand::Approve)
-                .is_err()
-        );
+        let done = store
+            .transition_from_local_api(&story.id, review.revision, StoryCommand::Approve)
+            .expect("local reviewer approves");
+        assert_eq!(done.status, StoryStatus::Done);
+        assert_eq!(store.transition_history(&story.id).expect("history").last().expect("approval").actor,
+            StoryTransitionActor::LocalApi);
     }
 
     #[test]
@@ -856,7 +937,12 @@ mod tests {
             .add_dependency(&last.id, &middle.id, last.revision)
             .expect("edge");
         store
-            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .transition_for_actor(
+                &cancelled.id,
+                cancelled.revision,
+                StoryCommand::WontFix,
+                None,
+            )
             .expect("cancel");
         let view = store.plan_view(&plan.id).expect("view");
         assert_eq!(view.state, PlanState::Active);
@@ -874,11 +960,11 @@ mod tests {
         assert_eq!(empty_view.state, PlanState::Draft);
         assert!(!empty_view.all_cancelled);
         store
-            .transition(&middle.id, middle.revision, StoryCommand::WontFix)
+            .transition_for_actor(&middle.id, middle.revision, StoryCommand::WontFix, None)
             .expect("cancel middle");
         let last = store.get_story(&last.id).expect("last");
         store
-            .transition(&last.id, last.revision, StoryCommand::WontFix)
+            .transition_for_actor(&last.id, last.revision, StoryCommand::WontFix, None)
             .expect("cancel last");
         let cancelled_view = store.plan_view(&plan.id).expect("cancelled view");
         assert_eq!(cancelled_view.state, PlanState::Done);
@@ -908,11 +994,11 @@ mod tests {
             })
             .expect("story");
         let cancelled = store
-            .transition(&story.id, story.revision, StoryCommand::WontFix)
+            .transition_for_actor(&story.id, story.revision, StoryCommand::WontFix, None)
             .expect("cancel");
         assert!(
             store
-                .transition(&story.id, cancelled.revision, StoryCommand::WontFix)
+                .transition_for_actor(&story.id, cancelled.revision, StoryCommand::WontFix, None)
                 .is_err()
         );
         assert_eq!(
@@ -951,10 +1037,15 @@ mod tests {
             .add_dependency(&dependent.id, &target.id, dependent.revision)
             .expect("edge");
         store
-            .transition(&target.id, target.revision, StoryCommand::WontFix)
+            .transition_for_actor(&target.id, target.revision, StoryCommand::WontFix, None)
             .expect("cancel target");
         let dropped = store
-            .transition(&dependent.id, dependent.revision, StoryCommand::WontFix)
+            .transition_for_actor(
+                &dependent.id,
+                dependent.revision,
+                StoryCommand::WontFix,
+                None,
+            )
             .expect("discard dependent");
         assert!(
             store
@@ -1015,7 +1106,7 @@ mod tests {
             .add_dependency(&dependent.id, &target.id, dependent.revision)
             .expect("edge");
         store
-            .transition(&target.id, target.revision, StoryCommand::WontFix)
+            .transition_for_actor(&target.id, target.revision, StoryCommand::WontFix, None)
             .expect("cancel target");
         let error = store
             .remove_dependency(&dependent.id, &target.id, dependent.revision, Some("agent"))

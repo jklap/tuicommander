@@ -1,4 +1,3 @@
-use alacritty_terminal::grid::ReflowMode;
 use dashmap::{DashMap, DashSet};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -11,6 +10,10 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64, AtomicUsize
 use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
+
+pub(crate) use tuic_terminal::vt_log::{ChangedRow, LogLine, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
+#[cfg(test)]
+pub(crate) use tuic_terminal::vt_log::{LogColor, LogSpan, mark_agent_chrome};
 
 /// A submission waiting for the agent's next safe idle window.
 ///
@@ -601,6 +604,9 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Keep the foreground detection warning to one record per session.
+    #[serde(skip)]
+    pub(crate) unknown_foreground_warned: bool,
     /// True when this agent has native-hook instrumentation enabled, so heuristic
     /// question-detection is suppressed (awaiting comes from OSC 7770 instead).
     /// Resolved from config when `agent_type` is set; internal, not serialized.
@@ -1319,14 +1325,7 @@ pub(crate) fn strip_kitty_sequences(input: &str) -> (Cow<'_, str>, Vec<KittyActi
     (Cow::Owned(output), actions)
 }
 
-/// Represents a git worktree
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorktreeInfo {
-    pub name: String,
-    pub path: PathBuf,
-    pub branch: Option<String>,
-    pub base_repo: PathBuf,
-}
+pub use tuic_git::worktree::WorktreeInfo;
 
 /// Represents a PTY session with optional worktree
 pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
@@ -1420,10 +1419,10 @@ pub struct McpSessionMeta {
 }
 
 /// A registered peer agent in the inter-agent messaging system.
-/// Keyed by `tuic_session` (the stable tab UUID from TUIC_SESSION env var).
+/// Keyed by `tuic_session` (a stable peer UUID from TUIC_SESSION env var).
 #[derive(Debug, Clone, Serialize)]
 pub struct PeerAgent {
-    /// Stable tab UUID (from TUIC_SESSION env var) — primary identifier
+    /// Stable peer UUID (from TUIC_SESSION env var) — primary identifier
     pub tuic_session: String,
     /// MCP session ID (for routing notifications via SSE)
     pub mcp_session_id: String,
@@ -1478,7 +1477,19 @@ pub(crate) enum AgentDeliveryAssignment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AgentInboxFull;
+pub(crate) enum UrgentNoticeReservation {
+    AlreadyRead,
+    InFlight,
+    Written,
+    Reserved,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UrgentNotice {
+    first_through: u64,
+    through: u64,
+    written: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -1536,6 +1547,7 @@ pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
     active_waiters: std::collections::HashSet<u64>,
     owners: HashMap<String, AgentDeliveryOwner>,
+    urgent_notices: HashMap<String, UrgentNotice>,
     orchestrator_wake_pending_through: Option<u64>,
     orchestrator_wake_needed_through: Option<u64>,
     orchestrator_observed_through: u64,
@@ -1552,6 +1564,7 @@ impl Default for AgentDeliveryGate {
             next_lease: 0,
             active_waiters: std::collections::HashSet::new(),
             owners: HashMap::new(),
+            urgent_notices: HashMap::new(),
             orchestrator_wake_pending_through: None,
             orchestrator_wake_needed_through: None,
             orchestrator_observed_through: 0,
@@ -1606,11 +1619,22 @@ pub(crate) enum MarkerKind {
 /// Max messages per agent inbox before FIFO eviction.
 pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 
-/// Message-id prefix marking auto-generated lifecycle/system notifications
-/// (child exited/idle/died). These are low-volume and critical — losing one
-/// silently strands the orchestrator waiting on a child it thinks is alive —
-/// so `push_agent_inbox` protects them from eviction by chatty peer `send`s.
+/// Message-id prefix marking auto-generated lifecycle/system notifications.
 pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
+
+fn lifecycle_notice_kind(message: &AgentMessage) -> Option<String> {
+    if !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) || message.from_name != "tuic" {
+        return None;
+    }
+    let payload = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
+    let kind = payload.get("type")?.as_str()?;
+    // Each answered question can start a new wait. Keep those notices even if
+    // ordinary lifecycle updates from the same child are coalesced.
+    if kind == "state_change" && payload.get("state")?.as_str()? == "awaiting_input" {
+        return None;
+    }
+    Some(kind.to_string())
+}
 
 /// Max message body size in bytes (64 KB).
 pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
@@ -1708,6 +1732,13 @@ impl Default for McpState {
     }
 }
 
+#[cfg(feature = "desktop")]
+pub(crate) struct DesktopGridChannel {
+    pub(crate) channel: tauri::ipc::Channel<tauri::ipc::Response>,
+    pub(crate) webview_label: String,
+    pub(crate) epoch: u64,
+}
+
 /// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
 /// the raw-byte flight recorder beside it, and the channels and gates that
 /// deliver frames to a frontend.
@@ -1727,10 +1758,10 @@ pub(crate) struct GridState {
     /// Binary on purpose: `Channel<Vec<u8>>` serialises to a JSON number array,
     /// `Channel<Response>` keeps the raw bytes. See `send_grid_frame`.
     #[cfg(feature = "desktop")]
-    pub(crate) channels: DashMap<String, tauri::ipc::Channel<tauri::ipc::Response>>,
+    pub(crate) channels: DashMap<String, DesktopGridChannel>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
     /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
-    pub(crate) watch: DashMap<String, crate::grid_gate::GridWatchTx>,
+    pub(crate) watch: DashMap<String, crate::grid_watch::GridWatchTx>,
     /// Flow control: frames sent vs frames the frontend reported receiving. While
     /// the gate is closed the ticker skips sending — damage accumulates in
     /// alacritty. See [`crate::grid_gate::GridGate`] for why it counts instead of
@@ -1995,6 +2026,7 @@ pub struct AppState {
     pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
     /// Idle lifetime advertised by a deployed remote daemon.
     pub(crate) remote_survive_secs: Option<u64>,
+    pub(crate) remote_update: Option<crate::remote_update::RemoteUpdateState>,
     /// Open HTTP event streams. Unlike `event_bus.receiver_count()`, this does
     /// not include permanent backend subscribers such as repo watchers.
     pub(crate) sse_client_count: AtomicUsize,
@@ -2048,10 +2080,11 @@ pub struct AppState {
     /// Registered peer agents for inter-agent messaging (tuic_session → PeerAgent)
     pub peer_agents: DashMap<String, PeerAgent>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
-    /// Capped at AGENT_INBOX_CAPACITY messages per agent, old messages evicted FIFO.
+    /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
+    /// notices coalesce; other messages evict FIFO at capacity.
     pub agent_inbox: DashMap<String, VecDeque<AgentMessage>>,
-    /// Cumulative eviction count per agent since last inbox read (tuic_session → count).
-    /// Incremented on each FIFO eviction; consumed and reset by the inbox action.
+    /// Unread eviction count per agent since last inbox read (tuic_session → count).
+    /// Consumed and reset by the inbox action.
     pub(crate) agent_inbox_evictions: DashMap<String, u64>,
     /// Last read position per agent (tuic_session → logical unix-millis cursor).
     ///
@@ -2071,6 +2104,8 @@ pub struct AppState {
     /// leaves the prompt in place so a child that was blocked on a startup
     /// dialog still receives it when it becomes ready.
     pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
+    /// Claude MCP children allowed to answer their one startup trust dialog.
+    pub(crate) managed_trust_dialogs: DashSet<String>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
     /// Each message has exactly one wake-up owner while remaining visible in
     /// the authoritative inbox for backward-compatible reads.
@@ -2096,6 +2131,8 @@ pub struct AppState {
     /// here — it is read from configuration at each connect, so a changed
     /// setting takes effect without a restart.
     pub(crate) acp: crate::acp::AcpClientManager,
+    /// Mobile alert windows for ACP conversations, separate from PTY state.
+    acp_push_last_ms: DashMap<String, Option<u64>>,
     /// When true, the desktop window is currently focused and the user is at
     /// their machine — suppress mobile push notifications to avoid duplicate
     /// alerts. Set to true on focus and at startup; set to false on blur or
@@ -2139,6 +2176,9 @@ pub struct AppState {
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
     pub(crate) hot_repo_paths: parking_lot::RwLock<std::collections::HashSet<String>>,
+    /// Owns the fixture's data directory through normal drop and panic unwind.
+    #[cfg(test)]
+    _test_data_dir: Option<tempfile::TempDir>,
 }
 
 impl AppState {
@@ -2291,50 +2331,20 @@ impl AppState {
             .subscribe()
     }
 
-    /// Buffer a system message, logging back-pressure when every retained
-    /// message is still owned by an uncompleted delivery.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> Option<u64> {
-        let message_id = msg.id.clone();
-        match self.try_push_agent_inbox(recipient, msg) {
-            Ok(timestamp) => Some(timestamp),
-            Err(AgentInboxFull) => {
-                *self
-                    .agent_inbox_evictions
-                    .entry(recipient.to_string())
-                    .or_insert(0) += 1;
-                tracing::warn!(
-                    source = "agent",
-                    recipient,
-                    message_id,
-                    "agent inbox is full of in-flight messages; rejecting new system mail"
-                );
-                None
-            }
-        }
-    }
-
-    /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
-    /// FIFO eviction. An overflow may evict only lifecycle notices whose owner
-    /// has already observed or dispatched them; peer mail stays recoverable.
-    ///
-    /// On overflow we evict the oldest safe `tuic-auto-*` lifecycle notice first.
-    /// Peer mail is never evicted, including after terminal delivery has returned
-    /// it to the inbox: peer results and task output cannot be reconstructed from
-    /// a later lifecycle state change. Every genuine eviction bumps
-    /// `agent_inbox_evictions`, surfaced as `missed_count` on the next `inbox`
-    /// read. When the inbox contains peer mail only, or every lifecycle notice is
-    /// in flight, reject the new message so its sender can retry.
-    pub(crate) fn try_push_agent_inbox(
-        &self,
-        recipient: &str,
-        mut msg: AgentMessage,
-    ) -> Result<u64, AgentInboxFull> {
+    /// Buffer a message into `recipient`'s bounded inbox. Replace an older
+    /// lifecycle notice for the same child and kind, except question waits;
+    /// otherwise evict FIFO at capacity.
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())
             .or_default();
         let mut gate = gate_entry.lock();
-        let (evicted_id, stored_timestamp) = {
+        let read_cursor = self
+            .agent_read_cursor
+            .get(recipient)
+            .map(|entry| *entry.value());
+        let (evicted, stored_timestamp) = {
             let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
             if let Some(last_timestamp) = inbox.back().map(|message| message.timestamp)
                 && msg.timestamp <= last_timestamp
@@ -2344,37 +2354,45 @@ impl AppState {
                 // the theoretical u64 ceiling.
                 msg.timestamp = last_timestamp.saturating_add(1);
             }
-            let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
-                let evict_idx = inbox
-                    .iter()
-                    .position(|message| {
-                        message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
-                            && matches!(
-                                gate.owners.get(&message.id),
-                                None | Some(AgentDeliveryOwner::WaiterObserved)
-                                    | Some(AgentDeliveryOwner::TerminalDispatched)
-                            )
-                    })
-                    .ok_or(AgentInboxFull)?;
-                inbox.remove(evict_idx).map(|message| message.id)
-            } else {
-                None
-            };
+            let replaced = lifecycle_notice_kind(&msg).and_then(|kind| {
+                let index = inbox.iter().position(|message| {
+                    message.from_tuic_session == msg.from_tuic_session
+                        && lifecycle_notice_kind(message).as_deref() == Some(kind.as_str())
+                })?;
+                inbox
+                    .remove(index)
+                    .map(|message| (message.id, message.timestamp, false))
+            });
+            let evicted = replaced.or_else(|| {
+                if inbox.len() < AGENT_INBOX_CAPACITY {
+                    return None;
+                }
+                inbox.pop_front().map(|message| {
+                    let observed = read_cursor.is_some_and(|cursor| message.timestamp <= cursor)
+                        || gate.owners.get(&message.id)
+                            == Some(&AgentDeliveryOwner::WaiterObserved);
+                    (message.id, message.timestamp, !observed)
+                })
+            });
             let stored_timestamp = msg.timestamp;
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
-        if let Some(evicted_id) = evicted_id {
-            *self
-                .agent_inbox_evictions
-                .entry(recipient.to_string())
-                .or_insert(0) += 1;
+        if let Some((evicted_id, evicted_through, missed)) = evicted {
+            if missed {
+                *self
+                    .agent_inbox_evictions
+                    .entry(recipient.to_string())
+                    .or_insert(0) += 1;
+            }
             gate.owners.remove(&evicted_id);
+            gate.urgent_notices
+                .retain(|_, notice| notice.through > evicted_through);
         }
         gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
         let revision = gate.inbox_revision;
         gate.inbox_events.send_replace(revision);
-        Ok(stored_timestamp)
+        stored_timestamp
     }
 
     #[cfg(test)]
@@ -2451,6 +2469,8 @@ impl AppState {
                 .map(|message| message.timestamp)
                 .max()
                 .unwrap_or(since);
+            gate.urgent_notices
+                .retain(|_, notice| notice.through > read_through);
             gate.orchestrator_observed_through =
                 gate.orchestrator_observed_through.max(read_through);
             if read_through == 0
@@ -2470,6 +2490,74 @@ impl AppState {
             gate.reset_orchestrator_wake_budget_if_observed();
         }
         finish
+    }
+
+    /// Reserve one unread urgent notice per sender and recipient. This shares
+    /// the inbox delivery gate so reads and concurrent sends agree on the
+    /// covered logical cursor.
+    pub(crate) fn reserve_urgent_notice(
+        &self,
+        recipient: &str,
+        sender: &str,
+        through: u64,
+    ) -> UrgentNoticeReservation {
+        let gate_entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = gate_entry.lock();
+        if self
+            .agent_read_cursor
+            .get(recipient)
+            .is_some_and(|cursor| *cursor >= through)
+        {
+            return UrgentNoticeReservation::AlreadyRead;
+        }
+        match gate.urgent_notices.get_mut(sender) {
+            Some(notice) => {
+                notice.through = notice.through.max(through);
+                if notice.written {
+                    UrgentNoticeReservation::Written
+                } else {
+                    UrgentNoticeReservation::InFlight
+                }
+            }
+            None => {
+                gate.urgent_notices.insert(
+                    sender.to_string(),
+                    UrgentNotice {
+                        first_through: through,
+                        through,
+                        written: false,
+                    },
+                );
+                UrgentNoticeReservation::Reserved
+            }
+        }
+    }
+
+    pub(crate) fn finish_urgent_notice(
+        &self,
+        recipient: &str,
+        sender: &str,
+        first_through: u64,
+        written: bool,
+    ) {
+        let Some(gate_entry) = self.active_agent_waiters.get(recipient) else {
+            return;
+        };
+        let mut gate = gate_entry.lock();
+        if gate
+            .urgent_notices
+            .get(sender)
+            .is_some_and(|notice| notice.first_through == first_through)
+        {
+            if written {
+                gate.urgent_notices.get_mut(sender).unwrap().written = true;
+            } else {
+                gate.urgent_notices.remove(sender);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -2748,7 +2836,7 @@ impl AppState {
         tuic_session: &str,
         since: u64,
         limit: usize,
-    ) -> Vec<AgentMessage> {
+    ) -> (Vec<AgentMessage>, bool, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -2760,19 +2848,56 @@ impl AppState {
             .map(|inbox| {
                 inbox
                     .iter()
-                    .rev()
                     .filter(|message| message.timestamp > since)
-                    .take(limit)
+                    .take(limit.saturating_add(1))
                     .cloned()
                     .collect()
             })
             .unwrap_or_default();
-        messages.reverse();
+        let has_more = messages.len() > limit;
+        if has_more {
+            messages.pop();
+        }
+        let missed_count = self
+            .agent_inbox_evictions
+            .remove(tuic_session)
+            .map(|(_, count)| count)
+            .unwrap_or(0);
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
             .max()
             .unwrap_or(since);
+        // Publish the read position while holding the delivery gate. A sender
+        // cannot see a full inbox between this observation and cursor advancement.
+        let mut cursor = self
+            .agent_read_cursor
+            .entry(tuic_session.to_string())
+            .or_insert(0);
+        if read_through > *cursor {
+            *cursor = read_through;
+        }
+        // Reading is delivery, even when a terminal wake was queued first or a
+        // sender has buffered mail but has not yet assigned its wake owner.
+        for message in &messages {
+            gate.owners
+                .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
+        }
+        gate.urgent_notices
+            .retain(|_, notice| notice.through > read_through);
+        let no_pending_mail = self.agent_inbox.get(tuic_session).is_none_or(|inbox| {
+            inbox.iter().all(|message| {
+                gate.owners.get(&message.id) != Some(&AgentDeliveryOwner::TerminalPending)
+            })
+        });
+        if no_pending_mail
+            && let Some(pty_session) = self.live_pty_for_peer(tuic_session)
+            && let Some(mut queue) = self.pending_injections.get_mut(&pty_session)
+        {
+            queue.retain(|entry| {
+                !matches!(entry, PendingInjection::Notice { text, .. } if text == crate::pty::PEER_MAIL_WAKE)
+            });
+        }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
         if read_through == 0
             || gate
@@ -2789,7 +2914,7 @@ impl AppState {
             gate.orchestrator_wake_needed_through = None;
         }
         gate.reset_orchestrator_wake_budget_if_observed();
-        messages
+        (messages, has_more, missed_count)
     }
 
     /// Record one marker emission or one submitted turn for `session_id`.
@@ -3135,6 +3260,7 @@ impl AppState {
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             remote_survive_secs: None,
+            remote_update: None,
             sse_client_count: AtomicUsize::new(0),
             remote_client_generation: AtomicU64::new(0),
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3153,6 +3279,7 @@ impl AppState {
             agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
+            managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
             ai: AiAgentState::default(),
@@ -3162,8 +3289,9 @@ impl AppState {
                 crate::tailscale::TailscaleState::NotInstalled,
             ),
             acp: crate::acp::AcpClientManager::new(),
+            acp_push_last_ms: DashMap::new(),
             push_store,
-            desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
+            desktop_window_focused: std::sync::atomic::AtomicBool::new(cfg!(feature = "desktop")),
             server_start_time: std::time::Instant::now(),
             tunnel_manager,
             remote: Default::default(),
@@ -3175,6 +3303,8 @@ impl AppState {
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            #[cfg(test)]
+            _test_data_dir: None,
         }
     }
 
@@ -3374,20 +3504,11 @@ impl AppState {
         }
     }
 
-    /// Compatibility helper for callers that cannot surface an ambiguity error.
-    pub(crate) fn resolve_session_ref(&self, reference: &str) -> Option<String> {
-        self.resolve_session_ref_checked(reference).ok().flatten()
-    }
-
     /// Resolve any address into the key a peer's mail is filed under.
     ///
-    /// [`resolve_session_ref`] travels towards the terminal; mail travels the other
+    /// [`resolve_session_ref_checked`] travels towards the terminal; mail travels the other
     /// way, because `peer_agents` is keyed by `tuic_session`. An alias or a PTY key
     /// therefore has to be walked back to the peer that owns that terminal.
-    pub(crate) fn resolve_peer_ref(&self, reference: &str) -> Option<String> {
-        self.resolve_peer_ref_checked(reference).ok().flatten()
-    }
-
     /// Resolve a peer address while retaining an ambiguity error from the
     /// terminal address resolver.
     pub(crate) fn resolve_peer_ref_checked(
@@ -3743,6 +3864,30 @@ pub(crate) fn broadcast_to_ws_clients(
     }
 }
 
+const MOBILE_PUSH_HID_IDLE_SECS: f64 = 120.0;
+
+pub(crate) fn mobile_push_away(window_focused: bool, hid_idle_secs: Option<f64>) -> bool {
+    !window_focused
+        || hid_idle_secs.is_some_and(|secs| secs.is_finite() && secs >= MOBILE_PUSH_HID_IDLE_SECS)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn hid_idle_seconds() -> Option<f64> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+    }
+    // CoreGraphics defines HIDSystemState as 1 and AnyInputEventType as ~0.
+    // SAFETY: this OS API reads global input idle time and retains no pointers.
+    let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn hid_idle_seconds() -> Option<f64> {
+    None
+}
+
 impl AppState {
     /// Invalidate all operation caches (git + GitHub).
     /// Build a session's VT log buffer with the settings that apply to every
@@ -3925,9 +4070,9 @@ impl AppState {
     /// place that mirrors them onto both delivery routes — so a phone on
     /// `/events` and the desktop window are told the same thing at the same
     /// time. Call once at startup, after constructing AppState.
-    pub(crate) fn spawn_acp_notice_pump(state: Arc<AppState>) {
+    pub(crate) fn spawn_acp_notice_pump(state: Arc<AppState>) -> tokio::task::AbortHandle {
         let mut notices = state.acp.notices();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 match notices.recv().await {
                     Ok(notice) => {
@@ -3936,7 +4081,47 @@ impl AppState {
                             use tauri::Emitter;
                             let _ = app.emit("acp-notice", &notice);
                         }
-                        let _ = state.event_bus.send(AppEvent::AcpNotice(notice));
+                        let _ = state.event_bus.send(AppEvent::AcpNotice(notice.clone()));
+                        if notice.kind == crate::acp::AcpNoticeKind::InteractionPending {
+                            let pending = state
+                                .acp
+                                .pending_interactions(notice.connection_id)
+                                .await
+                                .ok()
+                                .and_then(|interactions| {
+                                    interactions.into_iter().find(|interaction| {
+                                        Some(interaction.request_id()) == notice.request_id
+                                            && Some(interaction.session_id())
+                                                == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|interaction| {
+                                    let snapshot = state.acp.snapshot(notice.connection_id).ok()?;
+                                    let attachment =
+                                        snapshot.attachments.into_iter().find(|attachment| {
+                                            attachment.session_id == *interaction.session_id()
+                                                && (attachment
+                                                    .pending_permission_ids
+                                                    .contains(&interaction.request_id())
+                                                    || attachment
+                                                        .pending_elicitation_ids
+                                                        .contains(&interaction.request_id()))
+                                        })?;
+                                    Some((
+                                        interaction.request_id(),
+                                        attachment.cwd.to_str()?.to_owned(),
+                                    ))
+                                });
+                            if let Some((url, body)) = Self::mobile_push_for_acp_notice(
+                                &state,
+                                &notice,
+                                pending
+                                    .as_ref()
+                                    .map(|(request_id, repo)| (*request_id, repo.as_str())),
+                            ) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
+                        }
                     }
                     // A notice carries nothing that cannot be re-read: a client
                     // that missed one still finds the truth in the connection
@@ -3948,6 +4133,54 @@ impl AppState {
                 }
             }
         });
+        task.abort_handle()
+    }
+
+    fn mobile_push_for_acp_notice(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        pending: Option<(crate::acp::AcpHostRequestId, &str)>,
+    ) -> Option<(String, String)> {
+        if notice.kind != crate::acp::AcpNoticeKind::InteractionPending
+            || notice.request_id.is_none()
+            || notice.request_id != pending.map(|(request_id, _)| request_id)
+        {
+            return None;
+        }
+        let (_, repo) = pending?;
+        let session_id = notice.session_id.as_ref()?;
+        let ready = {
+            let config = state.config.read();
+            config.services.push.enabled
+                && !config.services.push.vapid_private_key.is_empty()
+                && !state.push_store.is_empty()
+        };
+        let focused = state
+            .desktop_window_focused
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let away = mobile_push_away(focused, if focused { hid_idle_seconds() } else { None });
+        if !ready || !away {
+            return None;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut last = state
+            .acp_push_last_ms
+            .entry(session_id.to_string())
+            .or_default();
+        if !crate::push::reserve_push_slot(&mut last, now_ms, true) {
+            return None;
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("repo", repo)
+            .append_pair("session", &session_id.to_string())
+            .finish();
+        Some((
+            format!("/mobile?{query}"),
+            "AI Chat: response needed".to_string(),
+        ))
     }
 
     /// Spawn a background task that subscribes to the event bus and updates
@@ -4058,7 +4291,7 @@ impl AppState {
         let push_state = Arc::clone(state);
         let body = body.to_owned();
         tokio::spawn(async move {
-            let stale = crate::push::send_push_batch(
+            let result = crate::push::send_push_batch(
                 subs,
                 &config,
                 &http_client,
@@ -4067,7 +4300,7 @@ impl AppState {
                 &url,
             )
             .await;
-            for endpoint in &stale {
+            for endpoint in &result.stale_endpoints {
                 push_state.push_store.remove(endpoint);
             }
         });
@@ -4177,6 +4410,20 @@ impl AppState {
                         .map(|sl| sl.lock().record_awaiting(rank, source))
                         .unwrap_or(true)
                 });
+                let push_ready = matches!(event_type, "question" | "choice-prompt") && {
+                    let config = state.config.read();
+                    config.services.push.enabled
+                        && !config.services.push.vapid_private_key.is_empty()
+                        && !state.push_store.is_empty()
+                };
+                let window_focused = state
+                    .desktop_window_focused
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let desktop_away = matches!(event_type, "question" | "choice-prompt")
+                    && mobile_push_away(
+                        window_focused,
+                        if window_focused { hid_idle_seconds() } else { None },
+                    );
                 // "status-line" and "question-cleared" only clear a non-confident
                 // awaiting verdict — the old `!question_confident` sticky guard,
                 // read off the same ranked evidence instead of a raw bool.
@@ -4214,6 +4461,15 @@ impl AppState {
                                 .and_then(|t| t.as_str())
                                 .map(|t| t.to_string());
                             s.question_confident = new_confident;
+                            tracing::debug!(
+                                session_id = %session_id,
+                                turn_epoch = s.turn_epoch,
+                                confident = new_confident,
+                                hook_instrumented = s.hook_instrumented,
+                                generic_claude_notify = s.question_text.as_deref()
+                                    == Some("Claude is waiting for your input"),
+                                "awaiting_input set from question"
+                            );
 
                             // Confidence is metadata, not a routing gate. A
                             // managed child has nobody at its keyboard, so every
@@ -4228,11 +4484,15 @@ impl AppState {
                             }
 
                             // Rate limit: skip if last push for this session was < 30s ago
-                            let should_push = !state.push_store.is_empty()
-                                && s.last_push_ms
-                                    .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
+                            let eligible = push_ready
+                                && desktop_away
+                                && s.question_text.as_deref().is_some_and(|text| !text.trim().is_empty());
+                            let should_push = crate::push::reserve_push_slot(
+                                &mut s.last_push_ms,
+                                now_ms,
+                                eligible,
+                            );
                             if should_push {
-                                s.last_push_ms = Some(now_ms);
                                 let prompt = s.question_text.clone().unwrap_or_default();
                                 push_data = Some((session_id.clone(), prompt));
                             }
@@ -4250,11 +4510,16 @@ impl AppState {
                         }
                     }
                     "protocol-question-cleared" if epoch_matches => {
-                        s.awaiting_input = false;
-                        s.question_text = None;
-                        s.question_confident = false;
-                        s.choice_prompt = None;
-                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        let expected = parsed
+                            .get("expected_question_text")
+                            .and_then(|value| value.as_str());
+                        if expected.is_none_or(|text| s.question_text.as_deref() == Some(text)) {
+                            s.awaiting_input = false;
+                            s.question_text = None;
+                            s.question_confident = false;
+                            s.choice_prompt = None;
+                            awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
+                        }
                     }
                     "user-input" => {
                         // User responded — agent will start working
@@ -4356,6 +4621,17 @@ impl AppState {
                             as serde::Deserialize>::deserialize(&**parsed)
                         .ok();
                         s.awaiting_input = true;
+                        if let Some(title) = s.choice_prompt.as_ref().map(|choice| choice.title.clone()) {
+                            s.question_text = Some(title.clone());
+                            s.question_confident = true;
+                            if crate::push::reserve_push_slot(
+                                &mut s.last_push_ms,
+                                now_ms,
+                                push_ready && desktop_away && !title.trim().is_empty(),
+                            ) {
+                                push_data = Some((session_id.clone(), title));
+                            }
+                        }
                         awaiting_evidence_op = Some(AwaitingEvidenceOp::RecordChoicePrompt);
                         if !was_awaiting {
                             parked_wait = Some((
@@ -4440,11 +4716,7 @@ impl AppState {
                 }
 
                 // Spawn push notification outside the DashMap lock
-                if let Some((sid, prompt)) = push_data
-                    && !state
-                        .desktop_window_focused
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if let Some((sid, prompt)) = push_data {
                     let session_name = state
                         .session_maps.sessions
                         .get(&sid)
@@ -4459,7 +4731,26 @@ impl AppState {
                 }
             }
             AppEvent::PtyExit { session_id } => {
-                if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
+                let push_ready = {
+                    let config = state.config.read();
+                    config.services.push.enabled
+                        && !config.services.push.vapid_private_key.is_empty()
+                        && !state.push_store.is_empty()
+                };
+                let window_focused = state
+                    .desktop_window_focused
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let desktop_away = mobile_push_away(
+                    window_focused,
+                    if window_focused { hid_idle_seconds() } else { None },
+                );
+                let mut should_push = false;
+                {
+                    let mut entry = state
+                        .session_maps
+                        .session_states
+                        .entry(session_id.clone())
+                        .or_default();
                     entry.awaiting_input = false;
                     entry.question_text = None;
                     entry.question_confident = false;
@@ -4469,12 +4760,16 @@ impl AppState {
                     entry.active_sub_tasks = 0;
                     entry.choice_prompt = None;
                     entry.last_activity_ms = now_ms;
+                    // Completion and questions share the same per-session window.
+                    if crate::push::reserve_push_slot(
+                        &mut entry.last_push_ms,
+                        now_ms,
+                        push_ready && desktop_away,
+                    ) {
+                        should_push = true;
+                    }
                 }
-                // Push "session completed" to mobile (unseen)
-                if !state
-                    .desktop_window_focused
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if should_push {
                     let session_name = state
                         .session_maps.sessions
                         .get(session_id)
@@ -4603,634 +4898,6 @@ pub(crate) struct AgentConfig {
     pub(crate) args: Option<Vec<String>>,
 }
 
-// ---------------------------------------------------------------------------
-// VtLogBuffer — VT100-aware log extractor for mobile/REST consumers
-// ---------------------------------------------------------------------------
-
-/// Default maximum log lines retained per session.
-pub(crate) const VT_LOG_BUFFER_CAPACITY: usize = 10_000;
-
-/// Terminal color extracted from vt100 cells.
-///
-/// Serializes as `{"idx": N}` for 256-color palette or `{"rgb": [r,g,b]}` for
-/// 24-bit color.  Default color is omitted (serialized as `null` / skipped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogColor {
-    Idx(u8),
-    Rgb(u8, u8, u8),
-}
-
-impl LogColor {
-    pub(crate) fn from_ansi_color(c: alacritty_terminal::vte::ansi::Color) -> Option<Self> {
-        use alacritty_terminal::vte::ansi::{Color, NamedColor};
-        match c {
-            Color::Named(n) => match n {
-                NamedColor::Foreground
-                | NamedColor::Background
-                | NamedColor::Cursor
-                | NamedColor::BrightForeground
-                | NamedColor::DimForeground => None,
-                NamedColor::Black => Some(LogColor::Idx(0)),
-                NamedColor::Red => Some(LogColor::Idx(1)),
-                NamedColor::Green => Some(LogColor::Idx(2)),
-                NamedColor::Yellow => Some(LogColor::Idx(3)),
-                NamedColor::Blue => Some(LogColor::Idx(4)),
-                NamedColor::Magenta => Some(LogColor::Idx(5)),
-                NamedColor::Cyan => Some(LogColor::Idx(6)),
-                NamedColor::White => Some(LogColor::Idx(7)),
-                NamedColor::BrightBlack => Some(LogColor::Idx(8)),
-                NamedColor::BrightRed => Some(LogColor::Idx(9)),
-                NamedColor::BrightGreen => Some(LogColor::Idx(10)),
-                NamedColor::BrightYellow => Some(LogColor::Idx(11)),
-                NamedColor::BrightBlue => Some(LogColor::Idx(12)),
-                NamedColor::BrightMagenta => Some(LogColor::Idx(13)),
-                NamedColor::BrightCyan => Some(LogColor::Idx(14)),
-                NamedColor::BrightWhite => Some(LogColor::Idx(15)),
-                NamedColor::DimBlack => Some(LogColor::Idx(0)),
-                NamedColor::DimRed => Some(LogColor::Idx(1)),
-                NamedColor::DimGreen => Some(LogColor::Idx(2)),
-                NamedColor::DimYellow => Some(LogColor::Idx(3)),
-                NamedColor::DimBlue => Some(LogColor::Idx(4)),
-                NamedColor::DimMagenta => Some(LogColor::Idx(5)),
-                NamedColor::DimCyan => Some(LogColor::Idx(6)),
-                NamedColor::DimWhite => Some(LogColor::Idx(7)),
-            },
-            Color::Indexed(i) => Some(LogColor::Idx(i)),
-            Color::Spec(rgb) => Some(LogColor::Rgb(rgb.r, rgb.g, rgb.b)),
-        }
-    }
-}
-
-/// A contiguous run of text with uniform formatting attributes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct LogSpan {
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fg: Option<LogColor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bg: Option<LogColor>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub bold: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub italic: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub underline: bool,
-}
-
-/// A single log line composed of styled spans.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct LogLine {
-    pub spans: Vec<LogSpan>,
-    #[serde(skip_serializing_if = "is_zero_u16")]
-    pub cols: u16,
-    /// True when this line is agent UI chrome (prompt box, footer, status bar)
-    /// rather than agent output. Set once, at capture time, by
-    /// [`mark_agent_chrome`]; readers skip these lines instead of the buffer
-    /// dropping them, so a misclassification hides text rather than destroying
-    /// it. Never serialized — consumers receive the already-filtered view.
-    #[serde(skip)]
-    pub chrome: bool,
-}
-
-fn is_zero_u16(v: &u16) -> bool {
-    *v == 0
-}
-
-impl LogLine {
-    /// Returns the plain-text content (all span texts concatenated).
-    pub fn text(&self) -> String {
-        let mut s = String::new();
-        for span in &self.spans {
-            s.push_str(&span.text);
-        }
-        s
-    }
-
-    /// Strip structural tokens (`intent: ...`, `suggest: ...`) from span text.
-    /// These tokens are parsed by the output parser for state updates but should not
-    /// appear in rendered log output (PWA/REST consumers).
-    pub fn strip_structural_tokens(&mut self) {
-        // The grammar lives in `output_parser`, next to the regexes that READ
-        // these tokens. A second copy here knew only the two Ink bullets and
-        // drifted: the parser learned Codex's `•`/`◦` and the ack prefix, this
-        // did not, so tokens TUIC had consumed were still shown to the user.
-        for span in &mut self.spans {
-            if span.text.contains("intent:") || span.text.contains("suggest:") {
-                let replaced = crate::output_parser::strip_plain_prefix_tokens(&span.text);
-                span.text = replaced.into_owned();
-            }
-        }
-        // Remove spans that became empty after stripping
-        self.spans.retain(|s| !s.text.is_empty());
-    }
-}
-
-/// A screen row that changed after a `VtLogBuffer::process()` call.
-///
-/// Consumers (output parsers) iterate these to detect status lines, intent
-/// tokens, and other structured events — regardless of whether the terminal
-/// is in normal or alternate screen mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChangedRow {
-    /// Zero-based row index on the visible screen.
-    pub row_index: usize,
-    /// Clean text content of the row (ANSI sequences stripped by the vt100 parser).
-    pub text: String,
-}
-
-/// Per-session VT-aware log buffer.
-///
-/// Wraps a `TerminalGrid` (backed by `alacritty_terminal`) with scrollback
-/// capture. Lines that scroll off the top of the screen are captured from the
-/// grid's history and stored in a bounded `VecDeque<LogLine>` for REST and
-/// WebSocket consumers.
-///
-/// **Thread safety:** Not `Sync` — lives behind `Mutex<VtLogBuffer>` in `AppState`.
-pub struct VtLogBuffer {
-    grid: crate::terminal_grid::TerminalGrid,
-    /// Finalized log lines (oldest first).
-    log: VecDeque<LogLine>,
-    /// Maximum number of log lines retained in our own buffer.
-    capacity: usize,
-    /// Whether the previous `process()` call saw the alternate screen active.
-    was_alternate: bool,
-    /// Number of scrollback lines already read from the grid.
-    /// Used to detect new scrollback lines after each `process()`.
-    scrollback_read: usize,
-    /// Monotonically increasing count of all log lines ever pushed (not bounded
-    /// by capacity). Used as stable cursor for paginated reads.
-    total_pushed: usize,
-    /// Widest cols seen so far. The grid never shrinks below this —
-    /// prevents Ink re-renders from fragmenting scrollback mid-word.
-    max_cols: u16,
-    /// Actual PTY cols (what the child process / Ink sees). May be smaller
-    /// than grid cols when a side panel narrows the terminal. Stamped
-    /// onto LogLine.cols so the frontend can detect narrow-captured lines.
-    pty_cols: u16,
-    /// When true, scrollback capture is paused — a side panel just
-    /// narrowed the terminal and Ink is flooding scrollback with
-    /// narrow re-renders. Cleared when pty_cols widens again.
-    suppress_capture: bool,
-}
-
-/// Internal scrollback capacity for the terminal grid. Must be large enough
-/// that it never fills up between consecutive `process()` calls — in practice
-/// even a `cat huge_file` sends data in ~4KB PTY read chunks.
-const GRID_SCROLLBACK: usize = 10_000;
-
-impl VtLogBuffer {
-    pub fn new(rows: u16, cols: u16, capacity: usize) -> Self {
-        let grid = crate::terminal_grid::TerminalGrid::new(rows, cols, GRID_SCROLLBACK);
-        Self {
-            grid,
-            log: VecDeque::new(),
-            capacity,
-            was_alternate: false,
-            scrollback_read: 0,
-            total_pushed: 0,
-            max_cols: cols,
-            pty_cols: cols,
-            suppress_capture: false,
-        }
-    }
-
-    pub fn set_ansi_colors(&mut self, colors: &[[u8; 3]; 16]) {
-        self.grid.set_ansi_colors(colors);
-    }
-
-    /// Reflow scrollback on a column resize, or truncate it.
-    ///
-    /// Live-settable rather than construction-only because the Settings toggle
-    /// must reach sessions that already exist: a user who narrows a terminal,
-    /// loses history and then finds the setting would otherwise have to restart
-    /// every session for it to mean anything (#660-d087).
-    pub fn set_reflow_history(&mut self, on: bool) {
-        self.grid.reflow_history = on;
-    }
-
-    /// Feed raw PTY bytes into the terminal grid.
-    ///
-    /// Returns the screen rows that changed since the previous call.  Changed
-    /// rows are detected for **both** normal and alternate screen so that
-    /// output parsers can match status lines and intent tokens emitted by
-    /// agents that use the alternate screen (e.g. Claude Code / Ink).
-    ///
-    /// Log extraction reads new primary-screen scrollback lines from the grid's
-    /// history. Alternate history may exist for interactive scrolling, but it is
-    /// deliberately excluded from the durable log. The same exclusion applies
-    /// while mouse reporting is on the primary screen (`grok --no-alt-screen`):
-    /// the app owns the viewport and its SU/line dumps are not shell output.
-    pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
-        let is_alternate = self.grid.is_alternate_screen();
-
-        // TerminalGrid::process handles changed-row detection internally,
-        // but we need to detect screen switches for prev_rows reset.
-        if is_alternate != self.was_alternate {
-            // Force full diff by clearing TerminalGrid's prev_rows
-            self.grid.clear_prev_rows();
-        }
-
-        let changed = self.grid.process(data);
-
-        let is_alternate = self.grid.is_alternate_screen();
-        let inline_tui = !is_alternate && self.grid.is_mouse_reporting();
-
-        // --- Log extraction: read new scrollback lines from grid ---
-        // The grid accumulates scrollback automatically when lines scroll
-        // off the top of the normal screen. We just read the delta.
-        //
-        // When suppress_capture is set (side panel halved the terminal
-        // width), Ink re-renders push fragmented junk into scrollback.
-        // Skip capture but keep scrollback_read in sync. Inline TUIs use
-        // the same keep-cursor-in-sync path so disabling mouse mode does
-        // not flush the TUI history into the log.
-        if !is_alternate {
-            let total_sb = self.grid.scrollback_count();
-            let delta = total_sb.saturating_sub(self.scrollback_read);
-            if delta > 0 {
-                if !self.suppress_capture && !inline_tui {
-                    let mut new_lines = self.grid.read_scrollback_log_lines(delta);
-                    mark_agent_chrome(&mut new_lines);
-                    let pty_cols = self.pty_cols;
-                    for mut ll in new_lines {
-                        ll.cols = pty_cols;
-                        self.push_log_line(ll);
-                    }
-                }
-                self.scrollback_read = total_sb;
-            }
-        }
-
-        self.was_alternate = is_alternate;
-        changed
-    }
-
-    /// Resize with reflow. The reflow_wrap flag on Row prevents stale
-    /// natural wraps from merging — only shrink-produced wraps get merged.
-    /// Alt screen and reflow_history=false disable reflow entirely.
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        let prev = self.pty_cols;
-        self.pty_cols = cols;
-        if cols > self.max_cols {
-            self.max_cols = cols;
-        }
-        // Suppress scrollback capture when cols drops by >50% (side panel).
-        // Ignore the very first resize (total_pushed==0, xterm fit addon).
-        if cols.saturating_mul(2) < prev && self.total_pushed > 0 {
-            self.suppress_capture = true;
-        } else if cols.saturating_mul(2) >= self.max_cols {
-            self.suppress_capture = false;
-        }
-        let mode = if !self.grid.reflow_history || self.grid.is_alternate_screen() {
-            ReflowMode::None
-        } else {
-            ReflowMode::All
-        };
-        self.grid.resize_with_mode(rows, cols, mode);
-        // A resize can change the inactive primary grid's history length while an
-        // alternate-screen app is active. Keep the durable-log cursor in the
-        // primary coordinate space; syncing it to alt history suppresses normal
-        // shell capture after exit until primary history catches up.
-        self.scrollback_read = self.grid.primary_scrollback_count();
-    }
-
-    /// All finalized log lines (oldest first).
-    #[allow(dead_code)]
-    pub fn lines(&self) -> &VecDeque<LogLine> {
-        &self.log
-    }
-
-    /// Returns log lines starting at absolute `offset`, up to `limit` lines.
-    /// Offset is in the same coordinate space as `total_lines()` — monotonically
-    /// increasing, not relative to the current buffer contents.
-    /// Returns `(lines, new_offset)` where `new_offset = total_lines()`.
-    ///
-    /// Chrome lines (agent prompt box and footer) occupy offset slots but are
-    /// omitted from the result, so the returned count can be smaller than
-    /// `limit`. Callers deriving a window start from the result length must use
-    /// [`Self::oldest_offset`] instead.
-    pub fn lines_since_owned(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) {
-        let oldest = self.oldest_offset();
-        let total = self.total_pushed;
-        if offset >= total {
-            return (Vec::new(), total);
-        }
-        // Clamp to oldest retained line if the requested offset was evicted
-        let effective = offset.max(oldest);
-        let skip = effective - oldest;
-        let mut slice: Vec<LogLine> = self
-            .log
-            .iter()
-            .skip(skip)
-            .take(limit)
-            .filter(|line| !line.chrome)
-            .cloned()
-            .collect();
-        for line in &mut slice {
-            line.strip_structural_tokens();
-        }
-        (slice, total)
-    }
-
-    /// Current visible screen rows.
-    ///
-    /// Returns the cached snapshot from the grid (from the last `process()` call)
-    /// when available — no re-parsing needed.
-    pub fn screen_rows(&self) -> Vec<String> {
-        self.grid.screen_text_rows()
-    }
-
-    /// Borrowed view of cached screen rows — avoids cloning when caller holds the lock.
-    pub fn screen_rows_ref(&self) -> Option<&[String]> {
-        self.grid.screen_text_rows_ref()
-    }
-
-    pub(crate) fn cursor_point(&self) -> (usize, usize) {
-        self.grid.cursor_point()
-    }
-
-    pub(crate) fn logical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
-        self.grid.logical_prefix_at_cursor()
-    }
-
-    pub(crate) fn physical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
-        self.grid.physical_prefix_at_cursor()
-    }
-
-    /// Current visible screen rows as styled LogLines (with ANSI color attributes).
-    /// Used by mobile/REST to render screen content with colors.
-    pub fn screen_log_lines(&self) -> Vec<LogLine> {
-        let mut lines = self.grid.screen_log_lines();
-        for line in &mut lines {
-            line.strip_structural_tokens();
-        }
-        // Trim trailing empty lines
-        while let Some(last) = lines.last() {
-            if last.spans.is_empty() {
-                lines.pop();
-            } else {
-                break;
-            }
-        }
-        lines
-    }
-
-    /// Extract the user-typed text from the prompt line, excluding ghost/suggestion text.
-    /// Uses the cursor position as the boundary — everything after the cursor is suggestion.
-    /// Falls back to dim-detection when the cursor is not on a prompt row.
-    pub fn prompt_input_text(&self) -> Option<String> {
-        self.grid.prompt_input_text()
-    }
-
-    /// Total log lines ever pushed (monotonically increasing).
-    /// Use as a stable cursor for paginated reads — does not decrease when
-    /// old lines are evicted from the bounded buffer.
-    pub fn total_lines(&self) -> usize {
-        self.total_pushed
-    }
-
-    /// Absolute offset of the oldest retained line. Lines before this have
-    /// been evicted by buffer rotation and are no longer available.
-    pub fn oldest_offset(&self) -> usize {
-        self.total_pushed - self.log.len()
-    }
-
-    /// Serialize damaged grid rows into a binary frame for Tauri Channel streaming.
-    /// Delegates to the inner TerminalGrid; the frame is empty when no rows changed.
-    ///
-    /// The order the frame is cut in is stamped here, inside the vt lock the
-    /// caller holds, because that is the only place the serialize order exists:
-    /// every producer releases the lock before handing the bytes to
-    /// `send_grid_frame`. See [`crate::grid_gate::GridFrame`].
-    pub(crate) fn serialize_dirty_rows(&mut self) -> crate::grid_gate::GridFrame {
-        crate::grid_gate::GridFrame::cut(self.grid.serialize_dirty_rows())
-    }
-
-    /// A whole-screen frame for ONE subscriber that leaves the shared damage,
-    /// the viewport state and the bell untouched. See
-    /// [`crate::terminal_grid::TerminalGrid::serialize_full_frame`].
-    pub(crate) fn serialize_full_frame(&self) -> Vec<u8> {
-        self.grid.serialize_full_frame()
-    }
-
-    /// Whether a DEC 2026 synchronized update is currently open.
-    pub(crate) fn is_sync_update_active(&self) -> bool {
-        self.grid.is_sync_update_active()
-    }
-
-    /// Flush a synchronized update whose deadline has passed; `true` when it
-    /// produced new damage to serialize.
-    pub(crate) fn flush_sync_timeout_if_needed(&mut self) -> bool {
-        self.grid.flush_sync_timeout_if_needed()
-    }
-
-    /// Drain a still-buffered synchronized update regardless of its deadline.
-    pub(crate) fn force_stop_sync_if_buffered(&mut self) -> bool {
-        self.grid.force_stop_sync_if_buffered()
-    }
-
-    pub(crate) fn is_alternate_screen(&self) -> bool {
-        self.grid.is_alternate_screen()
-    }
-
-    pub(crate) fn is_mouse_reporting(&self) -> bool {
-        self.grid.is_mouse_reporting()
-    }
-
-    pub(crate) fn is_cursor_visible(&self) -> bool {
-        self.grid.is_cursor_visible()
-    }
-
-    pub(crate) fn grid_force_full_damage(&mut self) {
-        self.grid.force_full_damage();
-    }
-
-    pub(crate) fn grid_drain_events(&self) -> Vec<crate::terminal_grid::TermEvent> {
-        self.grid.drain_events()
-    }
-
-    // --- Scroll delegates ---
-
-    pub(crate) fn grid_scroll(&mut self, delta: i32) {
-        self.grid.scroll(delta);
-    }
-
-    pub(crate) fn grid_scroll_to_line(&mut self, line: usize) {
-        self.grid.scroll_to_line(line);
-    }
-
-    pub(crate) fn grid_scroll_to_offset(&mut self, offset: usize) {
-        self.grid.scroll_to_offset(offset);
-    }
-
-    pub(crate) fn grid_display_offset(&self) -> usize {
-        self.grid.display_offset()
-    }
-
-    pub(crate) fn grid_serialize_styled_range(&self, start_abs: usize, count: usize) -> Vec<u8> {
-        self.grid.serialize_styled_range(start_abs, count)
-    }
-
-    pub(crate) fn grid_total_lines(&self) -> usize {
-        self.grid.total_lines()
-    }
-
-    pub(crate) fn read_rows_in_range(&self, start_abs: usize, end_abs: usize) -> Vec<String> {
-        self.grid.read_rows_in_range(start_abs, end_abs)
-    }
-
-    pub(crate) fn grid_screen_lines(&self) -> usize {
-        self.grid.screen_lines()
-    }
-
-    pub(crate) fn grid_columns(&self) -> usize {
-        self.grid.columns()
-    }
-
-    pub(crate) fn grid_history_size(&self) -> usize {
-        self.grid.scrollback_count()
-    }
-
-    // --- Search delegate ---
-
-    pub(crate) fn grid_search(&self, query: &str) -> Vec<crate::terminal_grid::SearchMatch> {
-        self.grid.search(query)
-    }
-
-    pub(crate) fn grid_search_buffer(
-        &self,
-        query: &str,
-    ) -> Vec<crate::terminal_grid::BufferSearchMatch> {
-        self.grid.search_buffer(query)
-    }
-
-    // --- Row text delegate ---
-
-    pub(crate) fn grid_get_row_text(&self, row: usize) -> String {
-        self.grid.get_row_text(row)
-    }
-
-    pub(crate) fn grid_get_logical_line(&self, row: usize) -> (usize, String) {
-        self.grid.get_logical_line(row)
-    }
-
-    pub(crate) fn grid_get_cursor_line(&self) -> String {
-        self.grid.get_cursor_row_text()
-    }
-
-    pub(crate) fn grid_get_selection_text(
-        &self,
-        start_row: usize,
-        start_col: usize,
-        end_row: usize,
-        end_col: usize,
-        history_base: Option<usize>,
-    ) -> Result<String, String> {
-        self.grid.get_selection_text_with_history_base(
-            start_row,
-            start_col,
-            end_row,
-            end_col,
-            history_base,
-        )
-    }
-
-    pub(crate) fn grid_get_lines(&self, start: usize, end: usize) -> Vec<String> {
-        // `start`/`end` are ABSOLUTE row indices (0 = oldest scrollback line),
-        // end-exclusive. get_row_text() treats its arg as a viewport-relative
-        // screen row, so it returned the wrong lines whenever scrollback existed.
-        // read_rows_in_range does the correct absolute→grid conversion (inclusive end).
-        let total = self.grid.total_lines();
-        let clamped_end = end.min(total);
-        if start >= clamped_end {
-            return Vec::new();
-        }
-        self.grid.read_rows_in_range(start, clamped_end - 1)
-    }
-
-    pub(crate) fn grid_hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
-        self.grid.hyperlink_at(row, col)
-    }
-
-    pub(crate) fn grid_hyperlink_span(
-        &self,
-        row: usize,
-        col: usize,
-    ) -> Option<(usize, usize, String)> {
-        self.grid.hyperlink_span(row, col)
-    }
-
-    // --- private helpers ---
-
-    /// Roughly how much heap the captured log lines hold, for `memory_report`.
-    ///
-    /// Reported apart from [`Self::grid_bytes`] because the two are bounded by
-    /// different things and only one of them can run away. The line *count* is
-    /// capped at `VT_LOG_BUFFER_CAPACITY`, but a span's text is whatever the
-    /// PTY emitted — 10,000 lines of a multi-megabyte JSON blob is 10,000 lines
-    /// and gigabytes. Summed together with the grid, a climb here is
-    /// indistinguishable from a terminal simply filling its scrollback.
-    ///
-    /// Walks the log once, which is fine on demand and is why the report is not
-    /// on the diagnostics tick.
-    pub fn log_bytes(&self) -> usize {
-        self.log
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|s| s.text.len() + std::mem::size_of::<LogSpan>())
-                    .sum::<usize>()
-            })
-            .sum()
-    }
-
-    /// Roughly how much heap the terminal grid behind this buffer holds.
-    ///
-    /// Hard-bounded: `GRID_SCROLLBACK` rows × columns × one `Cell`. A session
-    /// that fills its scrollback reaches this ceiling and stops.
-    pub fn grid_bytes(&self) -> usize {
-        self.grid.approx_bytes()
-    }
-
-    fn push_log_line(&mut self, line: LogLine) {
-        if self.log.len() >= self.capacity {
-            self.log.pop_front();
-        }
-        self.log.push_back(line);
-        self.total_pushed += 1;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Agent chrome trimming — removes prompt lines and UI chrome from full-screen
-// redraw batches so they don't pollute the mobile log.
-// ---------------------------------------------------------------------------
-
-use crate::chrome::find_scrollback_chrome_cutoff;
-
-/// Flags the agent prompt box and footer in a batch of scrolled-off lines.
-///
-/// When a prompt row is found in the last [`crate::chrome::CHROME_SCAN_ROWS`]
-/// rows, it and everything below it (plus the separator/blank rows directly
-/// above) are marked [`LogLine::chrome`]. Every CLI agent renders context info
-/// below its prompt that has no place in the log.
-///
-/// Marking, not truncating: the lines stay in the buffer and readers skip them.
-/// The previous implementation dropped them at capture, so a false positive —
-/// a markdown blockquote, a table rule — silently deleted the rest of the batch
-/// from history, and the mobile log showed paragraphs starting mid-sentence.
-fn mark_agent_chrome(lines: &mut [LogLine]) {
-    let texts: Vec<String> = lines.iter().map(|l| l.text()).collect();
-    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    if let Some(cutoff) = find_scrollback_chrome_cutoff(&refs) {
-        for line in &mut lines[cutoff..] {
-            line.chrome = true;
-        }
-    }
-}
-
 /// Test helper: construct a minimal `AppState` for unit tests in other modules.
 #[cfg(test)]
 pub(crate) mod tests_support {
@@ -5286,17 +4953,20 @@ pub(crate) mod tests_support {
     }
 
     pub fn make_test_app_state() -> AppState {
+        make_test_app_state_in(&crate::test_support::test_temp_root())
+    }
+
+    pub fn make_test_app_state_in(root: &std::path::Path) -> AppState {
         // Unique data dir per call: AppState::new eagerly opens
         // `data_dir/tunnel_audit.db`, so a shared path makes parallel tests
         // collide on the SQLite file (concurrent opens → SQLITE_BUSY
-        // "database is locked"). The pid + monotonic seq keeps each test's
-        // on-disk DB isolated.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let data_dir =
-            std::env::temp_dir().join(format!("test-tuic-data-{}-{}", std::process::id(), seq));
-        let _ = std::fs::create_dir_all(&data_dir);
+        // "database is locked"). The guard keeps every DB isolated and
+        // removes it when the state drops, including during panic unwind.
+        let data_guard = tempfile::Builder::new()
+            .prefix("test-tuic-data-")
+            .tempdir_in(root)
+            .expect("create test AppState data dir");
+        let data_dir = data_guard.path().to_path_buf();
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
         ));
@@ -5315,7 +4985,7 @@ pub(crate) mod tests_support {
         // `worktree.rs` hung until nextest's timeout before this was reverted).
         let mut state = AppState::new(
             data_dir,
-            std::env::temp_dir().join("test-worktrees"),
+            data_guard.path().join("worktrees"),
             crate::config::AppConfig::default(),
             log_buffer,
         );
@@ -5323,6 +4993,7 @@ pub(crate) mod tests_support {
         state.session_token = parking_lot::RwLock::new(String::from("test-token"));
         // Skip disk I/O for claude_usage in tests
         state.claude_usage_cache = parking_lot::Mutex::new(std::collections::HashMap::new());
+        state._test_data_dir = Some(data_guard);
         state
     }
 }
@@ -5434,6 +5105,17 @@ mod tests {
         }
     }
 
+    fn lifecycle_msg(child: &str, kind: &str, state: &str, id: &str) -> AgentMessage {
+        AgentMessage {
+            id: format!("tuic-auto-{id}"),
+            from_tuic_session: child.to_string(),
+            from_name: "tuic".to_string(),
+            content: serde_json::json!({"type": kind, "state": state}).to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }
+    }
+
     // ── scrollback_reflow: the config toggle reaches the grids ──
 
     /// Fill a buffer's scrollback, then shrink it. With reflow the wrapped rows
@@ -5497,35 +5179,170 @@ mod tests {
         );
     }
 
-    // ── push_agent_inbox: lifecycle notifications yield before peer mail ──
+    // ── push_agent_inbox: one FIFO for peer and lifecycle mail ──
 
     #[test]
-    fn push_agent_inbox_evicts_lifecycle_before_peer_mail() {
+    fn lifecycle_churn_for_three_children_preserves_unread_peer_result() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("peer-result"));
+
+        for index in 0..150 {
+            let child = format!("child-{}", index % 3);
+            let notice = lifecycle_msg(&child, "state_change", "working", &index.to_string());
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].id, "peer-result");
+        for child in 0..3 {
+            assert!(messages.iter().any(|message| {
+                message.from_tuic_session == format!("child-{child}")
+                    && message.id == format!("tuic-auto-{}", 147 + child)
+            }));
+        }
+    }
+
+    #[test]
+    fn lifecycle_replacement_is_scoped_to_child_and_kind() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for notice in [
+            lifecycle_msg("child-a", "state_change", "working", "a-working"),
+            lifecycle_msg("child-b", "state_change", "idle", "b-idle"),
+            lifecycle_msg("child-a", "prompt_delivered", "done", "a-prompt"),
+            lifecycle_msg("child-a", "state_change", "idle", "a-idle"),
+        ] {
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, _, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert_eq!(missed_count, 0);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].id, "tuic-auto-b-idle");
+        assert_eq!(messages[1].id, "tuic-auto-a-prompt");
+        assert_eq!(messages[2].id, "tuic-auto-a-idle");
+    }
+
+    #[test]
+    fn separate_confident_questions_remain_visible_after_state_churn() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for notice in [
+            lifecycle_msg(
+                "child-a",
+                "state_change",
+                "awaiting_input",
+                "first-question",
+            ),
+            lifecycle_msg("child-a", "state_change", "working", "working"),
+            lifecycle_msg(
+                "child-a",
+                "state_change",
+                "awaiting_input",
+                "second-question",
+            ),
+        ] {
+            state.push_agent_inbox(recipient, notice);
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "tuic-auto-first-question",
+                "tuic-auto-working",
+                "tuic-auto-second-question",
+            ],
+            "a later state change must not erase either question"
+        );
+    }
+
+    #[test]
+    fn peer_only_overflow_keeps_fifo_and_counts_unread_loss() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for index in 0..101 {
+            state.push_agent_inbox(recipient, make_msg(&format!("peer-{index}")));
+        }
+
+        let (messages, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert!(!has_more);
+        assert_eq!(missed_count, 1);
+        assert_eq!(messages.len(), 100);
+        assert_eq!(messages[0].id, "peer-1");
+        assert_eq!(messages[99].id, "peer-100");
+    }
+
+    #[test]
+    fn replaced_lifecycle_notice_releases_existing_delivery_owners() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        let first = lifecycle_msg("child-a", "state_change", "working", "first");
+        state.push_agent_inbox(recipient, first);
+        let lease = state.begin_agent_wait(recipient);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        assert_eq!(
+            state.finish_agent_wait(recipient, lease, 0, true).messages[0].id,
+            "tuic-auto-first"
+        );
+        state.push_agent_inbox(
+            recipient,
+            lifecycle_msg("child-a", "state_change", "idle", "second"),
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "tuic-auto-first"),
+            None
+        );
+
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "tuic-auto-second", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        state.mark_terminal_delivery_dispatched(recipient, "tuic-auto-second");
+        state.push_agent_inbox(
+            recipient,
+            lifecycle_msg("child-a", "state_change", "completed", "third"),
+        );
+
+        let (messages, _, missed_count) = state.observe_agent_inbox(recipient, 0, 100);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "tuic-auto-third");
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "tuic-auto-second"),
+            None
+        );
+    }
+
+    #[test]
+    fn push_agent_inbox_evicts_oldest_across_peer_and_lifecycle_mail() {
         let state = tests_support::make_test_app_state();
         let rcpt = "orchestrator";
 
-        // Lifecycle notices are coalescible state observations; a peer result is
-        // not. Fill the inbox with notices plus one durable peer message.
+        state.push_agent_inbox(rcpt, make_msg("oldest-peer"));
         for i in 0..(AGENT_INBOX_CAPACITY - 1) {
             state.push_agent_inbox(rcpt, make_msg(&format!("tuic-auto-state-{i}")));
         }
-        state.push_agent_inbox(rcpt, make_msg("peer-result"));
-
-        // Another state update must replace an older lifecycle notice, never the
-        // peer message which a parent may not otherwise recover.
-        state
-            .try_push_agent_inbox(rcpt, make_msg("tuic-auto-state-overflow"))
-            .expect("an unleased lifecycle notice leaves an eviction slot");
+        state.push_agent_inbox(rcpt, make_msg("tuic-auto-state-overflow"));
 
         let inbox = state.agent_inbox.get(rcpt).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
         assert!(
-            inbox.iter().any(|m| m.id == "peer-result"),
-            "peer mail must survive lifecycle eviction pressure"
+            !inbox.iter().any(|m| m.id == "oldest-peer"),
+            "the oldest peer message must be evicted before newer lifecycle mail"
         );
         assert!(
-            !inbox.iter().any(|m| m.id == "tuic-auto-state-0"),
-            "the oldest lifecycle notice is evicted first"
+            inbox.iter().any(|m| m.id == "tuic-auto-state-0"),
+            "a newer lifecycle notice must remain"
         );
         assert!(
             *state.agent_inbox_evictions.get(rcpt).unwrap() > 0,
@@ -5534,7 +5351,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_falls_back_to_oldest_when_all_lifecycle() {
+    fn push_agent_inbox_evicts_oldest_when_all_lifecycle() {
         let state = tests_support::make_test_app_state();
         let rcpt = "orchestrator";
 
@@ -5554,7 +5371,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_does_not_evict_terminal_pending_mail() {
+    fn push_agent_inbox_evicts_oldest_terminal_pending_mail() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5570,16 +5387,20 @@ mod tests {
         state.push_agent_inbox(recipient, make_msg("overflow"));
 
         assert!(
-            state
+            !state
                 .agent_inbox
                 .get(recipient)
                 .is_some_and(|inbox| inbox.iter().any(|message| message.id == "terminal-pending")),
-            "a terminal-pending message must remain available for requeue after delivery failure"
+            "the oldest message must leave the bounded inbox"
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "terminal-pending"),
+            None
         );
     }
 
     #[test]
-    fn push_agent_inbox_rejects_peer_only_overflow_after_waiter_delivery() {
+    fn push_agent_inbox_evicts_peer_only_overflow_after_waiter_delivery() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5599,21 +5420,18 @@ mod tests {
             state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
         }
 
-        assert_eq!(
-            state.try_push_agent_inbox(recipient, make_msg("overflow")),
-            Err(AgentInboxFull)
-        );
+        state.push_agent_inbox(recipient, make_msg("overflow"));
 
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
-        assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
+        assert!(!inbox.iter().any(|message| message.id == "terminal-pending"));
         assert!(
             inbox.iter().any(|message| message.id == "waiter-observed"),
-            "returned peer mail is not an eviction candidate"
+            "newer mail remains after the oldest is evicted"
         );
     }
 
     #[test]
-    fn push_agent_inbox_rejects_overflow_when_every_message_is_in_flight() {
+    fn push_agent_inbox_accepts_overflow_when_every_message_is_in_flight() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5626,13 +5444,128 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            state.try_push_agent_inbox(recipient, make_msg("overflow")),
-            Err(AgentInboxFull)
-        );
+        state.push_agent_inbox(recipient, make_msg("overflow"));
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
-        assert!(inbox.iter().all(|message| message.id != "overflow"));
+        assert_eq!(inbox.front().unwrap().id, "pending-1");
+        assert_eq!(inbox.back().unwrap().id, "overflow");
+    }
+
+    #[test]
+    fn inbox_eviction_is_per_recipient_and_paging_skips_only_evicted_mail() {
+        let state = tests_support::make_test_app_state();
+        state.push_agent_inbox("other", make_msg("other-oldest"));
+        for index in 0..AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox("peer", make_msg(&format!("mail-{index}")));
+        }
+        let (first, has_more, missed_count) = state.observe_agent_inbox("peer", 0, 2);
+        assert!(has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(
+            first.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["mail-0", "mail-1"]
+        );
+        for index in AGENT_INBOX_CAPACITY..(AGENT_INBOX_CAPACITY + 3) {
+            state.push_agent_inbox("peer", make_msg(&format!("mail-{index}")));
+        }
+        let cursor = first.last().unwrap().timestamp;
+        let (second, has_more, missed_count) = state.observe_agent_inbox("peer", cursor, 2);
+        assert!(has_more);
+        assert_eq!(missed_count, 1);
+        assert_eq!(
+            second.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["mail-3", "mail-4"]
+        );
+        assert_eq!(
+            state.agent_inbox.get("other").unwrap()[0].id,
+            "other-oldest"
+        );
+        assert!(!state.agent_inbox_evictions.contains_key("peer"));
+        assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    #[test]
+    fn urgent_notice_reservation_survives_partial_read_and_clears_after_eviction() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let first_through = state.push_agent_inbox(recipient, make_msg("urgent-0"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first_through),
+            UrgentNoticeReservation::Reserved
+        );
+        state.finish_urgent_notice(recipient, "sender", first_through, true);
+        let second_through = state.push_agent_inbox(recipient, make_msg("urgent-1"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second_through),
+            UrgentNoticeReservation::Written
+        );
+        state.observe_agent_inbox(recipient, 0, 1);
+        let third_through = state.push_agent_inbox(recipient, make_msg("urgent-2"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third_through),
+            UrgentNoticeReservation::Written
+        );
+        state.observe_agent_inbox(recipient, first_through, 2);
+        let fourth_through = state.push_agent_inbox(recipient, make_msg("urgent-3"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth_through),
+            UrgentNoticeReservation::Reserved
+        );
+
+        for index in 0..AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(recipient, make_msg(&format!("filler-{index}")));
+        }
+        let after_eviction = state.push_agent_inbox(recipient, make_msg("urgent-after-eviction"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", after_eviction),
+            UrgentNoticeReservation::Reserved
+        );
+    }
+
+    #[test]
+    fn push_agent_inbox_reclaims_read_mail_and_settles_delivery_leases() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        state.push_agent_inbox("other-peer", make_msg("other-mail"));
+
+        state.push_agent_inbox(recipient, make_msg("terminal-pending"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "terminal-pending", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("waiter-owned"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "waiter-owned", true),
+            AgentDeliveryAssignment::Waiter
+        );
+        state.push_agent_inbox(recipient, make_msg("consumed"));
+        let (observed, has_more, missed_count) = state.observe_agent_inbox(recipient, 0, 3);
+        assert!(!has_more);
+        assert_eq!(missed_count, 0);
+        assert_eq!(observed.len(), 3);
+        assert_eq!(observed[2].id, "consumed");
+
+        for index in 0..(AGENT_INBOX_CAPACITY - 3) {
+            state.push_agent_inbox(recipient, make_msg(&format!("unread-{index}")));
+        }
+        state.push_agent_inbox(recipient, make_msg("new-mail"));
+
+        let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
+        assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
+        assert!(inbox.iter().all(|message| message.id != "terminal-pending"));
+        assert!(inbox.iter().any(|message| message.id == "waiter-owned"));
+        assert!(inbox.iter().any(|message| message.id == "consumed"));
+        assert!(inbox.iter().any(|message| message.id == "unread-0"));
+        assert!(inbox.iter().any(|message| message.id == "new-mail"));
+        assert!(!state.agent_inbox_evictions.contains_key(recipient));
+        assert_eq!(
+            state.agent_inbox.get("other-peer").unwrap()[0].id,
+            "other-mail"
+        );
+        drop(inbox);
+        let finish = state.finish_agent_wait(recipient, lease, 0, false);
+        assert!(finish.terminal_handoff.is_empty());
     }
 
     #[test]
@@ -5640,17 +5573,16 @@ mod tests {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
+        state.push_agent_inbox(recipient, make_msg("oldest-lifecycle"));
         state.push_agent_inbox(recipient, make_msg("terminal-pending"));
         assert_eq!(
             state.assign_agent_delivery(recipient, "terminal-pending", true),
             AgentDeliveryAssignment::Terminal
         );
-        for index in 0..(AGENT_INBOX_CAPACITY - 1) {
+        for index in 0..(AGENT_INBOX_CAPACITY - 2) {
             state.push_agent_inbox(recipient, make_msg(&format!("tuic-auto-state-{index}")));
         }
-        state
-            .try_push_agent_inbox(recipient, make_msg("tuic-auto-state-overflow"))
-            .expect("safe lifecycle mail leaves an eviction slot");
+        state.push_agent_inbox(recipient, make_msg("tuic-auto-state-overflow"));
 
         state.release_terminal_delivery(recipient, "terminal-pending");
 
@@ -6666,10 +6598,13 @@ mod tests {
     #[test]
     fn test_state_has_data_dir() {
         let state = tests_support::make_test_app_state();
-        // make_test_app_state assigns a unique per-call dir under temp (named
-        // `test-tuic-data-<pid>-<seq>`) so parallel tests don't share the
-        // tunnel_audit.db SQLite file.
-        assert!(state.data_dir.starts_with(std::env::temp_dir()));
+        // The test fixture belongs to this checkout, even when the caller
+        // did not set TMPDIR before invoking Cargo.
+        assert!(
+            state
+                .data_dir
+                .starts_with(crate::test_support::test_temp_root())
+        );
         assert!(
             state
                 .data_dir
@@ -6679,6 +6614,49 @@ mod tests {
             "unexpected data_dir: {:?}",
             state.data_dir
         );
+    }
+
+    #[test]
+    fn test_state_data_dir_is_removed_on_drop_and_panic() {
+        let scratch =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("scratch test root");
+        let entries = || {
+            std::fs::read_dir(scratch.path())
+                .expect("read scratch root")
+                .count()
+        };
+        let before = entries();
+        let state = tests_support::make_test_app_state_in(scratch.path());
+        let normal_path = state.data_dir.clone();
+        let worktrees_path = state.worktrees_dir.clone();
+        std::fs::create_dir_all(&worktrees_path).expect("create fixture worktrees");
+        std::fs::write(worktrees_path.join("probe"), b"fixture").expect("write fixture worktree");
+        assert!(normal_path.exists());
+        drop(state);
+        assert!(
+            !normal_path.exists(),
+            "fixture survived normal drop: {normal_path:?}"
+        );
+        assert!(!worktrees_path.exists(), "fixture worktree survived drop");
+        assert_eq!(entries(), before, "fixture left an entry after normal drop");
+
+        let mut panic_path = None;
+        // The panic is the point of the test; keep it off stderr.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let state = tests_support::make_test_app_state_in(scratch.path());
+            panic_path = Some(state.data_dir.clone());
+            panic!("exercise fixture cleanup during unwind");
+        }));
+        std::panic::set_hook(hook);
+        assert!(outcome.is_err());
+        let panic_path = panic_path.expect("fixture was created before panic");
+        assert!(
+            !panic_path.exists(),
+            "fixture survived panic: {panic_path:?}"
+        );
+        assert_eq!(entries(), before, "fixture left an entry after panic");
     }
 
     // ── split_name_segments ──────────────────────────────────
@@ -6958,7 +6936,7 @@ mod tests {
     /// shown in the tab menu.
     #[cfg(unix)]
     #[test]
-    fn resolve_session_ref_accepts_pty_id_tuic_session_and_alias() {
+    fn resolve_session_ref_checked_accepts_pty_id_tuic_session_and_alias() {
         let state = tests_support::make_test_app_state();
         let session_id = "01234567-89ab-cdef-0123-456789abcdef";
         tests_support::insert_dummy_session(&state, session_id);
@@ -6980,13 +6958,13 @@ mod tests {
             "reviewer",
         ] {
             assert_eq!(
-                state.resolve_session_ref(reference),
+                state.resolve_session_ref_checked(reference).unwrap(),
                 Some(session_id.to_string()),
                 "'{reference}' must address the terminal behind it"
             );
         }
         assert_eq!(
-            state.resolve_session_ref("never-seen"),
+            state.resolve_session_ref_checked("never-seen").unwrap(),
             None,
             "an unknown reference resolves to nothing rather than to a guess"
         );
@@ -7046,7 +7024,7 @@ mod tests {
     /// has to travel back the other way before a message can be delivered.
     #[cfg(unix)]
     #[test]
-    fn resolve_peer_ref_maps_a_terminal_address_back_to_its_peer() {
+    fn resolve_peer_ref_checked_maps_a_terminal_address_back_to_its_peer() {
         let state = tests_support::make_test_app_state();
         tests_support::insert_dummy_session(&state, "pty-key");
         state.bind_live_pty("tuic-uuid", "pty-key");
@@ -7064,12 +7042,12 @@ mod tests {
 
         for reference in ["tuic-uuid", "pty-key", alias.as_str()] {
             assert_eq!(
-                state.resolve_peer_ref(reference),
+                state.resolve_peer_ref_checked(reference).unwrap(),
                 Some("tuic-uuid".to_string()),
                 "'{reference}' must resolve to the peer that owns that terminal"
             );
         }
-        assert_eq!(state.resolve_peer_ref("never-seen"), None);
+        assert_eq!(state.resolve_peer_ref_checked("never-seen").unwrap(), None);
     }
 
     #[test]
@@ -7949,6 +7927,345 @@ mod tests {
     }
 
     #[test]
+    fn pending_acp_question_alerts_the_chat_once_while_desktop_is_away() {
+        let state = fresh_state();
+        let (private, _) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+        }
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let request_id = crate::acp::AcpHostRequestId::new();
+        let notice = crate::acp::AcpNotice {
+            connection_id: crate::acp::AcpConnectionId::new(),
+            generation: 1,
+            session_id: Some(agent_client_protocol::schema::v1::SessionId::new(
+                "conversation-1",
+            )),
+            request_id: Some(request_id),
+            sequence: 7,
+            kind: crate::acp::AcpNoticeKind::InteractionPending,
+        };
+
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            Some((
+                "/mobile?repo=%2Frepo&session=conversation-1".to_string(),
+                "AI Chat: response needed".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "a repeated notice must not alert within 30 seconds"
+        );
+        let mut other_conversation = notice.clone();
+        other_conversation.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "conversation-2",
+        ));
+        assert!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &other_conversation,
+                Some((request_id, "/repo"))
+            )
+            .is_some(),
+            "one conversation must not spend another's push budget"
+        );
+        let mut special_conversation = notice.clone();
+        special_conversation.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "conversation-special",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &special_conversation,
+                Some((request_id, "/repo/a & b")),
+            ),
+            Some((
+                "/mobile?repo=%2Frepo%2Fa+%26+b&session=conversation-special".to_string(),
+                "AI Chat: response needed".to_string(),
+            )),
+            "repository paths must stay inside the deep-link query value"
+        );
+        let key = "conversation-1";
+        let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
+        *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));
+        assert!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo")))
+                .is_some()
+        );
+        state.acp_push_last_ms.remove(key);
+        let winners = std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        AppState::mobile_push_for_acp_notice(
+                            &state,
+                            &notice,
+                            Some((request_id, "/repo")),
+                        )
+                    })
+                })
+                .collect();
+            calls
+                .into_iter()
+                .map(|call| call.join().unwrap().is_some())
+                .filter(|sent| *sent)
+                .count()
+        });
+        assert_eq!(
+            winners, 1,
+            "concurrent notices may spend one slot only once"
+        );
+    }
+
+    #[test]
+    fn answered_or_unrelated_acp_notice_cannot_alert_the_phone() {
+        let state = fresh_state();
+        let (private, _) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+        }
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let request_id = crate::acp::AcpHostRequestId::new();
+        let mut notice = crate::acp::AcpNotice {
+            connection_id: crate::acp::AcpConnectionId::new(),
+            generation: 1,
+            session_id: Some(agent_client_protocol::schema::v1::SessionId::new(
+                "conversation-1",
+            )),
+            request_id: Some(request_id),
+            sequence: 7,
+            kind: crate::acp::AcpNoticeKind::InteractionPending,
+        };
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, None),
+            None
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(
+                &state,
+                &notice,
+                Some((crate::acp::AcpHostRequestId::new(), "/repo"))
+            ),
+            None
+        );
+        notice.kind = crate::acp::AcpNoticeKind::Ready;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None
+        );
+        notice.kind = crate::acp::AcpNoticeKind::InteractionSettled;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None
+        );
+        state
+            .push_store
+            .remove("https://fcm.googleapis.com/fcm/send/example");
+        notice.kind = crate::acp::AcpNoticeKind::InteractionPending;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "no subscribed phone must leave the budget free"
+        );
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state.config.write().services.push.enabled = false;
+        assert_eq!(
+            AppState::mobile_push_for_acp_notice(&state, &notice, Some((request_id, "/repo"))),
+            None,
+            "disabled push must not alert or spend a slot"
+        );
+        assert!(state.acp_push_last_ms.get("conversation-1").is_none());
+    }
+
+    #[tokio::test]
+    async fn live_acp_permission_reaches_one_subscribed_push_service() {
+        use base64ct::Encoding;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/push",
+                    axum::routing::post(move || {
+                        let accepted_tx = accepted_tx.clone();
+                        async move {
+                            accepted_tx.send(()).unwrap();
+                            axum::http::StatusCode::CREATED
+                        }
+                    }),
+                ),
+            )
+            .await
+        });
+
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint,
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: base64ct::Base64UrlUnpadded::encode_string(
+                    client_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                ),
+                auth: base64ct::Base64UrlUnpadded::encode_string(&[7u8; 16]),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let pump = AppState::spawn_acp_notice_pump(state.clone());
+
+        let root = tempfile::Builder::new()
+            .prefix("acp-push-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        for (source, target) in [
+            ("permission-turn.jsonl", "scenario.jsonl"),
+            ("ego-initialize.json", "ego-initialize.json"),
+        ] {
+            std::fs::copy(
+                format!("tests/fixtures/acp/{source}"),
+                root.path().join(target),
+            )
+            .unwrap();
+        }
+        let executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(format!(
+                "tuic-acp-fixture-agent{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+        assert!(
+            executable.is_file(),
+            "fixture agent missing: {}",
+            executable.display()
+        );
+        let connection = state
+            .acp
+            .connect(
+                &crate::acp::EgoAcpConfig {
+                    executable,
+                    profile: String::new(),
+                },
+                crate::acp::AcpConnectRequest {
+                    root: root.path().to_path_buf(),
+                },
+            )
+            .await
+            .unwrap();
+        let session = state
+            .acp
+            .new_session(
+                connection.connection_id,
+                crate::acp::AcpSessionAuthority {
+                    cwd: root.path().to_path_buf(),
+                    additional_directories: Vec::new(),
+                    mcp_servers: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        state
+            .acp
+            .prompt(
+                connection.connection_id,
+                session.session_id.clone(),
+                vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new("hello"),
+                )],
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted_rx.recv())
+            .await
+            .expect("pending ACP permission did not reach push service")
+            .expect("push service stopped");
+        let pending = state
+            .acp
+            .pending_interactions(connection.connection_id)
+            .await
+            .unwrap();
+        let request_id = pending[0].request_id();
+        state
+            .acp
+            .respond_permission(
+                connection.connection_id,
+                request_id,
+                agent_client_protocol::schema::v1::RequestPermissionOutcome::Selected(
+                    agent_client_protocol::schema::v1::SelectedPermissionOutcome::new(
+                        agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
+                    ),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), accepted_rx.recv())
+                .await
+                .is_err(),
+            "settling a permission must not send another push"
+        );
+        state
+            .acp
+            .disconnect(connection.connection_id)
+            .await
+            .unwrap();
+        pump.abort();
+        service.abort();
+    }
+
+    #[test]
     fn test_session_state_intent_sets_agent_intent() {
         let state = fresh_state();
         let event = make_parsed(
@@ -8300,6 +8617,279 @@ mod tests {
         assert!(
             !s.question_confident,
             "silence-based question should not be confident"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_question_without_a_phone_subscription_does_not_consume_the_away_push_budget() {
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        let question = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Should I deploy now?", "confident": true }),
+        );
+        let at_desk = apply(&state, &question);
+        assert!(
+            at_desk.last_push_ms.is_none(),
+            "a question without a subscribed phone must not spend the 30-second limit"
+        );
+
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let away = apply(&state, &question);
+        assert!(
+            away.last_push_ms.is_some(),
+            "the same question can alert once Boss leaves"
+        );
+
+        let first = away.last_push_ms.unwrap();
+        let recent = first.saturating_sub(1_000);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(recent);
+        let rate_limited = apply(&state, &question);
+        assert_eq!(
+            rate_limited.last_push_ms,
+            Some(recent),
+            "a repeated question within 30 seconds must not alert twice"
+        );
+
+        let old = first.saturating_sub(31_000);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(old);
+        let eligible = apply(&state, &question);
+        assert!(
+            eligible.last_push_ms.unwrap() > old,
+            "an older question alert must not block a new one"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_push_shares_per_session_window_with_question() {
+        use base64ct::Encoding;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let (sent, mut accepted) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/push",
+                    axum::routing::post(move || {
+                        let sent = sent.clone();
+                        async move {
+                            sent.send(()).unwrap();
+                            axum::http::StatusCode::CREATED
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+
+        let state = fresh_state();
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let exit = AppEvent::PtyExit {
+            session_id: "s1".to_string(),
+        };
+        let without_phone = apply(&state, &exit);
+        assert!(
+            without_phone.last_push_ms.is_none(),
+            "completion without a subscriber must leave the push budget available"
+        );
+        let client_key = web_push_native::p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint,
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: base64ct::Base64UrlUnpadded::encode_string(
+                    client_key
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                ),
+                auth: base64ct::Base64UrlUnpadded::encode_string(&[7u8; 16]),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let question = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Done?", "confident": true }),
+        );
+        let asked = apply(&state, &question);
+        let first = asked.last_push_ms.expect("question spent the push budget");
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("question push never reached the local service")
+            .expect("local service closed");
+
+        apply(&state, &exit);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+                .await
+                .is_err(),
+            "completion bypassed the question's 30-second push limit"
+        );
+
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .last_push_ms = Some(first.saturating_sub(31_000));
+        apply(&state, &exit);
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("completion stayed blocked after the window")
+            .expect("local service closed");
+        let completed_at = state
+            .session_maps
+            .session_states
+            .get("s1")
+            .unwrap()
+            .last_push_ms;
+        apply(&state, &exit);
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .last_push_ms,
+            completed_at,
+            "a repeated completion must not reserve a second push"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+                .await
+                .is_err(),
+            "a repeated completion reached the push service"
+        );
+
+        state
+            .session_maps
+            .session_states
+            .insert("s2".to_string(), SessionState::default());
+        AppState::apply_event_to_session_state(
+            &state,
+            &AppEvent::PtyExit {
+                session_id: "s2".to_string(),
+            },
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(60), accepted.recv())
+            .await
+            .expect("another session inherited the first session's limit")
+            .expect("local service closed");
+        AppState::apply_event_to_session_state(
+            &state,
+            &AppEvent::PtyExit {
+                session_id: "s3".to_string(),
+            },
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), accepted.recv())
+            .await
+            .expect("completion without an existing state row lost its push")
+            .expect("local service closed");
+        server.abort();
+    }
+
+    #[test]
+    fn a_focused_but_idle_desktop_can_alert_the_phone() {
+        assert!(super::mobile_push_away(true, Some(120.0)));
+        assert!(!super::mobile_push_away(true, Some(119.9)));
+        assert!(!super::mobile_push_away(true, Some(0.0)));
+        assert!(!super::mobile_push_away(true, Some(f64::NAN)));
+        assert!(!super::mobile_push_away(true, None));
+        assert!(super::mobile_push_away(false, None));
+    }
+
+    #[tokio::test]
+    async fn ask_user_question_waits_for_its_title_before_spending_the_push_limit() {
+        let state = fresh_state();
+        state.push_store.upsert(crate::push::PushSubscription {
+            endpoint: "https://fcm.googleapis.com/fcm/send/example".to_string(),
+            keys: crate::push::PushSubscriptionKeys {
+                p256dh: "unused".to_string(),
+                auth: "unused".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+        });
+        let (private, public) = crate::push::generate_vapid_keys().unwrap();
+        {
+            let mut config = state.config.write();
+            config.services.push.enabled = true;
+            config.services.push.vapid_private_key = private;
+            config.services.push.vapid_public_key = public;
+        }
+        state
+            .desktop_window_focused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        let hook = apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "", "confident": true }),
+            ),
+        );
+        assert!(hook.awaiting_input);
+        assert!(
+            hook.last_push_ms.is_none(),
+            "an empty hook signal must leave room for the real question"
+        );
+
+        let titled = apply(
+            &state,
+            &make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Should I deploy now?",
+                    "options": [
+                        { "key": "1", "label": "Yes", "highlighted": true, "destructive": false },
+                        { "key": "2", "label": "No", "highlighted": false, "destructive": true }
+                    ]
+                }),
+            ),
+        );
+        assert_eq!(
+            titled.question_text.as_deref(),
+            Some("Should I deploy now?")
+        );
+        assert!(
+            titled.last_push_ms.is_some(),
+            "the titled question must be eligible for one push"
         );
     }
 
