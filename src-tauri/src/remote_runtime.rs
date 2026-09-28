@@ -129,6 +129,8 @@ pub(crate) struct RemoteConnectionStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) update_notice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) update_in_progress: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<String>,
@@ -188,6 +190,7 @@ impl Entry {
             out_of_date: connected.then_some(self.out_of_date).flatten(),
             live_sessions: connected.then_some(self.live_sessions).flatten(),
             update_notice: connected.then(|| self.update_notice.clone()).flatten(),
+            update_in_progress: (connected && self.update_in_progress).then_some(true),
             error: self.error.clone(),
             step,
         }
@@ -1932,6 +1935,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_auto_update_upload_times_out_and_restores_heartbeat() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
+        let target = env!("TUIC_TARGET_TRIPLE");
+        let directory = cache
+            .path()
+            .join("remote-bin")
+            .join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("tuic-remote-{target}")),
+            b"remote binary",
+        )
+        .unwrap();
+        let upload_started = Arc::new(AtomicBool::new(false));
+        let router = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get(move || async move {
+                    axum::Json(serde_json::json!({
+                        "session_count": 0,
+                        "build": { "version": "1.7.6", "target": target, "sha256": "a".repeat(64) }
+                    }))
+                }),
+            )
+            .route(
+                "/remote/update",
+                axum::routing::post({
+                    let upload_started = upload_started.clone();
+                    move |body: axum::body::Bytes| {
+                        let upload_started = upload_started.clone();
+                        async move {
+                            assert_eq!(body.as_ref(), b"remote binary");
+                            upload_started.store(true, Ordering::SeqCst);
+                            std::future::pending::<StatusCode>().await
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/version",
+                axum::routing::get({
+                    let upload_started = upload_started.clone();
+                    move || {
+                        let upload_started = upload_started.clone();
+                        async move {
+                            if upload_started.load(Ordering::SeqCst) {
+                                StatusCode::SERVICE_UNAVAILABLE
+                            } else {
+                                StatusCode::OK
+                            }
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("auto", url.clone(), "boss");
+        connection.auto_update = true;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test(&id, &url, Some("test-token"));
+        update(&state, &id, |entry| {
+            entry.build = Some(crate::remote_deploy::assets::BuildIdentity {
+                version: "1.7.6".into(),
+                target: target.into(),
+                sha256: "a".repeat(64),
+            });
+        });
+        spawn_build_comparison(&state, &id);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !upload_started.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, Some(true));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if state.remote.snapshot()[0].update_notice.as_deref()
+                    == Some("Remote update failed: Remote binary upload timed out")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, None);
+        poll_once(&state, &id).await;
+        assert_eq!(state.remote.snapshot()[0].status, RemoteStatus::Error);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn auto_update_stays_off_and_offers_a_busy_daemon_without_uploading() {
         let cache = tempfile::tempdir().unwrap();
         let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
@@ -2408,6 +2514,7 @@ mod tests {
             out_of_date: None,
             live_sessions: None,
             update_notice: None,
+            update_in_progress: None,
             error: None,
             step: Some("asset".into()),
         });
@@ -3431,6 +3538,7 @@ mod tests {
                 out_of_date: None,
                 live_sessions: None,
                 update_notice: None,
+                update_in_progress: None,
                 error: None,
                 step: None,
             });

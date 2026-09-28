@@ -125,6 +125,20 @@ describe("RemoteMachinesPanel", () => {
 		expect(getByRole("status").textContent).toBe("Remote updated successfully.");
 	});
 
+	it("disables manual update while the automatic update is running", () => {
+		connections["machine-1"] = {
+			...sshConnection(),
+			status: "connected",
+			outOfDate: true,
+			updateInProgress: true,
+		};
+		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const button = getByText("Update & restart remote") as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
+		fireEvent.click(button);
+		expect(actions.prepareUpdate).not.toHaveBeenCalled();
+	});
+
 	it("shows the reason when a manual update cannot be prepared", async () => {
 		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true };
 		actions.prepareUpdate.mockRejectedValueOnce(new Error("requires --no-default-features"));
