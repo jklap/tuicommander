@@ -24,6 +24,10 @@
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego, send a turn, create a second conversation, then restart the app. Confirm the last conversation and its history return; select the older title in the newest-first picker and confirm its history appears once. The running Rust backend cannot load the new `AppConfig` field until restart.
 
+## Windows Codex npm launcher — Rust restart required (story 987-c0ca)
+
+- [ ] On a Windows build with npm's adjacent `codex` and `codex.cmd` shims, restart TUICommander and launch Codex from the agent menu. Confirm the help probe selects `codex.cmd`, reports `--no-alt-screen` support, and the new session stays on the primary screen. The targeted Rust test passed for the adjacent shims; native Windows execution remains to be checked.
+
 ## AI Chat pending ACP badge and notification (story 1070-38ce)
 
 - [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge.
