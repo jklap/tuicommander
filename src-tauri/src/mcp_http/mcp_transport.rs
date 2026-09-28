@@ -521,6 +521,36 @@ fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) ->
         .is_some_and(|bound| bound.value() == tuic_session)
 }
 
+/// A short-lived bridge can exit without DELETE /mcp. Retire its protocol
+/// metadata and routes when another bridge for the same identity arrives,
+/// while preserving subscribed and recently active sibling bridges.
+/// Callers hold PEER_IDENTITY_BIND_LOCK.
+fn retire_stale_identity_sessions_locked(state: &AppState, tuic_session: &str, incoming: &str) {
+    let stale: std::collections::HashSet<String> = state
+        .mcp
+        .session_to_mcp
+        .get(tuic_session)
+        .map(|reverse| {
+            reverse
+                .iter()
+                .filter(|sid| sid.as_str() != incoming && !mcp_session_has_live_owner(state, sid))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if stale.is_empty() {
+        return;
+    }
+    for sid in &stale {
+        state.mcp.sessions.remove(sid);
+        state.mcp.to_session.remove(sid);
+        state.session_maps.messaging_channels.remove(sid);
+    }
+    if let Some(mut reverse) = state.mcp.session_to_mcp.get_mut(tuic_session) {
+        reverse.retain(|sid| !stale.contains(sid));
+    }
+}
+
 /// Add a co-owner to an identity a live sibling already owns: routing entries
 /// only, so the sibling keeps delivery ownership. Two live bridges that traded
 /// ownership on every request would flip the delivery channel back and forth;
@@ -716,6 +746,7 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
         return true;
     }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    retire_stale_identity_sessions_locked(state, tuic, mcp_sid);
     // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
     // header, so a second asserting bridge is a sibling inside that PTY, not a
     // claimant from outside it — Codex opens two. It joins the identity's routing
@@ -10266,6 +10297,51 @@ mod tests {
                 .map(|entry| entry.clone()),
             Some(vec!["mcp-new".to_string()])
         );
+    }
+
+    /// Catches: short-lived bridges leave one protocol session per initialize
+    /// until the one-hour sweep, even after their peer route is replaced.
+    #[tokio::test]
+    async fn repeated_fresh_initialize_releases_stale_protocol_sessions() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+        for _ in 0..12 {
+            let response = mcp_post(
+                State(state.clone()),
+                ConnectInfo(loopback_addr()),
+                headers.clone(),
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"clientInfo": {"name": "tuic-bridge"}}
+                })),
+            )
+            .await
+            .into_response();
+            let sid = response
+                .headers()
+                .get(MCP_SESSION_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let (channel, _) = tokio::sync::broadcast::channel(8);
+            state
+                .session_maps
+                .messaging_channels
+                .insert(sid.clone(), channel);
+            state.mcp.sessions.get_mut(&sid).unwrap().last_activity = std::time::Instant::now()
+                - MCP_OWNER_ACTIVITY_GRACE
+                - std::time::Duration::from_secs(1);
+        }
+        assert_eq!(
+            state.mcp.sessions.len(),
+            1,
+            "abandoned bridge sessions must not accumulate"
+        );
+        assert_eq!(state.mcp.session_to_mcp.get(TEST_UUID_A).unwrap().len(), 1);
+        assert_eq!(state.mcp.to_session.len(), 1);
+        assert_eq!(state.session_maps.messaging_channels.len(), 1);
     }
 
     #[test]
