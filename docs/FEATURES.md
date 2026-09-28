@@ -860,7 +860,8 @@ one configured ego binary and speaks ACP to it, per
   replaced whole each time it changes
 - The connection acknowledgement is hidden; `intent:` is shown as turn status;
   bracketed `suggest:` items on their own line or at the end of an answer become
-  buttons that send the selected reply. Message Copy appears on hover or keyboard focus
+  buttons that send the selected reply. A sent reply appears once even when ego
+  echoes it in chunks. Message Copy appears on hover or keyboard focus
 - Session title updates rename the panel header and picker entry. The footer
   shows context-window use and the cumulative cost when ego reports it
 - Untitled sessions show a readable prompt or activity-time label in the picker;
@@ -876,7 +877,8 @@ one configured ego binary and speaks ACP to it, per
   forms. Each new question produces one desktop notification, cleared when the
   question settles
 - **Session settings** come from the options the session publishes through
-  `set_config_option`. The control bar summarizes model and mode; a dialog labels
+  `set_config_option`. The one-row control bar summarizes the model's short name
+  and mode; Pause, Resume, Compact and New use named icon buttons. A dialog labels
   every select option and shows its description and current choice. Errors from
   rejected changes appear in the dialog. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each

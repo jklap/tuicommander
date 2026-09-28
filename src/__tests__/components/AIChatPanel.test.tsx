@@ -737,6 +737,16 @@ describe("AIChatPanel: a turn", () => {
 		(choices[1] as HTMLButtonElement).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta");
+		feed({ kind: "promptSent", text: "Una decisione aperta" });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Una decisione aperta" } },
+		});
+		await settle();
+		// Catches: the suggestion click creates a bubble that doubles when ego echoes the prompt.
+		expect(
+			[...container.querySelectorAll(".userMsg")].map((message) => message.textContent?.replace("Copy", "")),
+		).toEqual(["Una decisione aperta"]);
 	});
 
 	// Catches: an inline token at the end of the answer remaining visible as raw text.
@@ -1180,7 +1190,9 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = [...container.querySelectorAll("button")].find((button) => button.textContent === "New");
+		const next = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Start another conversation on this repository"]',
+		);
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -1905,6 +1917,43 @@ describe("AIChatPanel: the session's own knobs", () => {
 });
 
 describe("AIChatPanel: pause, resume and compact", () => {
+	// Catches: text controls wrapping below a long model summary or icons losing accessible names.
+	it("keeps named icon controls on one row beside a short model summary", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = renderPanel();
+			await settle();
+			acpStore.applySnapshot(snapshot({
+				attachments: [attachment({
+					state: "prompting",
+					configOptions: [{ ...MODEL_OPTION, currentValue: "openai-codex/gpt-6-sol", options: [{ value: "openai-codex/gpt-6-sol", name: "openai-codex/gpt-6-sol" }] }],
+				})],
+			}));
+			await settle();
+			const bar = container.querySelector<HTMLElement>(".controlBar")!;
+			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
+			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
+			for (const label of ["Pause the turn", "Compact the conversation", "Start another conversation on this repository"]) {
+				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+				expect(button.title).toBe(label);
+				expect(button.querySelector("svg")).not.toBeNull();
+				expect(button.textContent?.trim()).toBe("");
+			}
+			acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+			await settle();
+			const resume = bar.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]')!;
+			expect(resume.title).toBe("Resume the turn");
+			expect(resume.querySelector("svg")).not.toBeNull();
+		} finally {
+			style.remove();
+		}
+	});
+
 	it("pauses a running turn and resumes a held one", async () => {
 		const { container } = renderPanel();
 		await settle();
@@ -1912,7 +1961,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
 		await settle();
 
-		const pause = [...container.querySelectorAll("button")].find((button) => button.textContent === "Pause");
+		const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause the turn"]');
 		pause?.click();
 		await settle();
 		expect(client.pause).toHaveBeenCalledWith(CONNECTION, SESSION);
@@ -1920,7 +1969,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
 		await settle();
 
-		const resume = [...container.querySelectorAll("button")].find((button) => button.textContent === "Resume");
+		const resume = container.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]');
 		resume?.click();
 		await settle();
 		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
@@ -1930,7 +1979,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		const { container } = renderPanel();
 		await settle();
 
-		const compact = [...container.querySelectorAll("button")].find((button) => button.textContent === "Compact");
+		const compact = container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]');
 		compact?.click();
 		await settle();
 
@@ -1961,8 +2010,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		const { container } = renderPanel();
 		await settle();
 
-		const labels = [...container.querySelectorAll("button")].map((button) => button.textContent);
-		expect(labels).not.toContain("Pause");
-		expect(labels).not.toContain("Compact");
+		expect(container.querySelector('button[aria-label="Pause the turn"]')).toBeNull();
+		expect(container.querySelector('button[aria-label="Compact the conversation"]')).toBeNull();
 	});
 });

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat sent messages** — A sent prompt appears once when ego streams it back in chunks, including replies chosen from suggestion buttons.
+
+- **AI Chat controls** — Pause, Resume, Compact and New use accessible icon buttons in one row, with a shortened model name that yields space to the actions.
+
 - **AI Chat transcript** — Message Copy appears on hover or keyboard focus, and a trailing inline `suggest:` token becomes reply buttons.
 
 - **MCP bridge session cleanup** — A bridge closes its upstream protocol session when its stdio client exits. The server removes stale sessions left by abrupt bridge exits when the same peer reconnects, while preserving active sibling bridges. Failed bridge reconnects pause between attempts.
