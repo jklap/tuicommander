@@ -1414,10 +1414,10 @@ pub struct McpSessionMeta {
 }
 
 /// A registered peer agent in the inter-agent messaging system.
-/// Keyed by `tuic_session` (the stable tab UUID from TUIC_SESSION env var).
+/// Keyed by `tuic_session` (a stable peer UUID from TUIC_SESSION env var).
 #[derive(Debug, Clone, Serialize)]
 pub struct PeerAgent {
-    /// Stable tab UUID (from TUIC_SESSION env var) — primary identifier
+    /// Stable peer UUID (from TUIC_SESSION env var) — primary identifier
     pub tuic_session: String,
     /// MCP session ID (for routing notifications via SSE)
     pub mcp_session_id: String,
@@ -3854,13 +3854,13 @@ pub(crate) fn broadcast_to_ws_clients(
 
 const MOBILE_PUSH_HID_IDLE_SECS: f64 = 120.0;
 
-fn mobile_push_away(window_focused: bool, hid_idle_secs: Option<f64>) -> bool {
+pub(crate) fn mobile_push_away(window_focused: bool, hid_idle_secs: Option<f64>) -> bool {
     !window_focused
         || hid_idle_secs.is_some_and(|secs| secs.is_finite() && secs >= MOBILE_PUSH_HID_IDLE_SECS)
 }
 
 #[cfg(target_os = "macos")]
-fn hid_idle_seconds() -> Option<f64> {
+pub(crate) fn hid_idle_seconds() -> Option<f64> {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
@@ -3872,7 +3872,7 @@ fn hid_idle_seconds() -> Option<f64> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn hid_idle_seconds() -> Option<f64> {
+pub(crate) fn hid_idle_seconds() -> Option<f64> {
     None
 }
 

@@ -163,11 +163,17 @@ pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 pub fn tuicommander_mcp_server(
     bridge: Option<std::path::PathBuf>,
     socket: Option<&std::path::Path>,
+    peer_id: Option<&str>,
 ) -> Option<v1::McpServer> {
     let mut server = v1::McpServerStdio::new(TUICOMMANDER_MCP_SERVER_NAME, bridge?);
+    let mut env = Vec::new();
     if let Some(socket) = socket.and_then(|s| s.to_str()) {
-        server = server.env(vec![v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket)]);
+        env.push(v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket));
     }
+    if let Some(peer_id) = peer_id {
+        env.push(v1::EnvVariable::new("TUIC_SESSION", peer_id));
+    }
+    server = server.env(env);
     Some(v1::McpServer::Stdio(server))
 }
 
@@ -176,6 +182,11 @@ pub fn tuicommander_mcp_server(
 /// Named here because this is the only producer; the bridge is a separate
 /// crate, so the two ends agree by spelling and by the story796 contract test.
 pub const BRIDGE_SOCKET_ENV_VAR: &str = "TUIC_SOCKET";
+
+/// The bridge header accepts only the canonical UUID form used for TUIC peers.
+pub(crate) fn valid_peer_id(id: &str) -> bool {
+    id.len() == 36 && uuid::Uuid::parse_str(id).is_ok()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {

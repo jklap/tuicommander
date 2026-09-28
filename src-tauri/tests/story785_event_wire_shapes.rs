@@ -243,6 +243,7 @@ fn the_synthesised_entry_names_our_bridge_as_a_command() {
     let server = tuicommander_lib::acp::tuicommander_mcp_server(
         Some(std::path::PathBuf::from("/opt/tuic/tuic-bridge")),
         None,
+        None,
     )
     .expect("a located bridge must yield an entry");
 

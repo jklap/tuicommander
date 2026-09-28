@@ -42,6 +42,48 @@ async fn connect_directly_launches_configured_ego_and_stores_ready_snapshot() {
 }
 
 #[tokio::test]
+async fn a_malformed_peer_identity_cannot_launch_or_drop_a_live_acp_connection() {
+    let fixture = Fixture::with("ready");
+    let failed = fixture
+        .manager
+        .connect_with_peer(
+            &Fixture::config(),
+            AcpConnectRequest {
+                root: fixture.root(),
+            },
+            "not-a-uuid".to_string(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failed.code, AcpClientErrorCode::InvalidInput);
+    assert!(fixture.manager.connection_ids().is_empty());
+
+    let live = fixture.connect().await;
+    let failed = fixture
+        .manager
+        .reconnect_with_peer(
+            &Fixture::config(),
+            AcpReconnectRequest {
+                connection_id: live.connection_id,
+                root: fixture.root(),
+            },
+            Some("not-a-uuid".to_string()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failed.code, AcpClientErrorCode::InvalidInput);
+    assert_eq!(
+        fixture.manager.snapshot(live.connection_id).unwrap().state,
+        AcpConnectionState::Ready
+    );
+    fixture
+        .manager
+        .disconnect(live.connection_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
     for scenario in ["malformed", "non-v1", "early-eof"] {
         let fixture = Fixture::with(scenario);

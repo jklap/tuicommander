@@ -20,7 +20,7 @@ use tuicommander_lib::acp::{TUICOMMANDER_MCP_SERVER_NAME, tuicommander_mcp_serve
 /// body reaches neither the name nor the command.
 #[test]
 fn the_synthesised_entry_runs_our_own_bridge() {
-    let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), None)
+    let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), None, None)
         .expect("a located bridge must yield an entry");
 
     let value = serde_json::to_value(&server).expect("the entry must serialize");
@@ -57,6 +57,7 @@ fn the_bound_socket_is_carried_to_the_bridge_rather_than_left_to_its_own_search(
     let server = tuicommander_mcp_server(
         Some(PathBuf::from("/opt/tuic/tuic-bridge")),
         Some(std::path::Path::new("/tmp/tuic-mcp-0badc0de.sock")),
+        None,
     )
     .expect("a located bridge must yield an entry");
 
@@ -81,7 +82,7 @@ fn the_bound_socket_is_carried_to_the_bridge_rather_than_left_to_its_own_search(
 /// it will try and fail to connect to. Absent is the honest answer.
 #[test]
 fn an_unbound_socket_sets_no_environment_at_all() {
-    let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), None)
+    let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), None, None)
         .expect("a located bridge must yield an entry");
 
     let value = serde_json::to_value(&server).expect("the entry must serialize");
@@ -95,11 +96,12 @@ fn an_unbound_socket_sets_no_environment_at_all() {
 /// admit, when the truth is that TUICommander was not ready.
 #[test]
 fn a_missing_bridge_yields_no_entry_rather_than_a_command_that_cannot_run() {
-    assert!(tuicommander_mcp_server(None, None).is_none());
+    assert!(tuicommander_mcp_server(None, None, None).is_none());
     assert!(
         tuicommander_mcp_server(
             None,
-            Some(std::path::Path::new("/tmp/tuic-mcp-0badc0de.sock"))
+            Some(std::path::Path::new("/tmp/tuic-mcp-0badc0de.sock")),
+            None,
         )
         .is_none(),
         "a bound socket is not a substitute for a binary"
