@@ -14474,6 +14474,160 @@ fn codex_native_scrollback_capture_keeps_approval_and_idle_composer_visible() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn codex_canceled_approval_capture_clears_the_waiting_badge() {
+    // Exact records 1775..1826 from the committed live capture, with its
+    // original geometry and chunk boundaries retained.
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-0.157.1-approval-cancel.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let sid = "codex-canceled-approval";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_approval = false;
+    let mut approval_title = None;
+    let mut ordinary_title = None;
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = utf8.push(&record.data);
+        let data = escape.push(&data);
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        if clean.contains("Action Required") && approval_title.is_none() {
+            approval_title = Some(clean.to_string());
+        }
+        if let Some(start) = clean.find("\x1b]0;Create approval marker")
+            && ordinary_title.is_none()
+        {
+            let end = start + clean[start..].find('\x07').expect("complete OSC title") + 1;
+            ordinary_title = Some(clean[start..end].to_string());
+        }
+        processor.process_chunk(&clean, &silence, sid, &state);
+        let screen = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .screen_rows();
+        if screen
+            .iter()
+            .any(|row| row.contains("Would you like to run the following command?"))
+        {
+            saw_approval = true;
+            assert!(
+                await_session(&state, sid, |session| session.awaiting_input
+                    && session.question_confident)
+                .await,
+                "the live approval dialog must set the waiting badge"
+            );
+        }
+    }
+    assert!(saw_approval, "capture must include the approval dialog");
+    assert!(
+        await_session(&state, sid, |session| !session.awaiting_input
+            && !session.question_confident)
+        .await,
+        "the canceled dialog and idle composer must clear the waiting badge"
+    );
+    processor.process_chunk(
+        &approval_title.expect("capture must include an approval title"),
+        &silence,
+        sid,
+        &state,
+    );
+    assert!(
+        await_session(&state, sid, |session| session.awaiting_input
+            && session.question_confident)
+        .await,
+        "a later approval must set the badge again"
+    );
+    let repaint = format!(
+        "{}\x1b[1;1H.",
+        ordinary_title.expect("capture must include the ordinary title after cancellation")
+    );
+    processor.process_chunk(&repaint, &silence, sid, &state);
+    assert!(
+        !await_session(&state, sid, |session| !session.awaiting_input).await,
+        "an old cancellation in scrollback must not clear a new approval"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canceled_approval_does_not_clear_a_different_confident_question() {
+    let sid = "approval-followed-by-another-question";
+    let state = accumulating_state(sid);
+    for prompt in [
+        "| Create approval marker | project",
+        "Confirm a different operation?",
+    ] {
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: sid.into(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": prompt,
+                "confident": true,
+            })
+            .into(),
+        });
+        assert!(
+            await_session(&state, sid, |session| session.question_text.as_deref()
+                == Some(prompt))
+            .await
+        );
+    }
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.into(),
+        parsed: serde_json::json!({
+            "type": "protocol-question-cleared",
+            "expected_question_text": "| Create approval marker | project",
+        })
+        .into(),
+    });
+    assert!(
+        !await_session(&state, sid, |session| !session.awaiting_input).await,
+        "cancellation of the earlier approval must preserve the later question"
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .question_confident
+    );
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.into(),
+        parsed: serde_json::json!({
+            "type": "protocol-question-cleared",
+            "expected_question_text": "Confirm a different operation?",
+        })
+        .into(),
+    });
+    assert!(
+        await_session(&state, sid, |session| !session.awaiting_input
+            && !session.question_confident)
+        .await,
+        "clearing the current question must still work"
+    );
+}
+
 #[test]
 fn opencode_mini_resize_repaint_does_not_reopen_an_idle_turn() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(

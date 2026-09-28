@@ -722,6 +722,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - `extract_question_line()` scans all changed rows (not just the last) for question text, applied in both normal and headless reader threads
 - Wrapped `suggest: [ … ]` items remain follow-up actions even when an item contains `?`; they cannot set the question state.
 - Question state auto-clears when a `status-line` event fires (agent is actively working, so it's no longer awaiting input)
+- Canceling a Codex approval with Esc clears its waiting badge when the idle composer returns, while a later question remains active.
 
 ### 6.5 Usage Limit Detection
 - Claude Code weekly and session usage percentage (from PTY output patterns)
