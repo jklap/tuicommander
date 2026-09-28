@@ -51,6 +51,16 @@ beside it lists previous conversations by title, newest first. Selecting one
 loads its history. The last selected conversation is restored after restarting
 TUICommander.
 
+The panel has chat tabs for parallel conversations on the same repository.
+Click **+** or press `Cmd+T` (`Ctrl+T` on Windows/Linux) while the panel has
+focus to start another ACP session; in browser mode use `Cmd/Ctrl+Alt+T` so the
+browser keeps its own new-tab shortcut. Click a tab to switch, or close it to
+remove it from the panel. Closing a chat tab does not delete ego's conversation:
+the conversation picker can reopen it. Each tab keeps its own transcript and
+unsent composer draft. Open tabs and the selected tab return when the panel is
+hidden and shown or detached into its own window; the detached view replays
+their histories from ego.
+
 An untitled conversation appears with its first prompt or latest activity time;
 its session ID is available in the option tooltip.
 
@@ -66,6 +76,15 @@ TUICommander bound, so a second copy started with `TUIC_APP_INSTANCE=<id>` drive
 its own terminals and repositories rather than the default install's.
 
 ## During a turn
+
+Select text in user messages, answers, code blocks, and tool output and use
+`Cmd/Ctrl+C` to copy it. **Copy** on a message or code block copies its raw
+text through the same clipboard adapter as the terminal. Web links open in the
+system browser; file links and plain source paths are resolved by the backend
+and opened in TUICommander's file viewer or editor, as they are from a terminal.
+With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
+`Cmd/Ctrl+F` opens its search, and `Cmd/Ctrl+K` clears the visible history of
+the current tab. Clearing the view does not delete ego's saved conversation.
 
 Paste a PNG, JPEG, GIF or WebP image into the composer to preview it before
 sending. Remove a preview with its close button if you change your mind. An

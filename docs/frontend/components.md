@@ -110,6 +110,10 @@ desktop terminal view.
 `SessionControls` lists ego's durable `session/list` results by `updatedAt` and
 loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
 binding from app config after a fresh document opens.
+The panel draws open chat tabs from `aiChatTabs`; each tab selects one ACP
+session on the repository's connection. A detached window reads the saved tab
+list and replays each open conversation. `aiChatDraft` keeps unsent text and
+staged images per tab while the document is mounted.
 ACP session title updates rename the panel header and picker entry. The usage
 footer shows context-window occupancy and the reported cumulative cost.
 Untitled sessions use their first prompt or latest activity time in the picker,
@@ -119,6 +123,14 @@ turns appear in the transcript.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
+Messages, tool output and code blocks have copy actions. The transcript has
+text selection, find/select-all/clear shortcuts, and local file paths use the
+terminal's backend path resolver and file opener. Web links use the shared
+external URL opener. A detached AI Chat window sends resolved file links to
+the main window's same file opener, where the editor and viewer tabs live.
+Tool-call dots pulse only while a call is pending or in progress. The
+transcript projection settles unfinished calls when their turn ends, so a
+missing final tool update cannot leave an old dot animating.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image

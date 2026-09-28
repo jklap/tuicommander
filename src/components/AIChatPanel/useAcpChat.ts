@@ -1,6 +1,5 @@
 /**
- * One repo root, one ego, one conversation — and the rules for moving between
- * them.
+ * One ego connection per root, with one ACP session per open chat tab.
  *
  * The panel binds to a repository and a session, never to a terminal. A turn
  * ego runs is not a thing the focused tab owns: it outlives the tab, it may
@@ -8,17 +7,18 @@
  * looking at the same conversation. An earlier build enforced a per-terminal
  * lock, which is the exact inverse of a control plane.
  *
- * Switching repository opens a new session and leaves the previous one running.
+ * Switching repository leaves its sessions running.
  * `bindings` is what makes that cheap: a root that already has a connection is
  * taken back as it was, so moving away and back costs nothing and never
  * launches a second ego on a root that already has one.
  */
 
-import { createEffect, createSignal } from "solid-js";
+import { createEffect, createSignal, untrack } from "solid-js";
 import { invoke } from "../../invoke";
 import { type AcpListedSession, acpClient } from "../../services/acpClient";
 import { acpStore } from "../../stores/acp";
 import { type AcpTranscriptEntry, acpTranscript } from "../../stores/acpTranscript";
+import { aiChatTabs } from "../../stores/aiChatTabs";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import type {
@@ -88,6 +88,8 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 	const [error, setError] = createSignal<string | null>(null);
 	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
 
+	aiChatTabs.refresh();
+
 	async function remember(target: string, session: AcpSessionId): Promise<void> {
 		await updateAppConfig<{ ai_chat_sessions?: Record<string, string> }>((config) => {
 			config.ai_chat_sessions = { ...config.ai_chat_sessions, [target]: session };
@@ -140,16 +142,22 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 				invoke<{ ai_chat_sessions?: Record<string, string> }>("load_config"),
 			);
 			if (!config) return;
-			const saved = config?.ai_chat_sessions?.[target];
+			const saved = aiChatTabs.active(target) ?? config?.ai_chat_sessions?.[target];
 			if (saved && snapshot.capabilities?.load) {
+				aiChatTabs.ensure(target, saved);
 				binding.sessionId = saved;
 				if (root() === target) setSessionId(saved);
 				await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, saved, target));
+				for (const tab of aiChatTabs.ids(target)) {
+					if (tab !== saved)
+						await guard("replaying a chat tab", () => client.loadSession(snapshot.connectionId, tab, target));
+				}
 				return;
 			}
 			const session = await guard("opening a session", () => client.newSession(snapshot.connectionId, target));
 			if (!session) return;
 			binding.sessionId = session;
+			aiChatTabs.replace(target, session);
 			if (root() === target) setSessionId(session);
 			await guard("saving conversation", () => remember(target, session));
 			if (snapshot.capabilities?.list)
@@ -170,7 +178,12 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 		const known = bindings.get(target);
 		if (known) {
 			setConnectionId(known.connectionId);
-			setSessionId(known.sessionId);
+			const selected = untrack(() => aiChatTabs.active(target)) ?? known.sessionId;
+			setSessionId(selected);
+			for (const tab of untrack(() => aiChatTabs.ids(target))) {
+				if (!acpStore.attachment(known.connectionId, tab))
+					void guard("replaying a chat tab", () => client.loadSession(known.connectionId, tab, target));
+			}
 			return;
 		}
 		setConnectionId(null);
@@ -264,6 +277,18 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 		},
 		/** Durable sessions published by ego, newest first. */
 		sessions: listedSessions,
+		tabs: () => (root() ? aiChatTabs.ids(root() as string) : []),
+
+		async closeTab(tab: AcpSessionId): Promise<void> {
+			const target = root();
+			if (!target) return;
+			const active = aiChatTabs.close(target, tab);
+			if (!active) return;
+			setSessionId(active);
+			const id = connectionId();
+			if (id) bindings.set(target, { connectionId: id, sessionId: active });
+			await guard("saving conversation", () => remember(target, active));
+		},
 
 		async send(text: string, images: Extract<AcpContentBlock, { type: "image" }>[] = []): Promise<void> {
 			const current = pair();
@@ -339,6 +364,7 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 			const session = await guard("opening a session", () => client.newSession(id, target));
 			if (!session) return;
 			bindings.set(target, { connectionId: id, sessionId: session });
+			aiChatTabs.add(target, session);
 			setSessionId(session);
 			await guard("saving conversation", () => remember(target, session));
 			if (connection()?.capabilities?.list) await guard("listing conversations", () => refreshSessions(id, target));
@@ -354,6 +380,7 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 				if (loaded === null && error()) return;
 			}
 			bindings.set(target, { connectionId: id, sessionId: session });
+			aiChatTabs.add(target, session);
 			setSessionId(session);
 			await guard("saving conversation", () => remember(target, session));
 		},
@@ -391,11 +418,16 @@ export function createAcpChat(root: () => string | null, active: () => boolean, 
 					bindings.set(target, { connectionId: snapshot.connectionId, sessionId: resumeId });
 					setSessionId(resumeId);
 					await guard("replaying the conversation", () => client.loadSession(snapshot.connectionId, resumeId, target));
+					for (const tab of aiChatTabs.ids(target)) {
+						if (tab !== resumeId)
+							await guard("replaying a chat tab", () => client.loadSession(snapshot.connectionId, tab, target));
+					}
 					return;
 				}
 				const session = await guard("opening a session", () => client.newSession(snapshot.connectionId, target));
 				if (!session) return;
 				bindings.set(target, { connectionId: snapshot.connectionId, sessionId: session });
+				aiChatTabs.replace(target, session);
 				setSessionId(session);
 				await guard("saving conversation", () => remember(target, session));
 				if (snapshot.capabilities?.list)
