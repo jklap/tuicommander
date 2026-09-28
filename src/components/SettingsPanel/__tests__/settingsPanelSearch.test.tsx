@@ -196,6 +196,13 @@ describe("SettingsPanel search", () => {
 			expect(ownText(target)).toBe("ego executable");
 		});
 
+		it("the ego profile opens General at its setting", async () => {
+			const { container } = open();
+			const target = await openResult(container, "ego profile", "General", "ego profile");
+			expect(target.tagName).toBe("LABEL");
+			expect(ownText(target)).toBe("ego profile");
+		});
+
 		it("a keyboard shortcut opens Keyboard Shortcuts at that control", async () => {
 			const { container } = open();
 			const target = await openResult(container, "global hotkey", "Keyboard Shortcuts", "Global Hotkey");

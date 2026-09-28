@@ -12,6 +12,10 @@
 
 # To Test
 
+## AI Chat ego profile (story 1074-9373) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart.
+
 ## AI Chat image paste (story 1085-fa65)
 
 - [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified.

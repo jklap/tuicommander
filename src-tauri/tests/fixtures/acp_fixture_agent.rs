@@ -18,7 +18,7 @@
 //!
 //! | Step | Meaning |
 //! | --- | --- |
-//! | `expect` | Read the next client frame. Assert `method`; subset-match `params` when given; remember its `id` under `capture`. |
+//! | `expect` | Read the next client frame. Assert `method`; subset-match `params`, reject `forbid_params` keys when given; remember its `id` under `capture`. |
 //! | `expect_response` | Read the next client frame. Assert it answers `id`; subset-match `result`, or assert `errorCode`. |
 //! | `respond` | Write a result for a captured request id. `result_file` reads the result from a file in the root instead, so one recording can serve every scenario that needs it. |
 //! | `error` | Write a JSON-RPC error for a captured request id. |
@@ -205,6 +205,16 @@ impl Agent {
                 contains(frame.get("params").unwrap_or(&Value::Null), params),
                 "scenario line {line}: params mismatch\nwanted {params}\ngot    {frame}"
             );
+        }
+        if let Some(forbidden) = step.get("forbid_params").and_then(Value::as_array) {
+            let params = frame.get("params").and_then(Value::as_object);
+            for key in forbidden {
+                let key = key.as_str().expect("forbid_params entries are strings");
+                assert!(
+                    params.is_none_or(|params| !params.contains_key(key)),
+                    "scenario line {line}: forbidden session policy key {key} in {frame}"
+                );
+            }
         }
         if let Some(name) = step.get("capture").and_then(Value::as_str) {
             let id = frame

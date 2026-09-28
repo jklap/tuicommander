@@ -36,6 +36,13 @@ function languageSelect(container: HTMLElement): HTMLSelectElement {
 	return select as HTMLSelectElement;
 }
 
+function egoProfileInput(container: HTMLElement): HTMLInputElement {
+	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "ego profile");
+	const input = label?.parentElement?.querySelector("input");
+	if (!input) throw new Error("ego profile input not found");
+	return input;
+}
+
 /** A string the picker must retranslate.
  *
  * Why this exists at all: `en.json` is generated from the call sites, so every
@@ -143,5 +150,25 @@ describe("GeneralTab language picker", () => {
 		const saved = mockInvoke.mock.calls.filter(([cmd]) => cmd === "save_config");
 		expect(saved).toHaveLength(1);
 		expect((saved[0][1] as { config: { language: string } }).config.language).toBe("en");
+	});
+});
+
+describe("GeneralTab ego profile", () => {
+	beforeEach(() => {
+		mockInvoke.mockImplementation(invokeImpl());
+	});
+
+	afterEach(() => {
+		settingsStore._testCancelPendingSave();
+		cleanup();
+	});
+
+	it("keeps the selected profile visible after rejecting a leading dash", () => {
+		settingsStore.setEgoProfile("coordinator");
+		const { container } = render(() => <GeneralTab />);
+		const input = egoProfileInput(container);
+		fireEvent.input(input, { target: { value: "-other" } });
+		expect(input.value).toBe("coordinator");
+		expect(settingsStore.state.egoProfile).toBe("coordinator");
 	});
 });

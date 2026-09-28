@@ -464,6 +464,16 @@ export const GeneralTab: Component = () => {
 					</div>
 				</div>
 			</Show>
+			<SettingInput
+				label={t("general.label.egoProfile", "ego profile")}
+				value={settingsStore.state.egoProfile}
+				onInput={(name) => settingsStore.setEgoProfile(name)}
+				placeholder={t("general.placeholder.egoProfile", "coordinator")}
+				hint={t(
+					"general.hint.egoProfile",
+					"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
+				)}
+			/>
 
 			<h3>{t("developerTools.heading.ide", "IDE")}</h3>
 

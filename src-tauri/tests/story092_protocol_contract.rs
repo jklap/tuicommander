@@ -20,6 +20,7 @@ fn configured_ego_launch_is_direct_and_has_exact_argv() {
     let spec = launch_spec(
         &EgoAcpConfig {
             executable: executable.clone(),
+            profile: String::new(),
         },
         &root,
     )
@@ -29,6 +30,62 @@ fn configured_ego_launch_is_direct_and_has_exact_argv() {
     assert_eq!(
         spec.args,
         ["acp", "-C", root.to_str().expect("a UTF-8 root")]
+    );
+}
+
+#[test]
+fn selected_user_profile_is_one_launch_argument() {
+    let root = acp_support::absolute("/private/tmp/worktree");
+    let spec = launch_spec(
+        &EgoAcpConfig {
+            executable: acp_support::absolute("/opt/ego/bin/ego"),
+            profile: "coordinator".to_string(),
+        },
+        &root,
+    )
+    .unwrap();
+
+    assert_eq!(
+        spec.args,
+        [
+            "acp",
+            "-C",
+            root.to_str().unwrap(),
+            "--profile",
+            "coordinator"
+        ]
+    );
+}
+
+#[test]
+fn ambiguous_profile_names_are_refused_before_launch() {
+    for profile in [
+        "-other",
+        "my profile",
+        " profile",
+        "profile\nother",
+        "name\u{a0}part",
+    ] {
+        let error = launch_spec(
+            &EgoAcpConfig {
+                executable: acp_support::absolute("/opt/ego/bin/ego"),
+                profile: profile.to_string(),
+            },
+            &acp_support::absolute("/private/tmp/worktree"),
+        )
+        .expect_err("ambiguous profile must not reach ego");
+        assert!(error.message.contains("profile"), "{error:?}");
+    }
+    let too_long = "a".repeat(65);
+    assert!(
+        launch_spec(
+            &EgoAcpConfig {
+                executable: acp_support::absolute("/opt/ego/bin/ego"),
+                profile: too_long,
+            },
+            &acp_support::absolute("/private/tmp/worktree"),
+        )
+        .is_err()
     );
 }
 
