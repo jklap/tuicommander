@@ -209,6 +209,12 @@
   font-size: var(--font-xs);
 }
 
+.userMsg .copyAction,
+.assistantMsg .copyAction {
+  min-height: 18px;
+  margin-top: 4px;
+}
+
 .userMsg:hover .copyAction,
 .userMsg:focus-within .copyAction,
 .assistantMsg:hover .copyAction,
@@ -654,11 +660,18 @@
 }
 
 .toolActivityTitles {
+  flex: 1;
   color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.toolCallCount,
+.toolActivitySummary .toolCallDuration {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .toolActivityCalls {

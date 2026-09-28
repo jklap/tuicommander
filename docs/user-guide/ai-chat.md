@@ -92,6 +92,12 @@ sending. Remove a preview with its close button if you change your mind. An
 image can be sent without text. The composer refuses images when the connected
 agent did not advertise image prompts, or when the pasted images exceed 10 MiB
 in total. Text paste works as usual.
+Pastes longer than 200 words appear as a numbered `[Pasted text #… +N words]`
+marker while you compose; the full text is sent when you press Send. The
+composer grows with shorter text up to its height limit, then scrolls.
+The transcript follows new output while you are at the bottom and keeps your
+position when you scroll up. Tool activity rows show names; expand a call to
+read its full command and output.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.

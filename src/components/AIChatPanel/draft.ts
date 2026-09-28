@@ -20,9 +20,11 @@ export interface StagedImage {
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
 const drafts = new Map<string, { text: string; images: StagedImage[] }>();
+const pastedText = new Map<string, string>();
 let activeSession = "";
 let revision = 0;
 let pendingBytes = 0;
+let pasteNumber = 0;
 
 function readImage(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -36,6 +38,17 @@ function readImage(file: File): Promise<string> {
 export const aiChatDraft = {
 	text,
 	set: setText,
+	expandedText(): string {
+		return text().replace(/\[Pasted text #\d+ \+\d+ words\]/g, (marker) => pastedText.get(marker) ?? marker);
+	},
+	stageTextPaste(value: string, start: number, end: number): number | null {
+		const words = value.trim().split(/\s+/).filter(Boolean).length;
+		if (words <= 200) return null;
+		const marker = `[Pasted text #${++pasteNumber} +${words} words]`;
+		pastedText.set(marker, value);
+		setText((current) => current.slice(0, start) + marker + current.slice(end));
+		return start + marker.length;
+	},
 	images,
 	activate(session: string): void {
 		if (session === activeSession) return;
@@ -88,6 +101,7 @@ export const aiChatDraft = {
 
 	clear(): void {
 		revision += 1;
+		for (const marker of text().match(/\[Pasted text #\d+ \+\d+ words\]/g) ?? []) pastedText.delete(marker);
 		setText("");
 		setImages([]);
 		drafts.delete(activeSession);
@@ -95,6 +109,8 @@ export const aiChatDraft = {
 
 	reset(): void {
 		drafts.clear();
+		pastedText.clear();
+		pasteNumber = 0;
 		activeSession = "";
 		revision += 1;
 		setText("");
