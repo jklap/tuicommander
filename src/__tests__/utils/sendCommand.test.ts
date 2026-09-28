@@ -185,6 +185,13 @@ describe("sendCommand", () => {
 		}
 	});
 
+	it("uses the Codex-safe Enter gap for an unrecognized agent type", async () => {
+		const stamps: number[] = [];
+		await sendCommand(async () => { stamps.push(performance.now()); }, "review this", "future-agent", "posix");
+		expect(stamps).toHaveLength(3);
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(195);
+	});
+
 	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {
 		setPlatform("MacIntel");
 		const stamps: number[] = [];

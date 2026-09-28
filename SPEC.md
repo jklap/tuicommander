@@ -232,7 +232,8 @@ There is no hybrid route and no fallback between them.
   `ParsedEvent`. Session state is recovered from the agent's own session files
   on disk (see AGENTS.md, "Agent Session Management").
 - **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
-  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly and
+  `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
+  adding `--profile <name>` only when a user selected an ego profile, and
   owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
   invoked, and no output is scraped. The host issues a durable `TUIC_SESSION`
   peer UUID for the repository conversation, persists it beside the selected
@@ -391,6 +392,9 @@ the new worktree, without following symlinks or changing the source checkout.
 
 Lifecycle state is one backend verdict keyed by workspace id: working-tree
 dirtiness, whether `HEAD` is merged into the default branch, and removal safety.
+A missing registered checkout has no dirty fingerprint; its preflight identifies
+the missing directory and requires explicit force confirmation. Cleanup preserves
+its submodule refs before pruning and checks separately before overriding a lock.
 Merged GitHub PR state can also prove a squash-merged branch safe when its local
 tip is contained in the PR head; ancestry in the checked-out integration branch
 is sufficient even when the remote default branch has not advanced. The MCP
@@ -635,6 +639,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
 - [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
+- [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
 - [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)

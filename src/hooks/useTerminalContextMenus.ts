@@ -35,11 +35,13 @@ function scopedLaunchCommand(
 	env: AgentRunConfig["env"] | undefined,
 	shellFamily: ShellFamily,
 ): string {
-	const entries = Object.entries(env ?? {}).filter(
-		([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && key !== "TUIC_SESSION" && key !== "TUIC_PARENT",
-	);
+	const windows = isWindows();
+	const entries = Object.entries(env ?? {}).filter(([key]) => {
+		const name = windows || shellFamily === "windows-native" ? key.toUpperCase() : key;
+		return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && name !== "TUIC_SESSION" && name !== "TUIC_PARENT";
+	});
 	if (!entries.length) return command;
-	if (shellFamily !== "windows-native" && (shellFamily === "posix" || !isWindows())) {
+	if (shellFamily !== "windows-native" && (shellFamily === "posix" || !windows)) {
 		return `env ${entries.map(([key, value]) => `${key}=${escapePosixShellArg(value)}`).join(" ")} ${command}`;
 	}
 	// EncodedCommand is accepted by both cmd and PowerShell and keeps values out of
@@ -50,7 +52,10 @@ function scopedLaunchCommand(
 		`Invoke-Expression ${psQuote(command)}`,
 	].join("; ");
 	let bytes = "";
-	for (const char of script) bytes += String.fromCharCode(char.charCodeAt(0) & 0xff, char.charCodeAt(0) >> 8);
+	for (let index = 0; index < script.length; index++) {
+		const codeUnit = script.charCodeAt(index);
+		bytes += String.fromCharCode(codeUnit & 0xff, codeUnit >> 8);
+	}
 	return `powershell.exe -NoProfile -EncodedCommand ${btoa(bytes)}`;
 }
 

@@ -475,6 +475,8 @@ pub struct WorkspaceLifecycleStatus {
     /// Count of staged, unstaged and untracked changes. Ignored files are not
     /// counted; removal also deletes those files, including warmed caches.
     pub dirty_files: Option<usize>,
+    /// The registration exists but its checkout directory has disappeared.
+    pub missing_checkout: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dirty_fingerprint: Option<String>,
     pub submodule_unpushed_commits: Vec<SubmoduleUnpushedCommits>,
@@ -889,7 +891,29 @@ pub fn inspect_workspace_lifecycle_with_pr(
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let workspace = resolve_any_workspace(base_repo, workspace_id)?;
+        let workspace = resolve_any_workspace(base_repo, workspace_id)
+            .or_else(|_| resolve_missing_registered_workspace(base_repo, workspace_id))?;
+        if !Path::new(&workspace.path).exists() {
+            let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
+            let tip = rev_at(base_repo, &format!("refs/heads/{}", workspace.branch))?;
+            let (commit_status, merge_proof) = classify_branch_merge(
+                base_repo,
+                &workspace.branch,
+                &tip,
+                &default_branch,
+                pr_proves_tip,
+            )?;
+            return Ok(WorkspaceLifecycleStatus {
+                dirty_files: None,
+                missing_checkout: true,
+                dirty_fingerprint: None,
+                submodule_unpushed_commits: Vec::new(),
+                commit_status,
+                merge_proof,
+                removal_safety: WorkspaceRemovalSafety::RequiresForce,
+                error: None,
+            });
+        }
         let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
         let (dirty_fingerprint, submodule_unpushed_commits) =
             dirty_fingerprint_at(Path::new(&workspace.path))?;
@@ -906,6 +930,7 @@ pub fn inspect_workspace_lifecycle_with_pr(
         )?;
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
+            missing_checkout: false,
             dirty_fingerprint: Some(dirty_fingerprint),
             submodule_unpushed_commits,
             commit_status,
@@ -921,6 +946,7 @@ pub fn inspect_workspace_lifecycle_with_pr(
 
     inspected.unwrap_or_else(|error| WorkspaceLifecycleStatus {
         dirty_files: None,
+        missing_checkout: false,
         dirty_fingerprint: None,
         submodule_unpushed_commits: Vec::new(),
         commit_status: WorkspaceCommitStatus::Unknown,
@@ -1202,7 +1228,7 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
     }
 }
 pub fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
-    remove_worktree_internal_with_lock(worktree, force, false, None)
+    remove_worktree_internal_with_lock(worktree, force, false, None, None)
 }
 
 fn registered_worktree_admin_dir(base_repo: &Path, path: &Path) -> Result<Option<PathBuf>, String> {
@@ -1393,6 +1419,7 @@ fn remove_worktree_internal_with_lock(
     force: bool,
     override_lock: bool,
     expected_fingerprint: Option<&str>,
+    expected_missing_checkout: Option<bool>,
 ) -> Result<(), String> {
     // A copy already in flight must finish before Git can remove its destination.
     // If removal wins, the queued copy sees the cleared token and never starts.
@@ -1414,6 +1441,13 @@ fn remove_worktree_internal_with_lock(
         return Err(format!(
             "{MAIN_WORKTREE_PREFIX}cannot remove the main worktree"
         ));
+    }
+    if let Some(expected_missing) = expected_missing_checkout {
+        if expected_missing != !worktree.path.exists() {
+            return Err(
+                "Worktree presence changed since confirmation; review it before removal".into(),
+            );
+        }
     }
     let admin = registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?;
     if !worktree.path.exists() {
@@ -1803,6 +1837,32 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
     expected_fingerprint: Option<&str>,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        expected_fingerprint,
+        None,
+        pr_proves_tip,
+    )
+}
+
+/// Transport-facing variant: `Some(true)` confirms a missing checkout, while
+/// `Some(false)` requires a live checkout and a fingerprint for force removal.
+pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+    expected_missing_checkout: Option<bool>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
     let mut removal_rule = if force { "force" } else { "kept_branch" };
@@ -1828,6 +1888,18 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
     let missing_checkout = !worktree_path.exists();
+    if let Some(expected_missing) = expected_missing_checkout {
+        if expected_missing != missing_checkout {
+            return Err(
+                "Worktree presence changed since confirmation; review it before removal".into(),
+            );
+        }
+        if force && !missing_checkout && expected_fingerprint.is_none() {
+            return Err(
+                "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+            );
+        }
+    }
 
     // Force permits discarding dirty files, but never detached commits or a
     // lock. Branch deletion still needs its own proof in either mode.
@@ -1902,6 +1974,7 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
 
     // Run archive/cleanup script before deletion (if configured)
     if let Some(script) = archive_script
+        && !missing_checkout
         && !script.is_empty()
     {
         run_script_in_dir(script, &worktree_path)
@@ -1916,7 +1989,13 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
         base_repo,
     };
 
-    remove_worktree_internal_with_lock(&worktree, force, override_lock, expected_fingerprint)?;
+    remove_worktree_internal_with_lock(
+        &worktree,
+        force,
+        override_lock,
+        expected_fingerprint,
+        expected_missing_checkout,
+    )?;
 
     // Compare-and-delete prevents an archive hook or another process from
     // advancing the branch after the safety proof.
@@ -6552,6 +6631,118 @@ branch refs/heads/feat
         assert!(
             !admin.exists(),
             "confirmed removal must prune the registration"
+        );
+    }
+
+    #[test]
+    fn missing_registered_checkout_has_a_confirmable_lifecycle() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "missing-preflight");
+        fs::remove_dir_all(&path).unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "missing-preflight");
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+        assert_eq!(status.dirty_files, None);
+        assert_eq!(status.dirty_fingerprint, None);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+        assert!(resolve_any_workspace(&repo, "missing-preflight").is_err());
+        assert!(!inspect_workspace_lifecycle(&repo, "not-registered").missing_checkout);
+    }
+
+    #[test]
+    fn missing_checkout_confirmation_prunes_only_the_confirmed_registration() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let missing = add_worktree(&repo, "missing-confirmed");
+        let live = add_worktree(&repo, "live-neighbor");
+        fs::remove_dir_all(&missing).unwrap();
+        let repo_name = repo.to_string_lossy();
+
+        let wrong_presence = remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo_name,
+            "live-neighbor",
+            false,
+            None,
+            true,
+            false,
+            None,
+            Some(true),
+            |_, _, _| false,
+        )
+        .unwrap_err();
+        assert!(
+            wrong_presence.contains("presence changed"),
+            "{wrong_presence}"
+        );
+        assert!(live.exists());
+
+        let outcome = remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo_name,
+            "missing-confirmed",
+            false,
+            None,
+            true,
+            false,
+            None,
+            Some(true),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert_eq!(outcome.branch, "missing-confirmed");
+        assert!(
+            registered_worktree_admin_dir(&repo, &missing)
+                .unwrap()
+                .is_none()
+        );
+        assert!(live.exists());
+    }
+
+    #[test]
+    fn live_checkout_force_still_requires_its_fingerprint() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let live = add_worktree(&repo, "live-fingerprint");
+        fs::write(live.join("uncommitted.txt"), "keep me\n").unwrap();
+
+        let error = remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "live-fingerprint",
+            false,
+            None,
+            true,
+            false,
+            None,
+            Some(false),
+            |_, _, _| false,
+        )
+        .unwrap_err();
+        assert!(error.contains("expected_fingerprint"), "{error}");
+        assert_eq!(
+            fs::read_to_string(live.join("uncommitted.txt")).unwrap(),
+            "keep me\n"
+        );
+    }
+
+    #[test]
+    fn missing_checkout_cleanup_does_not_require_its_deleted_archive_script_directory() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let missing = add_worktree(&repo, "missing-with-script");
+        fs::remove_dir_all(&missing).unwrap();
+
+        remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "missing-with-script",
+            false,
+            Some("printf 'would run only in a live checkout'"),
+            true,
+            false,
+            None,
+            Some(true),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert!(
+            registered_worktree_admin_dir(&repo, &missing)
+                .unwrap()
+                .is_none()
         );
     }
 

@@ -6,11 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Browser agent resume verification** — HTTP verification carries the agent PID and saved profile environment, so sessions under a non-default Claude, Codex or Gemini profile are checked in the correct store.
+
+- **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted and Unicode values stay intact, and menu overrides cannot replace TUIC peer identity variables, including differently cased names on Windows.
+
+- **AI Chat session details** — Live ACP titles update the header and conversation picker. A footer shows context-window use and reported cost.
+
 - **Agent menu run-config environment** — Active-terminal and sidebar launches apply the selected run config's environment only to the launched agent. Quoted values stay intact, and menu overrides cannot replace TUIC peer identity variables.
 
 - **AI Chat image paste** — Pasting a supported image stages a removable preview and sends its bytes as an ACP image block when the agent advertises image prompts. Oversized or unsupported images show a refusal before upload.
 
 - **AI Chat conversation recovery** — The last selected ego conversation reopens after a restart. The picker shows previous conversations by title and latest activity, then loads their history once.
+
+- **Managed Codex wrapper trust** — Codex run configs that forward launcher arguments receive the same launch-only workspace trust override as direct Codex spawns.
+
+- **Missing worktree cleanup** — A missing checkout's registered Git state can be confirmed and pruned from desktop or HTTP. Submodule refs are preserved first; lock override remains a separate confirmation.
 
 - **Headless MCP voice binding** — `tuic-remote` refuses voice calls from connections without a live terminal before reporting that audio is unavailable.
 
@@ -129,6 +139,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Agent command injection uses the longer Codex-safe Enter gap when the agent type is still unknown. MCP `session input` also separates text and Enter for Claude and other identified agents.
 - Worktree cleanup recognizes a merged GitHub PR whose head contains the local tip after a squash merge, and recognizes branches already contained in the checked-out integration branch. Warm copies retain ignored build directories while restoring owner write permission in the new worktree so sealed source caches do not block removal. MCP `repo branch_delete` safely deletes an integrated local branch without a worktree.
 - Dictation auto-send and other injected prompts now submit in Codex after its paste-burst Enter suppression window, in both the frontend and MCP session paths.
 - **Agent native scrollback** — TUICommander launches Claude, Codex, Grok and supported OpenCode versions without alternate-screen rendering by default, including resumed and orchestrated sessions. A one-time warning names any agent that still enters alternate screen.

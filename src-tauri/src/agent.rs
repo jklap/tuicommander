@@ -867,18 +867,33 @@ fn preferred_agent_path(output: &str) -> Option<&str> {
 }
 
 fn resolve_probe_executable(path: &str) -> std::path::PathBuf {
+    let enriched = crate::cli::enriched_path();
+    #[cfg(windows)]
+    let suffixes = &["exe", "cmd"];
+    #[cfg(not(windows))]
+    let suffixes: &[&str] = &[];
+    resolve_probe_executable_from_dirs(
+        path,
+        std::env::split_paths(std::ffi::OsStr::new(&enriched)),
+        suffixes,
+    )
+}
+
+fn resolve_probe_executable_from_dirs(
+    path: &str,
+    dirs: impl IntoIterator<Item = std::path::PathBuf>,
+    suffixes: &[&str],
+) -> std::path::PathBuf {
     let given = std::path::Path::new(path);
     if given.components().count() != 1 {
         return given.to_path_buf();
     }
-    let enriched = crate::cli::enriched_path();
-    for dir in std::env::split_paths(std::ffi::OsStr::new(&enriched)) {
+    for dir in dirs {
         let candidate = dir.join(path);
-        if candidate.is_file() {
+        if (suffixes.is_empty() || given.extension().is_some()) && candidate.is_file() {
             return candidate;
         }
-        #[cfg(windows)]
-        for suffix in ["exe", "cmd"] {
+        for suffix in suffixes {
             let candidate = dir.join(format!("{path}.{suffix}"));
             if candidate.is_file() {
                 return candidate;
@@ -1490,6 +1505,52 @@ pub(crate) async fn spawn_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_probe_resolution_prefers_runnable_shims_over_extensionless_script() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let npm = root.path().join("npm");
+        std::fs::create_dir(&npm).unwrap();
+        std::fs::write(npm.join("codex"), "#!/bin/sh\n").unwrap();
+        std::fs::write(npm.join("codex.cmd"), "@echo off\r\n").unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.cmd")
+        );
+
+        std::fs::write(npm.join("codex.exe"), []).unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.exe")
+        );
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex.cmd", [npm.clone()], &["exe", "cmd"]),
+            npm.join("codex.cmd")
+        );
+
+        std::fs::remove_file(npm.join("codex.exe")).unwrap();
+        std::fs::remove_file(npm.join("codex.cmd")).unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &["exe", "cmd"]),
+            std::path::PathBuf::from("codex")
+        );
+
+        let later = root.path().join("later");
+        std::fs::create_dir(&later).unwrap();
+        std::fs::write(later.join("codex.cmd"), "@echo off\r\n").unwrap();
+        assert_eq!(
+            resolve_probe_executable_from_dirs(
+                "codex",
+                [npm.clone(), later.clone()],
+                &["exe", "cmd"]
+            ),
+            later.join("codex.cmd")
+        );
+        assert_eq!(
+            resolve_probe_executable_from_dirs("codex", [npm.clone()], &[]),
+            npm.join("codex")
+        );
+    }
 
     #[test]
     fn screen_help_flag_matching_requires_option_boundaries() {

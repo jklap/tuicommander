@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
 import * as platform from "../../platform";
+import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { getForRepo as getFocusForRepo, recordTerminalRepo } from "../../stores/focusRegistry";
@@ -31,6 +32,13 @@ function resetStores() {
 	mdTabsStore.clearAll();
 }
 
+function defaultInvoke(cmd: string): Promise<unknown> {
+	if (cmd === "load_agents_config") return Promise.resolve({ agents: {} });
+	if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
+	if (cmd === "check_worktree_dirty") return Promise.resolve(false);
+	return Promise.resolve(undefined);
+}
+
 /** Build the id-keyed workspace map the backend now returns from a plain
  *  branch -> path object. Under the identity migration a git worktree's
  *  workspace id IS its branch, so the key is reused as the id and the branch
@@ -45,6 +53,7 @@ describe("buildAgentSeed", () => {
 	let isWindowsSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
+		mockInvoke.mockImplementation(defaultInvoke);
 		// Installed fresh per test and fully restored in afterEach so the mock
 		// cannot leak into later describes (e.g. handleConflictAssist's POSIX
 		// quoting assertions) — a plain mockReset() left the spy installed.
@@ -156,11 +165,7 @@ describe("useGitOperations", () => {
 		// The post-merge cleanup dialog asks two dirtiness questions before it opens.
 		// Both fail SAFE (an unanswered question reads as dirty), so a bare
 		// `resolves undefined` mock would make every ask-mode test look dirty.
-		mockInvoke.mockImplementation((cmd: string) => {
-			if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
-			if (cmd === "check_worktree_dirty") return Promise.resolve(false);
-			return Promise.resolve(undefined);
-		});
+		mockInvoke.mockImplementation(defaultInvoke);
 		mockRepo.switchBranch.mockResolvedValue({
 			success: true,
 			stashed: false,
@@ -1360,7 +1365,7 @@ describe("useGitOperations", () => {
 			prompt: string;
 		}) {
 			mockInvoke.mockImplementation((cmd: string) =>
-				cmd === "start_conflict_assist" ? Promise.resolve(result) : Promise.resolve(undefined),
+				cmd === "start_conflict_assist" ? Promise.resolve(result) : defaultInvoke(cmd),
 			);
 		}
 
@@ -2021,6 +2026,23 @@ describe("useGitOperations", () => {
 			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, "confirmed-state");
 		});
 
+		it("confirms a missing registered checkout without a fabricated fingerprint", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, undefined, true);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
 		it("closes branch terminals before removing", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -2045,6 +2067,26 @@ describe("useGitOperations", () => {
 
 	describe("handleRemoveWorkspace (locked worktree)", () => {
 		const LOCKED_ERROR = "worktree_locked:fatal: cannot remove a locked working tree, lock reason: claude agent";
+
+		it("asks separately before overriding a missing checkout lock", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: null,
+				missingCheckout: true,
+				commitStatus: "in_sync",
+				removalSafety: "requires_force",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR)).mockResolvedValueOnce(undefined);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith(
+				"/repo", "feature", true, true, true, undefined, true,
+			);
+		});
 
 		it("shows confirmation dialog when worktree is locked by agent", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
@@ -3250,7 +3292,6 @@ describe("useGitOperations", () => {
 
 			mockPty.write.mockRejectedValue(new Error("write failed"));
 
-			const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 			await gitOps.executeRunCommand("failing-cmd");
 
 			const ids = terminalsStore.getIds();
@@ -3258,8 +3299,14 @@ describe("useGitOperations", () => {
 
 			await vi.advanceTimersByTimeAsync(500);
 
-			expect(errSpy).toHaveBeenCalledWith("[terminal]", "Failed to send run command", expect.any(Error));
-			errSpy.mockRestore();
+			expect(appLogger.getEntries()).toContainEqual(
+				expect.objectContaining({
+					level: "error",
+					source: "terminal",
+					message: "Failed to send run command",
+					data: expect.objectContaining({ message: "write failed" }),
+				}),
+			);
 		});
 	});
 

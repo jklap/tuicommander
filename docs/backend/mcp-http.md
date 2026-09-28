@@ -982,8 +982,11 @@ agents, and older queued commands reject before the first byte. A peer that
 arrives after the claim queues behind it; a peer that wins first makes `submit`
 reject. Slash commands, including `/clear`, follow the same receipt contract.
 
-`session action=input` remains the raw compatibility surface. Its `ok:true`
-proves PTY write only; it may prefill a composer or send an interactive key and
+`session action=input` remains the write-only compatibility surface. For an
+identified agent, text with `special_key=enter` holds one PTY writer lock and
+separates the text and CR with the agent Enter gap; Codex/OpenCode also use
+the managed injection framing. Shell sessions and other keys retain raw pair
+writes. Its `ok:true` proves PTY write only; it may prefill a composer or send an interactive key and
 never returns a submission receipt. Never split command text and Enter across
 two calls.
 
@@ -1240,7 +1243,7 @@ For `agent action=spawn`, `prompt` is always delivered. The per-agent
 `prevent_alt_screen` setting controls the screen flag on every launch path,
 including MCP spawn; there is no per-spawn screen override. MCP spawn rejects
 the removed `allow_alt_screen` and `allowAltScreen` parameters.
-`skip_trust_dialog` defaults to true for Claude and direct Codex MCP children. It is a per-agent setting, not an MCP parameter. Direct Codex receives `-c projects."<canonical cwd>".trust_level="trusted"` for this launch; Claude's managed PTY answers only its exact startup trust question while **No, exit** remains selected. User-opened terminals and saved CLI trust files are unaffected.
+`skip_trust_dialog` defaults to true for Claude and Codex MCP children. It is a per-agent setting, not an MCP parameter. Codex receives `-c projects."<canonical cwd>".trust_level="trusted"` for this launch, including when a custom launcher forwards its arguments; Claude's managed PTY answers only its exact startup trust question while **No, exit** remains selected. User-opened terminals and saved CLI trust files are unaffected.
 
 Caller-supplied `args` that contain `{prompt}` remain authoritative and receive direct substitution.
 Flags-only `args` keep their order; normal CLIs receive the prompt as the final

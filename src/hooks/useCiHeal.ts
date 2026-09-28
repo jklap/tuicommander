@@ -209,6 +209,8 @@ export function useCiHeal(): void {
 				prompt.trimEnd(),
 				terminal.agentType,
 				shellFamily,
+				true,
+				terminal.sessionId,
 			);
 
 			const delivered = repositoriesStore.state.repositories[repoPath]?.workspaces[workspaceId]?.ciAutoHeal;

@@ -25,6 +25,10 @@ export const AGENT_ENTER_GAP_MS = 50;
  *  Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs */
 export const CODEX_ENTER_GAP_MS = 200;
 
+// Keep in step with Rust's injection_enter_gap: an unrecognized type must use
+// the Codex-safe default until its input semantics are known.
+const SHORT_ENTER_GAP_AGENTS = new Set(["claude", "gemini", "opencode", "aider", "amp", "cursor", "goose", "grok", "droid", "pi"]);
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Fetch (and cache) the shell family for a PTY session. Returns "unknown"
@@ -79,6 +83,7 @@ export function clearShellFamilyCache(sessionId: string): void {
  *                      Used by reviewable Smart Prompts and by suggestion chips
  *                      carrying shell metacharacters (spoofable via OSC 7770
  *                      from untrusted output). Default true.
+ *  @param sessionId    PTY to probe when the foreground agent type is unknown.
  */
 export async function sendCommand(
 	writeFn: (data: string) => Promise<void>,
@@ -86,11 +91,23 @@ export async function sendCommand(
 	agentType?: string | null,
 	shellFamily?: ShellFamily,
 	submit = true,
+	sessionId?: string,
 ): Promise<void> {
-	const skipPrefix = !agentType && isWindowsNative(shellFamily);
+	let unknownForeground = false;
+	let foregroundProbeFailed = false;
+	if (!agentType && sessionId) {
+		try {
+			unknownForeground = Boolean(await rpc<string | null>("has_foreground_process", { sessionId }));
+		} catch (err) {
+			appLogger.warn("terminal", "Failed to identify foreground process; keeping a safe Enter gap", err);
+			foregroundProbeFailed = true;
+		}
+	}
+	const agentInput = Boolean(agentType) || unknownForeground;
+	const skipPrefix = !agentInput && isWindowsNative(shellFamily);
 	const prefix = skipPrefix ? "" : "\x15";
 	const payload = text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text;
-	if (agentType) {
+	if (agentInput) {
 		// Ctrl-U must reach an agent in its own read. Claude Code treats a long
 		// input chunk as a paste: a Ctrl-U inside it is stripped as an invisible
 		// character, and Claude then refuses the Enter that follows ("review and
@@ -104,7 +121,8 @@ export async function sendCommand(
 	if (!submit) return;
 	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents;
 	// Codex also treats Enter as a newline for 120ms after a rapid paste burst.
-	if (agentType) await delay(agentType === "codex" ? CODEX_ENTER_GAP_MS : AGENT_ENTER_GAP_MS);
+	if (agentInput || foregroundProbeFailed)
+		await delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : CODEX_ENTER_GAP_MS);
 	await writeFn("\r");
 }
 

@@ -25,6 +25,7 @@ pnpm tauri dev
 
 Starts the Vite dev server and Tauri app. Frontend files use Vite HMR; Rust changes require restarting the development process.
 Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
+The watch allowlist and Tauri version are resolved from the directory containing `vite.config.ts`, so starting Vite from another working directory still uses this checkout's inputs.
 
 ### Browser Mode
 
@@ -55,6 +56,14 @@ Produces platform-specific installers:
 > ```
 
 ## Testing
+
+Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. If the
+checkout's test path exceeds the Unix socket limit, the helper uses a short
+checkout-specific directory under `~/Gits/.tmp/tuic-tests/socket-*`. The
+`scripts/with-test-tmp.sh` wrapper removes abandoned socket directories and
+test-run directories there (and in the checkout's `.tmp/tuic-tests`) after they
+have been unused for more than seven days. Run standalone Rust tests through
+that wrapper.
 
 ### Live peer-mail wake canary
 
@@ -91,6 +100,17 @@ pnpm test:coverage     # Coverage report
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
 **Coverage:** ~80%+
+
+### Rust tests in linked worktrees
+
+Run standalone Rust tests through `scripts/with-test-tmp.sh`. In a linked
+worktree, the wrapper clears an inherited `CARGO_TARGET_DIR`, so Cargo selects
+that checkout's artifacts instead of a target supplied by the parent
+TUICommander process. The worktrees' `tuic-terminal` builds have the same Cargo
+fingerprint key, while [Cargo checks path sources by file mtime](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/fingerprint/index.html);
+sharing one target can therefore make an older checkout look fresh against an
+artifact from another checkout. The wrapper also keeps test scratch files under
+`~/Gits`.
 
 ### TypeScript mutation testing
 

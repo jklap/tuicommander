@@ -309,7 +309,8 @@ describe("transport", () => {
 			// Every control the rejected design added — status, pause, resume,
 			// clear, update, read, export — is gone from both transports.
 			for (const command of ["progress_list", "progress_delete"]) {
-				const input = command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
+				const input =
+					command === "progress_list" ? { blockedOnly: false, ptyId: "pty-a", limit: 8, cursor: 42 } : { ids: [1] };
 				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
 					method: "POST",
 					path: `/progress/${command.slice(9)}?path=%2Frepo%20a`,
@@ -1235,6 +1236,18 @@ describe("transport", () => {
 			);
 		});
 
+		it("forwards missing-checkout confirmation without a fingerprint", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "missing",
+				force: true,
+				confirmMissingCheckout: true,
+			});
+			expect(result.path).toBe(
+				"/worktrees/missing?repoPath=%2Fr&deleteBranch=false&force=true&confirmMissingCheckout=true",
+			);
+		});
+
 		it("keeps the branch by default when force only discards checkout files", () => {
 			const result = mapCommandToHttp("remove_worktree", {
 				repoPath: "/r",
@@ -1856,21 +1869,61 @@ describe("transport", () => {
 			expect(detectClaude.transform?.({ path: "/usr/local/bin/claude" })).toBe("/usr/local/bin/claude");
 
 			const spawn = mapCommandToHttp("spawn_agent", {
-				pty_config: { rows: 30, cols: 100, cwd: "/repo", env: { PROFILE: "work" } },
-				agent_config: { prompt: "fix it", agent_type: "codex", model: "gpt-5" },
+				pty_config: {
+					rows: 30,
+					cols: 100,
+					shell: null,
+					cwd: "/repo",
+					tuic_session: null,
+					env: { PROFILE: "work" },
+					agent_type: "codex",
+					alias: null,
+				},
+				agent_config: {
+					prompt: "fix it",
+					cwd: "/agent",
+					agent_type: "codex",
+					model: "gpt-5",
+					print_mode: false,
+					output_format: null,
+					binary_path: null,
+					args: null,
+				},
 			});
 			expect(spawn.method).toBe("POST");
 			expect(spawn.path).toBe("/sessions/agent");
-			expect(spawn.body).toEqual({
-				rows: 30,
-				cols: 100,
-				cwd: "/repo",
-				env: { PROFILE: "work" },
-				prompt: "fix it",
-				agent_type: "codex",
-				model: "gpt-5",
-			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual(
+				JSON.parse(readRepoFile("src-tauri/tests/fixtures/spawn_agent_http_body.json")),
+			);
 			expect(spawn.transform?.({ session_id: "s1" })).toBe("s1");
+		});
+
+		it("uses PTY cwd when agent cwd is null", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: { rows: 24, cols: 80, cwd: "/repo", shell: null, tuic_session: null, alias: null },
+				agent_config: { prompt: "inspect", cwd: null, print_mode: false },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({
+				rows: 24,
+				cols: 80,
+				cwd: "/repo",
+				prompt: "inspect",
+				print_mode: false,
+			});
+		});
+
+		it("omits desktop-only PTY identity fields when populated", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: {
+					rows: 24,
+					cols: 80,
+					shell: "/bin/zsh",
+					tuic_session: "persistent-session",
+					alias: "tu-7",
+				},
+				agent_config: { prompt: "inspect" },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({ rows: 24, cols: 80, prompt: "inspect" });
 		});
 	});
 
@@ -2272,6 +2325,64 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		it("sends the selected Claude profile root when verifying a browser resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("true"));
+
+			await rpc("verify_agent_session", {
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+
+			const [url, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(url).toContain("/agents/verify-session");
+			expect(JSON.parse(request.body)).toEqual({
+				agentType: "claude",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: { CLAUDE_CONFIG_DIR: "/profiles/work" },
+			});
+		});
+
+		it("sends a live agent PID and Codex home when verifying through HTTP", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "codex",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({
+				agentPid: 4321,
+				envOverrides: { CODEX_HOME: "/profiles/codex" },
+			});
+		});
+
+		it("preserves an empty override map for a default-profile resume", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("false"));
+
+			await rpc("verify_agent_session", {
+				agentType: "gemini",
+				sessionId: "af467730-5e79-49d9-8a17-ebd94c99f262",
+				cwd: "/work/project",
+				agentPid: null,
+				envOverrides: {},
+			});
+
+			const [, request] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+			expect(JSON.parse(request.body)).toMatchObject({ agentPid: null, envOverrides: {} });
 		});
 
 		// The defect this story fixes: rpcImpl used to fetch a remote baseUrl with

@@ -36,6 +36,15 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 
 All unqualified files in this table are in `tuic-dictation/src/`. The domain crate has no Tauri or Tokio dependency. `DictationConfig` is defined in the root `config.rs` and re-exported at its previous command path. The root keeps the desktop feature gate, commands, downloads, PTY ports and event emission.
 
+## Whisper build cache
+
+`src-tauri/.cargo/config.toml` sets `GGML_CCACHE=OFF` for Cargo builds. The
+`whisper-rs-sys` build script passes this value to whisper.cpp's CMake build, so
+ggml does not add its own sccache or ccache compiler wrapper. That wrapper can
+fail when it invokes an mbx compiler shim. mbx still caches the Cargo build,
+including the resulting `whisper-rs-sys` artifacts. Run
+`cargo check -p tuic-dictation` from `src-tauri/` to verify the native build.
+
 ## Tauri Commands
 
 ### Recording
