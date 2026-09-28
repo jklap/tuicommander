@@ -1726,7 +1726,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return {
 				method: "POST",
 				path: "/sessions/agent",
-				body: { ...ptyConfig, ...agentConfig },
+				body: {
+					rows: ptyConfig.rows,
+					cols: ptyConfig.cols,
+					cwd: agentConfig.cwd ?? ptyConfig.cwd,
+					env: ptyConfig.env,
+					prompt: agentConfig.prompt,
+					model: agentConfig.model,
+					print_mode: agentConfig.print_mode,
+					output_format: agentConfig.output_format,
+					agent_type: agentConfig.agent_type,
+					binary_path: agentConfig.binary_path,
+					args: agentConfig.args,
+				},
 				transform: (data) => {
 					if (isRecord(data) && typeof data.session_id === "string") return data.session_id;
 					throw new Error("spawn_agent HTTP response missing session_id");
