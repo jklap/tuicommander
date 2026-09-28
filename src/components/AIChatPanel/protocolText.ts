@@ -14,14 +14,18 @@ const ACK = /^TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+connected\.[\t ]*/;
 const BULLET = "(?:[●⏺•◦][\\t ]+)?";
 const INTENT = new RegExp(`^[\\t ]*${BULLET}intent:[\\t ]+(.+)$`);
 const SUGGEST = new RegExp(`^[\\t ]*${BULLET}suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$`);
+const TRAILING_SUGGEST = new RegExp("[\\t ]+suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$");
 const TITLE = /^(.*?)\(([^)]+)\)\s*$/;
 
 export function projectChatProtocolText(text: string): ChatProtocolText {
 	const body: string[] = [];
+	const lines = text.split(/\r?\n/);
+	let lastContentIndex = lines.length - 1;
+	while (lastContentIndex >= 0 && !lines[lastContentIndex].trim()) lastContentIndex -= 1;
 	let intent: ChatProtocolText["intent"] = null;
 	let suggestions: string[] = [];
 	let fence: "`" | "~" | null = null;
-	for (const [index, original] of text.split(/\r?\n/).entries()) {
+	for (const [index, original] of lines.entries()) {
 		const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(original);
 		if (fenceMatch) {
 			const marker = fenceMatch[1][0] as "`" | "~";
@@ -49,7 +53,8 @@ export function projectChatProtocolText(text: string): ChatProtocolText {
 				continue;
 			}
 		}
-		const suggestMatch = SUGGEST.exec(line);
+		const standaloneSuggest = SUGGEST.exec(line);
+		const suggestMatch = standaloneSuggest ?? (index === lastContentIndex ? TRAILING_SUGGEST.exec(line) : null);
 		if (suggestMatch) {
 			const items = suggestMatch[1]
 				.split("|")
@@ -57,6 +62,7 @@ export function projectChatProtocolText(text: string): ChatProtocolText {
 				.filter(Boolean);
 			if (items.length >= 2 && items.length <= 4) {
 				suggestions = items;
+				if (!standaloneSuggest) body.push(line.slice(0, suggestMatch.index).trimEnd());
 				continue;
 			}
 		}
