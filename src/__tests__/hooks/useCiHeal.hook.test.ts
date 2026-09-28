@@ -53,7 +53,9 @@ vi.mock("../../stores/github", () => ({
 	},
 }));
 vi.mock("../../stores/terminals", () => ({
-	terminalsStore: { get: (id: string) => h.terminals.get(id) },
+	// isWorking mirrors debouncedBusy||declaredBackgroundWork on the seeded fixture
+	// terminal (shellState:"idle", no declaredBackgroundWork) — always false here.
+	terminalsStore: { get: (id: string) => h.terminals.get(id), isWorking: () => false },
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: h.toastAdd } }));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));

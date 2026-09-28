@@ -98,6 +98,7 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		get: mockTerminalsGet,
 		isBusy: vi.fn(() => false),
+		isWorking: vi.fn(() => false),
 		onRemove: vi.fn(() => () => {}),
 		state: { activeId: null as string | null },
 	},

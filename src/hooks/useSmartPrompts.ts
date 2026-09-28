@@ -223,7 +223,7 @@ export function useSmartPrompts() {
 		// Idle only matters when this action will submit. Review-only insertions do
 		// not steer the active turn, regardless of their preferred UI target.
 		if (shouldSubmitInjectPrompt(prompt, composeIsOpen) && prompt.requiresIdle !== false) {
-			const busy = terminalsStore.isBusy(active.id);
+			const busy = terminalsStore.isWorking(active.id);
 			if (busy) return { ok: false, reason: "Agent is busy" };
 		}
 		return { ok: true };

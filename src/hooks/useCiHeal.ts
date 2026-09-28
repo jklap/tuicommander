@@ -289,12 +289,15 @@ function findAgentTerminal(repoPath: string, workspaceId: string): string | null
 	return null;
 }
 
-/** Wait for a terminal's agent to be idle or awaiting input, with timeout */
-function waitForAgentIdle(terminalId: string, timeoutMs: number): Promise<void> {
+/** Wait for a terminal's agent to be idle or awaiting input, with timeout.
+ *  Exported for direct unit testing — the only production call site is `triggerHeal`. */
+export function waitForAgentIdle(terminalId: string, timeoutMs: number): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const terminal = terminalsStore.get(terminalId);
-		// If already idle or awaiting, resolve immediately
-		if (terminal?.shellState === "idle" || terminal?.awaitingInput) {
+		// If already idle or awaiting, resolve immediately. A shell that's idle but still
+		// has declared background work (terminalsStore.isWorking) is NOT actually idle —
+		// submitting into it here would collide with the agent's still-in-flight turn.
+		if ((terminal?.shellState === "idle" && !terminalsStore.isWorking(terminalId)) || terminal?.awaitingInput) {
 			resolve();
 			return;
 		}
@@ -307,7 +310,7 @@ function waitForAgentIdle(terminalId: string, timeoutMs: number): Promise<void> 
 				reject(new Error("Terminal no longer exists"));
 				return;
 			}
-			if (t.shellState === "idle" || t.awaitingInput) {
+			if ((t.shellState === "idle" && !terminalsStore.isWorking(terminalId)) || t.awaitingInput) {
 				clearInterval(interval);
 				resolve();
 				return;

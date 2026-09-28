@@ -30,6 +30,7 @@ const {
 	},
 	mockTerminals: {
 		isAnyBusy: vi.fn(() => true),
+		isAnyWorking: vi.fn(() => true),
 		onShellExit: vi.fn(),
 	},
 	mockToasts: { add: vi.fn() },
@@ -82,6 +83,7 @@ describe("application runtime boundaries", () => {
 		});
 		mockSettings.isAiChatEnabled.mockReturnValue(true);
 		mockTerminals.isAnyBusy.mockReturnValue(true);
+		mockTerminals.isAnyWorking.mockReturnValue(true);
 		mockInvoke.mockClear();
 		mockToasts.add.mockClear();
 		mockConversation.startAgent.mockClear();
