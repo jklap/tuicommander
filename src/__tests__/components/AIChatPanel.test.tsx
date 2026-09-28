@@ -138,8 +138,8 @@ const MODEL_OPTION: AcpSessionConfigOption = {
 	type: "select",
 	currentValue: "opus",
 	options: [
-		{ id: "opus", name: "Opus" },
-		{ id: "sonnet", name: "Sonnet" },
+		{ value: "opus", name: "Opus" },
+		{ value: "sonnet", name: "Sonnet" },
 	],
 };
 
@@ -1753,7 +1753,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 		description: "How ego handles tools",
 		type: "select",
 		currentValue: "ask",
-		options: [{ id: "ask", name: "Ask" }, { id: "auto", name: "Automatic" }],
+		options: [{ value: "ask", name: "Ask" }, { value: "auto", name: "Automatic" }],
 	};
 
 	// Catches: an ACP option is hidden or shown without its published name and choice.
@@ -1772,6 +1772,26 @@ describe("AIChatPanel: the session's own knobs", () => {
 		expect(dialog.textContent).toContain("How ego handles tools");
 		expect((dialog.querySelector('select[aria-label="Model"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Opus");
 		expect((dialog.querySelector('select[aria-label="Mode"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Ask");
+	});
+
+	it("renders ACP grouped choices with their group label and selected value", async () => {
+		const grouped: AcpSessionConfigOption = {
+			id: "mode",
+			name: "Mode",
+			type: "select",
+			currentValue: "auto",
+			options: [{ group: "behavior", name: "Behavior", options: [{ value: "ask", name: "Ask" }, { value: "auto", name: "Automatic" }] }],
+		};
+		const { container } = renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [grouped] })] }));
+		await settle();
+		expect(container.querySelector(".controlBar")?.textContent).toContain("Mode: Automatic");
+		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
+		const picker = container.querySelector('select[aria-label="Mode"]') as HTMLSelectElement;
+		expect(picker.querySelector('optgroup')?.label).toBe("Behavior");
+		expect(picker.selectedOptions[0].value).toBe("auto");
+		expect(picker.selectedOptions[0].textContent).toBe("Automatic");
 	});
 
 	// Catches: a new tab keeps a blank select after its options arrive.
