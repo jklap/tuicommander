@@ -71,6 +71,11 @@ in total. Text paste works as usual.
   advertised that extension, so a build without it shows no button rather than a
   button that fails. Resume remains available when a paused turn ends at its
   boundary; select it to continue the conversation.
+- **Queue** sends another message while a turn runs. TUICommander keeps it in
+  order and sends it only after the running turn ends. The queued list appears
+  in every connected view; either view can remove an item before ego receives
+  it. Stop affects the running turn for every view. The conversation shows a
+  queued message as sent only when it actually reaches ego.
 - **Model, reasoning effort and mode** come from the options the session
   publishes. There is no list of models in TUICommander: the session is asked,
   and the answer is what the control bar draws. This changes one conversation.

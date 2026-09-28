@@ -72,6 +72,7 @@ const client = vi.hoisted(() => ({
 	listSessions: vi.fn(),
 	prompt: vi.fn(),
 	cancel: vi.fn(),
+	cancelQueued: vi.fn(),
 	answerPermission: vi.fn(),
 	cancelPermission: vi.fn(),
 	answerElicitation: vi.fn(),
@@ -133,6 +134,7 @@ function attachment(overrides: Partial<AcpAttachmentSnapshot> = {}): AcpAttachme
 		configOptions: [MODEL_OPTION],
 		usage: null,
 		activeTurn: null,
+		queuedPrompts: [],
 		pendingPermissionIds: [],
 		pendingElicitationIds: [],
 		...overrides,
@@ -236,6 +238,7 @@ beforeEach(() => {
 		"disconnect",
 		"loadSession",
 		"cancel",
+		"cancelQueued",
 		"answerPermission",
 		"cancelPermission",
 		"answerElicitation",
@@ -292,6 +295,30 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("shows the shared queue, can remove the phone prompt, and accepts a desktop prompt while busy", async () => {
+		const { container } = renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({
+			state: "prompting",
+			activeTurn: { turnId: "running", state: "running", stopReason: null, usage: null },
+			queuedPrompts: [{ turnId: "phone-queued", summary: "from phone" }],
+		})] }));
+		await settle();
+		expect(container.textContent).toContain("from phone");
+		const remove = container.querySelector('button[aria-label="Cancel queued prompt from phone"]') as HTMLButtonElement;
+		expect(remove).not.toBeNull();
+		remove.click();
+		await settle();
+		expect(client.cancelQueued).toHaveBeenCalledWith(CONNECTION, SESSION, "phone-queued");
+
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "desktop next";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		await settle();
+		[...container.querySelectorAll("button")].find((button) => button.textContent === "Queue")?.click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "desktop next");
+	});
 	// Catches: an image paste is ignored even though ego advertises image prompts.
 	it("stages a pasted PNG and sends it with the next turn", async () => {
 		supportsImages = true;

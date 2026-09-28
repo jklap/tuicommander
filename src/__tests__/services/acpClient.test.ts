@@ -74,7 +74,7 @@ class FakeStreams {
 	}
 }
 
-function frame(sequence: number): AcpStreamFrame {
+function frame(sequence: number): Extract<AcpStreamFrame, { kind: "event" }> {
 	return {
 		kind: "event",
 		connectionId: CONNECTION,
@@ -229,6 +229,16 @@ describe("acpClient: a stream that stops", () => {
 });
 
 describe("acpClient: talking to a session", () => {
+	it("shows a queued prompt only in the queue, then in both transcripts when the agent receives it", async () => {
+		await client.connect(ROOT);
+		mockInvoke.mockImplementation((command: string) =>
+			command === "acp_session_prompt" ? Promise.resolve("phone-queued") : answering()(command),
+		);
+		await client.prompt(CONNECTION, SESSION, "from phone");
+		expect(acpTranscript.entries(SESSION)).toEqual([]);
+		streams.deliver({ ...frame(2), turnId: "phone-queued", event: { kind: "promptSent", text: "from phone" } });
+		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "from phone" })]);
+	});
 	// Catches: a caller bypasses the composer and sends an image to an incapable agent.
 	it("refuses image blocks at the shared client boundary without image capability", async () => {
 		await client.connect(ROOT);
@@ -271,6 +281,7 @@ describe("acpClient: talking to a session", () => {
 			sessionId: SESSION,
 			prompt: [{ type: "image", mimeType: "image/png", data: "iVBORw==" }],
 		});
+		streams.deliver({ ...frame(2), event: { kind: "promptSent", text: "Image" } });
 		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "Image" })]);
 	});
 
@@ -285,11 +296,8 @@ describe("acpClient: talking to a session", () => {
 		});
 	});
 
-	// The message is put on screen before the prompt is sent, which is the point
-	// of it. A prompt the backend refuses therefore has to take it back, or the
-	// conversation holds a turn ego never received — indistinguishable, to the
-	// person reading it, from one it received and ignored.
-	it("takes back the optimistic message when the prompt is refused", async () => {
+	// A refused request never emits promptSent, so no view can display it as sent.
+	it("does not show a message when the prompt is refused", async () => {
 		await client.connect(ROOT);
 		mockInvoke.mockImplementation((command: string) =>
 			command === "acp_session_prompt"
@@ -302,10 +310,11 @@ describe("acpClient: talking to a session", () => {
 		expect(acpTranscript.entries(SESSION)).toEqual([]);
 	});
 
-	it("leaves the message in place when the prompt is accepted", async () => {
+	it("shows the message when the server reports it reached the agent", async () => {
 		await client.connect(ROOT);
 
 		await client.prompt(CONNECTION, SESSION, "hello");
+		streams.deliver({ ...frame(2), event: { kind: "promptSent", text: "hello" } });
 
 		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "hello" })]);
 	});

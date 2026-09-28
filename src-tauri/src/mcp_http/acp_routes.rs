@@ -35,7 +35,8 @@ use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
     AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, EgoCompactRequest, EgoHoldRequest,
+    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoCompactRequest,
+    EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -82,6 +83,10 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
         .route(
             "/connections/{connection_id}/sessions/{session_id}/cancel",
             post(session_cancel),
+        )
+        .route(
+            "/connections/{connection_id}/sessions/{session_id}/queue/{turn_id}",
+            delete(queued_prompt_cancel),
         )
         .route(
             "/connections/{connection_id}/sessions/{session_id}/config",
@@ -419,6 +424,18 @@ async fn session_cancel(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     answer(state.acp.cancel(connection_id, session_id).await)
+}
+
+async fn queued_prompt_cancel(
+    Path((connection_id, session_id, turn_id)): Path<(AcpConnectionId, v1::SessionId, AcpTurnId)>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    answer(
+        state
+            .acp
+            .cancel_queued(connection_id, session_id, turn_id)
+            .await,
+    )
 }
 
 async fn session_set_config_option(

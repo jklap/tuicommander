@@ -2384,6 +2384,7 @@ DELETE /acp/connections/{cid}/sessions/{session_id}                             
 POST   /acp/connections/{cid}/sessions/{session_id}/close                                  -> null
 POST   /acp/connections/{cid}/sessions/{session_id}/prompt       {prompt:[ContentBlock]}   -> AcpTurnId
 POST   /acp/connections/{cid}/sessions/{session_id}/cancel                                 -> null
+DELETE /acp/connections/{cid}/sessions/{session_id}/queue/{turn_id}                       -> null
 POST   /acp/connections/{cid}/sessions/{session_id}/config       {configId, value}         -> [SessionConfigOption]
 POST   /acp/connections/{cid}/sessions/{session_id}/pause        {requestId}               -> EgoHoldResponse
 POST   /acp/connections/{cid}/sessions/{session_id}/resume-turn  {requestId}               -> EgoHoldResponse
@@ -2398,6 +2399,15 @@ POST   /acp/one-shot                                            {root, prompt}  
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+`prompt` returns an ID immediately. When the session already has a turn, the
+host queues the prompt and sends it only after the current ACP response; it
+never puts two prompts in flight on that session. Each attachment snapshot has
+`queuedPrompts: [{turnId, summary}]`, and `promptQueueChanged` replaces that
+list on both streams. A `promptSent` event records the user-visible text when
+ego actually receives the prompt. Image data stays in the actor until dispatch,
+not in queue snapshots or journal events. Either transport can remove a queued
+ID with the DELETE route; `cancel` stops the active turn for every view.
 
 ### One-shot (`POST /acp/one-shot`)
 

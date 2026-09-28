@@ -558,6 +558,20 @@ impl AcpClientManager {
             .await
     }
 
+    pub async fn cancel_queued(
+        &self,
+        connection_id: AcpConnectionId,
+        session_id: v1::SessionId,
+        turn_id: AcpTurnId,
+    ) -> Result<(), AcpClientError> {
+        self.dispatch(connection_id, |reply| Command::CancelQueued {
+            session_id,
+            turn_id,
+            reply,
+        })
+        .await
+    }
+
     /// Set one config option and take the full set back.
     ///
     /// The whole set is the answer because it is what the agent sent: setting
@@ -1080,7 +1094,7 @@ async fn supervise_connection(
 
                 match step {
                     Step::Command(command) => actor.handle(command, &connection, &in_flight),
-                    Step::Accept(accepted) => actor.accept(accepted),
+                    Step::Accept(accepted) => actor.accept(accepted, &connection, &in_flight),
                 }
                 // Checked here rather than in the select, because the caller
                 // whose request uncovered the contradiction has just been

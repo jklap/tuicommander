@@ -282,6 +282,7 @@
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
 }
@@ -359,7 +360,8 @@
 }
 
 .sendBtn {
-  width: 32px;
+  min-width: 44px;
+  padding: 0 8px;
   height: 32px;
   display: flex;
   align-items: center;
@@ -383,7 +385,8 @@
 }
 
 .stopBtn {
-  width: 32px;
+  min-width: 44px;
+  padding: 0 8px;
   height: 32px;
   display: flex;
   align-items: center;
@@ -741,6 +744,55 @@
   border-radius: 8px;
   padding: 0 4px;
 }
+
+.queueList {
+  display: flex;
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.queueText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+}
+
+.queueCancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  color: var(--fg-secondary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.queueCancel:hover { color: var(--error); }
 
 /* ── History panel ──────────────────────────────────── */
 .historyPanel {

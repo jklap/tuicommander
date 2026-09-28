@@ -272,25 +272,15 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 				throw new Error("This agent does not support images.");
 			}
 			const prompt: AcpContentBlock[] = [...(text.trim() ? [{ type: "text" as const, text }] : []), ...images];
-			// Shown before the agent answers. Ego echoes a user message only when
-			// it replays history, so nothing else would put it on screen — and a
-			// prompt the backend refuses would leave a turn that never happened
-			// sitting in the conversation, reading as one the agent ignored.
-			const entryId = acpTranscript.noteUserMessage(sessionId, text.trim() ? text : "Image");
-			try {
-				return await invoke<string>("acp_session_prompt", {
-					connectionId,
-					sessionId,
-					prompt,
-				});
-			} catch (error) {
-				acpTranscript.dropEntry(sessionId, entryId);
-				throw error;
-			}
+			return invoke<string>("acp_session_prompt", { connectionId, sessionId, prompt });
 		},
 
 		async cancel(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
 			await invoke("acp_session_cancel", { connectionId, sessionId });
+		},
+
+		async cancelQueued(connectionId: AcpConnectionId, sessionId: AcpSessionId, turnId: string): Promise<void> {
+			await invoke("acp_queued_prompt_cancel", { connectionId, sessionId, turnId });
 		},
 
 		/** Answer with one of the option ids the agent published, never another. */
