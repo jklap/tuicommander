@@ -2181,6 +2181,8 @@ returns `pending` and warms in the background.
 response rather than deriving it from display data. MCP
 `repo action=worktree_create` returns the same two fields.
 
+`GET /worktrees/lifecycle` provides the removal preview: branch history, dirty and untracked counts, live session names, and warnings. `DELETE /worktrees/:workspaceId` includes the same warnings on success.
+
 Creation announces itself on both transports as `worktree-created`
 (`{ repo_path, workspace_id, branch, worktree_path, kind }`, with `kind` equal
 to `"worktree"`) and removal as
@@ -2224,7 +2226,7 @@ for commits absent from its remote-tracking branches. `commit_status` is
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. The response also includes `untracked_files`, `live_sessions` with names, and `warnings` for removal review. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 

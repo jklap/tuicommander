@@ -120,6 +120,8 @@ The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflict
 
 ### Uncommitted work in the worktree
 
+Before manual removal, the confirmation distinguishes a branch with no commits of its own from one whose commits were merged. It names live terminal sessions and counts uncommitted and untracked files. Confirming still allows removal; review the warnings before proceeding. Automatic PR-close deletion keeps a worktree with live sessions or local changes and logs why it was skipped.
+
 Both **Archive** and **Delete** remove the worktree, so TUICommander asks first whenever the worktree is not known to be clean — whether or not the branch carries commits, and whether the cleanup was started by hand or by **Auto-archive merged**. The confirmation names what happens to the work: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, that counts as "not clean" and the cleanup still stops.
 
 The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).

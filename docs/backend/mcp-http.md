@@ -1071,7 +1071,7 @@ Non-Claude Code MCP clients do not receive this field.
 
 ### MCP Tool: `repo` — Worktree Remove
 
-MCP `repo action=worktree_remove` returns `{ "ok": true }` on full success. It
+MCP `repo action=worktree_remove` returns `{ "ok": true, "warnings": [...] }` on full success. The warnings come from the same removal preview as desktop and HTTP, including branch history, live sessions, and local file counts. It
 runs on the blocking pool and the local MCP bridge allows up to 305 seconds for
 the response, covering linked worktrees with large ignored build artifacts.
 Non-forced removal refuses staged, unstaged, or untracked work. The optional

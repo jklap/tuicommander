@@ -3485,7 +3485,8 @@ async fn handle_worktree(
                     return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'branch' parameter"});
                 }
             };
-            to_json_or_error(crate::worktree::inspect_workspace_lifecycle(
+            to_json_or_error(crate::worktree::inspect_worktree_removal(
+                state,
                 std::path::Path::new(&path),
                 workspace_id,
             ))
@@ -3596,6 +3597,12 @@ async fn handle_worktree(
             }
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
+            let warnings = crate::worktree::inspect_worktree_removal(
+                state,
+                std::path::Path::new(&path),
+                &workspace_id,
+            )
+            .warnings;
             let result = tokio::task::spawn_blocking(move || {
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
                 crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
@@ -3616,10 +3623,12 @@ async fn handle_worktree(
                         workspace_id: workspace_id.clone(),
                         branch: outcome.branch,
                     });
-                    worktree_remove_success_response(
+                    let mut response = worktree_remove_success_response(
                         outcome.branch_delete_warning,
                         &outcome.removal_rule,
-                    )
+                    );
+                    response["warnings"] = serde_json::json!(warnings);
+                    response
                 }
                 Ok(Err(e)) => serde_json::json!({"error": e}),
                 Err(e) => serde_json::json!({

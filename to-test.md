@@ -4157,3 +4157,7 @@ or credential is touched.
 ## MCP initialize storm — Rust restart required (#1148-c25f)
 
 - [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.
+
+## Worktree removal preview — Rust restart and visual review (#1138-ed2e)
+
+- [ ] After restarting an isolated `make dev` build, open removal confirmation for a branch with no own commits and a live agent in its worktree. Confirm the dialog names the agent and uncommitted/untracked counts, then take a screenshot of both the removal and post-merge cleanup dialogs. The current backend cannot hot reload the Rust preview, and this branch has not been rendered in a worktree build.

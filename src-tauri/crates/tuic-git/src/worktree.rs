@@ -855,8 +855,22 @@ fn classify_branch_merge(
 ) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
     let default_tip = rev_at(repo, default_branch)?;
     let merged = is_ancestor(repo, tip, &default_tip)?;
-    // A branch standing on the default tip has not itself merged anything.
-    if merged && tip == default_tip {
+    // An ancestor tip alone cannot tell a branch that produced merged commits
+    // from a branch created at an older default tip and never advanced.
+    let creation_tip = git_cmd(repo)
+        .args([
+            "reflog",
+            "show",
+            "--format=%H",
+            &format!("refs/heads/{branch}"),
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect branch creation: {error}"))?
+        .stdout
+        .lines()
+        .last()
+        .map(str::to_owned);
+    if merged && creation_tip.as_deref() == Some(tip) {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
         Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
@@ -1763,6 +1777,8 @@ pub fn ipc_worktree_response(workspace: &CreatedWorkspace, base_repo: &str) -> s
 pub struct RemoveWorktreeOutcome {
     pub branch_delete_warning: Option<String>,
     pub removal_rule: String,
+    /// App adapters fill this from the same preview shown before confirmation.
+    pub warnings: Vec<String>,
     /// Branch the removed workspace was on, read off the record before removal.
     /// Callers need it for branch-keyed follow-up work (config labels, logs) and
     /// cannot re-resolve it: the id stops resolving the moment the worktree is
@@ -2037,6 +2053,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     Ok(RemoveWorktreeOutcome {
         branch_delete_warning,
         removal_rule: removal_rule.to_string(),
+        warnings: Vec::new(),
         branch: branch_name.to_string(),
     })
 }
@@ -6946,7 +6963,40 @@ branch refs/heads/feat
         let outcome =
             remove_worktree_by_workspace_id(&repo.to_string_lossy(), "trails", true, None, false)
                 .unwrap();
-        assert_eq!(outcome.removal_rule, "ancestry");
+        assert_eq!(outcome.removal_rule, "in_sync");
+    }
+
+    #[test]
+    fn a_branch_with_own_commits_merged_into_main_remains_eligible_for_cleanup() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "completed-feature");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "completed-feature", "--no-edit"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "later.txt", "main advanced\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "completed-feature");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn fast_forward_merge_of_own_commits_is_merged_even_at_the_default_tip() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "fast-forwarded");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "fast-forwarded"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "fast-forwarded");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
     }
 
     #[test]
