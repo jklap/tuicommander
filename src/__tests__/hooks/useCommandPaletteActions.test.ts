@@ -49,7 +49,10 @@ const {
 	mockTerminals: { state: { activeId: "term-1" as string | null }, get: vi.fn(), findTerminalWithSession: vi.fn() },
 }));
 
-vi.mock("../../actions/actionRegistry", () => ({ getActionEntries: mockGetActionEntries }));
+vi.mock("../../actions/actionRegistry", () => ({
+	getActionEntries: mockGetActionEntries,
+	SMART_PROMPTS_CATEGORY: "Smart Prompts",
+}));
 vi.mock("../../utils/revealRepoInSidebar", () => ({ revealRepoInSidebar: mockReveal }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn(), warn: vi.fn() } }));
 vi.mock("../../stores/commandPalette", () => ({ commandPaletteStore: { openWithQuery: vi.fn() } }));

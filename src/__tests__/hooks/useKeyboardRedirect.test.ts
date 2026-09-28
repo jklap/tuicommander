@@ -16,6 +16,7 @@ vi.mock("../../stores/terminals", () => ({
 
 import { createRoot } from "solid-js";
 import { useKeyboardRedirect } from "../../hooks/useKeyboardRedirect";
+import { __resetModalStackForTest, popModal, pushModal } from "../../stores/modalStack";
 import { testInScopeAsync } from "../helpers/store";
 
 /** Dispatch a keydown event on document */
@@ -314,6 +315,70 @@ describe("useKeyboardRedirect", () => {
 				expect(mockWrite).not.toHaveBeenCalled();
 
 				document.body.removeChild(xterm);
+			});
+		});
+	});
+
+	describe("modal/dialog open", () => {
+		afterEach(() => {
+			__resetModalStackForTest();
+		});
+
+		it("does not redirect a printable key while a modal is registered, even with a focused button", async () => {
+			await testInScopeAsync(async () => {
+				useKeyboardRedirect();
+				await flushEffects();
+
+				// Regression: the New Worktree dialog's "Start from" trigger is a
+				// real <button>, not an INPUT_ELEMENTS member, so without a modal
+				// check this key would previously reach the terminal.
+				const button = document.createElement("button");
+				document.body.appendChild(button);
+				button.focus();
+				pushModal(() => {});
+
+				dispatchKeydown("x");
+
+				expect(mockWrite).not.toHaveBeenCalled();
+				expect(mockFocus).not.toHaveBeenCalled();
+
+				document.body.removeChild(button);
+			});
+		});
+
+		it("still redirects the same focused-button case once no modal is open", async () => {
+			await testInScopeAsync(async () => {
+				useKeyboardRedirect();
+				await flushEffects();
+
+				const button = document.createElement("button");
+				document.body.appendChild(button);
+				button.focus();
+
+				dispatchKeydown("x");
+
+				expect(mockWrite).toHaveBeenCalledWith("x");
+
+				document.body.removeChild(button);
+			});
+		});
+
+		it("popModal restores redirect behavior", async () => {
+			await testInScopeAsync(async () => {
+				useKeyboardRedirect();
+				await flushEffects();
+
+				const button = document.createElement("button");
+				document.body.appendChild(button);
+				button.focus();
+				const id = pushModal(() => {});
+				popModal(id);
+
+				dispatchKeydown("z");
+
+				expect(mockWrite).toHaveBeenCalledWith("z");
+
+				document.body.removeChild(button);
 			});
 		});
 	});
