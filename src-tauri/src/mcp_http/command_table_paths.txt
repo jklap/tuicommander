@@ -19,6 +19,7 @@
 /acp/connections/x/sessions/x/load
 /acp/connections/x/sessions/x/pause
 /acp/connections/x/sessions/x/prompt
+/acp/connections/x/sessions/x/queue/x
 /acp/connections/x/sessions/x/resume
 /acp/connections/x/sessions/x/resume-turn
 /acp/one-shot

@@ -2403,12 +2403,15 @@ agent over the Agent Client Protocol (v1). No frontend surface yet.
   on the version ego advertised
 
 ### 26.2 Where it is reachable
-- Desktop: 22 `acp_*` Tauri commands (`docs/api/tauri-commands.md`)
+- Desktop: 23 `acp_*` Tauri commands (`docs/api/tauri-commands.md`)
 - Browser/PWA/remote: an identical route per command under `/acp`
   (`docs/api/http-api.md`), including the same error bodies
 - The turn stream is a dedicated Channel on the desktop and a dedicated
   WebSocket in the browser; `/events` carries only the low-frequency
   `acp-notice` wake signal
+- Prompt submissions share one FIFO per ACP session across desktop and phone;
+  queued entries are visible and removable from either view, and active-turn
+  cancellation is shared. Queue snapshots and events omit image bytes.
 
 ### 26.3 Process authority
 The one binary this may launch is the `ego_executable` setting, read at each

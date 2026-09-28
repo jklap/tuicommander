@@ -426,6 +426,11 @@ re-render cannot send a duplicate. Settlement closes the matching notification.
 
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
+`acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
+on each `promptQueueChanged` event, so desktop and browser views share the
+same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host
+has sent it to ego; a queued prompt cancelled before dispatch never enters
+the transcript.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state — plus the speech
