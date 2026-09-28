@@ -125,6 +125,10 @@ pub(crate) struct RemoteConnectionStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) out_of_date: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) live_sessions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) update_notice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<String>,
@@ -141,6 +145,8 @@ struct Entry {
     protocol_version: Option<u64>,
     build: Option<crate::remote_deploy::assets::BuildIdentity>,
     out_of_date: Option<bool>,
+    live_sessions: Option<usize>,
+    update_notice: Option<String>,
     error: Option<String>,
     tunnel_id: Option<String>,
     /// The task that owns this connection's whole lifecycle: bring it up, keep
@@ -151,6 +157,8 @@ struct Entry {
     supervisor: Option<tokio::task::JoinHandle<()>>,
     /// The task that mirrors this daemon's sessions and events (#791-055e).
     mirror: Option<tokio::task::JoinHandle<()>>,
+    /// Build comparison and optional unattended update belong to this connection.
+    comparison: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Entry {
@@ -177,6 +185,8 @@ impl Entry {
             protocol_version: connected.then_some(self.protocol_version).flatten(),
             build: connected.then(|| self.build.clone()).flatten(),
             out_of_date: connected.then_some(self.out_of_date).flatten(),
+            live_sessions: connected.then_some(self.live_sessions).flatten(),
+            update_notice: connected.then(|| self.update_notice.clone()).flatten(),
             error: self.error.clone(),
             step,
         }
@@ -199,6 +209,8 @@ pub(crate) struct RemoteRuntime {
     /// to have stopped. A supervisor holding a stale generation cleans up after
     /// itself and returns instead.
     generations: DashMap<String, u64>,
+    /// One unattended attempt per selected digest, even after a reconnect.
+    attempted_updates: DashMap<String, String>,
     /// Serialises the two operations that decide whether an entry EXISTS:
     /// [`claim_and_supervise`] inserting one and [`teardown`] removing one.
     ///
@@ -223,6 +235,7 @@ impl Default for RemoteRuntime {
         Self {
             entries: DashMap::new(),
             generations: DashMap::new(),
+            attempted_updates: DashMap::new(),
             lifecycle: std::sync::Mutex::new(()),
             // No client-wide timeout on purpose: the probes set their own, and
             // the mirror's `/events` stream is long-lived by design — a deadline
@@ -398,21 +411,51 @@ fn update<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
     publish(state, &after);
 }
 
+fn update_connected<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
+    let Some(mut entry) = state.remote.entries.get_mut(id) else {
+        return;
+    };
+    if entry.status != Some(RemoteStatus::Connected) {
+        return;
+    }
+    let before = entry.snapshot(id);
+    mutate(&mut entry);
+    let after = entry.snapshot(id);
+    drop(entry);
+    if before != after {
+        publish(state, &after);
+    }
+}
+
 fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
+    let Some(mut entry) = state.remote.entries.get_mut(id) else {
+        return;
+    };
     let state = state.clone();
     let id = id.to_string();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let Some(build) = state
             .remote
             .entries
             .get(&id)
             .and_then(|entry| entry.build.clone())
         else {
+            update_connected(&state, &id, |entry| {
+                entry.update_notice = Some(
+                    "Remote daemon does not report build identity. Install it manually once."
+                        .to_string(),
+                );
+            });
             return;
         };
-        let Ok(asset) = crate::remote_deploy::assets::resolve_update_asset(&build.target).await
-        else {
-            return;
+        let asset = match crate::remote_deploy::assets::resolve_update_asset(&build.target).await {
+            Ok(asset) => asset,
+            Err(error) => {
+                update_connected(&state, &id, |entry| {
+                    entry.update_notice = Some(format!("Could not select remote update: {error}"));
+                });
+                return;
+            }
         };
         let selected = crate::remote_deploy::assets::BuildIdentity {
             version: asset.version,
@@ -426,15 +469,62 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
             return;
         }
         let before = entry.snapshot(&id);
-        entry.out_of_date = Some(crate::remote_update::build_is_out_of_date(
-            &build, &selected,
-        ));
+        let out_of_date = crate::remote_update::build_is_out_of_date(&build, &selected);
+        entry.out_of_date = Some(out_of_date);
         let after = entry.snapshot(&id);
         drop(entry);
         if before != after {
             publish(&state, &after);
         }
+        if !out_of_date {
+            return;
+        }
+        let Some(base_url) = state.remote.base_url(&id) else {
+            return;
+        };
+        let Ok(health) = read_health(&state.remote.http_client(), &base_url).await else {
+            return;
+        };
+        let sessions = health.session_count;
+        update_connected(&state, &id, |entry| entry.live_sessions = sessions);
+        let Ok(connection) = load_connection(&state, &id) else {
+            return;
+        };
+        if !connection.auto_update || sessions != Some(0) {
+            return;
+        }
+        match state.remote.attempted_updates.entry(id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                if entry.get() == &selected.sha256 {
+                    return;
+                }
+                entry.insert(selected.sha256.clone());
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(selected.sha256.clone());
+            }
+        }
+        update_connected(&state, &id, |entry| {
+            entry.update_notice = Some("Updating remote daemon...".to_string());
+        });
+        let result =
+            crate::remote_update::update_and_restart(&state, &id, 0, &selected.sha256).await;
+        match result {
+            Ok(_) => {
+                update_connected(&state, &id, |entry| {
+                    entry.update_notice = Some("Remote updated successfully.".to_string());
+                    entry.live_sessions = Some(0);
+                });
+                reauthenticate(&state, &id, &base_url).await;
+            }
+            Err(error) => update_connected(&state, &id, |entry| {
+                entry.update_notice = Some(format!("Remote update failed: {error}"));
+            }),
+        }
     });
+    if let Some(previous) = entry.comparison.replace(task) {
+        previous.abort();
+    }
 }
 
 /// Dual-emit. Nothing forwards the bus to the desktop window, so the window
@@ -1126,6 +1216,7 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
 pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
     stop_deleted_ephemeral(state, id);
     teardown(state, id);
+    state.remote.attempted_updates.remove(id);
 }
 
 fn stop_deleted_ephemeral(state: &Arc<AppState>, id: &str) {
@@ -1167,6 +1258,9 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     // re-seed the map we just cleared.
     if let Some(mirror) = entry.mirror.take() {
         mirror.abort();
+    }
+    if let Some(comparison) = entry.comparison.take() {
+        comparison.abort();
     }
     crate::remote_mirror::drop_connection(state, id);
     if let Some(tunnel_id) = entry.tunnel_id.take() {
@@ -1457,6 +1551,7 @@ pub async fn remote_connection_statuses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     /// A client for the probe tests, which have no `AppState` to borrow one
     /// from. The same builder the runtime uses, so a test cannot pass against a
@@ -1530,6 +1625,383 @@ mod tests {
         assert_eq!(snapshot.protocol_version, Some(3));
     }
 
+    #[tokio::test]
+    async fn auto_update_on_connect_only_uploads_for_an_empty_daemon() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
+        let target = env!("TUIC_TARGET_TRIPLE");
+        let directory = cache
+            .path()
+            .join("remote-bin")
+            .join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("tuic-remote-{target}")),
+            b"remote binary",
+        )
+        .unwrap();
+        let selected = "7dee7cc2fcb3d9ee8394182fe8d23a1a3d7e5c80b869b281269df9215a5abf2f";
+        let uploads = Arc::new(AtomicUsize::new(0));
+        let router = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get({
+                    let uploads = uploads.clone();
+                    move || {
+                        let uploads = uploads.clone();
+                        async move {
+                            let sha256 = if uploads.load(Ordering::SeqCst) == 0 {
+                                "a".repeat(64)
+                            } else {
+                                selected.to_string()
+                            };
+                            axum::Json(serde_json::json!({
+                                "session_count": 0,
+                                "build": { "version": "1.7.6", "target": target, "sha256": sha256 }
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/remote/update",
+                axum::routing::post({
+                    let uploads = uploads.clone();
+                    move |body: axum::body::Bytes| {
+                        let uploads = uploads.clone();
+                        async move {
+                            assert_eq!(body.as_ref(), b"remote binary");
+                            uploads.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::ACCEPTED
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/version",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"version":"1.7.7"})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("auto", url.clone(), "boss");
+        connection.auto_update = true;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test(&id, &url, Some("test-token"));
+        update(&state, &id, |entry| {
+            entry.build = Some(crate::remote_deploy::assets::BuildIdentity {
+                version: "1.7.6".into(),
+                target: target.into(),
+                sha256: "a".repeat(64),
+            })
+        });
+        spawn_build_comparison(&state, &id);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if state.remote.snapshot().iter().any(|status| {
+                    status.id == id
+                        && status.update_notice.as_deref() == Some("Remote updated successfully.")
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.remote.snapshot()[0].build.as_ref().unwrap().sha256,
+            selected
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state.remote.snapshot()[0].token.is_none() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.remote.snapshot()[0].status, RemoteStatus::Connected);
+        spawn_build_comparison(&state, &id);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn auto_update_stays_off_and_offers_a_busy_daemon_without_uploading() {
+        let cache = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
+        let target = env!("TUIC_TARGET_TRIPLE");
+        let directory = cache
+            .path()
+            .join("remote-bin")
+            .join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("tuic-remote-{target}")),
+            b"remote binary",
+        )
+        .unwrap();
+        for (auto_update, sessions) in [(false, 0), (true, 3)] {
+            let mut server = mockito::Server::new_async().await;
+            let health = server
+                .mock("GET", "/health")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "session_count": sessions,
+                        "build": { "version": "1.7.6", "target": target, "sha256": "a".repeat(64) }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+            let upload = server
+                .mock("POST", "/remote/update")
+                .expect(0)
+                .create_async()
+                .await;
+            let state = test_state();
+            let mut connection = RemoteConnection::new_direct("remote", server.url(), "boss");
+            connection.auto_update = auto_update;
+            let id = connection.id.clone();
+            RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+            state
+                .remote
+                .force_connected_for_test(&id, &server.url(), Some("test-token"));
+            update(&state, &id, |entry| {
+                entry.build = Some(crate::remote_deploy::assets::BuildIdentity {
+                    version: "1.7.6".into(),
+                    target: target.into(),
+                    sha256: "a".repeat(64),
+                })
+            });
+            spawn_build_comparison(&state, &id);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if state.remote.snapshot().iter().any(|status| {
+                        status.id == id
+                            && status.out_of_date == Some(true)
+                            && status.live_sessions == Some(sessions)
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+            health.assert_async().await;
+            upload.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_auto_update_keeps_the_old_build_and_does_not_retry_on_reconnect() {
+        let cache = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
+        let target = env!("TUIC_TARGET_TRIPLE");
+        let directory = cache
+            .path()
+            .join("remote-bin")
+            .join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("tuic-remote-{target}")),
+            b"remote binary",
+        )
+        .unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "session_count": 0,
+                    "build": { "version": "1.7.6", "target": target, "sha256": "a".repeat(64) }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let upload = server
+            .mock("POST", "/remote/update")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "token".into(),
+                "test-token".into(),
+            ))
+            .with_status(409)
+            .with_body("old daemon still serving")
+            .expect(1)
+            .create_async()
+            .await;
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("auto", server.url(), "boss");
+        connection.auto_update = true;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test(&id, &server.url(), Some("test-token"));
+        update(&state, &id, |entry| {
+            entry.build = Some(crate::remote_deploy::assets::BuildIdentity {
+                version: "1.7.6".into(),
+                target: target.into(),
+                sha256: "a".repeat(64),
+            })
+        });
+        spawn_build_comparison(&state, &id);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if state.remote.snapshot().iter().any(|status| {
+                    status.id == id
+                        && status.update_notice.as_deref().is_some_and(|notice| {
+                            notice.contains(
+                                "Remote update failed: Remote binary upload rejected: 409",
+                            )
+                        })
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        spawn_build_comparison(&state, &id);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        upload.assert_async().await;
+        assert_eq!(
+            state.remote.snapshot()[0].build.as_ref().unwrap().sha256,
+            "a".repeat(64)
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_daemon_reports_one_manual_install_without_attempting_an_update() {
+        let state = test_state();
+        state
+            .remote
+            .force_connected_for_test("legacy", "http://127.0.0.1:1", Some("test-token"));
+
+        spawn_build_comparison(&state, "legacy");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state.remote.snapshot()[0].update_notice.as_deref()
+                    == Some(
+                        "Remote daemon does not report build identity. Install it manually once.",
+                    )
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.remote.snapshot()[0].status, RemoteStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn disconnect_cancels_an_inflight_auto_update_check_before_reconnect() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(cache.path().to_path_buf());
+        let target = env!("TUIC_TARGET_TRIPLE");
+        let directory = cache
+            .path()
+            .join("remote-bin")
+            .join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("tuic-remote-{target}")),
+            b"remote binary",
+        )
+        .unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let health_reads = Arc::new(AtomicUsize::new(0));
+        let uploads = Arc::new(AtomicUsize::new(0));
+        let router = axum::Router::new()
+            .route("/health", axum::routing::get({
+                let entered = entered.clone();
+                let release = release.clone();
+                let health_reads = health_reads.clone();
+                move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let health_reads = health_reads.clone();
+                    async move {
+                        if health_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
+                        axum::Json(serde_json::json!({
+                            "session_count": 0,
+                            "build": { "version": "1.7.6", "target": target, "sha256": "a".repeat(64) }
+                        }))
+                    }
+                }
+            }))
+            .route("/remote/update", axum::routing::post({
+                let uploads = uploads.clone();
+                move || {
+                    let uploads = uploads.clone();
+                    async move {
+                        uploads.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::CONFLICT
+                    }
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let state = test_state();
+        let mut connection = RemoteConnection::new_direct("auto", url.clone(), "boss");
+        connection.auto_update = true;
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test(&id, &url, Some("test-token"));
+        update(&state, &id, |entry| {
+            entry.build = Some(crate::remote_deploy::assets::BuildIdentity {
+                version: "1.7.6".into(),
+                target: target.into(),
+                sha256: "a".repeat(64),
+            });
+        });
+        spawn_build_comparison(&state, &id);
+        tokio::time::timeout(Duration::from_secs(10), entered.notified())
+            .await
+            .unwrap();
+
+        teardown(&state, &id);
+        state
+            .remote
+            .force_connected_for_test(&id, &url, Some("new-token"));
+        release.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(uploads.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
     #[test]
     fn verified_update_clears_badge_without_resurrecting_a_disconnected_machine() {
         let state = test_state();
@@ -1578,6 +2050,8 @@ mod tests {
             protocol_version: None,
             build: None,
             out_of_date: None,
+            live_sessions: None,
+            update_notice: None,
             error: None,
             step: Some("asset".into()),
         });
@@ -2595,6 +3069,8 @@ mod tests {
                 protocol_version: None,
                 build: None,
                 out_of_date: None,
+                live_sessions: None,
+                update_notice: None,
                 error: None,
                 step: None,
             });
