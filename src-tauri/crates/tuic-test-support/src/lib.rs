@@ -44,7 +44,7 @@ pub fn test_temp_root() -> std::path::PathBuf {
 pub fn short_socket_test_temp_root() -> std::path::PathBuf {
     let requested = test_temp_root();
     if requested
-        .join("sXXXXXX/mcp-4294967295.sock")
+        .join("sXXXXXX/home/.mdkb/daemon-hook.sock.4294967295.tmp")
         .as_os_str()
         .len()
         < 104
