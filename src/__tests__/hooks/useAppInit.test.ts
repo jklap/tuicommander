@@ -1369,6 +1369,128 @@ describe("initApp", () => {
 			return toastsStore.toasts.find((toast) => toast.title === "Tab parked outside your repos");
 		}
 
+		it("does not offer registration for a newly discovered worktree of a registered repo", async () => {
+			const repoPath = "/gits/ls/gate-os";
+			repositoriesStore.add({ path: repoPath, displayName: "gate-os" });
+			repositoriesStore.setWorkspace(repoPath, "main", { worktreePath: repoPath });
+			repositoriesStore.setActiveWorkspace(repoPath, "main");
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "new-worktree", cwd: PARKED_CWD }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+				refreshAllBranchStats: vi.fn().mockImplementation(async () => {
+					repositoriesStore.setWorkspace(repoPath, "poc-0001-blade", { worktreePath: PARKED_CWD });
+				}),
+			});
+
+			await initApp(deps);
+
+			expect(parkedToast()).toBeUndefined();
+			expect(deps.registerRepo).not.toHaveBeenCalled();
+		});
+
+		it("homes a new-worktree session under its registered repo after refresh", async () => {
+			const repoPath = "/gits/ls/gate-os";
+			repositoriesStore.add({ path: repoPath, displayName: "gate-os" });
+			repositoriesStore.setWorkspace(repoPath, "main", { worktreePath: repoPath });
+			repositoriesStore.setActiveWorkspace(repoPath, "main");
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "new-worktree", cwd: PARKED_CWD }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+				refreshAllBranchStats: vi.fn().mockImplementation(async () => {
+					repositoriesStore.setWorkspace(repoPath, "poc-0001-blade", { worktreePath: PARKED_CWD });
+				}),
+			});
+
+			await initApp(deps);
+			await vi.advanceTimersByTimeAsync(0);
+
+			const workspace = repositoriesStore.get(repoPath)?.workspaces["poc-0001-blade"];
+			const terminalId = terminalsStore.getTerminalForSession("new-worktree");
+			expect(workspace?.terminals).toContain(terminalId);
+			expect(terminalsStore.get(terminalId!)?.repoPath).toBe(repoPath);
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(terminalId);
+			expect(deps.refreshAllBranchStats).toHaveBeenCalledWith(repoPath);
+		});
+
+		it("homes a live session-created tab when its registered repo learns the worktree", async () => {
+			const repoPath = "/gits/ls/gate-os";
+			repositoriesStore.add({ path: repoPath, displayName: "gate-os" });
+			repositoriesStore.setWorkspace(repoPath, "main", { worktreePath: repoPath });
+			repositoriesStore.setActiveWorkspace(repoPath, "main");
+			let onSessionCreated: ((event: { payload: { session_id: string; cwd: string } }) => void) | undefined;
+			vi.mocked(listen).mockImplementation(((event: string, handler: typeof onSessionCreated) => {
+				if (event === "session-created") onSessionCreated = handler;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			const deps = createMockDeps({
+				refreshAllBranchStats: vi.fn().mockImplementation(async (path?: string) => {
+					if (path === repoPath) {
+						repositoriesStore.setWorkspace(repoPath, "poc-0001-blade", { worktreePath: PARKED_CWD });
+					}
+				}),
+			});
+			await initApp(deps);
+
+			onSessionCreated!({ payload: { session_id: "live-worktree", cwd: PARKED_CWD } });
+			await vi.advanceTimersByTimeAsync(0);
+
+			const terminalId = terminalsStore.getTerminalForSession("live-worktree");
+			expect(repositoriesStore.get(repoPath)?.workspaces["poc-0001-blade"].terminals).toContain(terminalId);
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(terminalId);
+			expect(parkedToast()).toBeUndefined();
+		});
+
+		it("does not offer registration when Windows separators differ from the stored repo", async () => {
+			const repoPath = "C:\\Gits\\gate-os";
+			const cwd = "C:\\Gits\\gate-os__wt\\feature";
+			repositoriesStore.add({ path: repoPath, displayName: "gate-os" });
+			repositoriesStore.setWorkspace(repoPath, "main", { worktreePath: repoPath });
+			repositoriesStore.setActiveWorkspace(repoPath, "main");
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "windows-worktree", cwd }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+				refreshAllBranchStats: vi.fn().mockImplementation(async (path?: string) => {
+					if (path === repoPath) repositoriesStore.setWorkspace(repoPath, "feature", { worktreePath: cwd });
+				}),
+			});
+
+			await initApp(deps);
+			await vi.advanceTimersByTimeAsync(0);
+
+			const terminalId = terminalsStore.getTerminalForSession("windows-worktree");
+			expect(parkedToast()).toBeUndefined();
+			expect(repositoriesStore.get(repoPath)?.workspaces.feature.terminals).toContain(terminalId);
+		});
+
+		it("keeps the tab parked without a Register toast if worktree refresh fails", async () => {
+			const repoPath = "/gits/ls/gate-os";
+			repositoriesStore.add({ path: repoPath, displayName: "gate-os" });
+			repositoriesStore.setWorkspace(repoPath, "main", { worktreePath: repoPath });
+			repositoriesStore.setActiveWorkspace(repoPath, "main");
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "refresh-failed", cwd: PARKED_CWD }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+				refreshAllBranchStats: vi.fn().mockImplementation(async (path?: string) => {
+					if (path === repoPath) throw new Error("repository scan unavailable");
+				}),
+			});
+
+			await initApp(deps);
+			await vi.advanceTimersByTimeAsync(0);
+
+			const terminalId = terminalsStore.getTerminalForSession("refresh-failed");
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toContain(terminalId);
+			expect(parkedToast()).toBeUndefined();
+		});
+
 		it("offers a register action naming the deduced repo root", async () => {
 			const deps = parkedSessionDeps();
 			await initApp(deps);
