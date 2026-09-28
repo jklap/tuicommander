@@ -24,6 +24,10 @@
 
 # To Test
 
+## Remote manual update guard (story 1183-7154) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "Automatic remote update is already in progress". Targeted Rust tests cover the guard and the unchanged manual update path; the running backend cannot load this Rust change until restart.
+
 ## AI Chat layout and composer (story 1166-ef2f)
 
 - [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.

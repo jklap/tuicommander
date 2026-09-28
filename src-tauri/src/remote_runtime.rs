@@ -257,6 +257,12 @@ impl RemoteRuntime {
         self.client.clone()
     }
 
+    pub(crate) fn automatic_update_in_progress(&self, id: &str) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry.update_in_progress)
+    }
+
     /// Every connection this runtime knows about, in no particular order.
     pub(crate) fn snapshot(&self) -> Vec<RemoteConnectionStatus> {
         self.entries
@@ -517,7 +523,8 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
             entry.update_in_progress = true;
         });
         let result =
-            crate::remote_update::update_and_restart(&state, &id, 0, &selected.sha256).await;
+            crate::remote_update::perform_update_and_restart(&state, &id, 0, &selected.sha256)
+                .await;
         if !matches!(&result, Err(error) if error.starts_with("Live session count changed")) {
             state
                 .remote
@@ -2705,6 +2712,25 @@ mod tests {
 
     fn test_state() -> Arc<AppState> {
         Arc::new(crate::state::tests_support::make_test_app_state())
+    }
+
+    #[tokio::test]
+    async fn manual_update_rejects_the_connection_while_automatic_update_runs() {
+        let state = test_state();
+        state.remote.entries.insert(
+            "machine-1".to_string(),
+            Entry {
+                update_in_progress: true,
+                ..Entry::default()
+            },
+        );
+
+        let error =
+            crate::remote_update::update_and_restart(&state, "machine-1", 0, &"a".repeat(64))
+                .await
+                .unwrap_err();
+
+        assert_eq!(error, "Automatic remote update is already in progress");
     }
 
     /// Save a Direct connection pointing at `url`, where `connect` will find it.
