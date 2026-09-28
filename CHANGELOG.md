@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat session settings** — The control bar shows the current model and mode. A settings dialog labels every option ego offers and reports rejected changes.
+
 - **AI Chat parity** — Select or copy transcript text and code, open web and file links through the terminal's handlers, and keep parallel ACP conversations in chat tabs. Finished tool calls stop pulsing even when ego sends no final tool update.
 
 - **AI Chat permission alerts** — A pending ego permission or form request can alert a subscribed phone when the desktop is away. The notification opens the matching mobile conversation; answered requests and ordinary activity do not alert, and each conversation has a 30-second limit.

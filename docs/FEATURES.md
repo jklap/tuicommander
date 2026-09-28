@@ -874,8 +874,10 @@ one configured ego binary and speaks ACP to it, per
 - While AI Chat is hidden, its status-bar toggle counts pending permissions and
   forms. Each new question produces one desktop notification, cleared when the
   question settles
-- **Model, reasoning effort and mode** come from the options the session
-  publishes through `set_config_option`. TUICommander holds no model list
+- **Session settings** come from the options the session publishes through
+  `set_config_option`. The control bar summarizes model and mode; a dialog labels
+  every select option and shows its description and current choice. Errors from
+  rejected changes appear in the dialog. TUICommander holds no model list
 - **Pause, resume and compact** are drawn only when ego advertised each
   extension
 - **A stream gap is a state, not a skip**: the panel says it missed part of the
