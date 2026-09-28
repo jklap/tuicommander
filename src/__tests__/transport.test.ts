@@ -1856,21 +1856,61 @@ describe("transport", () => {
 			expect(detectClaude.transform?.({ path: "/usr/local/bin/claude" })).toBe("/usr/local/bin/claude");
 
 			const spawn = mapCommandToHttp("spawn_agent", {
-				pty_config: { rows: 30, cols: 100, cwd: "/repo", env: { PROFILE: "work" } },
-				agent_config: { prompt: "fix it", agent_type: "codex", model: "gpt-5" },
+				pty_config: {
+					rows: 30,
+					cols: 100,
+					shell: null,
+					cwd: "/repo",
+					tuic_session: null,
+					env: { PROFILE: "work" },
+					agent_type: "codex",
+					alias: null,
+				},
+				agent_config: {
+					prompt: "fix it",
+					cwd: "/agent",
+					agent_type: "codex",
+					model: "gpt-5",
+					print_mode: false,
+					output_format: null,
+					binary_path: null,
+					args: null,
+				},
 			});
 			expect(spawn.method).toBe("POST");
 			expect(spawn.path).toBe("/sessions/agent");
-			expect(spawn.body).toEqual({
-				rows: 30,
-				cols: 100,
-				cwd: "/repo",
-				env: { PROFILE: "work" },
-				prompt: "fix it",
-				agent_type: "codex",
-				model: "gpt-5",
-			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual(
+				JSON.parse(readRepoFile("src-tauri/tests/fixtures/spawn_agent_http_body.json")),
+			);
 			expect(spawn.transform?.({ session_id: "s1" })).toBe("s1");
+		});
+
+		it("uses PTY cwd when agent cwd is null", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: { rows: 24, cols: 80, cwd: "/repo", shell: null, tuic_session: null, alias: null },
+				agent_config: { prompt: "inspect", cwd: null, print_mode: false },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({
+				rows: 24,
+				cols: 80,
+				cwd: "/repo",
+				prompt: "inspect",
+				print_mode: false,
+			});
+		});
+
+		it("omits desktop-only PTY identity fields when populated", () => {
+			const spawn = mapCommandToHttp("spawn_agent", {
+				pty_config: {
+					rows: 24,
+					cols: 80,
+					shell: "/bin/zsh",
+					tuic_session: "persistent-session",
+					alias: "tu-7",
+				},
+				agent_config: { prompt: "inspect" },
+			});
+			expect(JSON.parse(JSON.stringify(spawn.body))).toEqual({ rows: 24, cols: 80, prompt: "inspect" });
 		});
 	});
 
