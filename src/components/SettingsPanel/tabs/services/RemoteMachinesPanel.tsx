@@ -245,6 +245,7 @@ export const RemoteMachinesPanel: Component = () => {
 	}
 
 	async function updateRemote(connState: ConnectionState) {
+		if (connState.updateInProgress) return;
 		const id = connState.connection.id;
 		setServiceBusyId(id);
 		setError("");
@@ -604,7 +605,7 @@ export const RemoteMachinesPanel: Component = () => {
 								<Show when={connState.status === "connected"}>
 									<button
 										class={s.textBtn}
-										disabled={serviceBusyId() === conn().id}
+										disabled={serviceBusyId() === conn().id || connState.updateInProgress}
 										onClick={() => updateRemote(connState)}
 									>
 										{serviceBusyId() === conn().id ? "Updating..." : "Update & restart remote"}

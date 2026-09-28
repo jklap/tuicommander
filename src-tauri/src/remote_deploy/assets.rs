@@ -12,6 +12,10 @@ const TARGETS: &[(&str, &str)] = &[
     ("Darwin arm64", "aarch64-apple-darwin"),
 ];
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(not(test))]
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+#[cfg(test)]
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuildIdentity {
@@ -223,7 +227,16 @@ async fn ensure_local_from_url(
         uuid::Uuid::new_v4()
     ));
 
-    let result = download_and_promote(version, target, url, &staging, &destination).await;
+    let result = tokio::time::timeout(
+        DOWNLOAD_TIMEOUT,
+        download_and_promote(version, target, url, &staging, &destination),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(format!(
+            "tuic-remote release download timed out for {target}"
+        ))
+    });
     if result.is_err() {
         let _ = tokio::fs::remove_file(&staging).await;
     }
@@ -414,6 +427,35 @@ mod tests {
         );
         assert!(!config.path().join("remote-bin/1.2.3/.staging").exists());
         route.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stalled_release_download_times_out_without_caching_an_asset() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let router = axum::Router::new().route(
+            "/asset",
+            axum::routing::get(|| async { std::future::pending::<axum::http::StatusCode>().await }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/asset", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            ensure_local_from_url("1.2.3", "test-target", &url),
+        )
+        .await
+        .expect("release download must have its own timeout")
+        .expect_err("stalled response must not be cached");
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            !config
+                .path()
+                .join("remote-bin/1.2.3/tuic-remote-test-target")
+                .exists()
+        );
+        server.abort();
     }
 
     #[tokio::test]

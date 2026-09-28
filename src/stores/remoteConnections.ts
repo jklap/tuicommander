@@ -54,6 +54,7 @@ export interface ConnectionState {
 	outOfDate?: boolean;
 	liveSessions?: number;
 	updateNotice?: string;
+	updateInProgress?: boolean;
 	error?: string;
 	deployStep?: string;
 }
@@ -68,6 +69,7 @@ interface RemoteConnectionStatusPayload {
 	out_of_date?: boolean;
 	live_sessions?: number;
 	update_notice?: string;
+	update_in_progress?: boolean;
 	error?: string;
 	step?: string;
 }
@@ -168,6 +170,7 @@ function createRemoteConnectionsStore() {
 			outOfDate: payload.out_of_date,
 			liveSessions: payload.live_sessions,
 			updateNotice: payload.update_notice,
+			updateInProgress: payload.update_in_progress,
 			error: payload.error,
 			deployStep: payload.step,
 		});
