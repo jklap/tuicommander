@@ -13,6 +13,7 @@
  */
 
 import { type Component, For, Show } from "solid-js";
+import type { AcpListedSession } from "../../services/acpClient";
 import { acpTranscript } from "../../stores/acpTranscript";
 import type {
 	AcpSessionConfigOption,
@@ -35,6 +36,17 @@ function groups(option: SelectOption): AcpSessionConfigSelectGroup[] {
 
 function flat(option: SelectOption): AcpSessionConfigSelectOption[] {
 	return isGrouped(option.options) ? [] : option.options;
+}
+
+function conversationLabel(session: AcpListedSession): string {
+	const title = acpTranscript.title(session.sessionId) || session.title;
+	if (title?.trim() && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(title.trim())) return title.trim();
+	const firstPrompt = acpTranscript.entries(session.sessionId).find((entry) => entry.kind === "user");
+	if (firstPrompt?.kind === "user" && firstPrompt.text.trim()) return firstPrompt.text.trim().slice(0, 48);
+	const updated = session.updatedAt ? new Date(session.updatedAt) : null;
+	return updated && !Number.isNaN(updated.getTime())
+		? `Conversation · ${updated.toLocaleString()}`
+		: "Untitled conversation";
 }
 
 const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props) => (
@@ -88,8 +100,8 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 				>
 					<For each={sessions()}>
 						{(session) => (
-							<option value={session.sessionId}>
-								{acpTranscript.title(session.sessionId) || session.title || session.sessionId}
+							<option value={session.sessionId} title={session.sessionId}>
+								{conversationLabel(session)}
 							</option>
 						)}
 					</For>

@@ -238,8 +238,8 @@ command ego runs, so the server-side synthesis in `granted` is what keeps it saf
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
 | `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
 | `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
-| `src/components/AIChatPanel/Interactions.tsx` | Permission options and the elicitation form. `form` is the only mode drawn |
-| `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, plus pause/resume/compact — each drawn only when ego advertised it |
+| `src/components/AIChatPanel/Interactions.tsx` | Permission options and elicitation forms; a single choice field with up to three values has direct buttons. `form` is the only mode drawn |
+| `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, pause/resume/compact, and readable labels for untitled conversations |
 | `src/components/AIChatPanel/Composer.tsx`, `draft.ts` | Where a turn is written; the draft is module-scoped so the context menu can seed it |
 | `src/components/AIChatPanel/contextMenuActions.ts` | "Explain with AI" / "Fix this error" on terminal right-click, registered through `contextMenuActionsStore` |
 | `src/services/acpClient.ts`, `src/services/acpStream.ts` | Every command the panel sends and the frame stream behind it. `adopt` commits to the store only after the pending fetch and the open succeed, and `reconnect` lets go of the id the backend replaced — the new one is a *different* connection |

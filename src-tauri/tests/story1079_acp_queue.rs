@@ -253,8 +253,9 @@ async fn paused_session_holds_queued_prompts_until_resume_and_both_views_can_can
         acp_support::until(stream, |event| {
             matches!(
                 event,
-                AcpClientEvent::AttachmentState {
-                    state: AcpAttachmentState::Paused
+                AcpClientEvent::TurnFailed {
+                    state: AcpAttachmentState::Paused,
+                    ..
                 }
             )
         })

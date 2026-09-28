@@ -56,7 +56,7 @@ async fn pause_error_keeps_resume_available_and_resume_allows_another_turn() {
     })
     .await;
     let settled = until(&mut stream, |event| {
-        matches!(event, AcpClientEvent::AttachmentState { .. })
+        matches!(event, AcpClientEvent::TurnFailed { .. })
     })
     .await;
     assert_eq!(
@@ -65,7 +65,8 @@ async fn pause_error_keeps_resume_available_and_resume_allows_another_turn() {
     );
     assert_eq!(
         settled.last().unwrap().event,
-        AcpClientEvent::AttachmentState {
+        AcpClientEvent::TurnFailed {
+            message: "session held at a boundary".to_string(),
             state: AcpAttachmentState::Paused
         },
         "the pause boundary leaves Resume available"
@@ -146,20 +147,13 @@ async fn ordinary_prompt_error_without_hold_returns_to_idle_even_with_pause_word
         .await
         .expect("prompt starts");
     let seen = until(&mut stream, |event| {
-        matches!(
-            event,
-            AcpClientEvent::AttachmentState {
-                state: AcpAttachmentState::Idle
-            }
-        )
+        matches!(event, AcpClientEvent::TurnFailed { .. })
     })
     .await;
-    assert_eq!(
-        seen.last().unwrap().event,
-        AcpClientEvent::AttachmentState {
-            state: AcpAttachmentState::Idle
-        }
-    );
+    assert!(seen.iter().any(|event| matches!(
+        &event.event,
+        AcpClientEvent::TurnFailed { message, .. } if message == "session held at a boundary"
+    )));
     assert_eq!(
         fixture
             .manager

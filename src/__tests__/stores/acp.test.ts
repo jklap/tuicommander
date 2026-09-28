@@ -157,17 +157,47 @@ describe("acpStore: the journal cursor", () => {
 });
 
 describe("acpStore: state events", () => {
+	it("a failed prompt releases its own turn and preserves the paused state", () => {
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		acpStore.applyFrame(CONNECTION, {
+			...frame(2, { kind: "turnFailed", message: "held", state: "paused" }, SESSION),
+			turnId: "turn-1",
+		});
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "paused", activeTurn: null });
+	});
+
 	it("shows a turn started and cancelled by the other view as busy, cancelling, then idle", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
 		const started = { ...frame(2, { kind: "turnStarted" }, SESSION), turnId: "01932d5e-0000-7000-8000-0000000000a1" };
 		acpStore.applyFrame(CONNECTION, started);
-		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "prompting", activeTurn: { turnId: started.turnId, state: "running" } });
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({
+			state: "prompting",
+			activeTurn: { turnId: started.turnId, state: "running" },
+		});
 
 		acpStore.applyFrame(CONNECTION, frame(3, { kind: "attachmentState", state: "cancelling" }, SESSION));
-		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "cancelling", activeTurn: { state: "cancelling" } });
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({
+			state: "cancelling",
+			activeTurn: { state: "cancelling" },
+		});
 
-		acpStore.applyFrame(CONNECTION, { ...frame(4, { kind: "turnSettled", stopReason: "cancelled", usage: null }, SESSION), turnId: started.turnId });
-		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({ state: "idle", activeTurn: { state: "settled", stopReason: "cancelled" } });
+		acpStore.applyFrame(CONNECTION, {
+			...frame(4, { kind: "turnSettled", stopReason: "cancelled", usage: null }, SESSION),
+			turnId: started.turnId,
+		});
+		expect(acpStore.attachment(CONNECTION, SESSION)).toMatchObject({
+			state: "idle",
+			activeTurn: { state: "settled", stopReason: "cancelled" },
+		});
 	});
 	it("shows a queued phone prompt from the server stream and removes it after another client cancels it", () => {
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ queuedPrompts: [] })] }));

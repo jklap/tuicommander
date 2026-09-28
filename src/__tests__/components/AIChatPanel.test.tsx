@@ -178,7 +178,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 let sequence = 0;
 
 /** One event frame, as the stream would deliver it. */
-function feed(event: AcpClientEvent, sessionId: string | null = SESSION): void {
+function feed(event: AcpClientEvent, sessionId: string | null = SESSION, turnId: string | null = null): void {
 	sequence += 1;
 	const frame = {
 		kind: "event" as const,
@@ -186,7 +186,7 @@ function feed(event: AcpClientEvent, sessionId: string | null = SESSION): void {
 		generation: 1,
 		sequence,
 		sessionId,
-		turnId: null,
+		turnId,
 		event,
 	};
 	acpStore.applyFrame(CONNECTION, frame);
@@ -295,14 +295,61 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("shows an ACP prompt failure in the transcript and returns the composer to Send", async () => {
+		const { container } = renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "turn-1", state: "running", stopReason: null, usage: null },
+					}),
+				],
+			}),
+		);
+		feed(
+			{ kind: "turnFailed", message: "no capabilities are configured for `openai-codex/gpt-5.6-sol`", state: "idle" },
+			SESSION,
+			"turn-1",
+		);
+		await settle();
+		expect(container.textContent).toContain("no capabilities are configured");
+		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Send")).toBe(true);
+	});
+
+	it("shows that a normally settled turn without an agent reply ended", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "promptSent", text: "ciao" });
+		feed({ kind: "turnSettled", stopReason: "end_turn", usage: null });
+		await settle();
+		expect(container.textContent).toContain("Turn ended without a reply");
+	});
+
+	it("shows an agent refusal after the prompt settles", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "promptSent", text: "ciao" });
+		feed({ kind: "turnSettled", stopReason: "refusal", usage: null });
+		await settle();
+		expect(container.textContent).toContain("The agent refused this turn.");
+	});
+
 	it("shows the shared queue, can remove the phone prompt, and accepts a desktop prompt while busy", async () => {
 		const { container } = renderPanel();
 		await settle();
-		acpStore.applySnapshot(snapshot({ attachments: [attachment({
-			state: "prompting",
-			activeTurn: { turnId: "running", state: "running", stopReason: null, usage: null },
-			queuedPrompts: [{ turnId: "phone-queued", summary: "from phone" }],
-		})] }));
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						state: "prompting",
+						activeTurn: { turnId: "running", state: "running", stopReason: null, usage: null },
+						queuedPrompts: [{ turnId: "phone-queued", summary: "from phone" }],
+					}),
+				],
+			}),
+		);
 		await settle();
 		expect(container.textContent).toContain("from phone");
 		const remove = container.querySelector('button[aria-label="Cancel queued prompt from phone"]') as HTMLButtonElement;
@@ -464,6 +511,28 @@ describe("AIChatPanel: a turn", () => {
 });
 
 describe("AIChatPanel: durable conversations", () => {
+	it("labels untitled conversations without exposing an id as the option text", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{ sessionId: SESSION, cwd: ROOT, title: null, updatedAt: "2026-09-27T09:00:00Z" },
+				{
+					sessionId: "01932d5e-0000-7000-8000-0000000000bb",
+					cwd: ROOT,
+					title: null,
+					updatedAt: "2026-09-26T09:00:00Z",
+				},
+			],
+			nextCursor: null,
+		});
+		const { container } = renderPanel();
+		await settle();
+		const options = [...container.querySelectorAll('select[title="Conversation"] option')];
+		expect(options).toHaveLength(2);
+		expect(options[0].textContent).toContain("Conversation");
+		expect(options[0].textContent).not.toContain(SESSION);
+		expect(options[0].getAttribute("title")).toBe(SESSION);
+	});
+
 	it("shows a new ACP session title in the header and conversation picker", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
@@ -724,11 +793,16 @@ describe("AIChatPanel: tool activity", () => {
 	it("collapses seven calls in one turn into one activity line with count and salient titles", async () => {
 		const { container } = renderPanel();
 		await settle();
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Check files" } } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Check files" } },
+		});
 		for (let id = 1; id <= 7; id += 1) tool(id);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) => summary.textContent?.includes("7 tool calls"));
+		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
+			summary.textContent?.includes("7 tool calls"),
+		);
 		expect(summaries).toHaveLength(1);
 		expect(summaries[0].textContent).toContain("Inspect file 1");
 		expect(summaries[0].textContent).toContain("Inspect file 2");
@@ -742,7 +816,9 @@ describe("AIChatPanel: tool activity", () => {
 		tool(1);
 		await settle();
 
-		const activity = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent?.includes("tool call"));
+		const activity = [...container.querySelectorAll("details")].find((details) =>
+			details.querySelector("summary")?.textContent?.includes("tool call"),
+		);
 		expect(activity).toBeDefined();
 		expect(activity?.open).toBe(false);
 		activity!.open = true;
@@ -762,7 +838,9 @@ describe("AIChatPanel: tool activity", () => {
 		tool(2, "failed");
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("2 tool calls"));
+		const summary = [...container.querySelectorAll("summary")].find((element) =>
+			element.textContent?.includes("2 tool calls"),
+		);
 		expect(summary?.textContent).toContain("Failed");
 	});
 
@@ -791,7 +869,9 @@ describe("AIChatPanel: tool activity", () => {
 		});
 		await settle();
 
-		const activity = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent?.includes("tool call"));
+		const activity = [...container.querySelectorAll("details")].find((details) =>
+			details.querySelector("summary")?.textContent?.includes("tool call"),
+		);
 		expect(activity?.open).toBe(false);
 		expect(container.textContent).toContain("Write file");
 		expect(container.textContent).toContain("Which branch?");
@@ -801,15 +881,26 @@ describe("AIChatPanel: tool activity", () => {
 	it("keeps calls together across agent text but separates the next user turn", async () => {
 		const { container } = renderPanel();
 		await settle();
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "First task" } } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "First task" } },
+		});
 		tool(1);
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking more." } } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Checking more." } },
+		});
 		tool(2);
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Second task" } } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Second task" } },
+		});
 		tool(3);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) => summary.textContent?.includes("tool call"));
+		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
+			summary.textContent?.includes("tool call"),
+		);
 		expect(summaries).toHaveLength(2);
 		expect(summaries[0].textContent).toContain("2 tool calls");
 		expect(summaries[1].textContent).toContain("1 tool call");
@@ -820,10 +911,15 @@ describe("AIChatPanel: tool activity", () => {
 		await settle();
 		tool(1);
 		await settle();
-		feed({ kind: "sessionUpdate", update: { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "failed" } });
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "failed" },
+		});
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("1 tool call"));
+		const summary = [...container.querySelectorAll("summary")].find((element) =>
+			element.textContent?.includes("1 tool call"),
+		);
 		expect(summary?.textContent).toContain("Failed");
 	});
 
@@ -841,7 +937,9 @@ describe("AIChatPanel: tool activity", () => {
 			tool(2);
 			await settle();
 
-			const summary = [...container.querySelectorAll("summary")].find((element) => element.textContent?.includes("2 tool calls"));
+			const summary = [...container.querySelectorAll("summary")].find((element) =>
+				element.textContent?.includes("2 tool calls"),
+			);
 			expect(summary?.textContent).toMatch(/2\.5s observed|2\.6s observed/);
 		} finally {
 			now.mockRestore();
@@ -881,6 +979,91 @@ describe("AIChatPanel: permission", () => {
 });
 
 describe("AIChatPanel: elicitation", () => {
+	it("keeps an elicitation with an additional unsupported field in the form", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "elicitationRequested",
+			requestId: "mixed-form",
+			request: {
+				mode: "form",
+				sessionId: SESSION,
+				message: "Choose and describe",
+				requestedSchema: {
+					type: "object",
+					properties: { answer: { type: "string", enum: ["yes", "no"] }, context: { type: "array" } },
+				},
+			},
+		});
+		await settle();
+		expect(container.querySelector("select.formInput")).not.toBeNull();
+		expect(container.textContent).toContain("Submit");
+	});
+
+	it("keeps a four-choice elicitation in the form", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "elicitationRequested",
+			requestId: "choice-4",
+			request: {
+				mode: "form",
+				sessionId: SESSION,
+				message: "Choose one",
+				requestedSchema: {
+					type: "object",
+					properties: { answer: { type: "string", enum: ["one", "two", "three", "four"] } },
+					required: ["answer"],
+				},
+			},
+		});
+		await settle();
+		expect(container.querySelector("select.formInput")).not.toBeNull();
+		expect(container.textContent).toContain("Submit");
+	});
+
+	it("offers small single-select trust choices as direct buttons plus Cancel", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({ kind: "turnStarted" }, SESSION, "turn-1");
+		feed({
+			kind: "elicitationRequested",
+			requestId: "trust-1",
+			request: {
+				mode: "form",
+				sessionId: SESSION,
+				message: "Trust this workspace?",
+				requestedSchema: {
+					type: "object",
+					properties: { answer: { type: "string", enum: ["trusted", "untrusted"] } },
+					required: ["answer"],
+				},
+			},
+		});
+		await settle();
+		expect(container.querySelector("select.formInput")).toBeNull();
+		expect(container.textContent).not.toContain("Submit");
+		const trust = [...container.querySelectorAll("button")].find((button) => button.textContent === "Trust");
+		expect(trust).toBeDefined();
+		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Don't trust")).toBe(true);
+		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Cancel")).toBe(true);
+		trust?.click();
+		await settle();
+		expect(client.answerElicitation).toHaveBeenCalledWith(CONNECTION, "trust-1", {
+			action: "accept",
+			content: { answer: "trusted" },
+		});
+		feed({
+			kind: "elicitationSettled",
+			requestId: "trust-1",
+			action: { action: "accept", content: { answer: "trusted" } },
+		});
+		feed({ kind: "turnFailed", message: "model unavailable", state: "idle" }, SESSION, "turn-1");
+		await settle();
+		expect(container.textContent).toContain("model unavailable");
+		expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Send")).toBe(true);
+	});
+
 	it("renders a form and submits the values that were filled in", async () => {
 		const { container } = renderPanel();
 		await settle();

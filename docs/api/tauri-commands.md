@@ -699,6 +699,8 @@ Drives an [ego](https://github.com/sstraus/ego) agent over the Agent Client
 Protocol. Every command is a one-line pass-through to `AcpClientManager`; each
 has an identical HTTP route (see `docs/api/http-api.md`) so a browser or the
 PWA gets the same answers, including the same error bodies.
+The shared event stream sends `turnFailed {message, state}` when an accepted
+prompt later fails; the event envelope identifies its session and turn.
 
 The binary this launches is **not** an argument. It comes from the
 `ego_executable` setting, read at each connect, so no caller over IPC or HTTP
