@@ -1532,6 +1532,22 @@ fn remove_worktree_internal_with_lock(
     if admin.is_none() && worktree.path.join(".git").exists() {
         return Err("Cannot remove worktree: its Git registration is missing".into());
     }
+    if admin.is_none() {
+        // Only a warm token proves that TUIC previously created this checkout.
+        // Without one, this could be an unrelated directory at the same path.
+        if warm_lock.is_none() {
+            return Err("Cannot remove worktree: path is not a registered worktree".into());
+        }
+        clear_warm(&worktree.path);
+        if !force {
+            return Err(format!(
+                "Worktree directory still exists after removal: {}",
+                worktree.path.display()
+            ));
+        }
+        return std::fs::remove_dir_all(&worktree.path)
+            .map_err(|error| format!("Failed to remove worktree directory: {error}"));
+    }
     if has_operation_in_progress(&wt_path_str) {
         return Err("Cannot remove worktree: a Git operation is in progress".into());
     }
@@ -7928,6 +7944,26 @@ branch refs/heads/feat
         assert!(!warm_token_is_current(&path, token), "{error}");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn unknown_directory_is_not_removed_without_a_warm_token() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let path = workspaces.join("unrelated-directory");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("keep.txt"), "unrelated\n").unwrap();
+        let worktree = WorktreeInfo {
+            name: "unrelated-directory".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo,
+        };
+
+        assert!(remove_worktree_internal(&worktree, true).is_err());
+        assert_eq!(
+            fs::read_to_string(path.join("keep.txt")).unwrap(),
+            "unrelated\n"
+        );
     }
 
     /// Dirtiness is orthogonal to the commit verdict, and that is exactly why

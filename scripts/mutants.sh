@@ -78,7 +78,15 @@ git -C "$SRC" checkout --quiet --detach "$(git -C "$ROOT" rev-parse HEAD)"
 # generate_context! embeds ../dist; tauri-build checks the gitignored sidecar.
 mkdir -p "$SRC/dist" "$SRC/src-tauri/binaries"
 cp -R "$ROOT/dist/." "$SRC/dist/"
-cp -R "$ROOT/src-tauri/binaries/." "$SRC/src-tauri/binaries/"
+# The clone already contains tracked sidecars. Never overwrite that inode:
+# code-signature caches and concurrent readers must keep the old bytes.
+for source in "$ROOT"/src-tauri/binaries/*; do
+  [[ -f "$source" ]] || continue
+  name="${source##*/}"
+  staged="$SRC/src-tauri/binaries/.$name.update.$$"
+  cp -p "$source" "$staged"
+  mv -f "$staged" "$SRC/src-tauri/binaries/$name"
+done
 # `plugins` is a SUBMODULE: `git archive` writes the gitlink and none of the
 # files under it, so the six include_str! in plugins.rs (plan and
 # stories-ticker) resolve to nothing and the BASELINE build fails — "cargo

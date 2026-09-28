@@ -590,6 +590,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-machines", section: "Remote Machines", label: "Port" },
 	{ tab: "remote-machines", section: "Remote Machines", label: "User" },
 	{ tab: "remote-machines", section: "Remote Machines", label: "Remote daemon port" },
+	{ tab: "remote-machines", section: "Remote Machines", label: "Auto-update remote daemons" },
 	// tabs/PluginsTab.tsx
 	{ tab: "plugins", section: "Plugins" },
 	{ tab: "plugins", section: "Plugins", label: "Check for plugin updates" },

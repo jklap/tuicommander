@@ -24,9 +24,17 @@
 
 # To Test
 
+## Already unregistered worktree cleanup (1175-71fc) — Rust restart required
+
+- [ ] After a manual `make dev` restart, use an isolated `TUIC_APP_INSTANCE=<id>` and a disposable repository to remove a worktree while its build-input warming is pending, after Git has already unregistered the checkout. Confirm the pending status clears even if a leftover directory cannot be removed. The running backend cannot load this Rust change until restart; the targeted Rust test covers the cleanup failure path.
+
 ## AI Chat layout and composer (story 1166-ef2f)
 
 - [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
+
+## CLI sidecar replacement (story 1165-e905) — Rust restart required
+
+- [ ] After a manual `make dev` restart when current sessions may be discarded, install or update `tuic` from Settings in an isolated `TUIC_APP_INSTANCE`. Confirm `tuic --version` runs and a previously running CLI process is unaffected. The live backend cannot load the Rust installer change until restart; fixture tests cover replacement through hard links and symlinks.
 
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
@@ -229,6 +237,7 @@
 
 ## Remote update and restart — Rust, needs `make dev` restart
 
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once through the daemon restart, live sessions show a manual offer with a count that refreshes while connected, and a failed update shows its error. During automatic transfer, confirm the manual update button is disabled; a stalled transfer eventually reports a timeout and resumes connection checks. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart.
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections.
 
 ## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart
@@ -459,6 +468,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask a question. The spoken reply plays to the end unless you talk over it. Talk over a second reply: it stops within about a quarter of a second, and your first words are in the transcript.
 - [ ] [HUMAN] After the restart, in hands-free, say half a sentence, pause about a second, and finish it before the hold-back ends. One turn arrives with both halves; the first half is not sent alone.
+- [ ] [HUMAN] After the restart, arm hands-free with the activation phrase on the desktop. Say a phrase, pause about four seconds, then continue without the phrase. The pending text gains the continuation and the agent receives one message after the final five-second window. Check the microphone level while TTS plays and whether the reply's own words appear as a new turn; these acoustic and gain observations require the real device.
 
 ## Calm hands-free voice meter (2026-09-23) — frontend via HMR; the Rust level fallback needs a `make dev` restart
 
@@ -3287,6 +3297,10 @@ restart, not before.
 - [ ] The AI Chat panel still detaches into its own window and the main window
       shows the *Bring back* placeholder; closing the detached window restores
       the docked shell.
+- [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose
+      first answer starts with `TUICommander v1.7.7 is connected.` followed by
+      `intent:`. The status appears and no clipped acknowledgement such as
+      `.7.7 is connected.` remains in the transcript.
 - [ ] **Needs a `make dev` restart (Rust).** In a tab *you* opened by hand (not
       one an orchestrator spawned), an agent calling `progress type=done` no
       longer answers `project_required`: the entry lands in that project's

@@ -363,7 +363,9 @@ without authentication, **Tailscale HTTPS**, the connect QR code, and the
 ### Remote Machines
 
 Add, connect, and manage `tuic-remote` daemons on other machines over SSH or a
-direct URL. See [Remote Access → Remote Connection Manager](remote-access.md#remote-connection-manager).
+direct URL. **Auto-update remote daemons** is a per-connection option, off by
+default. It updates on connect only when the daemon has no live PTY sessions.
+See [Remote Access → Remote Connection Manager](remote-access.md#remote-connection-manager).
 
 ### Plugins
 

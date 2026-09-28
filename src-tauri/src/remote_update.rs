@@ -9,6 +9,11 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 
+#[cfg(not(test))]
+const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+#[cfg(test)]
+const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct UpdatePreview {
     pub(crate) remote_build: Option<BuildIdentity>,
@@ -117,21 +122,29 @@ pub(crate) async fn update_and_restart(
                     )))
                 }
             });
-            let response = client
-                .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
-                .query(&[("token", token.as_str())])
-                .header("x-tuic-target", &preview.desktop_build.target)
-                .header("x-tuic-sha256", &preview.desktop_build.sha256)
-                .header("x-tuic-confirmed-sessions", confirmed_sessions)
-                .body(reqwest::Body::wrap_stream(stream))
-                .send()
-                .await
-                .map_err(|e| format!("Remote binary upload failed: {e}"))?;
+            let response = tokio::time::timeout(
+                UPLOAD_TIMEOUT,
+                client
+                    .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
+                    .query(&[("token", token.as_str())])
+                    .header("x-tuic-target", &preview.desktop_build.target)
+                    .header("x-tuic-sha256", &preview.desktop_build.sha256)
+                    .header("x-tuic-confirmed-sessions", confirmed_sessions)
+                    .body(reqwest::Body::wrap_stream(stream))
+                    .send(),
+            )
+            .await
+            .map_err(|_| "Remote binary upload timed out".to_string())?
+            .map_err(|e| format!("Remote binary upload failed: {e}"))?;
             if !response.status().is_success() {
+                let status = response.status();
+                let detail = tokio::time::timeout(UPLOAD_TIMEOUT, response.text())
+                    .await
+                    .map_err(|_| "Remote binary upload response timed out".to_string())?
+                    .unwrap_or_default();
                 return Err(format!(
                     "Remote binary upload rejected: {}: {}",
-                    response.status(),
-                    response.text().await.unwrap_or_default()
+                    status, detail
                 ));
             }
         }
