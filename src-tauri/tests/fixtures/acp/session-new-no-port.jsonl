@@ -1,8 +1,0 @@
-// No bridge located, so the session carries no MCP server at all. Naming a
-// command we could not find would surface as ego reporting the server
-// inadmissible, instead of TUICommander reporting it was not ready.
-{"step":"expect","method":"initialize","params":{"protocolVersion":1},"capture":"init"}
-{"step":"respond","to":"init","result_file":"ego-initialize.json"}
-{"step":"expect","method":"session/new","params":{"mcpServers":[]},"capture":"new"}
-{"step":"respond","to":"new","result":{"sessionId":"01932d5e-0000-7000-8000-0000000000aa","configOptions":[]}}
-{"step":"await_stdin_eof"}

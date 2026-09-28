@@ -87,6 +87,22 @@ describe("mobile ego chat", () => {
 		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
 	});
 
+	// The chat is global and nothing starts ego before the first message, so a
+	// link must not wait for a live connection or a listed session.
+	it("selects a linked conversation before ego is running, and lets the first message start it", async () => {
+		history.replaceState(null, "", "/mobile?repo=%2Frepo&session=previous");
+		createAcpChat.mockReturnValue({
+			...chat(),
+			phase: () => "ready",
+			connectionId: () => null,
+			sessionId: () => null,
+			sessions: () => [],
+		});
+		const { container } = render(() => <MobileChatScreen />);
+		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
+		expect(container.querySelector("textarea")).toBeTruthy();
+	});
+
 	it("ignores a push link to a repository this phone has not registered", async () => {
 		history.replaceState(null, "", "/mobile?repo=%2Funknown&session=previous");
 		render(() => <MobileChatScreen />);
