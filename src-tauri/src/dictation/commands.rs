@@ -144,6 +144,27 @@ fn empty_final_response(
     })
 }
 
+/// Run the final push-to-talk pass after capture has assembled the recording.
+fn transcribe_final_ptt_audio(
+    transcriber: &dyn transcribe::Transcriber,
+    audio: &[f32],
+    language: Option<&str>,
+    gates: transcribe::VoiceGates,
+) -> Result<transcribe::TranscribeResult, String> {
+    let activity = continuous::SegmenterConfig::default();
+    if !continuous::has_sustained_speech(audio, activity) {
+        return Ok(transcribe::TranscribeResult {
+            text: String::new(),
+            skip_reason: Some(format!(
+                "no sustained speech (need {}ms of active audio)",
+                activity.min_speech_ms
+            )),
+            language: None,
+        });
+    }
+    transcriber.transcribe(audio, language, gates)
+}
+
 /// Resolve a model name from config, falling back to the default.
 fn resolve_model(name: &str) -> model::WhisperModel {
     model::WhisperModel::from_name(name).unwrap_or(model::WhisperModel::LargeV3Turbo)
@@ -1727,7 +1748,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
 
         if let Some(ref transcriber) = transcriber {
             let lang_ref = lang_owned.as_deref();
-            match transcriber.transcribe(&all_audio, lang_ref, gates) {
+            match transcribe_final_ptt_audio(transcriber.as_ref(), &all_audio, lang_ref, gates) {
                 Ok(result) if result.skip_reason.is_none() => {
                     final_text = result.text;
                 }
@@ -2578,6 +2599,112 @@ pub fn open_microphone_settings() {
 mod tests {
     use super::*;
     use crate::dictation::continuous::Phase;
+
+    struct PhraseTranscriber;
+
+    impl transcribe::Transcriber for PhraseTranscriber {
+        fn transcribe(
+            &self,
+            _audio: &[f32],
+            _language: Option<&str>,
+            _gates: transcribe::VoiceGates,
+        ) -> Result<transcribe::TranscribeResult, String> {
+            Ok(transcribe::TranscribeResult {
+                text: "run the tests".to_string(),
+                skip_reason: None,
+                language: Some("en".to_string()),
+            })
+        }
+    }
+
+    #[test]
+    fn push_to_talk_rejects_a_short_noise_burst_before_transcription() {
+        let mut audio = vec![0.03; 16_000 * 180 / 1_000];
+        audio.resize(16_000, 0.0);
+
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+
+        assert!(
+            result.text.is_empty(),
+            "a noise burst must not reach the prompt"
+        );
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_rejects_quiet_audio_above_the_whole_buffer_rms_floor() {
+        let audio = vec![0.005; 16_000];
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_keeps_sustained_speech_at_normal_level() {
+        let mut audio = vec![0.03; 16_000 * 300 / 1_000];
+        audio.resize(16_000, 0.0);
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "run the tests");
+        assert!(result.skip_reason.is_none());
+    }
+
+    #[test]
+    fn push_to_talk_does_not_join_separate_noise_bursts_into_speech() {
+        let mut audio = vec![0.03; 16_000 * 100 / 1_000];
+        audio.extend(vec![0.0; 16_000 * 1_600 / 1_000]);
+        audio.extend(vec![0.03; 16_000 * 100 / 1_000]);
+
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_accepts_speech_ending_at_key_release() {
+        let audio = vec![0.03; 16_000 * 200 / 1_000];
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "run the tests");
+        assert!(result.skip_reason.is_none());
+    }
 
     #[test]
     fn stopped_dictation_preserves_final_transcriber_skip_reason() {
