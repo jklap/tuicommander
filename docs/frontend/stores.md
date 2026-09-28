@@ -426,6 +426,11 @@ re-render cannot send a duplicate. Settlement closes the matching notification.
 
 `acpTranscript` also projects ACP session titles and usage by session ID. The
 AI Chat header, conversation picker and usage footer read that projection.
+`aiChatTabs` is the single per-root store for open chat session IDs and the
+selected tab. It mirrors its state to localStorage so a detached WebView can
+restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
+The existing `ai_chat_sessions` app config value remains the last selected
+conversation for older documents and clients.
 `acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
 on each `promptQueueChanged` event, so desktop and browser views share the
 same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host

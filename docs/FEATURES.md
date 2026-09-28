@@ -845,6 +845,16 @@ one configured ego binary and speaks ACP to it, per
   main window meanwhile
 - The conversation view loads on first opening, including in a detached window;
   the desktop terminal is ready before this optional view loads
+- Multiple chat tabs keep separate ACP sessions, transcripts and composer drafts
+  within one panel. Open tabs and the selected tab survive hide/show and detach;
+  closing a tab leaves its durable ego conversation available in the picker.
+  The focused panel uses `Cmd/Ctrl+T` for a new tab (`Cmd/Ctrl+Alt+T` in browser
+  mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
+- Transcript text and tool output are selectable. User and assistant messages,
+  tool outputs and code blocks have copy actions using the terminal clipboard
+  adapter. Web links open externally and file paths use the terminal file opener
+  after backend resolution. Transcript focus gives `Cmd/Ctrl+A` (select this
+  transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
   replaced whole each time it changes

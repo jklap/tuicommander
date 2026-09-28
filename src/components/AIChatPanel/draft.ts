@@ -19,6 +19,8 @@ export interface StagedImage {
  */
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
+const drafts = new Map<string, { text: string; images: StagedImage[] }>();
+let activeSession = "";
 let revision = 0;
 let pendingBytes = 0;
 
@@ -35,6 +37,16 @@ export const aiChatDraft = {
 	text,
 	set: setText,
 	images,
+	activate(session: string): void {
+		if (session === activeSession) return;
+		const previous = { text: text(), images: images() };
+		if (activeSession) drafts.set(activeSession, previous);
+		const next = drafts.get(session) ?? (activeSession === "" && session ? previous : undefined);
+		activeSession = session;
+		setText(next?.text ?? "");
+		setImages(next?.images ?? []);
+		revision += 1;
+	},
 
 	/** Validate bytes before FileReader expands them into base64. */
 	async stageImage(file: File, supported: boolean): Promise<string | null> {
@@ -75,6 +87,15 @@ export const aiChatDraft = {
 	},
 
 	clear(): void {
+		revision += 1;
+		setText("");
+		setImages([]);
+		drafts.delete(activeSession);
+	},
+
+	reset(): void {
+		drafts.clear();
+		activeSession = "";
 		revision += 1;
 		setText("");
 		setImages([]);

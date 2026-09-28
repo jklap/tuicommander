@@ -126,6 +126,18 @@ function stripUndefined(fields: Partial<AcpToolCall>): Partial<AcpToolCall> {
 	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
+/** A terminal turn cannot leave its tool indicators showing work in progress. */
+function settleToolCalls(entries: AcpTranscriptEntry[], status: "completed" | "failed"): void {
+	for (const entry of entries) {
+		if (
+			entry.kind === "tool" &&
+			(!entry.call.status || entry.call.status === "pending" || entry.call.status === "in_progress")
+		) {
+			entry.call.status = status;
+		}
+	}
+}
+
 function reduceUpdate(
 	draft: TranscriptState,
 	sessionId: AcpSessionId,
@@ -271,9 +283,13 @@ export const acpTranscript = {
 					return;
 				}
 				if (event.kind === "turnFailed") {
+					settleToolCalls(entries, "failed");
 					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
 					s.nextId += 1;
 					return;
+				}
+				if (event.kind === "turnSettled") {
+					settleToolCalls(entries, event.stopReason === "end_turn" ? "completed" : "failed");
 				}
 				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {
 					// A turn that ended because it was cancelled, refused or ran

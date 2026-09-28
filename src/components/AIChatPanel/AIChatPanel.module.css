@@ -98,6 +98,48 @@
   white-space: nowrap;
 }
 
+.chatTabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chatTab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.chatTabActive {
+  background: var(--bg-highlight);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.chatTab button, .newChatTab {
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-sm);
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.chatTab button:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+
+.newChatTab {
+  color: var(--fg-secondary);
+}
+
 .frozenBanner {
   padding: 4px 16px;
   font-size: var(--font-xs);
@@ -116,6 +158,69 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.messageList, .messageList * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.messageList button {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.findBar {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.findBar input {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--fg-primary);
+}
+
+.findBar button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-xs);
+}
+
+.copyAction {
+  display: block;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-xs);
+}
+
+.messageList :global(pre[data-raw-code]) {
+  position: relative;
+}
+
+.messageList :global(pre[data-raw-code] button[data-copy-code]) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  cursor: pointer;
 }
 
 .messageList > * {

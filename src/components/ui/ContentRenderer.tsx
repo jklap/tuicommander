@@ -19,6 +19,7 @@ import {
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
+import { filePathRegex } from "../Terminal/linkProvider";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -30,6 +31,10 @@ const ALLOWED_URI_REGEXP =
 
 export interface ContentRendererProps {
 	content: string;
+	/** Opt-in copy action for fenced code blocks. Receives the original source text. */
+	onCodeCopy?: (text: string) => void;
+	/** Turn plain file paths into links; the caller still resolves and validates them. */
+	autoLinkFiles?: boolean;
 	emptyMessage?: string;
 	/** Called for local file, directory, and heading links (raw href passed as argument). */
 	onLinkClick?: (href: string) => void;
@@ -114,12 +119,13 @@ marked.use({
 		code(token: Tokens.Code) {
 			const lang = token.lang ?? "";
 			const baseCls = lang ? `language-${lang}` : "";
+			const raw = encodeURIComponent(token.text);
 			if (ANSI_CSI_RE.test(token.text)) {
 				const cls = [baseCls, "ansi-block"].filter(Boolean).join(" ");
-				return `<pre><code class="${cls}">${ansiConverter.toHtml(token.text)}</code></pre>\n`;
+				return `<pre data-raw-code="${raw}"><code class="${cls}">${ansiConverter.toHtml(token.text)}</code></pre>\n`;
 			}
 			const escaped = token.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-			return `<pre><code${baseCls ? ` class="${baseCls}"` : ""}>${escaped}</code></pre>\n`;
+			return `<pre data-raw-code="${raw}"><code${baseCls ? ` class="${baseCls}"` : ""}>${escaped}</code></pre>\n`;
 		},
 	},
 });
@@ -440,6 +446,11 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 
 	const handleClick = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
+		if (target.closest("button[data-copy-code]") && props.onCodeCopy) {
+			const raw = target.closest("pre")?.getAttribute("data-raw-code");
+			if (raw !== null && raw !== undefined) props.onCodeCopy(decodeURIComponent(raw));
+			return;
+		}
 
 		// GFM task-list checkbox toggle (tri-state: [ ] → [x] → [~] → [ ])
 		if (target instanceof HTMLInputElement && target.type === "checkbox" && target.dataset.sourceLine != null) {
@@ -528,6 +539,50 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// still moves block ranges and must refresh their DOM metadata.
 		if (props.commentableBlocks && !props.incremental) props.content;
 		if (!containerRef) return;
+		if (props.autoLinkFiles) {
+			queueMicrotask(() => {
+				if (!containerRef) return;
+				const walker = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT);
+				const nodes: Text[] = [];
+				while (walker.nextNode()) {
+					const node = walker.currentNode as Text;
+					if (!node.parentElement?.closest("a, code, pre, button, textarea, input")) nodes.push(node);
+				}
+				for (const node of nodes) {
+					const source = node.textContent ?? "";
+					const regex = filePathRegex();
+					const fragment = document.createDocumentFragment();
+					let end = 0;
+					for (const match of source.matchAll(regex)) {
+						const path = match[1];
+						const start = match.index + match[0].indexOf(path);
+						fragment.append(document.createTextNode(source.slice(end, start)));
+						const anchor = document.createElement("a");
+						anchor.href = path;
+						anchor.dataset.tuicHref = path;
+						anchor.textContent = path;
+						fragment.append(anchor);
+						end = start + path.length;
+					}
+					if (!end) continue;
+					fragment.append(document.createTextNode(source.slice(end)));
+					node.replaceWith(fragment);
+				}
+			});
+		}
+		if (props.onCodeCopy) {
+			queueMicrotask(() => {
+				containerRef?.querySelectorAll<HTMLPreElement>("pre[data-raw-code]").forEach((pre) => {
+					if (pre.querySelector("button[data-copy-code]")) return;
+					const button = document.createElement("button");
+					button.type = "button";
+					button.dataset.copyCode = "";
+					button.setAttribute("aria-label", "Copy code");
+					button.textContent = "Copy";
+					pre.append(button);
+				});
+			});
+		}
 		const raf = requestAnimationFrame(() => {
 			if (!containerRef) return;
 			containerRef.querySelectorAll<HTMLInputElement>(`input[${TILDE_SENTINEL}]`).forEach((cb) => {
