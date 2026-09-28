@@ -10,6 +10,7 @@
     "!src/**/*",
     "!src-tauri/src/**/*.rs",
     "!src-tauri/src/mcp_http/command_table_paths.txt",
+    "!src-tauri/tests/fixtures/spawn_agent_http_body.json",
     "!src-tauri/crates/tuic-terminal/src/terminal_grid.rs",
     "!vitest.config.ts",
     "!scripts/ts-mutants.mjs",
