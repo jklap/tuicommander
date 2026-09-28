@@ -79,7 +79,8 @@ in total. Text paste works as usual.
   button that fails. Resume remains available when a paused turn ends at its
   boundary; select it to continue the conversation.
 - **Queue** sends another message while a turn runs. TUICommander keeps it in
-  order and sends it only after the running turn ends. The queued list appears
+  order and sends it only after the running turn ends. If ego pauses at a turn
+  boundary, the queue waits for Resume. The queued list appears
   in every connected view; either view can remove an item before ego receives
   it. Stop affects the running turn for every view. The conversation shows a
   queued message as sent only when it actually reaches ego.

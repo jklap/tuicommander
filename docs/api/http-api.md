@@ -2404,7 +2404,8 @@ loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
 
 `prompt` returns an ID immediately. When the session already has a turn, the
-host queues the prompt and sends it only after the current ACP response; it
+host queues the prompt and sends it only after the current ACP response leaves
+the session idle; a paused session keeps its queue until resume succeeds. It
 never puts two prompts in flight on that session. Each attachment snapshot has
 `queuedPrompts: [{turnId, summary}]`, and `promptQueueChanged` replaces that
 list on both streams. A `promptSent` event records the user-visible text when

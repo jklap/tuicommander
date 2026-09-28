@@ -916,7 +916,9 @@ impl ConnectionActor {
                 // A refused detach keeps the attachment on purpose: the agent
                 // still has the session, and forgetting it here would leave a
                 // live session nothing in this client can reach.
-                if outcome.is_ok() && let Some(removed) = self.attachments.remove(&session_id) {
+                if outcome.is_ok()
+                    && let Some(removed) = self.attachments.remove(&session_id)
+                {
                     for queued in removed.queued_prompts {
                         self.queued_contents.remove(&queued.turn_id);
                     }
@@ -938,34 +940,7 @@ impl ConnectionActor {
                 outcome,
             } => {
                 if self.settle_turn(&session_id, turn_id, outcome) {
-                    if let Some(attachment) = self.attachments.get_mut(&session_id) {
-                        if !attachment.queued_prompts.is_empty() {
-                            let queued = attachment.queued_prompts.remove(0);
-                            self.publish();
-                            self.journal.append(
-                                Some(session_id.clone()),
-                                Some(queued.turn_id),
-                                AcpClientEvent::PromptQueueChanged {
-                                    queued_prompts: self.attachments[&session_id]
-                                        .queued_prompts
-                                        .clone(),
-                                },
-                            );
-                            let prompt = self
-                                .queued_contents
-                                .remove(&queued.turn_id)
-                                .expect("queued payload exists");
-                            let sent =
-                                self.send_prompt(&session_id, queued.turn_id, prompt, connection);
-                            in_flight.push(Box::pin(async move {
-                                Pending::Turn {
-                                    session_id,
-                                    turn_id: queued.turn_id,
-                                    outcome: sent.await,
-                                }
-                            }));
-                        }
-                    }
+                    self.drain_next(&session_id, connection, in_flight);
                 }
             }
             Pending::Config {
@@ -990,7 +965,10 @@ impl ConnectionActor {
                 session_id,
                 outcome,
                 reply,
-            } => self.settle_hold(&session_id, outcome, reply),
+            } => {
+                self.settle_hold(&session_id, outcome, reply);
+                self.drain_next(&session_id, connection, in_flight);
+            }
             // Nothing on this attachment changes. The successor is a different
             // session that this connection is not attached to, and attaching to
             // it is a separate decision a caller makes.
@@ -1169,10 +1147,12 @@ impl ConnectionActor {
         }
 
         let turn_id = AcpTurnId::new();
-        if attachment
-            .active_turn
-            .as_ref()
-            .is_some_and(|turn| turn.state != AcpTurnState::Settled)
+        if attachment.state != AcpAttachmentState::Idle
+            || !attachment.queued_prompts.is_empty()
+            || attachment
+                .active_turn
+                .as_ref()
+                .is_some_and(|turn| turn.state != AcpTurnState::Settled)
         {
             let attachment = self
                 .attachments
@@ -1235,6 +1215,48 @@ impl ConnectionActor {
             AcpClientEvent::TurnStarted,
         );
         sent
+    }
+
+    /// Send the next accepted prompt only when ego can take a turn again.
+    fn drain_next(
+        &mut self,
+        session_id: &v1::SessionId,
+        connection: &ConnectionTo<Agent>,
+        in_flight: &InFlight,
+    ) {
+        loop {
+            let Some(attachment) = self.attachments.get_mut(session_id) else {
+                return;
+            };
+            if attachment.state != AcpAttachmentState::Idle {
+                return;
+            }
+            let Some(queued) = attachment.queued_prompts.first().cloned() else {
+                return;
+            };
+            attachment.queued_prompts.remove(0);
+            let queued_prompts = attachment.queued_prompts.clone();
+            self.publish();
+            self.journal.append(
+                Some(session_id.clone()),
+                Some(queued.turn_id),
+                AcpClientEvent::PromptQueueChanged { queued_prompts },
+            );
+            let Some(prompt) = self.queued_contents.remove(&queued.turn_id) else {
+                tracing::warn!(turn_id = ?queued.turn_id, "ACP queued prompt payload missing");
+                continue;
+            };
+            let sent = self.send_prompt(session_id, queued.turn_id, prompt, connection);
+            let session_id = session_id.clone();
+            in_flight.push(Box::pin(async move {
+                Pending::Turn {
+                    session_id,
+                    turn_id: queued.turn_id,
+                    outcome: sent.await,
+                }
+            }));
+            return;
+        }
     }
 
     /// Ask for the running turn to stop, exactly once.
