@@ -10,7 +10,6 @@ import { remoteConnectionsStore } from "../../../../stores/remoteConnections";
 import type { ForwardSpec, SshConnectionParams, TunnelProfile } from "../../../../stores/tunnels";
 import { tunnelsStore } from "../../../../stores/tunnels";
 import { randomId } from "../../../../utils/randomId";
-import d from "../../../shared/dialog.module.css";
 import { SshConnectionFields } from "../../../shared/SshConnectionFields";
 import { normalizeForwardForType, PortForwardsEditor } from "../../../TunnelsPanel/PortForwardsEditor";
 import s from "../../Settings.module.css";
@@ -351,7 +350,15 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			</label>
 			<div class={s.group}>
 				<label>Auth username (optional)</label>
-				<input value={authUsername()} onInput={(e) => setAuthUsername(e.currentTarget.value)} />
+				<input
+					type="text"
+					autocomplete="off"
+					autocorrect="off"
+					autocapitalize="off"
+					spellcheck={false}
+					value={authUsername()}
+					onInput={(e) => setAuthUsername(e.currentTarget.value)}
+				/>
 			</div>
 			<div class={s.group}>
 				<label>Auth password (optional)</label>
@@ -363,19 +370,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					placeholder={passwordExists() ? "Password stored — leave blank to keep it" : "No password set"}
 				/>
 				<Show when={passwordExists()}>
-					<button
-						type="button"
-						class={d.cancelBtn}
-						style={{
-							"margin-top": "6px",
-							padding: "2px 8px",
-							"font-size": "var(--font-sm)",
-							border: "none",
-							"border-radius": "var(--radius-md)",
-							cursor: "pointer",
-						}}
-						onClick={handleClearPassword}
-					>
+					<button type="button" class={s.testBtn} style={{ "margin-top": "6px" }} onClick={handleClearPassword}>
 						Clear stored password
 					</button>
 				</Show>
@@ -396,7 +391,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			<div style={{ display: "grid", gap: "8px" }}>
 				<div class={s.group}>
 					<label>Name</label>
-					<input value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+					<input type="text" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
 				</div>
 
 				<div class={s.group}>
@@ -452,6 +447,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<div class={s.group}>
 						<label>Instance ID (optional)</label>
 						<input
+							type="text"
 							placeholder="e.g. dev-box"
 							value={sshInstanceId()}
 							onInput={(e) => setSshInstanceId(e.currentTarget.value)}
@@ -494,6 +490,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<div class={s.group}>
 						<label>URL</label>
 						<input
+							type="text"
 							placeholder="http://192.168.1.100:9877"
 							value={directUrl()}
 							onInput={(e) => {
@@ -542,6 +539,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						<div class={s.group}>
 							<label>Instance ID</label>
 							<input
+								type="text"
 								placeholder="e.g. dev-box"
 								value={localInstanceId()}
 								onInput={(e) => setLocalInstanceId(e.currentTarget.value)}
@@ -562,7 +560,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</Show>
 
 				<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-					<button type="button" class={s.copyBtn} onClick={handleTest} disabled={testing()}>
+					<button type="button" class={s.testBtn} onClick={handleTest} disabled={testing()}>
 						{testing() ? "Testing..." : "Test Connection"}
 					</button>
 					<Show when={testResult()}>
@@ -580,10 +578,10 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</div>
 
 				<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-					<button class={s.copyBtn} onClick={handleSave} disabled={saving()}>
+					<button class={s.testBtn} onClick={handleSave} disabled={saving()}>
 						{saving() ? "Saving..." : "Save"}
 					</button>
-					<button class={s.copyBtn} onClick={props.onClose}>
+					<button class={s.testBtn} onClick={props.onClose}>
 						Cancel
 					</button>
 				</div>
