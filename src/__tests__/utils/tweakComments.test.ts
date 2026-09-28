@@ -22,6 +22,21 @@ import {
 /** Spread a findSourceMatch result into String.slice(start, end) arguments. */
 const offsets = (m: { start: number; end: number }): [number, number] => [m.start, m.end];
 
+const legacyHeader =
+	"<!-- tweak-comments v1: inline review comments.\n" +
+	"     Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP\n" +
+	"     comment body (free text, may span multiple lines)\n" +
+	"     ] — where [ ] are the HTML comment delimiters <!-- -->.\n" +
+	"     The only escape is '-->' → '--&gt;' inside the comment body.\n" +
+	"     Read each comment, apply the feedback to the highlighted text,\n" +
+	"     then remove the tweak markers. -->\n\n";
+
+function renderedText(source: string): string {
+	const container = document.createElement("div");
+	container.innerHTML = marked.parse(source) as string;
+	return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
+}
+
 describe("tweakComments parser/serializer", () => {
 	describe("block comments", () => {
 		it("maps rendered blocks to exact raw markdown ranges across formatting and links", () => {
@@ -348,6 +363,39 @@ describe("tweakComments parser/serializer", () => {
 			expect(out.indexOf(CONVENTION_HEADER)).toBe(0);
 		});
 
+		// Catches: the header closes early and exposes its instructions above an inline comment.
+		it("keeps the convention invisible in standard Markdown after an inline comment", () => {
+			const out = insertTweakComment("Hello world.", {
+				id: "c_1",
+				highlighted: "world",
+				comment: "Clarify this word",
+				createdAt: "2026-09-27T12:00:00.000Z",
+			});
+			expect(renderedText(out)).toBe("Hello world.");
+		});
+
+		// Catches: block insertion writes a header that leaks into a standard renderer.
+		it("keeps the convention invisible in standard Markdown after a block comment", () => {
+			const source = "# Heading\n\nBody.";
+			const out = insertTweakBlockComment(
+				source,
+				{ id: "c_1", highlighted: "# Heading", comment: "Clarify", createdAt: "2026-09-27T12:00:00.000Z" },
+				{ start: 0, end: 9 },
+			);
+			expect(renderedText(out)).toBe("Heading Body.");
+		});
+
+		// Catches: item insertion leaves convention text visible above the list.
+		it("keeps the convention invisible in standard Markdown after an item comment", () => {
+			const source = "- first\n- second";
+			const out = insertTweakBlockComment(
+				source,
+				{ id: "c_1", highlighted: "- first", comment: "Clarify", createdAt: "2026-09-27T12:00:00.000Z" },
+				{ start: 0, end: 7 },
+			);
+			expect(renderedText(out)).toBe("first second");
+		});
+
 		it("does not duplicate convention header on subsequent insertions", () => {
 			let src = "First word and second word.";
 			src = insertTweakComment(src, {
@@ -656,6 +704,12 @@ describe("tweakComments parser/serializer", () => {
 			expect(out).toContain("# Title");
 		});
 
+		// Catches: new-header support leaves the legacy header visible in the app renderer.
+		it("strips an existing legacy header from the app rendering path", () => {
+			const out = injectTweakSentinels(legacyHeader + "# Title\n\nBody text.");
+			expect(out).toBe("# Title\n\nBody text.");
+		});
+
 		it("is a no-op on plain markdown without markers", () => {
 			const src = "# Title\n\nSome **bold** text.";
 			expect(injectTweakSentinels(src)).toBe(src);
@@ -663,6 +717,28 @@ describe("tweakComments parser/serializer", () => {
 	});
 
 	describe("ensureConventionHeader", () => {
+		// Catches: an agent reading the file sees instructions for inline markers only.
+		it("describes inline, block, and item markers in raw Markdown", () => {
+			const source = ensureConventionHeader("body");
+			expect(source).toContain("tweak:begin:");
+			expect(source).toContain("tweak:end:");
+			expect(source).toContain("tweak:block:");
+			expect(source).toContain("tweak:item:");
+			expect(source).toContain("immediately before the selected block");
+			expect(source).toContain("after the selected list item");
+		});
+
+		// Catches: editing a legacy file prepends a second convention header.
+		it("does not add a second header to a file with the legacy convention", () => {
+			expect(ensureConventionHeader(legacyHeader + "body")).toBe(legacyHeader + "body");
+		});
+
+		// Catches: removing the final legacy marker leaves stale convention text in the file.
+		it("removes the legacy header when its last comment is deleted", () => {
+			const source = legacyHeader + "Hello <!--tweak:begin:c_1-->world<!--tweak:end:c_1 @2026-09-27T12:00:00.000Z\nnote-->";
+			expect(removeTweakComment(source, "c_1")).toBe("Hello world");
+		});
+
 		it("adds header when missing", () => {
 			const out = ensureConventionHeader("body");
 			expect(out.startsWith(CONVENTION_HEADER)).toBe(true);
