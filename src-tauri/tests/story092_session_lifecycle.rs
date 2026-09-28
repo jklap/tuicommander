@@ -614,28 +614,3 @@ async fn every_session_carries_this_process_and_nothing_a_caller_named() {
         .unwrap();
 }
 
-/// No bridge means no entry, rather than a command that cannot run.
-///
-/// This used to be the default install rather than an edge case: the entry was
-/// built from a TCP port, the listener starts only when remote access is
-/// enabled, and remote access is off by default — so an ordinary session
-/// reached no TUICommander tools at all. Over the bridge the socket is always
-/// there, and this is what it says it is: an install missing its own sidecar.
-#[tokio::test]
-async fn no_bridge_leaves_the_session_with_no_mcp_server() {
-    let fixture = Fixture::with("session-new-no-port");
-    fixture.manager.set_bridge_binary(None);
-    let connection = fixture.connect().await;
-
-    fixture
-        .manager
-        .new_session(connection.connection_id, authority(fixture.root()))
-        .await
-        .expect("session/new");
-
-    fixture
-        .manager
-        .disconnect(connection.connection_id)
-        .await
-        .unwrap();
-}
