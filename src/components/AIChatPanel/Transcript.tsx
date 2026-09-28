@@ -7,10 +7,14 @@
  * only the shape each kind takes on screen.
  */
 
-import { type Component, createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
+import { type Component, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
+import { appLogger } from "../../stores/appLogger";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
+import { writeClipboard } from "../../utils/clipboard";
+import { handleOpenUrl } from "../../utils/openUrl";
+import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import s from "./AIChatPanel.module.css";
 import { projectChatProtocolText } from "./protocolText";
@@ -107,7 +111,10 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 								</span>
 							</summary>
 							<Show when={toolCallDetail(call)}>
-								<div class={s.toolCallBody}>{toolCallDetail(call)}</div>
+								<div class={s.toolCallBody}>
+									{toolCallDetail(call)}
+									<CopyButton label="Copy tool output" text={toolCallDetail(call)} />
+								</div>
 							</Show>
 						</details>
 					)}
@@ -146,21 +153,175 @@ export interface TranscriptProps {
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
 	emptyMessage: string;
+	onOpenFile?: (href: string) => void;
+	onClear?: () => void;
 	onSuggestion: (text: string) => void;
 	/** Open questions, drawn at the end of the conversation they belong to. */
 	children?: JSX.Element;
 }
 
+const CopyButton: Component<{ label: string; text: string }> = (props) => (
+	<button
+		type="button"
+		class={s.copyAction}
+		aria-label={props.label}
+		onClick={() => void writeClipboard(props.text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))}
+	>
+		Copy
+	</button>
+);
+
+const LinkedPlainText: Component<{ text: string; onOpenFile?: (href: string) => void }> = (props) => {
+	const parts = createMemo(() => {
+		const source = props.text;
+		const links = matchWebUrls(source).map((url) => ({ start: url.index, text: url.text, web: true }));
+		for (const match of source.matchAll(filePathRegex())) {
+			links.push({ start: match.index + match[0].indexOf(match[1]), text: match[1], web: false });
+		}
+		links.sort((a, b) => a.start - b.start);
+		const segments: { text: string; web?: boolean; file?: boolean }[] = [];
+		let end = 0;
+		for (const link of links) {
+			if (link.start < end) continue;
+			segments.push({ text: source.slice(end, link.start) });
+			segments.push({ text: link.text, web: link.web, file: !link.web });
+			end = link.start + link.text.length;
+		}
+		segments.push({ text: source.slice(end) });
+		return segments;
+	});
+	return (
+		<For each={parts()}>
+			{(part) =>
+				part.web ? (
+					<a
+						href={part.text}
+						onClick={(event) => {
+							event.preventDefault();
+							handleOpenUrl(part.text);
+						}}
+					>
+						{part.text}
+					</a>
+				) : part.file ? (
+					<a
+						href={part.text}
+						onClick={(event) => {
+							event.preventDefault();
+							props.onOpenFile?.(part.text);
+						}}
+					>
+						{part.text}
+					</a>
+				) : (
+					part.text
+				)
+			}
+		</For>
+	);
+};
+
 export const Transcript: Component<TranscriptProps> = (props) => {
 	const activity = createMemo(() => activityRows(props.entries()));
+	const [finding, setFinding] = createSignal(false);
+	const [query, setQuery] = createSignal("");
+	let container: HTMLDivElement | undefined;
+	let searchInput: HTMLInputElement | undefined;
+	let matchIndex = -1;
+	const findNext = () => {
+		if (!container || !query()) return;
+		const needle = query().toLocaleLowerCase();
+		const matches: Range[] = [];
+		const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+		while (walker.nextNode()) {
+			const node = walker.currentNode;
+			if (node.parentElement?.closest("button, input, ." + s.findBar)) continue;
+			const text = node.textContent?.toLocaleLowerCase() ?? "";
+			for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+				const range = document.createRange();
+				range.setStart(node, at);
+				range.setEnd(node, at + needle.length);
+				matches.push(range);
+			}
+		}
+		if (!matches.length) return;
+		matchIndex = (matchIndex + 1) % matches.length;
+		const selection = window.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(matches[matchIndex]);
+		matches[matchIndex].startContainer.parentElement?.scrollIntoView?.({ block: "center" });
+	};
+	const onKeyDown = (event: KeyboardEvent) => {
+		if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+		if (event.target === searchInput) return;
+		const key = event.key.toLowerCase();
+		if (key === "a" && container) {
+			event.preventDefault();
+			event.stopPropagation();
+			const range = document.createRange();
+			range.selectNodeContents(container);
+			window.getSelection()?.removeAllRanges();
+			window.getSelection()?.addRange(range);
+		} else if (key === "c" && container) {
+			const selection = window.getSelection();
+			if (!selection?.rangeCount || !container.contains(selection.getRangeAt(0).commonAncestorContainer)) return;
+			const selected = selection.toString();
+			if (!selected) return;
+			event.preventDefault();
+			event.stopPropagation();
+			void writeClipboard(selected).catch((error) => appLogger.error("ai-chat", "Copy failed", error));
+		} else if (key === "f") {
+			event.preventDefault();
+			event.stopPropagation();
+			setFinding(true);
+			queueMicrotask(() => searchInput?.focus());
+		} else if (key === "k") {
+			event.preventDefault();
+			event.stopPropagation();
+			props.onClear?.();
+		}
+	};
 	return (
-		<div class={s.messageList}>
+		<div class={s.messageList} ref={container} aria-label="Chat transcript" tabIndex={0} onKeyDown={onKeyDown}>
+			<Show when={finding()}>
+				<div class={s.findBar}>
+					<input
+						ref={searchInput}
+						aria-label="Find in chat"
+						value={query()}
+						onInput={(event) => {
+							setQuery(event.currentTarget.value);
+							matchIndex = -1;
+						}}
+						onKeyDown={(event) => {
+							if (event.key === "Enter") {
+								event.preventDefault();
+								findNext();
+							}
+							if (event.key === "Escape") setFinding(false);
+						}}
+					/>
+					<button type="button" onClick={findNext}>
+						Next
+					</button>
+					<button type="button" aria-label="Close chat search" onClick={() => setFinding(false)}>
+						<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+							<path d="M2.8 2l3.2 3.2L9.2 2l.8.8L6.8 6l3.2 3.2-.8.8L6 6.8 2.8 10l-.8-.8L5.2 6 2 2.8z" />
+						</svg>
+					</button>
+				</div>
+			</Show>
 			<Show when={props.entries().length > 0} fallback={<div class={s.emptyState}>{props.emptyMessage}</div>}>
 				<For each={activity().visible}>
 					{(entry) => (
 						<Switch>
 							<Match when={entry.kind === "user" && entry}>
-								{(user) => <div class={s.userMsg}>{user().text}</div>}
+								{(user) => (
+									<div class={s.userMsg}>
+										<LinkedPlainText text={user().text} onOpenFile={props.onOpenFile} />
+										<CopyButton label="Copy user message" text={user().text} />
+									</div>
+								)}
 							</Match>
 							<Match when={entry.kind === "agent" && entry}>
 								{(agent) => {
@@ -176,8 +337,17 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 												)}
 											</Show>
 											<Show when={projected().body}>
-												<ContentRenderer content={projected().body} incremental={true} />
+												<ContentRenderer
+													content={projected().body}
+													incremental={true}
+													onLinkClick={props.onOpenFile}
+													autoLinkFiles={true}
+													onCodeCopy={(text) =>
+														void writeClipboard(text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))
+													}
+												/>
 											</Show>
+											<CopyButton label="Copy assistant message" text={agent().text} />
 											<Show when={projected().suggestions.length > 0}>
 												<div class={s.suggestedReplies} aria-label="Suggested replies">
 													<For each={projected().suggestions}>

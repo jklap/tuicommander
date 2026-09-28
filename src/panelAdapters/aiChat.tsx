@@ -3,6 +3,7 @@ import { initPanelWindow } from "../hooks/initPanelWindow";
 import type { PanelAdapter } from "../panelRouter";
 import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
+import { openTerminalFilePath } from "../utils/filePreview";
 
 const AIChatPanel = lazy(() =>
 	import("../components/AIChatPanel/AIChatPanel").then((module) => ({ default: module.AIChatPanel })),
@@ -45,6 +46,15 @@ export const aiChatPanelAdapter: PanelAdapter = {
 	defaultSize: { width: 420, height: 700 },
 	toggle: () => uiStore.toggleAiChatPanel(),
 	onDetach: () => uiStore.setAiChatPanelVisible(false),
+	handleAction: (action, data) => {
+		if (action !== "open-file" || !data || typeof data !== "object") return;
+		const { path, line, col } = data as { path?: unknown; line?: unknown; col?: unknown };
+		if (typeof path !== "string" || !path) return;
+		if (line !== undefined && (!Number.isInteger(line) || Number(line) < 1)) return;
+		if (col !== undefined && (!Number.isInteger(col) || Number(col) < 1)) return;
+		if (line !== undefined) openTerminalFilePath(path, undefined, line as number, col as number | undefined);
+		else openTerminalFilePath(path);
+	},
 	detachParams: () => {
 		const repoPath = repositoriesStore.state.activeRepoPath;
 		const fsRoot = activeFsRoot();
