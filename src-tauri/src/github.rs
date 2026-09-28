@@ -5639,7 +5639,7 @@ mod tests {
             GitHubHost::new("ghe.acme.com").unwrap(),
             None,
         ));
-        registry.save().unwrap();
+        registry.save(&GitHubAccountRegistry::default()).unwrap();
         let mut bindings = RepoBindingStore::default();
         bindings.set_binding(
             &repo,
@@ -5650,7 +5650,7 @@ mod tests {
                 remote_name: "origin".into(),
             },
         );
-        bindings.save().unwrap();
+        bindings.save(&RepoBindingStore::default()).unwrap();
 
         let err =
             fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main", None, None).unwrap_err();

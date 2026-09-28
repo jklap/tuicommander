@@ -55,7 +55,7 @@ pub(super) async fn put_config(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(incoming): Json<serde_json::Value>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::AppConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
@@ -66,9 +66,7 @@ pub(super) async fn put_config(
     let saved = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            crate::config::commit_config_change(&state, |current| {
-                crate::config::merge_partial_app_config(current, incoming)
-            })
+            crate::config::commit_config_save(&state, request.base, request.config)
         })
         .await
     };
@@ -188,12 +186,12 @@ pub(super) async fn get_notification_config() -> impl IntoResponse {
 pub(super) async fn put_notification_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::NotificationConfig>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::NotificationConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_notification_config(config) {
+    match crate::config::save_notification_config(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -214,12 +212,12 @@ pub(super) async fn get_config_defaults_http() -> impl IntoResponse {
 pub(super) async fn put_ui_prefs(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::UIPrefsConfig>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::UIPrefsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_ui_prefs(config) {
+    match crate::config::save_ui_prefs(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -235,12 +233,12 @@ pub(super) async fn get_repo_settings() -> impl IntoResponse {
 pub(super) async fn put_repo_settings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::RepoSettingsMap>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoSettingsMap>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_repo_settings(config) {
+    match crate::config::save_repo_settings(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -323,12 +321,12 @@ pub(super) async fn get_pane_layout() -> impl IntoResponse {
 pub(super) async fn put_pane_layout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(layout): Json<serde_json::Value>,
+    Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_pane_layout(layout) {
+    match crate::config::save_pane_layout(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -377,12 +375,12 @@ pub(super) async fn get_prompt_library() -> impl IntoResponse {
 pub(super) async fn put_prompt_library(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::PromptLibraryConfig>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::PromptLibraryConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_prompt_library(config) {
+    match crate::config::save_prompt_library(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -400,12 +398,12 @@ pub(super) async fn get_repo_defaults() -> impl IntoResponse {
 pub(super) async fn put_repo_defaults(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::RepoDefaultsConfig>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoDefaultsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_repo_defaults(config) {
+    match crate::config::save_repo_defaults(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -430,12 +428,12 @@ pub(super) async fn get_notes() -> impl IntoResponse {
 pub(super) async fn put_notes(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<serde_json::Value>,
+    Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_notes(config) {
+    match crate::config::save_notes(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -453,12 +451,12 @@ pub(super) async fn get_activity() -> impl IntoResponse {
 pub(super) async fn put_activity(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(items): Json<serde_json::Value>,
+    Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_activity(items) {
+    match crate::config::save_activity(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -476,12 +474,12 @@ pub(super) async fn get_keybindings() -> impl IntoResponse {
 pub(super) async fn put_keybindings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<serde_json::Value>,
+    Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_keybindings(config) {
+    match crate::config::save_keybindings(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -499,12 +497,12 @@ pub(super) async fn get_agents_config() -> impl IntoResponse {
 pub(super) async fn put_agents_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::AgentsConfig>,
+    Json(request): Json<crate::config::ConfigSaveRequest<crate::config::AgentsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    match crate::config::save_agents_config(config) {
+    match crate::config::save_agents_config(request.base, request.config) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

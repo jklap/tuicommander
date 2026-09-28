@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { ACTION_NAMES, type ActionName, DEFAULT_BINDINGS, normalizeCombo } from "../keybindingDefaults";
 import { appLogger } from "./appLogger";
 
@@ -27,6 +28,7 @@ export interface DynamicAction {
  * Exported as a factory for testability. The singleton is exported at the bottom.
  */
 export function createKeybindingsStore() {
+	const keybindingsWriter = createConfigDeltaWriter<KeybindingOverride[]>("save_keybindings");
 	// Action → display key (e.g. "Cmd+Shift+D"). Undefined means unbound.
 	let actionToKey = new Map<string, string>();
 	// Normalized combo → action name (for event dispatch)
@@ -113,6 +115,7 @@ export function createKeybindingsStore() {
 		async hydrate(): Promise<void> {
 			try {
 				const overrides = await invoke<KeybindingOverride[]>("load_keybindings");
+				keybindingsWriter.loaded(Array.isArray(overrides) ? overrides : []);
 				// Load succeeded (even if empty/missing file) — unlock persistence
 				hydrated = true;
 				if (!Array.isArray(overrides) || overrides.length === 0) return;
@@ -237,7 +240,7 @@ export function createKeybindingsStore() {
 				return;
 			}
 			try {
-				await invoke("save_keybindings", { config: toOverridesArray() });
+				await keybindingsWriter.save(toOverridesArray());
 			} catch (err) {
 				appLogger.error("config", "Failed to save keybindings", err);
 			}

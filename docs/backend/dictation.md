@@ -152,7 +152,7 @@ own identity so the binding can be checked — see "Who may speak" below.
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `hands_free_start_notice`, `hands_free_earcons`, `speech_command`, `speech_voice`, `speech_volume_db` and `speech_levelling`). Writes the whole document — see "Configuration persistence" |
+| `set_dictation_config(base, config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `hands_free_start_notice`, `hands_free_earcons`, `speech_command`, `speech_voice`, `speech_volume_db` and `speech_levelling`). Applies the caller's changes to the latest document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -569,12 +569,14 @@ no notice — asserted at the surface in
 
 ### Configuration persistence
 
-`set_dictation_config` writes the whole document, and every hands-free field
-carries `#[serde(default)]` so a config written before the field existed still
-loads. A payload that omits a field therefore **silently resets it** rather than
-failing. Any caller that rebuilds a `DictationConfig` must carry every field:
-load-modify-save, never build-from-scratch. `dictationStore.saveConfig` reads
-the stored config and overrides only the fields the UI owns, and
+`set_dictation_config` accepts the loaded `base` and edited `config`, then
+applies only their delta to the latest file under its lock. Every hands-free
+field carries `#[serde(default)]` so a config written before the field existed
+still loads. A caller must keep the loaded snapshot and override only the
+fields it changed. A recovered malformed document is rewritten from its
+salvaged values as before; ordinary saves refuse to overwrite a newly corrupt
+file. `dictationStore.saveConfig` reads the stored config and overrides only the
+field in the request, and
 `src/__tests__/stores/dictation.test.ts` drives that field list off this crate's
 struct so a newly added field is covered by whoever adds it.
 

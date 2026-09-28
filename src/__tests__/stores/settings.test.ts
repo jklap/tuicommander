@@ -224,6 +224,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ ide: "cursor" }),
 				});
 			});
@@ -260,6 +261,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ font_family: "Fira Code" }),
 				});
 			});
@@ -450,6 +452,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ shell: "/bin/zsh" }),
 				});
 			});
@@ -468,6 +471,7 @@ describe("settingsStore", () => {
 				await vi.runAllTimersAsync();
 
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ progress_tracking: false }),
 				});
 			});
@@ -483,6 +487,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ theme: "dracula" }),
 				});
 			});
@@ -498,6 +503,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ split_tab_mode: "unified" }),
 				});
 			});
@@ -537,6 +543,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ auto_show_pr_popover: false }),
 				});
 			});
@@ -577,6 +584,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ issue_filter: "mentioned" }),
 				});
 			});
@@ -661,6 +669,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ pr_hide_drafts: true }),
 				});
 			});
@@ -727,6 +736,7 @@ describe("settingsStore", () => {
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
 				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ custom_launchers: [launcher] }),
 				});
 			});

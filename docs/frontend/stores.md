@@ -407,6 +407,15 @@ interface Idea {
 
 ## Other Stores
 
+Config-backed stores retain the snapshot returned by their load command and
+send `{ base, config }` on save (`paneLayoutStore` uses `layout`, and
+`activityStore` uses `items` for the edited value). Their shared
+`configDeltaWriter` orders overlapping saves within one WebView and advances
+the base after each successful write. The backend merges only changed keys
+against the latest locked file; arrays such as keybindings and notes replace as
+a unit. A failed load disables saving rather than treating defaults as the
+user's prior document.
+
 ### repoSettingsStore (`repoSettings.ts`)
 Per-repository settings (base branch, scripts, worktree options).
 

@@ -632,7 +632,8 @@ mod warm_tests {
             gate.display(),
             finished.display()
         );
-        crate::config::save_repo_defaults(defaults).unwrap();
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+            .unwrap();
     }
 
     #[cfg(unix)]

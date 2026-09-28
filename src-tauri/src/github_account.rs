@@ -36,8 +36,8 @@ impl GitHubAccountRegistry {
     }
 
     /// Persist the registry to disk atomically.
-    pub(crate) fn save(&self) -> Result<(), String> {
-        crate::config::ConfigFile::<Self>::new(GITHUB_ACCOUNTS_FILE).save(self)
+    pub(crate) fn save(&self, base: &Self) -> Result<(), String> {
+        crate::config::ConfigFile::<Self>::new(GITHUB_ACCOUNTS_FILE).save_delta(base, self)
     }
 
     pub(crate) fn list(&self) -> &[GitHubAccount] {
@@ -103,8 +103,8 @@ impl RepoBindingStore {
     }
 
     /// Persist bindings to disk atomically.
-    pub(crate) fn save(&self) -> Result<(), String> {
-        crate::config::ConfigFile::<Self>::new(GITHUB_BINDINGS_FILE).save(self)
+    pub(crate) fn save(&self, base: &Self) -> Result<(), String> {
+        crate::config::ConfigFile::<Self>::new(GITHUB_BINDINGS_FILE).save_delta(base, self)
     }
 
     /// Canonical-root key for a repo path (worktree-aware).
@@ -305,6 +305,7 @@ fn store_guard() -> std::sync::MutexGuard<'static, ()> {
 pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> Result<(), String> {
     let _guard = store_guard();
     let mut registry = GitHubAccountRegistry::load();
+    let base = registry.clone();
     // Reject an id already used by a DIFFERENT host: a bare-hostname GHE account
     // (id = host) and a named github.com account (id = login) could otherwise
     // collide and silently clobber each other's record + vault token. Same host
@@ -322,7 +323,7 @@ pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> R
         crate::credentials::set(Credential::GithubToken(&account.id), pat)?;
     }
     registry.upsert(account);
-    registry.save()
+    registry.save(&base)
 }
 
 /// Remove an account everywhere: its PAT, its registry record, and every binding
@@ -333,11 +334,13 @@ pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> 
     // Best-effort token delete — absence is not an error.
     let _ = crate::credentials::delete(Credential::GithubToken(account_id));
     let mut registry = GitHubAccountRegistry::load();
+    let registry_base = registry.clone();
     registry.remove(account_id);
-    registry.save()?;
+    registry.save(&registry_base)?;
     let mut bindings = RepoBindingStore::load();
+    let bindings_base = bindings.clone();
     bindings.remove_account_bindings(account_id);
-    bindings.save()
+    bindings.save(&bindings_base)
 }
 
 /// Persist a repo→account binding derived from the chosen remote (its owner/repo
@@ -361,8 +364,9 @@ pub(crate) fn bind_repo_to_account(
     };
     let _guard = store_guard();
     let mut store = RepoBindingStore::load();
+    let base = store.clone();
     store.set_binding(repo_path, binding.clone());
-    store.save()?;
+    store.save(&base)?;
     Ok(binding)
 }
 
@@ -371,9 +375,10 @@ pub(crate) fn bind_repo_to_account(
 pub(crate) fn unbind_repo(repo_path: &std::path::Path) -> Result<bool, String> {
     let _guard = store_guard();
     let mut store = RepoBindingStore::load();
+    let base = store.clone();
     let removed = store.remove_binding(repo_path);
     if removed {
-        store.save()?;
+        store.save(&base)?;
     }
     Ok(removed)
 }
@@ -677,7 +682,7 @@ mod tests {
             GitHubHost::new("ghe.acme.com").unwrap(),
             Some("octocat".into()),
         ));
-        reg.save().expect("save");
+        reg.save(&GitHubAccountRegistry::default()).expect("save");
 
         let loaded = GitHubAccountRegistry::load();
         assert_eq!(loaded, reg);
@@ -768,7 +773,7 @@ mod tests {
 
         let mut store = RepoBindingStore::default();
         store.set_binding(&repo, sample_binding("github.com"));
-        store.save().expect("save");
+        store.save(&RepoBindingStore::default()).expect("save");
 
         let loaded = RepoBindingStore::load();
         assert_eq!(loaded, store);
@@ -776,6 +781,29 @@ mod tests {
             loaded.get_binding(&repo),
             Some(&sample_binding("github.com"))
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_binding_saves_preserve_distinct_repositories() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let base = RepoBindingStore::load();
+        let mut first = base.clone();
+        first
+            .bindings
+            .insert("/alpha".into(), sample_binding("one"));
+        let mut second = base.clone();
+        second
+            .bindings
+            .insert("/beta".into(), sample_binding("two"));
+
+        first.save(&base).unwrap();
+        second.save(&base).unwrap();
+
+        let saved = RepoBindingStore::load();
+        assert!(saved.bindings.contains_key("/alpha"));
+        assert!(saved.bindings.contains_key("/beta"));
     }
 
     // --- resolve_repo_account ---
@@ -1280,7 +1308,7 @@ mod tests {
                 remote_name: "origin".into(),
             },
         );
-        bindings.save().unwrap();
+        bindings.save(&RepoBindingStore::default()).unwrap();
 
         remove_account_everywhere("ghe.remove-test.example").unwrap();
 

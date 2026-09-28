@@ -1161,6 +1161,16 @@ Returns bcrypt hash string.
 
 ### Notification Config
 
+Interactive config `PUT` routes below (except `/config/repositories`, which has
+its own keyed mutation protocol) accept `{ "base": <last GET response>,
+"config": <edited document> }`. The server computes the changes from `base` to
+`config` and applies them to the latest file under its lock. Objects merge by
+key, arrays replace whole, and JSON null deletes a key. A field unchanged by
+this caller is never written. Clients should serialize their own overlapping
+saves so each later request has the preceding desired document as its base.
+`PUT /config` uses this same envelope. Its `GET` response omits secret values;
+unchanged omitted secrets remain on disk.
+
 ```
 GET /config/notifications
 PUT /config/notifications
@@ -1769,7 +1779,7 @@ PUT  /dictation/corrections      { "map": { ... } } -> null
 GET  /dictation/devices                             -> AudioDevice[]
 POST /dictation/inject           { "text": "..." }  -> "<corrected text>"
 GET  /dictation/config                              -> DictationConfig
-PUT  /dictation/config           DictationConfig    -> null
+PUT  /dictation/config           {base, config}     -> null
 GET  /dictation/hands-free                          -> HandsFreeStatus
 GET  /dictation/hands-free/default-notice           -> string
 POST /dictation/hands-free/arm   { "sessionId": "...", "owner": "..." }
@@ -1779,8 +1789,8 @@ GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 ```
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
-`{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the config
-object as the whole body, not wrapped in a field.
+`{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the loaded
+`base` and edited `config`; unchanged keys survive a concurrent save.
 
 The speech-asset routes take `asset`, an id from the catalogue in
 `dictation::speech::assets`. That is an allowlist, not a hint: an unknown id is

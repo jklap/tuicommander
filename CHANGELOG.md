@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, prompt, notes, activity, keybinding, dictation, and GitHub binding configuration.
+
 - **One AI Chat across repositories** — The AI Chat is the same conversation whichever repository is on screen: switching repository keeps its tabs and starts nothing, and the repository you are viewing is sent with each message as context. ego starts with your first message (or **+**), runs in `~/Gits`, is shared by every window and the phone, and is ended when TUICommander quits.
 
 - **ego reaches TUICommander over ACP** — The AI Chat's ego sessions now get the `tuicommander` MCP server on the ACP connection itself (MCP-over-ACP) instead of a `tuic-bridge` process. Each tool call no longer opens a fresh HTTP MCP session; the tools, their names and ego's permission rules are unchanged, and ego can cancel a running call. Claude Code, Codex and other agents keep using the bridge and HTTP `/mcp`.

@@ -532,10 +532,10 @@ describe("transport", () => {
 
 		it("maps save_config to PUT /config", () => {
 			const cfg = { font_family: "JetBrains Mono" };
-			const result = mapCommandToHttp("save_config", { config: cfg });
+			const result = mapCommandToHttp("save_config", { base: { font_family: "Menlo" }, config: cfg });
 			expect(result.method).toBe("PUT");
 			expect(result.path).toBe("/config");
-			expect(result.body).toEqual(cfg);
+			expect(result.body).toEqual({ base: { font_family: "Menlo" }, config: cfg });
 		});
 
 		it("maps upstream saves with both the loaded base and desired config", () => {
@@ -655,7 +655,7 @@ describe("transport", () => {
 				["speak_reply", { text: "Fatto.", turn: 3 }, "POST", "/dictation/speech/speak", { text: "Fatto.", turn: 3 }],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
-				["set_dictation_config", { config: { enabled: true } }, "PUT", "/dictation/config", { enabled: true }],
+				["set_dictation_config", { base: { enabled: false }, config: { enabled: true } }, "PUT", "/dictation/config", { base: { enabled: false }, config: { enabled: true } }],
 				// The body is camelCase on both transports: the Rust request type
 				// renames its fields to match, so one store works unchanged.
 				[

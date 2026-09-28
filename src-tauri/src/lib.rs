@@ -342,10 +342,14 @@ mod boot_commands {
 /// Save configuration to disk, update the AppState cache, and live-restart the HTTP server
 /// if MCP / Remote Access settings changed (no app restart required).
 #[tauri::command]
-fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Result<(), String> {
+fn save_config(
+    state: State<'_, Arc<AppState>>,
+    base: config::AppConfig,
+    config: config::AppConfig,
+) -> Result<(), String> {
     // Serialized read-merge-persist: see config::commit_config_change. Two overlapping
     // saves used to read the same snapshot and the loser's fields were silently dropped.
-    let effects = config::commit_config_change(state.inner(), move |_current| Ok(config))?;
+    let effects = config::commit_config_save(state.inner(), base, config)?;
 
     if effects.tools_changed {
         let _ = state.mcp.tools_changed.send(());
@@ -356,6 +360,16 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn save_app_config(
+    state: State<'_, Arc<AppState>>,
+    base: config::AppConfig,
+    config: config::AppConfig,
+) -> Result<(), String> {
+    save_config(state, base, config)
 }
 
 /// Hash a plaintext password with bcrypt for remote access config
@@ -2093,7 +2107,7 @@ pub fn run() {
             dictation::commands::get_hands_free_status,
             global_hotkey::set_global_hotkey,
             config::load_app_config,
-            config::save_app_config,
+            save_app_config,
             boot_commands::load_notification_config_async,
             config::save_notification_config,
             boot_commands::load_ui_prefs_async,
