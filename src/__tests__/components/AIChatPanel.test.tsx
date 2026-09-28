@@ -295,6 +295,131 @@ describe("AIChatPanel: without a configured binary", () => {
 });
 
 describe("AIChatPanel: a turn", () => {
+	it("hides the connection ack and presents intent as turn status", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: {
+					type: "text",
+					text: "TUICommander v1.7.7 is connected. intent: Controllo lo stato prima di risponderti (Stato)\nRisultato pronto.",
+				},
+			},
+		});
+		await settle();
+		expect(container.textContent).not.toContain("TUICommander v1.7.7 is connected.");
+		expect(container.textContent).not.toContain("intent:");
+		expect(container.querySelector('[aria-label="Agent intent"]')?.textContent).toContain(
+			"Controllo lo stato prima di risponderti",
+		);
+		expect(container.textContent).toContain("Risultato pronto.");
+	});
+
+	it("turns a streamed suggestion into three actions and submits the chosen text", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Scegli il prossimo passo.\nsug" },
+			},
+		});
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "gest: [ Stato lavori | Una decisione aperta | Nuova richiesta ]" },
+			},
+		});
+		await settle();
+		expect(container.textContent).not.toContain("suggest:");
+		const choices = [...container.querySelectorAll('[aria-label="Suggested replies"] button')];
+		expect(choices.map((button) => button.textContent)).toEqual([
+			"Stato lavori",
+			"Una decisione aperta",
+			"Nuova richiesta",
+		]);
+		(choices[1] as HTMLButtonElement).click();
+		await settle();
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Una decisione aperta");
+	});
+
+	it("leaves mentions of protocol words inside prose and fenced code unchanged", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: {
+					type: "text",
+					text: "I suggest: [ A | B ] in the sample.\n```text\nsuggest: [ Alpha | Beta ]\nintent: sample (Demo)\n```",
+				},
+			},
+		});
+		await settle();
+		expect(container.textContent).toContain("I suggest: [ A | B ]");
+		expect(container.textContent).toContain("suggest: [ Alpha | Beta ]");
+		expect(container.textContent).toContain("intent: sample (Demo)");
+		expect(container.querySelector('[aria-label="Suggested replies"]')).toBeNull();
+	});
+
+	it("keeps malformed suggestions and mid-sentence intent as answer text", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: {
+					type: "text",
+					text: "The intent: of this example is explanatory.\nsuggest: [ A | B\nsuggest: [ A | nested [ B ] | C ]\nsuggest: [ A | B | C | D | E ]",
+				},
+			},
+		});
+		await settle();
+		expect(container.textContent).toContain("The intent: of this example");
+		expect(container.textContent).toContain("suggest: [ A | B");
+		expect(container.textContent).toContain("suggest: [ A | nested [ B ] | C ]");
+		expect(container.textContent).toContain("suggest: [ A | B | C | D | E ]");
+		expect(container.querySelector('[aria-label="Agent intent"]')).toBeNull();
+		expect(container.querySelector('[aria-label="Suggested replies"]')).toBeNull();
+	});
+
+	it("does not interpret markers in indented markdown code", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Example:\n\n    suggest: [ Yes | No ]\n    intent: show syntax (Example)" },
+			},
+		});
+		await settle();
+		expect(container.textContent).toContain("suggest: [ Yes | No ]");
+		expect(container.textContent).toContain("intent: show syntax (Example)");
+		expect(container.querySelector('[aria-label="Suggested replies"]')).toBeNull();
+	});
+
+	it("keeps an indented code example at the start of an answer", async () => {
+		const { container } = renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "    suggest: [ A | B ]" },
+			},
+		});
+		await settle();
+		expect(container.querySelector("pre code")?.textContent).toContain("suggest: [ A | B ]");
+		expect(container.querySelector('[aria-label="Suggested replies"]')).toBeNull();
+	});
+
 	it("shows an ACP prompt failure in the transcript and returns the composer to Send", async () => {
 		const { container } = renderPanel();
 		await settle();

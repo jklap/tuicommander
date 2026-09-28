@@ -75,6 +75,10 @@ in total. Text paste works as usual.
 
 - **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
   a *Thinking* disclosure, kept apart from the answer.
+- **Turn markers.** AI Chat hides ego's TUICommander connection acknowledgement,
+  shows `intent:` as a labelled status, and turns a `suggest: [ A | B | C ]`
+  line into reply buttons. Choosing one sends that text as the next prompt.
+  Mentions in ordinary prose and code examples remain in the answer.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
   composer becomes available for another prompt.
