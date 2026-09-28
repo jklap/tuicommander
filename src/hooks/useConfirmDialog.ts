@@ -108,6 +108,7 @@ export function useConfirmDialog() {
 		deleteBranch: boolean,
 	): Promise<boolean> {
 		const lost = status.dirtyFiles ?? 0;
+		const missing = status.missingCheckout === true;
 		const dirty = lost > 0 ? `${lost} uncommitted file${lost === 1 ? "" : "s"} will be discarded` : "clean";
 		const commits =
 			status.commitStatus === "merged"
@@ -124,7 +125,7 @@ export function useConfirmDialog() {
 			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
 		return await confirm({
 			title: destructive ? "Destroy workspace state?" : "Remove workspace?",
-			message: `Remove "${branchName}"?\n\nWorking tree: ${dirty}.${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
+			message: `Remove "${branchName}"?\n\n${missing ? "The checkout directory is missing; Git still has a worktree registration. Its submodule refs will be preserved before cleanup." : `Working tree: ${dirty}.`}${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
 			okLabel: destructive ? "Delete anyway" : "Remove",
 			cancelLabel: "Cancel",
 			kind: destructive ? "error" : "warning",

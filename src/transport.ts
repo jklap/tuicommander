@@ -1502,10 +1502,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			const force = args.force === true ? "&force=true" : "";
 			const overrideLock = args.overrideLock === true ? "&overrideLock=true" : "";
 			const expectedFingerprint = args.expectedFingerprint ? `&expectedFingerprint=${p("expectedFingerprint")}` : "";
+			const confirmMissingCheckout = args.confirmMissingCheckout === true ? "&confirmMissingCheckout=true" : "";
 			const deleteBranch = args.deleteBranch ?? args.force !== true;
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}${confirmMissingCheckout}`,
 			};
 		},
 	},

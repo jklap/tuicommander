@@ -135,7 +135,7 @@ edits to a path that was already dirty. Initialized submodule refs, stash entrie
 and reflog-only commits are preserved in the main checkout's module repository
 before removal. If the main checkout's copy of a
 submodule is uninitialized or points at the wrong Git repository, removal stops
-and leaves the worktree available for recovery. If the checkout directory is already missing, force confirmation is required to prune its Git registration; a lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
+and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
 Deinitialized submodules with retained Git history also block removal, even when
 their Git module name differs from the checkout path or they are nested.
 
