@@ -261,18 +261,21 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			});
 		},
 
-		/** Send one turn as ACP content blocks, shared by desktop and remote chat. */
+		/** Send one turn as ACP content blocks, shared by desktop and remote chat.
+		 *  `viewedRepo` is the repository on screen, sent as context for this turn
+		 *  only — the session's cwd stays the workspace. */
 		async prompt(
 			connectionId: AcpConnectionId,
 			sessionId: AcpSessionId,
 			text: string,
 			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
+			viewedRepo: string | null = null,
 		): Promise<string> {
 			if (images.length && !acpStore.connection(connectionId)?.capabilities?.promptImage) {
 				throw new Error("This agent does not support images.");
 			}
 			const prompt: AcpContentBlock[] = [...(text.trim() ? [{ type: "text" as const, text }] : []), ...images];
-			return invoke<string>("acp_session_prompt", { connectionId, sessionId, prompt });
+			return invoke<string>("acp_session_prompt", { connectionId, sessionId, prompt, viewedRepo });
 		},
 
 		async cancel(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {

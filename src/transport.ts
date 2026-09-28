@@ -346,7 +346,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({
 			method: "POST",
 			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/prompt`,
-			body: { prompt: args.prompt },
+			body: { prompt: args.prompt, viewedRepo: args.viewedRepo ?? null },
 		}),
 	},
 	acp_session_cancel: {
