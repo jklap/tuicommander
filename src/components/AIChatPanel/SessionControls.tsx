@@ -29,7 +29,7 @@ import type { AcpChat } from "./useAcpChat";
 type SelectOption = Extract<AcpSessionConfigOption, { type: "select" }>;
 
 function isGrouped(options: SelectOption["options"]): options is AcpSessionConfigSelectGroup[] {
-	return options.length > 0 && !("id" in options[0]);
+	return options.length > 0 && "options" in options[0];
 }
 
 function groups(option: SelectOption): AcpSessionConfigSelectGroup[] {
@@ -45,7 +45,7 @@ function choices(option: SelectOption): AcpSessionConfigSelectOption[] {
 }
 
 function choiceName(option: SelectOption): string {
-	return choices(option).find((choice) => choice.id === option.currentValue)?.name ?? option.currentValue;
+	return choices(option).find((choice) => choice.value === option.currentValue)?.name ?? option.currentValue;
 }
 
 function conversationLabel(session: AcpListedSession): string {
@@ -73,13 +73,13 @@ const ConfigSelect: Component<{ option: SelectOption; chat: AcpChat }> = (props)
 		}}
 	>
 		<For each={flat(props.option)}>
-			{(choice) => <option value={choice.id} selected={choice.id === props.option.currentValue}>{choice.name}</option>}
+			{(choice) => <option value={choice.value} selected={choice.value === props.option.currentValue}>{choice.name}</option>}
 		</For>
 		<For each={groups(props.option)}>
 			{(group) => (
 				<optgroup label={group.name}>
 					<For each={group.options}>
-						{(choice) => <option value={choice.id} selected={choice.id === props.option.currentValue}>{choice.name}</option>}
+						{(choice) => <option value={choice.value} selected={choice.value === props.option.currentValue}>{choice.name}</option>}
 					</For>
 				</optgroup>
 			)}
