@@ -864,17 +864,26 @@ pub(super) fn refresh_mcp_session(
     if let Some(mut meta) = state.mcp.sessions.get_mut(mcp_sid) {
         meta.last_activity = std::time::Instant::now();
     } else {
-        state.mcp.sessions.insert(
-            mcp_sid.to_string(),
-            crate::state::McpSessionMeta {
-                last_activity: std::time::Instant::now(),
-                is_claude_code,
-                requires_meta_tools: false,
-                has_sse_stream: false,
-                sse_generation: 0,
-                repo_path: None,
-            },
-        );
+        // A reaper that removed metadata still owns the identity lock until
+        // it has retired routes and channels. Wait for that cleanup before
+        // recreating the protocol session, then re-assert identity below.
+        // Existing sessions take the lock-free path above on every 3s ping.
+        let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+        if let Some(mut meta) = state.mcp.sessions.get_mut(mcp_sid) {
+            meta.last_activity = std::time::Instant::now();
+        } else {
+            state.mcp.sessions.insert(
+                mcp_sid.to_string(),
+                crate::state::McpSessionMeta {
+                    last_activity: std::time::Instant::now(),
+                    is_claude_code,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+        }
     }
     apply_initialize_identity(state, mcp_sid, tuic_session_header);
 }
