@@ -31,7 +31,12 @@ describe("configDeltaWriter", () => {
 
 	it("does not send a later save while the earlier write is pending", async () => {
 		let finishFirst!: () => void;
-		mockInvoke.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve; }));
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					finishFirst = resolve;
+				}),
+		);
 		const writer = createConfigDeltaWriter<{ count: number }>("save_ui_prefs");
 		writer.loaded({ count: 0 });
 		const first = writer.save({ count: 1 });

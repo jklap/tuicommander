@@ -154,10 +154,7 @@ describe("settings search index — drift guard", () => {
 
 	it("classifies only the machine selector and per-agent idle close as Agents orphans", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
-		expect(orphans.map((setting) => setting.text)).toEqual([
-			"Close idle managed child after",
-			"Configure agents on",
-		]);
+		expect(orphans.map((setting) => setting.text)).toEqual(["Close idle managed child after", "Configure agents on"]);
 	});
 
 	it("indexes no tab the panel cannot open", () => {
