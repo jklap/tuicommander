@@ -102,6 +102,8 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
+Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
+
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
 Each setting can use the global default or be overridden for a specific repository.

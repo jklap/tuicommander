@@ -489,17 +489,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		if (orphanCleanup === "on") {
 			// Auto-remove silently
+			let removed = 0;
 			await Promise.allSettled(
 				orphanPaths.map(async (wtPath) => {
 					try {
 						await deps.closeTerminalsInWorktree(wtPath);
 						await deps.repo.removeOrphanWorktree(repoPath, wtPath);
+						removed++;
 					} catch (err) {
 						appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
 					}
 				}),
 			);
-			deps.setStatusInfo(`Removed ${orphanPaths.length} orphaned worktree(s)`);
+			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
 			return;
 		}
 
@@ -523,17 +525,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			return;
 		}
 
+		let removed = 0;
 		await Promise.allSettled(
 			pending.map(async (wtPath) => {
 				try {
 					await deps.closeTerminalsInWorktree(wtPath);
 					await deps.repo.removeOrphanWorktree(repoPath, wtPath);
+					removed++;
 				} catch (err) {
 					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);
 				}
 			}),
 		);
-		deps.setStatusInfo(`Removed ${pending.length} orphaned worktree(s)`);
+		if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */
