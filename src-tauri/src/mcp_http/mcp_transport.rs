@@ -1286,7 +1286,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
@@ -3531,10 +3531,40 @@ async fn handle_worktree(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            match crate::worktree::get_worktree_paths(path) {
-                Ok(wts) => to_json_or_error(wts),
-                Err(e) => serde_json::json!({"error": e}),
+            let mut wts = match crate::worktree::get_worktree_paths(path.clone()) {
+                Ok(wts) => wts,
+                Err(e) => return serde_json::json!({"error": e}),
+            };
+            // Same source as the sidebar's lifecycleStatus (get_repo_summary /
+            // get_repo_diff_stats): inspect_workspace_lifecycle, fanned out per
+            // worktree on the blocking pool so the async worker isn't parked on
+            // the git subprocesses each inspection runs.
+            let mut lifecycle_handles = Vec::with_capacity(wts.len());
+            for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
+                let base_repo = path.clone();
+                lifecycle_handles.push(tokio::task::spawn_blocking(move || {
+                    let lifecycle = crate::worktree::inspect_workspace_lifecycle(
+                        std::path::Path::new(&base_repo),
+                        &workspace_id,
+                    );
+                    (workspace_id, lifecycle)
+                }));
             }
+            for handle in lifecycle_handles {
+                match handle.await {
+                    Ok((workspace_id, lifecycle)) => {
+                        if let Some(workspace) = wts.get_mut(&workspace_id) {
+                            workspace.lifecycle_status = Some(lifecycle);
+                        }
+                    }
+                    Err(error) => {
+                        return serde_json::json!({
+                            "error": format!("worktree lifecycle task failed: {error}")
+                        });
+                    }
+                }
+            }
+            to_json_or_error(wts)
         }
         "worktree_lifecycle" => {
             let path = match require_path(args, "worktree_lifecycle") {
@@ -8963,6 +8993,186 @@ mod tests {
         assert!(
             error.contains("status"),
             "available actions omitted status: {error}"
+        );
+    }
+
+    /// worktree_list must reuse `inspect_workspace_lifecycle` — the same
+    /// function `get_repo_summary`/`get_repo_diff_stats` call for the sidebar's
+    /// `lifecycleStatus` — rather than recomputing merge state a second way.
+    #[tokio::test]
+    async fn native_mcp_worktree_list_reports_lifecycle_status() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        crate::git_cli::git_cmd(&repo).args(["init"]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "base"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["branch", "-M", "main"])
+            .run()
+            .unwrap();
+        let worktree = temp.path().join("feature");
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(worktree.join("feature.txt"), "work\n").unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["commit", "-m", "feature work"])
+            .run()
+            .unwrap();
+        // Fast-forwards main to feature's tip, so the worktree is merged and clean.
+        crate::git_cli::git_cmd(&repo)
+            .args(["merge", "feature"])
+            .run()
+            .unwrap();
+
+        let state = test_state();
+        let repo_path = repo.to_string_lossy().into_owned();
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_list", "path": &repo_path}),
+            false,
+        )
+        .await;
+
+        let lifecycle = &response["feature"]["lifecycle_status"];
+        assert_eq!(
+            lifecycle["commit_status"].as_str(),
+            Some("merged"),
+            "a fast-forward-merged, clean worktree must report its merged commit status, reusing \
+             the same inspect_workspace_lifecycle the sidebar uses: {response}"
+        );
+        assert_eq!(
+            lifecycle["dirty_files"].as_i64(),
+            Some(0),
+            "a clean worktree must report zero dirty files: {response}"
+        );
+        assert_eq!(
+            lifecycle["removal_safety"].as_str(),
+            Some("safe"),
+            "a merged, clean worktree must be safe to remove: {response}"
+        );
+    }
+
+    /// Adversarial complement to `native_mcp_worktree_list_reports_lifecycle_status`:
+    /// an unmerged branch with an uncommitted, dirty file must not be reported as
+    /// merged/safe. Catches a fan-out bug that mismatches lifecycle results back
+    /// onto the wrong workspace id, or a default that silently reads as "safe".
+    #[tokio::test]
+    async fn native_mcp_worktree_list_reports_unmerged_dirty_worktree_as_unsafe() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        crate::git_cli::git_cmd(&repo).args(["init"]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "base"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["branch", "-M", "main"])
+            .run()
+            .unwrap();
+        let worktree = temp.path().join("feature");
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(worktree.join("feature.txt"), "work\n").unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["commit", "-m", "feature work"])
+            .run()
+            .unwrap();
+        // main never merges feature: feature stays unmerged. An untracked file
+        // keeps the worktree dirty.
+        std::fs::write(worktree.join("untracked.txt"), "not committed\n").unwrap();
+
+        let state = test_state();
+        let repo_path = repo.to_string_lossy().into_owned();
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_list", "path": &repo_path}),
+            false,
+        )
+        .await;
+
+        let lifecycle = &response["feature"]["lifecycle_status"];
+        assert_eq!(
+            lifecycle["commit_status"].as_str(),
+            Some("unmerged"),
+            "an unmerged branch must not be reported merged: {response}"
+        );
+        assert_eq!(
+            lifecycle["dirty_files"].as_i64(),
+            Some(1),
+            "the untracked file must be counted dirty: {response}"
+        );
+        assert_eq!(
+            lifecycle["removal_safety"].as_str(),
+            Some("requires_force"),
+            "a dirty, unmerged worktree must never report safe: {response}"
+        );
+
+        // main itself is merged (it is the default branch) and has no dirty
+        // files: its lifecycle must not have picked up feature's verdict.
+        let main_lifecycle = &response["main"]["lifecycle_status"];
+        assert_eq!(main_lifecycle["dirty_files"].as_i64(), Some(0));
+        assert_ne!(
+            main_lifecycle["commit_status"].as_str(),
+            Some("unmerged"),
+            "main's own lifecycle must not be feature's: {response}"
         );
     }
 

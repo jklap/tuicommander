@@ -1009,6 +1009,7 @@ mod tests {
                     path: repo.clone(),
                     kind: crate::worktree::WorkspaceKind::Worktree,
                     warm_artifacts: None,
+                    lifecycle_status: None,
                 },
             )])),
         );
