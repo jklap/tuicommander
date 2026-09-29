@@ -9,6 +9,7 @@ interface TerminalKeybarProps {
 	sessionId: string;
 	agentType?: string | null;
 	awaitingInput?: boolean;
+	choicePromptOpen?: boolean;
 	/** True when the question was detected with high confidence (Ink menu footer) */
 	questionConfident?: boolean;
 	sessionExists?: boolean;
@@ -90,7 +91,7 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 
 	return (
 		<div class={styles.bar}>
-			<Show when={props.awaitingInput}>
+			<Show when={props.awaitingInput && !props.choicePromptOpen}>
 				<For each={confirmKeys()}>
 					{(k) => (
 						<button

@@ -923,6 +923,7 @@ re-derived later.
 - Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
 
 ### 6.16 ChoicePrompt Detection
+- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions. Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling
@@ -1995,7 +1996,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
 - Question and completion pushes share one 30-second limit per session
 - ACP interaction pushes use the same 30-second limit for each conversation
-- A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path
+- A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path. For Codex `request_user_input`, the session header opens the queued question; its title and options appear in the transient choice overlay, and numbered answers use one PTY key. The `Other` choice opens Codex notes for a typed answer. The control uses the existing header, preserving all terminal rows
+- Claude AskUserQuestion publishes its actual choices in the same mobile overlay; a tap follows the backend's arrow-and-Enter selection contract instead of using generic Yes/No keys
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS

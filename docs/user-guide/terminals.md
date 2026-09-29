@@ -274,6 +274,12 @@ TUICommander detects rate limits, prompts, and status messages from AI agents:
 - **Progress indicators** — Shows progress bars for long-running operations
 
 When an agent asks a question, the tab indicator changes and a notification sound plays (if enabled).
+On the mobile PWA, a waiting Codex `request_user_input` question adds a control to the session header. Tap it to open Codex's question panel. The question and numbered options appear above the composer; tap an option once to answer. Tap **Other** to enter a typed note. The panel overlays the terminal without permanently reducing its height. The Rust parser that supplies those options takes effect after TUICommander restarts.
+For a Claude AskUserQuestion dialog, the mobile session shows the title and
+all choices and presents those choices above the composer. Tap a choice to
+navigate to it and submit it; the app uses Claude's arrow-and-Enter contract.
+The backend update requires a TUICommander restart before it reaches an
+already-running development instance.
 Remote HTTP/MCP workers respect **Silence orchestration completions** even after
 a frontend reload, and a single busy cycle produces at most one completion
 notification when idle and process exit arrive separately.

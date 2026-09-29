@@ -2627,6 +2627,7 @@ mod tests {
                         destructive: false,
                         hint: None,
                     }],
+                    selection_mode: None,
                     dismiss_key: None,
                     amend_key: None,
                 }),
@@ -2818,6 +2819,53 @@ mod tests {
     fn trim_empty_input() {
         let result = trim_screen_chrome(&[]);
         assert_eq!(result.cutoff, 0);
+    }
+
+    // Catches: the highlighted Claude option is mistaken for the composer prompt,
+    // so the mobile screen loses the remaining choices and its selection footer.
+    #[test]
+    fn captured_claude_askuser_dialog_survives_mobile_screen_trim() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../fixtures/agent_prompts/claude-askuser-esc-20260929.tcap"
+        ))
+        .expect("real Claude capture");
+        let (rows, cols) = capture.geometry.expect("captured terminal geometry");
+        let mut grid = crate::state::VtLogBuffer::new(rows, cols, 2000);
+        let mut utf8 = crate::state::Utf8ReadBuffer::new();
+        let mut escape = crate::state::EscapeAwareBuffer::new();
+        let mut dialog_rows = None;
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                grid.process(clean.as_bytes());
+                let rows = grid.screen_rows();
+                if rows
+                    .iter()
+                    .any(|row| row.contains("Which color do you prefer?"))
+                    && rows.iter().any(|row| row.contains("Enter to select"))
+                {
+                    dialog_rows = Some(rows);
+                }
+            }
+        }
+        let rows = dialog_rows.expect("the captured dialog must render before Esc");
+        let visible = &rows[..trim_screen_chrome(&rows).cutoff];
+        for expected in [
+            "Which color do you prefer?",
+            "1. Red",
+            "2. Green",
+            "3. Blue",
+            "4. Type something.",
+            "5. Chat about this",
+            "Enter to select",
+        ] {
+            assert!(
+                visible.iter().any(|row| row.contains(expected)),
+                "mobile screen lost {expected:?}: {visible:#?}"
+            );
+        }
     }
 
     // --- Log-WS screen polling (604-cb45 F14) ---

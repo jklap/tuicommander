@@ -16605,6 +16605,24 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
                         .await,
                         "an open AskUserQuestion must keep the confident badge"
                     );
+                    // Catches: awaiting_input is set, but the mobile choice
+                    // overlay has no title or options for the live Claude dialog.
+                    assert!(
+                        await_session(&state, sid, |s| {
+                            s.choice_prompt.as_ref().is_some_and(|prompt| {
+                                prompt.title == "Which color do you prefer?"
+                                    && prompt.options.len() == 5
+                                    && prompt.selection_mode
+                                        == Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+                                    && prompt
+                                        .options
+                                        .iter()
+                                        .any(|option| option.key == "2" && option.label == "Green")
+                            })
+                        })
+                        .await,
+                        "live AskUserQuestion must expose its choices to mobile"
+                    );
                 }
                 saw_done |= clean.contains("Worked for 4s");
             }
@@ -16717,6 +16735,7 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
     session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
         title: "Which approach should I use?".to_string(),
         options: vec![],
+        selection_mode: None,
         dismiss_key: None,
         amend_key: None,
     });
@@ -18022,6 +18041,59 @@ fn process_tree_snapshot_reports_own_process() {
 // payloads, the shell state and the awaiting badge — for a real capture
 // replayed through the real `process_chunk`, so a regression shows up as a
 // diff in the recorded trace rather than as a subtle live-session bug.
+
+#[test]
+fn captured_codex_request_user_input_reaches_choice_prompt() {
+    let bytes = agent_prompt_fixture("codex-request-user-input-20260929.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("real Codex capture");
+    let (rows, cols) = capture.geometry.expect("capture records terminal geometry");
+    let sid = "codex-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut prompts = Vec::new();
+
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed.get("type").and_then(serde_json::Value::as_str) == Some("choice-prompt")
+            {
+                prompts.push(parsed);
+            }
+        }
+    }
+
+    assert!(
+        prompts.iter().any(|prompt| {
+            prompt.get("title").and_then(serde_json::Value::as_str)
+                == Some("Boss, scegli rosso o blu?")
+                && prompt["options"].as_array().is_some_and(|options| {
+                    options
+                        .iter()
+                        .any(|option| option["key"] == "2" && option["label"] == "Blu")
+                })
+        }),
+        "captured Codex question must reach the mobile choice-prompt state"
+    );
+}
 
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]

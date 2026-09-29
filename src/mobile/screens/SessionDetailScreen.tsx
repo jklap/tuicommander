@@ -132,6 +132,29 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	// Ideas overlay toggle
 	const [ideasOpen, setIdeasOpen] = createSignal(false);
 
+	const [openingQuestion, setOpeningQuestion] = createSignal(false);
+	const [codexQuestionOpen, setCodexQuestionOpen] = createSignal(false);
+	createEffect(() => {
+		if (!sessionState()?.awaiting_input) setCodexQuestionOpen(false);
+	});
+	const codexQuestionWaiting = () => sessionState()?.agent_type === "codex"
+		&& sessionState()?.awaiting_input && sessionState()?.question_confident
+		&& !sessionState()?.choice_prompt && props.sessionExists;
+
+	async function openCodexQuestion() {
+		if (openingQuestion()) return;
+		setOpeningQuestion(true);
+		try {
+			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;3A" });
+			setCodexQuestionOpen(true);
+		} catch (err) {
+			appLogger.warn("network", "Could not open Codex question", { error: err });
+			toastsStore.add("Question not opened", "Could not open the Codex question", "error", true);
+		} finally {
+			setOpeningQuestion(false);
+		}
+	}
+
 	// Prefill value for CommandInput (set by slash menu selection).
 	const [inputPrefill] = createSignal<{ text: string; seq: number }>({ text: "", seq: 0 });
 
@@ -227,6 +250,15 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<span class={styles.taskCount}>{sessionState()!.active_sub_tasks}</span>
 					</Show>
 				</button>
+				<Show when={codexQuestionWaiting()}>
+					<button type="button" class={styles.headerAction} onClick={openCodexQuestion} disabled={openingQuestion()} aria-label="Open Codex question" title="Open Codex question">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+							<circle cx="12" cy="12" r="9" />
+							<path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" />
+							<circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none" />
+						</svg>
+					</button>
+				</Show>
 				<button
 					type="button"
 					class={styles.headerAction}
@@ -364,6 +396,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				sessionId={props.session.session_id}
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
+				choicePromptOpen={!!sessionState()?.choice_prompt}
 				questionConfident={sessionState()?.question_confident}
 				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
@@ -379,6 +412,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type ?? null}
 				slashItems={sessionState()?.slash_menu_items}
 				choicePrompt={sessionState()?.choice_prompt}
+				codexQuestionOpen={codexQuestionOpen()}
 				onRegisterTrigger={(fn) => {
 					slashTrigger = fn;
 				}}

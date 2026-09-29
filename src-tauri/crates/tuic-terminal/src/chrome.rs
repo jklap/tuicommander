@@ -246,6 +246,13 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
         return None;
     }
 
+    // An open Claude Ink dialog owns the bottom of the screen. Its highlighted
+    // option begins with the same ❯ glyph as the composer, and its rule looks
+    // like a composer separator. Keep the whole dialog for mobile clients.
+    if rows.iter().any(|row| row.starts_with("Enter to select")) {
+        return None;
+    }
+
     // Trim trailing empty rows (terminal padding below content).
     let content_end = rows
         .iter()
