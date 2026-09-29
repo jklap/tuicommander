@@ -1928,9 +1928,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Error bar (red tint) when `last_error` is set
 - Rate-limit bar (orange tint) with live countdown timer (`formatRetryCountdown`)
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
-- Slash menu overlay: frosted glass bottom sheet showing detected `/command` entries; tap to fill the input, then submit after the agent's Enter gap
+- Slash menu overlay: the keybar `/` opens local agent-specific choices without writing to the PTY; typed slash menus still show detected entries. Removed commands are hidden, and the close button dismisses the menu. Picking a command fills the input; submitting waits for the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
-- **TerminalKeybar:** context-aware row of special key buttons above the main input. Shows Ctrl+C, Ctrl+D, Tab, Esc, Enter, arrow keys for terminal operations. When the agent is awaiting input, adds Yes/No quick-reply buttons. Consolidated from the former separate QuickActions component
+- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl+C, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. When the agent is awaiting input, it adds Yes/No quick-reply buttons. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
 - **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes

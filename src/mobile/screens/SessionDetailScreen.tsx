@@ -130,7 +130,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<line x1="21" y1="21" x2="16.65" y2="16.65" />
 					</svg>
 				</button>
-				<StatusBadge status={status()} />
+				<Show when={props.sessionExists}>
+					<StatusBadge status={status()} />
+				</Show>
 			</header>
 
 			<Show when={searchOpen()}>
@@ -236,6 +238,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
 				questionConfident={sessionState()?.question_confident}
+				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
 				onSlashRequest={() => slashTrigger?.()}
 			/>
