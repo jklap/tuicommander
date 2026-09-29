@@ -13,6 +13,10 @@
 //! refusal leaves nothing attached.
 
 use agent_client_protocol::schema::v1;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::{Layer, layer::Context, prelude::*};
 use tuicommander_lib::acp::{
     AcpAttachKind, AcpAttachmentState, AcpClientErrorCode, AcpDetachKind, AcpOperation,
     AcpSessionAuthority,
@@ -28,6 +32,82 @@ const FORKED: &str = "01932d5e-0000-7000-8000-0000000000bb";
 
 fn session(id: &str) -> v1::SessionId {
     v1::SessionId::new(id)
+}
+
+#[derive(Default)]
+struct CapturedFields(BTreeMap<String, String>);
+
+impl Visit for CapturedFields {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+}
+
+struct AttachLogLayer(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+impl<S: tracing::Subscriber> Layer<S> for AttachLogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut fields = CapturedFields::default();
+        event.record(&mut fields);
+        if fields
+            .0
+            .get("message")
+            .is_some_and(|text| text.contains("ACP attach"))
+        {
+            self.0.lock().unwrap().push(fields.0);
+        }
+    }
+}
+
+/// A future initialize storm needs its initiating ACP method and session id
+/// in the host log, not just a count of new MCP sessions.
+#[tokio::test]
+async fn every_attach_log_names_its_method_and_session() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(AttachLogLayer(events.clone()));
+    tracing::subscriber::set_global_default(subscriber).expect("install test log collector");
+
+    let fixture = Fixture::with("no-lifecycle");
+    let connection = fixture.connect().await;
+    for (kind, expected_method) in [
+        (AcpAttachKind::Load, "session/load"),
+        (AcpAttachKind::Resume, "session/resume"),
+        (AcpAttachKind::Fork, "session/fork"),
+    ] {
+        let error = fixture
+            .manager
+            .attach(
+                connection.connection_id,
+                kind,
+                session(FIRST),
+                authority(fixture.root()),
+            )
+            .await
+            .expect_err("fixture advertises no attach capabilities");
+        assert_eq!(error.code, AcpClientErrorCode::CapabilityUnavailable);
+        let rows = events.lock().unwrap();
+        assert!(
+            rows.iter().any(|fields| {
+                fields.get("method").map(|value| value.trim_matches('"')) == Some(expected_method)
+                    && fields
+                        .get("session_id")
+                        .map(|value| value.trim_matches('"'))
+                        == Some(FIRST)
+                    && fields.get("source").map(|value| value.trim_matches('"')) == Some("acp")
+            }),
+            "missing structured attach log for {expected_method} and {FIRST}: {rows:?}"
+        );
+    }
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -226,9 +306,17 @@ async fn load_preserves_the_first_replayed_assistant_chunks() {
         .await
         .expect("session/load");
 
-    let mut stream = fixture.manager.subscribe(connection.connection_id, 0).expect("journal");
+    let mut stream = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .expect("journal");
     let events = until(&mut stream, |event| {
-        matches!(event, tuicommander_lib::acp::AcpClientEvent::AttachmentState { state: AcpAttachmentState::Idle })
+        matches!(
+            event,
+            tuicommander_lib::acp::AcpClientEvent::AttachmentState {
+                state: AcpAttachmentState::Idle
+            }
+        )
     })
     .await;
     let answer: String = events.iter().filter_map(chunk).collect();
@@ -237,7 +325,11 @@ async fn load_preserves_the_first_replayed_assistant_chunks() {
         "TUICommander v1.7.7 is connected.\nintent: Checking active agents (Agents)"
     );
 
-    fixture.manager.disconnect(connection.connection_id).await.unwrap();
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
 }
 
 /// A fork is a second session, and the original keeps its own attachment.
