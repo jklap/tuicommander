@@ -12,20 +12,20 @@
 
 ## Global AI Chat (1157-1e54)
 
-- [ ] After a `make dev` restart, open AI Chat and switch between three repositories: `ps` shows no new `ego acp` process and the tabs stay. Send a message: exactly one `ego acp -C ~/Gits` starts, and ego's answer knows which repository was on screen. Reload the webview and send again: still one process. Quit TUICommander: no `ego acp` survives.
-- [ ] After a Rust restart, open the same AI Chat peer simultaneously from desktop and a remote browser in an isolated instance; both views must attach to one `ego acp` process and show the same conversation.
+- [ ] After a `make dev` restart, open AI Chat and switch between three repositories: `ps` shows no new `ego acp` process and the tabs stay. Send a message: exactly one `ego acp -C ~/Gits` starts, and ego's answer knows which repository was on screen. Reload the webview and send again: still one process. Quit TUICommander: no `ego acp` survives. _(NOT VERIFIED 2026-09-29: Needs real ego binary (`ego acp`) and a live AI Chat agent conversation.)_
+- [ ] After a Rust restart, open the same AI Chat peer simultaneously from desktop and a remote browser in an isolated instance; both views must attach to one `ego acp` process and show the same conversation. _(NOT VERIFIED 2026-09-29: Needs a real `ego acp` process (real ego binary/account); dual attach from desktop+browser cannot be done with a fake.)_
 
 ## ego MCP over ACP (1156-1b61)
 
-- [ ] After a `make dev` restart and an ego build that advertises `mcpCapabilities.acp`, open AI Chat in an isolated `TUIC_APP_INSTANCE=<id>` and ask ego to list terminals. `ps` shows no `tuic-bridge` child of ego, the app log shows no `MCP initialize` line per tool call, and the tool answers.
+- [ ] After a `make dev` restart and an ego build that advertises `mcpCapabilities.acp`, open AI Chat in an isolated `TUIC_APP_INSTANCE=<id>` and ask ego to list terminals. `ps` shows no `tuic-bridge` child of ego, the app log shows no `MCP initialize` line per tool call, and the tool answers. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 
 ## AI Chat replay storm (1151-4243)
 
-- [ ] After a `make dev` restart, open AI Chat on a repository with two saved tabs in an isolated `TUIC_APP_INSTANCE=<id>`. The app log shows one `ACP attach` line with `method=session/load` per tab, not a repeating stream, and a refused load shows the error with Retry instead of re-sending.
+- [ ] After a `make dev` restart, open AI Chat on a repository with two saved tabs in an isolated `TUIC_APP_INSTANCE=<id>`. The app log shows one `ACP attach` line with `method=session/load` per tab, not a repeating stream, and a refused load shows the error with Retry instead of re-sending. _(NOT VERIFIED 2026-09-29: Needs ego executable and real ACP session/load; log check of 'ACP attach' only meaningful with real ego.)_
 
 ## Crate split restart
 
-- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout.
+- [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout. _(NOT VERIFIED 2026-09-29: Needs real audio (push-to-talk, spoken reply) and real GitHub account for PR/CI notifications)_
 
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP
@@ -43,7 +43,7 @@
 
 ## Queued Claude notice confirmation (story 1251-9ec8) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated instance, queue a notice to a disposable Claude session with the UserPromptSubmit hooks enabled. When Claude accepts it after more than one second, confirm the notice appears without an "Agent input was not confirmed" toast. A notice left in the composer must still show the uncertainty toast after the six-second bound. The running backend does not hot-reload this Rust change.
+- [ ] After a manual `make dev` restart in an isolated instance, queue a notice to a disposable Claude session with the UserPromptSubmit hooks enabled. When Claude accepts it after more than one second, confirm the notice appears without an "Agent input was not confirmed" toast. A notice left in the composer must still show the uncertainty toast after the six-second bound. The running backend does not hot-reload this Rust change. _(NOT VERIFIED 2026-09-29: Needs real Claude session with UserPromptSubmit hooks and timing of Claude accepting a queued notice.)_
 ## Shared agent mail identity (story 1246-46e3) — Rust restart required
 
 - [ ] After rebuilding `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, use a disposable managed PTY with two MCP bridges asserting its durable tab UUID and PTY UUID. Send distinct messages to each UUID and to the PTY display name, once through `tuic mcp` and once through the MCP client. Confirm both bridges read every message in `agent action=inbox`, `list_peers` shows one recipient for the PTY, and reconnecting one bridge leaves the inbox readable. Boss's live Rust backend does not hot-reload this change.
@@ -86,7 +86,7 @@
 
 ## Dictation Metal release link (story 1198-535b) — Rust rebuild required
 
-- [ ] After rebuilding `make dev`, verify macOS dictation starts with a downloaded Whisper model and still uses Metal. The build script change cannot affect Boss's running backend until a rebuild and restart; the targeted release test covers linking and loudness timing.
+- [ ] After rebuilding `make dev`, verify macOS dictation starts with a downloaded Whisper model and still uses Metal. The build script change cannot affect Boss's running backend until a rebuild and restart; the targeted release test covers linking and loudness timing. _(NOT VERIFIED 2026-09-29: Needs real Whisper model, microphone audio and Metal GPU use on macOS.)_
 
 ## Mobile slash commands (story 1199-7b8d)
 
@@ -98,9 +98,9 @@
 
 ## Queued agent submission confirmation (story 1163-5bed) — Rust restart required
 
-- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a message for a disposable Codex session while a stop hook delays the next Working screen by about four seconds. Confirm the message reaches the transcript without an uncertain-delivery toast. A silent composer must still report uncertainty after the bounded wait. The running backend does not load story 1239-dca9 until restart.
-- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a short command for a disposable Codex session while it is busy. When it becomes ready, confirm that the command starts a turn. If the composer retains the text instead, confirm that TUICommander reports uncertain delivery with an error toast and `session status` shows `delivery_uncertain=true`. Repeat with the installed Claude, OpenCode, Goose, Grok, and pi binaries. The running backend does not load this Rust change until restart.
-- [ ] In that disposable session, leave one uncertain queued command in the composer and queue a second. Confirm the second waits. Press Enter once for the retained command, wait for the next ready prompt, and confirm the second is delivered once. Check that its toast says to inspect the transcript and composer before acting. Amp, Cursor, and Droid still use the legacy PTY-write result until live screen captures establish a confirmation signal.
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a message for a disposable Codex session while a stop hook delays the next Working screen by about four seconds. Confirm the message reaches the transcript without an uncertain-delivery toast. A silent composer must still report uncertainty after the bounded wait. The running backend does not load story 1239-dca9 until restart. _(NOT VERIFIED 2026-09-29: Needs real Codex session with a delaying stop hook (and Claude/OpenCode/Goose/Grok/pi binaries))_
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a short command for a disposable Codex session while it is busy. When it becomes ready, confirm that the command starts a turn. If the composer retains the text instead, confirm that TUICommander reports uncertain delivery with an error toast and `session status` shows `delivery_uncertain=true`. Repeat with the installed Claude, OpenCode, Goose, Grok, and pi binaries. The running backend does not load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs real Codex/Claude/OpenCode/Goose/Grok/pi binaries and their composer behaviour.)_
+- [ ] In that disposable session, leave one uncertain queued command in the composer and queue a second. Confirm the second waits. Press Enter once for the retained command, wait for the next ready prompt, and confirm the second is delivered once. Check that its toast says to inspect the transcript and composer before acting. Amp, Cursor, and Droid still use the legacy PTY-write result until live screen captures establish a confirmation signal. _(NOT VERIFIED 2026-09-29: Needs a real agent session (Claude/Codex) with uncertain queued composer state and live ready-prompt detection)_
 
 ## Concurrent config saves (story 900-43dd) — Rust restart required
 
@@ -108,7 +108,7 @@
 
 ## Current MCP tool results (story 1190-75eb) — Rust restart required
 
-- [ ] After a manual `make dev` restart and sidecar rebuild in an isolated `TUIC_APP_INSTANCE`, open a disposable ego PTY session and call `search_tools`. Confirm it lists TUIC tool names without a protocol error. Disconnect the test MCP endpoint and confirm a current-protocol `tools/call` reports the unavailable error without a result-shape error. Targeted HTTP and bridge tests cover the wire fields; the running backend and installed sidecar cannot load this Rust change until restart or rebuild.
+- [ ] After a manual `make dev` restart and sidecar rebuild in an isolated `TUIC_APP_INSTANCE`, open a disposable ego PTY session and call `search_tools`. Confirm it lists TUIC tool names without a protocol error. Disconnect the test MCP endpoint and confirm a current-protocol `tools/call` reports the unavailable error without a result-shape error. Targeted HTTP and bridge tests cover the wire fields; the running backend and installed sidecar cannot load this Rust change until restart or rebuild. _(NOT VERIFIED 2026-09-29: Needs real ego PTY session (ego agent calling search_tools) plus rebuilt sidecar.)_
 
 ## Worktree removal with sealed build output (story 1179-50a8) — Rust restart required
 
@@ -124,7 +124,7 @@
 
 ## ACP peer mail receipt (1176-e82e) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable ego conversation and subscribe it to `tuic://inbox`. Send ordinary and urgent peer mail to ego, including after `agent register orchestrator=true`, and confirm `agent send` returns `delivered:true` with `delivery_path:acp_inbox_resource` (and `urgent_delivered:true` for urgent mail); confirm ego receives the inbox updates. Disconnect ego and verify a separately registered offline peer still reports `inbox_only`. The live backend cannot load this Rust change until restart; targeted MCP tests cover the subscription and notification path.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable ego conversation and subscribe it to `tuic://inbox`. Send ordinary and urgent peer mail to ego, including after `agent register orchestrator=true`, and confirm `agent send` returns `delivered:true` with `delivery_path:acp_inbox_resource` (and `urgent_delivered:true` for urgent mail); confirm ego receives the inbox updates. Disconnect ego and verify a separately registered offline peer still reports `inbox_only`. The live backend cannot load this Rust change until restart; targeted MCP tests cover the subscription and notification path. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless (subscribes to tuic://inbox))_
 
 ## Already unregistered worktree cleanup (1175-71fc) — Rust restart required
 
@@ -144,7 +144,7 @@
 
 ## AI Chat layout and composer (story 1166-ef2f)
 
-- [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
+- [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture. _(NOT VERIFIED 2026-09-29: Needs a real ego (ACP) AI Chat session streaming an answer; stealth browser wrapper reportedly unreliable)_
 
 ## CLI sidecar replacement (story 1165-e905) — Rust restart required
 
@@ -152,13 +152,13 @@
 
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
-- [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus.
-- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`.
-- [ ] Send a typed AI Chat message and choose a suggested reply; confirm each user bubble shows the text once after ego replies. Targeted reducer and panel tests cover both paths.
+- [ ] In an isolated AI Chat conversation, confirm a message shows Copy on hover and keyboard focus, and a reply ending with `suggest: [ Retry | Show status | Diagnose ]` displays three buttons without the raw token. Targeted component tests cover the parser and keyboard reachability; a browser CSS fixture confirms visibility on hover and focus. _(NOT VERIFIED 2026-09-29: Live AI Chat reply from ego needed to render suggest buttons; parser/keyboard already covered by component tests.)_
+- [ ] In the same conversation, confirm Pause, Resume, Compact and New remain on one row as icon buttons at the panel's normal width, have tooltips, and the model summary shows only the name after the final `/`. _(NOT VERIFIED 2026-09-29: Needs a real ego AI Chat conversation (same conversation with Pause/Compact/Copy); ego not available headlessly.)_
+- [ ] Send a typed AI Chat message and choose a suggested reply; confirm each user bubble shows the text once after ego replies. Targeted reducer and panel tests cover both paths. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 
 ## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open a disposable ego chat and send a prompt that fails before producing a reply. Confirm its diagnostic appears in the transcript and the composer returns to Send. Answer a two-choice trust elicitation using its direct button and confirm the turn then shows a reply or a failure. The live backend cannot load the ACP failure event until restart; targeted Rust and frontend tests cover the wire and rendering behavior.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open a disposable ego chat and send a prompt that fails before producing a reply. Confirm its diagnostic appears in the transcript and the composer returns to Send. Answer a two-choice trust elicitation using its direct button and confirm the turn then shows a reply or a failure. The live backend cannot load the ACP failure event until restart; targeted Rust and frontend tests cover the wire and rendering behavior. _(NOT VERIFIED 2026-09-29: Needs real ego agent (ACP failed turn and trust elicitation).)_
 
 ## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
 
@@ -166,20 +166,20 @@
 
 ## ACP ego peer identity (story 1073-3431) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego configured and verify its MCP bridge appears in `agent list_peers` as an `ego` peer without a terminal; send mail, reconnect, restart, and verify the same peer UUID can read it with `agent wait`.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego configured and verify its MCP bridge appears in `agent list_peers` as an `ego` peer without a terminal; send mail, reconnect, restart, and verify the same peer UUID can read it with `agent wait`. _(NOT VERIFIED 2026-09-29: Needs real ego ACP session configured in AI Chat; peer/mail restart flow with a real agent)_
 - [ ] Spawn a child from that ACP bridge and verify `parent_session_id` equals the AI Chat peer UUID. Submit blocked progress and verify the desktop progress event carries the ACP conversation ID and the away-state mobile push is emitted when push is configured. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Codex approval cancellation (story 1125-f4ea) — Rust restart required
 
-- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, create a disposable Codex session and trigger a shell approval. Confirm its tab reports awaiting input; press Esc and confirm the badge clears when the idle composer returns. Trigger another approval and confirm the badge appears again. The running backend cannot load this Rust change until restart.
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, create a disposable Codex session and trigger a shell approval. Confirm its tab reports awaiting input; press Esc and confirm the badge clears when the idle composer returns. Trigger another approval and confirm the badge appears again. The running backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs a real Codex CLI session issuing a shell approval and Esc (fixture codex-0.157.1-approval-cancel.tcap covers replay only); account-backed agent.)_
 
 ## AI Chat ACP session details (story 1072-6787)
 
-- [ ] In an isolated test instance running this frontend, open a disposable ego conversation and confirm its updated title fits the panel header and picker. After a usage update, confirm the context percentage and optional cost remain readable above the panel edge. The targeted component tests cover the values; no instance running this worktree was available for a screenshot.
+- [ ] In an isolated test instance running this frontend, open a disposable ego conversation and confirm its updated title fits the panel header and picker. After a usage update, confirm the context percentage and optional cost remain readable above the panel edge. The targeted component tests cover the values; no instance running this worktree was available for a screenshot. _(NOT VERIFIED 2026-09-29: Needs live ego ACP conversation (title, usage update).)_
 
 ## AI Chat ego profile (story 1074-9373) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. Capture the Settings row to verify its layout. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart; the browser wrapper timed out twice while opening the worktree's Vite page, and maccontrol returned circuit open.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set **ego profile** to a profile in ego's user configuration and open AI Chat. Confirm ego uses that profile for the new connection. Clear the setting and reconnect; ego must use its normal profile selection. Capture the Settings row to verify its layout. The running Rust backend cannot load the new `AppConfig` field or ACP launch arguments until restart; the browser wrapper timed out twice while opening the worktree's Vite page, and maccontrol returned circuit open. _(NOT VERIFIED 2026-09-29: Needs real ego user config with profiles and a live ego connection to see which profile is used.)_
 
 ## AI Chat image paste (story 1085-fa65)
 
@@ -187,7 +187,7 @@
 
 ## AI Chat conversation recovery (story 1071-46c9) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego, send a turn, create a second conversation, then restart the app. Confirm the last conversation and its history return; select the older title in the newest-first picker and confirm its history appears once. The running Rust backend cannot load the new `AppConfig` field until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego, send a turn, create a second conversation, then restart the app. Confirm the last conversation and its history return; select the older title in the newest-first picker and confirm its history appears once. The running Rust backend cannot load the new `AppConfig` field until restart. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 
 ## Windows Codex npm launcher — Rust restart required (story 987-c0ca)
 
@@ -195,11 +195,11 @@
 
 ## Agent Enter gap (stories 974-254a, 975-1de1) — Rust restart required
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send text plus `special_key=enter` to a disposable Claude MCP session and confirm it submits. Launch Codex through a wrapper that foreground detection does not recognize, then send a long prompt from a suggestion or dictation while the tab still has no agent type; confirm it submits and check app logs for one unknown-foreground warning. The current backend cannot load the Rust change until restart.
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send text plus `special_key=enter` to a disposable Claude MCP session and confirm it submits. Launch Codex through a wrapper that foreground detection does not recognize, then send a long prompt from a suggestion or dictation while the tab still has no agent type; confirm it submits and check app logs for one unknown-foreground warning. The current backend cannot load the Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs real Claude and Codex CLIs (submit semantics, foreground detection).)_
 
 ## Managed Codex wrapper trust (story 1047-c41c) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, configure a Codex run config whose launcher forwards `"$@"` to Codex. Spawn a throwaway managed peer in a new directory and confirm it reaches Ready and receives its initial task without a trust answer. Turn off **Accept workspace trust for managed spawns** and repeat in another new directory; the ordinary Codex trust question must remain. The current live backend cannot load this Rust change until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, configure a Codex run config whose launcher forwards `"$@"` to Codex. Spawn a throwaway managed peer in a new directory and confirm it reaches Ready and receives its initial task without a trust answer. Turn off **Accept workspace trust for managed spawns** and repeat in another new directory; the ordinary Codex trust question must remain. The current live backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs real Codex CLI reaching Ready and showing/skipping its trust prompt)_
 
 ## Missing registered worktree cleanup — Rust restart required
 
@@ -207,11 +207,11 @@
 
 ## AI Chat pending ACP badge and notification (story 1070-38ce)
 
-- [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge.
+- [ ] In an isolated desktop test instance, open AI Chat, start a request that asks for permission, then hide the panel. Confirm the status-bar AI Chat toggle shows one pending item and one desktop notification. Answer the request and confirm the badge disappears and the notification closes. Targeted component/store tests cover the state changes; the visual screenshot attempt timed out in the browser wrapper after its accessibility snapshot showed the badge. _(NOT VERIFIED 2026-09-29: Needs a real ego ACP request that asks permission plus a real desktop notification; no ego/paid provider in headless run.)_
 
 ## Child lifecycle inbox coalescing — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, let a throwaway managed child ask a confident question, answer it, then have it ask another. Confirm the parent inbox contains both question notices while ordinary state updates still coalesce. The current live backend cannot load this Rust change until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, let a throwaway managed child ask a confident question, answer it, then have it ask another. Confirm the parent inbox contains both question notices while ordinary state updates still coalesce. The current live backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs a real managed child agent asking confident questions (Claude/Codex).)_
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart.
 
@@ -221,11 +221,11 @@
 
 ## AI Chat ACP pause settlement (story 1069-97bd) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, pause a disposable ego conversation while its turn streams. When ego stops at the pause boundary, Resume must remain visible and a new prompt must work after Resume. The running backend cannot load this Rust change until restart; the targeted ACP fixture test covers the state transition and the resumed prompt.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, pause a disposable ego conversation while its turn streams. When ego stops at the pause boundary, Resume must remain visible and a new prompt must work after Resume. The running backend cannot load this Rust change until restart; the targeted ACP fixture test covers the state transition and the resumed prompt. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 
 ## Urgent agent mail — Rust restart required
 
-- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start throwaway Claude Code and Codex sessions and send `agent action=send urgency=urgent` while each is busy. Check that the notice appears after the current tool call and before the agent's next planned step, the peer body remains in the inbox, and the sender receives `urgent_delivered=true`. Repeat with a draft and a confident dialog; each must return `urgent_delivered=false` with a fallback reason and must preserve the composer. Boss's current backend cannot load this Rust change without a manual restart.
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start throwaway Claude Code and Codex sessions and send `agent action=send urgency=urgent` while each is busy. Check that the notice appears after the current tool call and before the agent's next planned step, the peer body remains in the inbox, and the sender receives `urgent_delivered=true`. Repeat with a draft and a confident dialog; each must return `urgent_delivered=false` with a fallback reason and must preserve the composer. Boss's current backend cannot load this Rust change without a manual restart. _(NOT VERIFIED 2026-09-29: Needs real busy Claude Code and Codex sessions (tool-call boundary, composer/dialog).)_
 
 ## Progress journal paging — Rust restart required
 
@@ -241,15 +241,15 @@
 
 ## Push-to-talk native release — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Fn key hold, macOS microphone indicator and real microphone audio.)_
 
 ## Managed Claude mail wake — Rust restart required
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send mail to a throwaway managed Claude peer while its turn is busy and its MCP SSE stream is connected. Let it become idle without reading the inbox during the turn. Confirm one payload-free `[TUIC] message available` notice starts a new turn and `agent action=inbox` returns the mail. Repeat with an inbox read before idle and confirm no stale notice is submitted. The current live backend cannot load this Rust change until restart.
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send mail to a throwaway managed Claude peer while its turn is busy and its MCP SSE stream is connected. Let it become idle without reading the inbox during the turn. Confirm one payload-free `[TUIC] message available` notice starts a new turn and `agent action=inbox` returns the mail. Repeat with an inbox read before idle and confirm no stale notice is submitted. The current live backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs a real managed Claude peer with MCP SSE stream)_
 
 ## Claude awaiting badge — Rust restart required
 
-- [ ] After a `make dev` restart, let a Claude tab finish an ordinary prose reply with the Activity Dashboard open. The generic desktop notification must not flash Waiting input; an Ink picker or explicit permission request must still show it. The running backend cannot load this Rust change without a restart.
+- [ ] After a `make dev` restart, let a Claude tab finish an ordinary prose reply with the Activity Dashboard open. The generic desktop notification must not flash Waiting input; an Ink picker or explicit permission request must still show it. The running backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Needs real Claude tab finishing a prose reply and Ink picker.)_
 
 ## Detached CLI wake status — rebuild the Rust CLI
 
@@ -258,7 +258,7 @@
 ## Queued agent command diagnostics — Rust restart required
 
 - [ ] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it.
-- [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`,
+- [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`, _(NOT VERIFIED 2026-09-29: Needs real Codex session reaching Ready while busy (idle_unconfirmed path).)_
       queue a command for a throwaway Codex session while it is busy. Confirm it
       runs once when Codex reaches Ready and the queue reaches zero. If the shell
       first becomes idle without confirmed readiness, logs must name
@@ -290,7 +290,7 @@
 
 ## Embedded external links (story 989-63fa) — after Rust rebuild
 
-- [ ] After the next `make dev` restart, use an isolated `TUIC_APP_INSTANCE` test instance to click an HTTPS link in an HTML preview and an inline plugin panel: each should open outside the app. Open a cross-origin dashboard URL in a tab, attempt an external navigation, and confirm the blocked-link toast directs users to the tab menu's Open in Browser action. The live Boss backend has not restarted for the Rust navigation event.
+- [ ] After the next `make dev` restart, use an isolated `TUIC_APP_INSTANCE` test instance to click an HTTPS link in an HTML preview and an inline plugin panel: each should open outside the app. Open a cross-origin dashboard URL in a tab, attempt an external navigation, and confirm the blocked-link toast directs users to the tab menu's Open in Browser action. The live Boss backend has not restarted for the Rust navigation event. _(NOT VERIFIED 2026-09-29: Needs the native Tauri WebView opening the system browser (desktop opener); not reproducible in web mode; maccontrol lacks Screen Recording.)_
 
 ## Mobile repository files (story 1063-3fe1) — real phone
 
@@ -331,7 +331,7 @@
 
 ## Managed agent workspace trust (2026-09-26) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use `agent action=spawn` to start Claude and direct Codex in never-trusted folders under `~/Gits/.tmp/`. Confirm each reaches the agent prompt and receives the task without a manual trust keypress. Turn **Accept workspace trust for managed spawns** off for each agent and confirm its normal trust question remains. User-opened agent terminals must retain normal trust behavior. The current running backend cannot load this Rust change until restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use `agent action=spawn` to start Claude and direct Codex in never-trusted folders under `~/Gits/.tmp/`. Confirm each reaches the agent prompt and receives the task without a manual trust keypress. Turn **Accept workspace trust for managed spawns** off for each agent and confirm its normal trust question remains. User-opened agent terminals must retain normal trust behavior. The current running backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs real Claude and Codex trust prompts in never-trusted folders.)_
 
 ## MCP config ownership (story 988-d1a1) — Rust, needs `make dev` restart
 
@@ -347,16 +347,16 @@
 
 ## Claude question state after wrapped suggestions (story 1023-dcc9) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, run a Claude turn that ends in a wrapped `suggest: [ … ]` item containing `?`. Confirm the idle tab does not show a question badge. A real AskUserQuestion must still show one. The existing live backend cannot load this Rust change without a restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, run a Claude turn that ends in a wrapped `suggest: [ … ]` item containing `?`. Confirm the idle tab does not show a question badge. A real AskUserQuestion must still show one. The existing live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Needs a real Claude turn producing a wrapped suggest: item; screen-state heuristic on live agent)_
 
 ## Remote update and restart — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once through the daemon restart, live sessions show a manual offer with a count that refreshes while connected, and a failed update shows its error. During automatic transfer, confirm the manual update button is disabled; a stalled transfer eventually reports a timeout and resumes connection checks. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once through the daemon restart, live sessions show a manual offer with a count that refreshes while connected, and a failed update shows its error. During automatic transfer, confirm the manual update button is disabled; a stalled transfer eventually reports a timeout and resumes connection checks. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart. _(NOT VERIFIED 2026-09-29: Needs a real remote daemon of another version plus update transfer over SSH/Direct (second machine or second daemon build) and a failing update path.)_
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 
 ## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, inspect a clean squash-merged worktree whose local tip is contained in its merged GitHub PR head. Confirm the lifecycle badge says Merged and removal with branch deletion succeeds. Check that a branch contained in the main checkout's current integration branch also removes when the remote default branch is behind. A read-only ignored build tree should arrive writable only in the new worktree and should not block removal. The current live backend cannot load this Rust change without a restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, inspect a clean squash-merged worktree whose local tip is contained in its merged GitHub PR head. Confirm the lifecycle badge says Merged and removal with branch deletion succeeds. Check that a branch contained in the main checkout's current integration branch also removes when the remote default branch is behind. A read-only ignored build tree should arrive writable only in the new worktree and should not block removal. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Needs a squash-merged GitHub PR head (real GitHub/gh) for Merged lifecycle badge.)_
 
 ## MCP local branch deletion (story 1033-1796) — Rust, needs `make dev` restart
 
@@ -364,7 +364,7 @@
 
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, focus Claude sessions launched with the default config and a separate `CLAUDE_CONFIG_DIR`. Confirm the status badge changes to each account's quota and its dashboard shows the same account. A profile without credentials must show unknown. The live `make dev` backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Needs real Claude sessions with default and separate CLAUDE_CONFIG_DIR credentials and live quota accounts.)_
 
 ## Hidden iframe unload (story 979-3d7f) — live instance required
 
@@ -416,8 +416,8 @@
 ## Agent native scrollback (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout.
-- [ ] After a `make dev` restart, open a **new** TUIC shell and type `codex`, `grok`, and `opencode` in separate throwaway tabs. Confirm each supported installed CLI stays in native scrollback; repeat with its per-agent **Prevent alternate screen** setting off, then restore the setting. Existing shells retain the previous PTY environment and cannot verify this change.
-- [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch.
+- [ ] After a `make dev` restart, open a **new** TUIC shell and type `codex`, `grok`, and `opencode` in separate throwaway tabs. Confirm each supported installed CLI stays in native scrollback; repeat with its per-agent **Prevent alternate screen** setting off, then restore the setting. Existing shells retain the previous PTY environment and cannot verify this change. _(NOT VERIFIED 2026-09-29: Needs real installed codex/grok/opencode CLIs.)_
+- [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch. _(NOT VERIFIED 2026-09-29: Needs real Claude, Codex, Grok, OpenCode CLIs launched and resumed.)_
 - [ ] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled.
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
@@ -490,16 +490,16 @@ Settings > Voice > Spoken replies, with the Italian bundle and the runtime downl
 - [ ] [VISUAL] Downloadable starts collapsed as "DOWNLOADABLE (n)" with a disclosure marker; Tab focuses it, Enter or Space opens it, and the Voice volume and Levelling sliders are visible without scrolling past the catalogue.
 - [ ] [VISUAL] Take a screenshot of the Spoken replies section. The group titles (Installed, Downloadable, Yours), the voice rows, the Listen button beside the voice picker and the two slider labels follow `docs/frontend/STYLE_GUIDE.md`.
 - [ ] Download one catalogue voice from Downloadable. The progress bar moves; when it ends, the row moves to Installed and the voice appears in the voice picker.
-- [ ] Click "Add voice file…" and choose a valid Italian `.safetensors` voice. It appears under Yours and in the picker, and it speaks when selected. Choose a 24-layer (French) voice or a file that is not a voice: the reason shows under the button and nothing is added. The × on a Yours row deletes the file. Add a file with the same name as a voice under Yours: it is refused with "You already have a voice called … delete it first or choose another name", and the stored voice still speaks as before.
+- [ ] Click "Add voice file…" and choose a valid Italian `.safetensors` voice. It appears under Yours and in the picker, and it speaks when selected. Choose a 24-layer (French) voice or a file that is not a voice: the reason shows under the button and nothing is added. The × on a Yours row deletes the file. Add a file with the same name as a voice under Yours: it is refused with "You already have a voice called … delete it first or choose another name", and the stored voice still speaks as before. _(NOT VERIFIED 2026-09-29: Needs a valid Italian .safetensors voice and hearing that it speaks when selected; audio output judged by ear.)_
 - [ ] [HUMAN] With no hands-free conversation, click Listen and listen: the sample is audible, in the selected voice, at the Voice volume level, and the saved voice does not change. Start hands-free, let the agent speak a reply, and click Listen while it plays: the refusal shows inline. _(2026-09-24 isolated instance voice0924: `POST /dictation/speech/voices/preview` with hands-free not armed returned 200 for giovanni, alba and an imported voice, and the output device accepted the audio; UI Listen with alba showed no error. Nobody listened, so audibility is unverified.)_ _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
-- [ ] Move Voice volume and Levelling and release. The next reply is louder or quieter and more or less even, without a restart. At -12 dB with Strong there is no clipping.
+- [ ] Move Voice volume and Levelling and release. The next reply is louder or quieter and more or less even, without a restart. At -12 dB with Strong there is no clipping. _(NOT VERIFIED 2026-09-29: Needs real audio playback and ears to judge loudness/clipping.)_
 
 HTTP import and delete (use the test instance on `:9877`):
 
-- [ ] `POST /dictation/speech/voices/import` with `{"language":"it","name":"nonna","dataBase64":"<base64 of an Italian .safetensors>"}` succeeds. Voice choice then accepts `speech_voice` `"nonna"`, and a reply speaks in it.
+- [ ] `POST /dictation/speech/voices/import` with `{"language":"it","name":"nonna","dataBase64":"<base64 of an Italian .safetensors>"}` succeeds. Voice choice then accepts `speech_voice` `"nonna"`, and a reply speaks in it. _(NOT VERIFIED 2026-09-29: HTTP import (POST /dictation/speech/voices/import) is scriptable but needs a real Italian .safetensors and human ears for the spoken reply.)_
 - [ ] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`.
 - [ ] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing.
-- [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak.
+- [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak. _(NOT VERIFIED 2026-09-29: 'still speak' requires hearing audio output; listing part is browser-checkable)_
 - [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language".
 - Note: an isolated `TUIC_APP_INSTANCE` debug instance binds no TCP port while remote access is off; reach it with `curl --unix-socket <tuic-mcp-*.sock>` (the path is in its log).
 
@@ -510,7 +510,7 @@ HTTP import and delete (use the test instance on `:9877`):
 ## Spoken replies at one level (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
-- [ ] Set `speech_volume_db` to -24 in `dictation-config.json` through the settings save (`set_dictation_config`) while a reply is queued. The queued reply is not cut off, and the next reply is quieter. The same change is also available from the Voice volume slider in Settings > Voice > Spoken replies.
+- [ ] Set `speech_volume_db` to -24 in `dictation-config.json` through the settings save (`set_dictation_config`) while a reply is queued. The queued reply is not cut off, and the next reply is quieter. The same change is also available from the Voice volume slider in Settings > Voice > Spoken replies. _(NOT VERIFIED 2026-09-29: Needs audible comparison of reply loudness on real audio output.)_
 - [ ] An existing `dictation-config.json` with neither field loads with -18 dB and 0.67 levelling (`GET /dictation/config` or `get_dictation_config`).
 
 ## MCP `session action=rename` and leaner output/spawn responses (2026-09-24) — Rust, needs `make dev` restart
@@ -518,24 +518,24 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately.
 - [ ] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename.
 - [ ] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched.
-- [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there.
+- [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there. _(NOT VERIFIED 2026-09-29: Needs real Claude tab (idle prompt chrome and permission dialog) for session action=output.)_
 - [ ] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`.
 
 ## No duplicated agent rows after a WebView reload (2026-09-24) — frontend via HMR
 
-- [ ] Open an agent tab that shows the Context bar. Reload the WebView (`POST localhost:9876/debug/reload_webview`). Scroll up: the last reply must appear once. Before the fix, each reload added 1–2 copies of its top rows.
-- [ ] Check without the eye: `GET /sessions/{id}/raw-ring`. Each Claude full repaint (`ESC[2K` run) after the reload must clear exactly the tab's row count, not 1–2 more.
+- [ ] Open an agent tab that shows the Context bar. Reload the WebView (`POST localhost:9876/debug/reload_webview`). Scroll up: the last reply must appear once. Before the fix, each reload added 1–2 copies of its top rows. _(NOT VERIFIED 2026-09-29: Needs a real agent tab showing the Context bar (real Claude session); raw-ring check alone does not cover it)_
+- [ ] Check without the eye: `GET /sessions/{id}/raw-ring`. Each Claude full repaint (`ESC[2K` run) after the reload must clear exactly the tab's row count, not 1–2 more. _(NOT VERIFIED 2026-09-29: Needs real Claude full repaint output (ESC[2K runs) after WebView reload.)_
 
 ## Hands-free turns reach a busy agent at once (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=dictation` shows `Hands-free turn typed now` with the session.
-- [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the hands-free panel keeps showing the turn, and the log shows `Hands-free turn held` with `reason="confident question on screen"` once (not every 50 ms). Answer the dialog: the turn is typed.
-- [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn is typed now, and the Compose badge still shows the typed command, which goes out at the next idle as before.
+- [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=dictation` shows `Hands-free turn typed now` with the session. _(NOT VERIFIED 2026-09-29: Needs real Claude Code tab plus real speech input via hands-free)_
+- [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the hands-free panel keeps showing the turn, and the log shows `Hands-free turn held` with `reason="confident question on screen"` once (not every 50 ms). Answer the dialog: the turn is typed. _(NOT VERIFIED 2026-09-29: Needs speech input (microphone/ears) plus a real Claude permission dialog.)_
+- [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn is typed now, and the Compose badge still shows the typed command, which goes out at the next idle as before. _(NOT VERIFIED 2026-09-29: Needs speaking (audio input) to a hands-free session with busy agent.)_
 - [ ] Stop hands-free: the status bar reads "Hands-free: stopped" (no "entries had already been typed" count any more).
 
 ## Opening AI Chat no longer aborts the app (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, open the AI Chat panel (ego over ACP) and send a prompt. The app stays up and the reply streams in. Before the fix, `acp_subscribe` called `tokio::spawn` on the main thread, which panicked with `TryCurrentError` (SIGABRT, crash report `tuicommander-2026-09-23-164623.ips`) and killed every PTY session.
+- [ ] After a `make dev` restart, open the AI Chat panel (ego over ACP) and send a prompt. The app stays up and the reply streams in. Before the fix, `acp_subscribe` called `tokio::spawn` on the main thread, which panicked with `TryCurrentError` (SIGABRT, crash report `tuicommander-2026-09-23-164623.ips`) and killed every PTY session. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 
 ## Voiceless dictation languages are marked (2026-09-23) — frontend via HMR
 
@@ -551,8 +551,8 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Reply language stated once per hands-free conversation (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, with the dictation language on Auto-detect, arm hands-free on an idle agent tab and say two Italian sentences, then one English sentence. The terminal receives `<first> (reply in Italian)`, the second sentence with no suffix, and `<english> (reply in English)`.
-- [ ] After the same restart, set the dictation language to Italian and arm again: the start notice ends with `Reply in Italian.` and the first spoken turn carries no suffix.
+- [ ] After a `make dev` restart, with the dictation language on Auto-detect, arm hands-free on an idle agent tab and say two Italian sentences, then one English sentence. The terminal receives `<first> (reply in Italian)`, the second sentence with no suffix, and `<english> (reply in English)`. _(NOT VERIFIED 2026-09-29: Needs spoken Italian/English speech via microphone and a live agent tab with dictation Auto-detect.)_
+- [ ] After the same restart, set the dictation language to Italian and arm again: the start notice ends with `Reply in Italian.` and the first spoken turn carries no suffix. _(NOT VERIFIED 2026-09-29: Hands-free arming needs microphone and spoken turn; language notice tied to real arm.)_
 
 ## Custom hands-free start notice (2026-09-23) — Rust, needs `make dev` restart
 
@@ -565,7 +565,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Parked voice turns leave together (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, arm hands-free on a Claude tab, give it a long task, and speak three short turns while it works. At the next idle the three turns arrive together as one message, in the order spoken, one `(reply in Italian)` line each — not one message per agent turn. A command typed into Compose between the turns still arrives as its own message.
+- [ ] After a `make dev` restart, arm hands-free on a Claude tab, give it a long task, and speak three short turns while it works. At the next idle the three turns arrive together as one message, in the order spoken, one `(reply in Italian)` line each — not one message per agent turn. A command typed into Compose between the turns still arrives as its own message. _(NOT VERIFIED 2026-09-29: Needs microphone/speech hands-free with a real Claude agent.)_
 
 ## Settings consistency: Language, ego, Spoken replies (2026-09-23) — Rust part needs `make dev` restart
 
@@ -586,8 +586,8 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Calm hands-free voice meter (2026-09-23) — frontend via HMR; the Rust level fallback needs a `make dev` restart
 
-- [ ] [VISUAL] Arm hands-free. The toast shows one thin horizontal voice meter and the phase text — no pulsing dot and no moving dots after the text. Push-to-talk (dictation hotkey) still shows the bar meter, the dot and the dots.
-- [ ] Stay silent with normal room noise (fan, typing): the voice meter stays flat. Speak: it fills at once and falls back smoothly over about 1.5 s after you stop, with no flicker between words.
+- [ ] [VISUAL] Arm hands-free. The toast shows one thin horizontal voice meter and the phase text — no pulsing dot and no moving dots after the text. Push-to-talk (dictation hotkey) still shows the bar meter, the dot and the dots. _(NOT VERIFIED 2026-09-29: Arming hands-free needs a real microphone input; toast visuals depend on live audio phases)_
+- [ ] Stay silent with normal room noise (fan, typing): the voice meter stays flat. Speak: it fills at once and falls back smoothly over about 1.5 s after you stop, with no flicker between words. _(NOT VERIFIED 2026-09-29: Voice meter reaction to real room noise and speech through a microphone; smoothing judged by eye/ear.)_
 
 ## Unmerged worktree removal (2026-09-23) — Rust, needs `make dev` restart
 
@@ -600,15 +600,15 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows.
 - [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable.
 - [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip.
-- [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload.
+- [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload. _(NOT VERIFIED 2026-09-29: Needs real Claude setting an OSC title in a browser-mode agent tab; subagent tag part alone is testable but item is combined.)_
 
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
 - [x] Download reaches Ready with no hash error _(verified 2026-09-23: `POST /dictation/speech/assets/download` for onnxruntime, italian, english, french; all `ready`, sha256 checked during install)_
 - [ ] [HUMAN] A hands-free reply in Italian is spoken with the giovanni voice (`/dictation/speech/speak` refuses while hands-free is not armed). _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
-- [ ] **Rust, needs another `make dev` restart:** arm hands-free on a hand-opened Claude tab, then `voice action=status` from that tab reports `available: true` instead of "Speech is bound to another session" (caller now resolved to its live PTY, `resolve_mcp_origin_pty`).
-- [ ] Settings → Dictation → Spoken replies lists English, French, German, Italian, Portuguese and Spanish. Set the Whisper language to English, download English, and a hands-free reply is spoken in English with the alba voice.
-- [ ] French (24-layer, ~390 MB): download and speak one reply. The engine reads the layer count from `bundle.json`, but no 24-layer bundle has been run here before.
+- [ ] **Rust, needs another `make dev` restart:** arm hands-free on a hand-opened Claude tab, then `voice action=status` from that tab reports `available: true` instead of "Speech is bound to another session" (caller now resolved to its live PTY, `resolve_mcp_origin_pty`). _(NOT VERIFIED 2026-09-29: Needs a real hand-opened Claude tab calling voice action=status (mcp caller to PTY resolution) with speech assets.)_
+- [ ] Settings → Dictation → Spoken replies lists English, French, German, Italian, Portuguese and Spanish. Set the Whisper language to English, download English, and a hands-free reply is spoken in English with the alba voice. _(NOT VERIFIED 2026-09-29: Downloads ~390 MB voice bundles and needs audible spoken reply (human ears))_
+- [ ] French (24-layer, ~390 MB): download and speak one reply. The engine reads the layer count from `bundle.json`, but no 24-layer bundle has been run here before. _(NOT VERIFIED 2026-09-29: Needs ~390MB French bundle download plus audio playback judged by ears.)_
 
 ## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
 
@@ -626,15 +626,15 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Hands-free earcons (2026-09-23) — **Rust, needs a `make dev` restart**
 
-- [ ] Arm hands-free on the desktop, speak a turn: after the hold-back a short, quiet blip plays as it reaches the agent. Set an activation phrase and speak without it: a softer, lower blip plays and nothing is sent. Neither blip opens a turn or stops a spoken reply. Repeat from a browser tab at `:9876` — the tab beeps, the desktop stays silent. Also check the first blip after arming from the global hotkey is audible (WKWebView may keep an ungestured AudioContext suspended). Turn the Earcons setting off and repeat: no sound on the desktop, and none in a browser tab armed after the change.
+- [ ] Arm hands-free on the desktop, speak a turn: after the hold-back a short, quiet blip plays as it reaches the agent. Set an activation phrase and speak without it: a softer, lower blip plays and nothing is sent. Neither blip opens a turn or stops a spoken reply. Repeat from a browser tab at `:9876` — the tab beeps, the desktop stays silent. Also check the first blip after arming from the global hotkey is audible (WKWebView may keep an ungestured AudioContext suspended). Turn the Earcons setting off and repeat: no sound on the desktop, and none in a browser tab armed after the change. _(NOT VERIFIED 2026-09-29: Earcon blips require audible output and real hands-free arming)_
 
-- [ ] Earcon redesign (frontend, live via HMR): a delivered turn plays two short **rising** notes; a dropped turn plays two softer **falling** notes. Each is recognisable without hearing the other, and neither opens a turn, appears as captured speech, or stops a spoken reply.
+- [ ] Earcon redesign (frontend, live via HMR): a delivered turn plays two short **rising** notes; a dropped turn plays two softer **falling** notes. Each is recognisable without hearing the other, and neither opens a turn, appears as captured speech, or stops a spoken reply. _(NOT VERIFIED 2026-09-29: Earcon note direction (rising vs falling) is judged by ear.)_
 
 ## Dictation auto-send on long text (2026-09-23) — frontend, live via HMR
 
-- [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears.
-- [ ] Dictate a short phrase into Claude and into a Codex tab: both still submit.
-- [ ] **After a `make dev` restart (Rust):** `session action=submit` with a 600+ char input to a Claude tab returns `acknowledged:true` and the prompt runs; a peer `agent send` of a long message also submits.
+- [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears. _(NOT VERIFIED 2026-09-29: Needs 30+ s of real dictated audio into a Claude tab.)_
+- [ ] Dictate a short phrase into Claude and into a Codex tab: both still submit. _(NOT VERIFIED 2026-09-29: Needs real dictation audio and real Claude and Codex tabs.)_
+- [ ] **After a `make dev` restart (Rust):** `session action=submit` with a 600+ char input to a Claude tab returns `acknowledged:true` and the prompt runs; a peer `agent send` of a long message also submits. _(NOT VERIFIED 2026-09-29: Needs a real Claude tab to run the long prompt and peer agent send)_
 
 ## New-tab long press and settings button spacing (2026-09-23) — frontend, live via HMR
 
@@ -658,7 +658,7 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns.
 - [x] **Store fix, needs another `make dev` restart:** after the restart, one `progress` call (or `POST /progress/list`) succeeds, and the live journal's schema (`SELECT sql FROM sqlite_master WHERE name='entries'` on `<config dir>/progress.sqlite3`) contains `'delegated'`. The legacy no-AUTOINCREMENT journal is migrated with every id kept. _(verified 2026-09-23 after restart: `progress` returned id 1617; schema now `INTEGER PRIMARY KEY AUTOINCREMENT` with `'delegated'` in the CHECK; `sqlite_sequence` = 1617 = MAX(id); `POST /progress/list` and `/progress/flow` answer 200, list ids 388–1618.)_
-- [ ] After the same restart: in a Claude session with 65+ subagents, the newest and every running one still get a Flow column; expand a Flow row, let a new entry arrive, and the same row stays expanded.
+- [ ] After the same restart: in a Claude session with 65+ subagents, the newest and every running one still get a Flow column; expand a Flow row, let a new entry arrive, and the same row stays expanded. _(NOT VERIFIED 2026-09-29: Needs a real Claude session with 65+ subagents)_
 - [x] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed. _(verified 2026-09-23: returned `404` on :9876.)_
 
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
@@ -670,7 +670,7 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [ ] In a Markdown file with plain, task, and nested bullets, hover each bullet's gutter and save a comment. Confirm each highlight stays on its chosen bullet and the file contains an indented `tweak:item` marker directly below that bullet's own content. _(Automated: `MarkdownTab.test.tsx` writes the selected task marker; `ContentRenderer.test.tsx` checks nested source targets; `tweakComments.test.ts` checks nested anchors and list rendering.)_
 - [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block.
 - [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line.
-- [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition.
+- [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition. _(NOT VERIFIED 2026-09-29: Needs a real agent tab in the same repository with idle/busy transitions to observe immediate delivery vs queued delivery.)_
 
 ## Design Mode (2026-09-23) — **Rust, needs a `make dev` restart**
 
@@ -688,7 +688,7 @@ that checkout merely to run this check.
       local page with a click handler. Start Design Mode from an agent tab: a
       dedicated Chrome window opens the configured URL, hovering highlights an
       element, and clicking selects it without firing the page handler.
-- [ ] Begin typing a note in the bound agent's composer, select two elements,
+- [ ] Begin typing a note in the bound agent's composer, select two elements, _(NOT VERIFIED 2026-09-29: Design Mode needs a bound real agent composer (Claude/Codex) plus element grabs in a browser; agent composer not available headlessly.)_
       and confirm both grab blocks appear alongside the untouched note without
       submitting. Check selector, path, style subset, rectangle, HTML snippet,
       nearby text, source location when the dev build supplies one, and a valid
@@ -701,11 +701,11 @@ that checkout merely to run this check.
       `<style>` or `adoptedStyleSheets`), select a button inside a component.
       The `tokens:` line lists the component's own `--…` variables. jsdom has no
       `ShadowRoot.styleSheets`, so no unit test covers this.
-- [ ] Start Design Mode from another agent terminal in the same repository.
+- [ ] Start Design Mode from another agent terminal in the same repository. _(NOT VERIFIED 2026-09-29: Needs real Chrome window bound by Design Mode with grabs from another agent terminal)_
       Confirm the existing Chrome window is reused and subsequent grabs go to
       the newly bound terminal. Close that terminal, then Chrome: the status
       indicator must show Stopped and no further grab may be delivered.
-- [ ] With a separate debug instance, check that quitting TUICommander closes
+- [ ] With a separate debug instance, check that quitting TUICommander closes _(NOT VERIFIED 2026-09-29: Needs real Chrome on the host, TUIC quitting and owned-window behaviour, plus a live agent session (desktop-only, multi-app).)_
       only the Chrome windows it owns. A browser/PWA start must explain that
       Chrome opens on the host machine.
 - [ ] Review fixes (2026-09-23): a page running `debugger;` keeps responding;
@@ -828,7 +828,7 @@ tab being closed.
       frontend and has no audio route, so testing it proves nothing. The tab
       must be **present** — it used to be hidden outside Tauri. The global
       hotkey and the microphone-device list must be **absent**.
-- [ ] Press Start on a terminal running an agent. The browser must ask for
+- [ ] Press Start on a terminal running an agent. The browser must ask for _(NOT VERIFIED 2026-09-29: Needs real browser microphone permission prompt and a live mic; hands-free Start on an agent terminal.)_
       microphone permission, and the phase must reach `waiting`.
 - [ ] **[HUMAN]** Hold a complete turn: speak, see the transcript delivered to _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       the agent, and hear the reply **through the browser's speakers** — not
@@ -839,7 +839,7 @@ tab being closed.
 - [ ] **[HUMAN]** Close the tab mid-utterance. The conversation must disarm _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       (`GET /dictation/hands-free` reports `armed: false`), nothing may stay
       queued, and nothing may be left speaking.
-- [ ] Arm from the desktop app while a browser tab holds an audio socket. The
+- [ ] Arm from the desktop app while a browser tab holds an audio socket. The _(NOT VERIFIED 2026-09-29: Needs real microphone on desktop and a browser tab audio socket.)_
       desktop must use its own microphone and ignore the browser entirely.
 - [ ] Reload the browser tab while armed. The old conversation must disarm
       rather than follow the new socket.
@@ -910,21 +910,21 @@ the parser; these items are the part a live terminal shows.
 
 ## Dictation preserves speech before a pause (2026-09-21) — **Rust, needs a `make dev` restart**
 
-- [ ] After restart, dictate a short phrase followed by a pause while holding F5. The live preview must receive the phrase; the final transcription must retain it. Verify silent recordings remain rejected by the configured speech gates.
+- [ ] After restart, dictate a short phrase followed by a pause while holding F5. The live preview must receive the phrase; the final transcription must retain it. Verify silent recordings remain rejected by the configured speech gates. _(NOT VERIFIED 2026-09-29: Needs real speech through microphone with F5 hold and pause.)_
 
 ## Hooked dialogs restore the question badge (2026-09-21) — **Rust, needs a `make dev` restart**
 
-- [ ] After restart, a Claude selection dialog with native hooks enabled must
+- [ ] After restart, a Claude selection dialog with native hooks enabled must _(NOT VERIFIED 2026-09-29: Needs real Claude selection dialog with native hooks)_
       show the question badge. It must survive switching sub-questions and
       redraws without duplicate notifications. After the final answer or cancel,
       normal protocol activity must clear question when the dialog closes.
 
 ## Protocol idle survives terminal animation (2026-09-21) — **Rust, needs a `make dev` restart**
 
-- [ ] After a rebuild/restart, finish a Codex turn in brainstorming with its idle
+- [ ] After a rebuild/restart, finish a Codex turn in brainstorming with its idle _(NOT VERIFIED 2026-09-29: Needs real Codex turn with its idle animation.)_
       animation enabled. The terminal and session API must remain idle while the
       animation runs. Submit another prompt: working must return immediately.
-- [ ] Finish a Claude turn: idle must survive ordinary redraws. A real active
+- [ ] Finish a Claude turn: idle must survive ordinary redraws. A real active _(NOT VERIFIED 2026-09-29: Needs a real Claude turn with a blocking Stop hook and idle redraws)_
       phase from a blocking Stop hook must still report working.
 
 ## Ego reaches this instance and the collapsed tool surface (#802-4c43, 2026-09-21) — **Rust, needs a `make dev` restart**
@@ -936,13 +936,13 @@ Separately, `tools/list` preferred the session flag over the per-request `_meta`
 identity, so ego was handed the full catalogue after `server/discover` had
 advertised the collapsed one.
 
-- [ ] Start a named test instance (`TUIC_APP_INSTANCE=tuic-test make dev`) while
+- [ ] Start a named test instance (`TUIC_APP_INSTANCE=tuic-test make dev`) while _(NOT VERIFIED 2026-09-29: Needs real ego binary in the AI Chat panel to list sessions of the named test instance.)_
       Boss's install is running. Open the AI Chat panel there and ask ego to list
       the sessions: it must report the test instance's sessions, not Boss's.
-- [ ] In that same conversation ask ego which tools it has. It must name
+- [ ] In that same conversation ask ego which tools it has. It must name _(NOT VERIFIED 2026-09-29: Needs live ego conversation listing its tools.)_
       `search_tools`, `get_tool_schema`, `call_tool` and `progress` — four, not
       the full catalogue.
-- [ ] Kill nothing and start a second copy so the primary socket is already held:
+- [ ] Kill nothing and start a second copy so the primary socket is already held: _(NOT VERIFIED 2026-09-29: Needs real ego reaching the second instance socket (-<pid> entry); requires real ego binary.)_
       ego in the second copy still reaches the second copy (it binds a `-<pid>`
       socket, and the entry carries that path).
 
@@ -957,7 +957,7 @@ that already has one is dropped.
 - [ ] Connect mac-mint, start a PTY **on mac-mint** (ssh in, `tuic session` there, _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       or its own UI). This Mac must show it as a session-list row with the remote
       badge and **no new tab** — no `PTY: Session N`.
-- [ ] Its busy/idle/question badge still moves from here while it works. That is
+- [ ] Its busy/idle/question badge still moves from here while it works. That is _(NOT VERIFIED 2026-09-29: Needs second machine mac-mint)_
       the one thing the window emit is still allowed to carry.
 - [ ] Open a repo folder on mac-mint from its own UI: no repository appears in _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       this Mac's sidebar, and no git work runs here for that path.
@@ -990,16 +990,16 @@ reads `dirty_files` off an old backend that does not send it, so every count is
 
 ## Notification sound teardown (2026-09-20) — **Rust, needs a `make dev` restart**
 
-- [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown.
+- [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown. _(NOT VERIFIED 2026-09-29: Needs real CoreAudio output device and ears (click artifact).)_
 
 ## Progress dialog and journal (2026-09-19)
 
 - [ ] **Rust, needs a `make dev` restart.** In an isolated agent session, print an `intent:` that soft-wraps over at least 12 rows in a 40-column terminal. Confirm the complete title appears once and Progress records a capped entry. Scroll a title-less intent under capped history and confirm it stays open until the next prose line. Composer chrome must not extend the intent, and an unfinished `(` title fragment must be removed when the intent closes.
 - [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, print a title-less `intent:` followed by indented prose in a wide agent terminal. Progress must keep only the intent text; the prose must not become a tab title. In a narrow terminal, print a title after three hard-wrap rows, then another intent: both entries and both titles must appear. A long intent must keep its full tab-title event while its journal text ends at 500 characters.
 
-- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, have Codex stream a long `intent:` in a narrow terminal while it redraws and moves the cursor to its composer. Progress should receive one full entry with its title; a later identical repaint must add none. Restart when current PTY sessions may be lost.
+- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, have Codex stream a long `intent:` in a narrow terminal while it redraws and moves the cursor to its composer. Progress should receive one full entry with its title; a later identical repaint must add none. Restart when current PTY sessions may be lost. _(NOT VERIFIED 2026-09-29: Needs real Codex streaming a long intent in a narrow terminal.)_
 
-- [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically.
+- [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically. _(NOT VERIFIED 2026-09-29: WKWebView-specific hover-stuck icon; author states it could not be reproduced programmatically; needs desktop app and human.)_
 - [ ] **Rust, needs a `make dev` restart.** With an agent tab open, let it print `intent: …` and let the screen repaint (spinner running). `sqlite3 "<config dir>/progress.sqlite3" "select count(*) from entries where kind='intent' and created_at_ms > <restart ms>"` must grow by one per distinct intent, not per repaint. Then call the `progress` tool twice with the same `done` text and confirm both rows land. _(NOTE 2026-09-23: FAILS on :9876 — no row at all has landed since the restart (newest `created_at_ms` is 12:04, restart 13:08) because every `ProgressStore::open()` fails with `no such table: sqlite_sequence`; see Progress Flow view, first item.)_
 
 ## ego reaches TUIC over the stdio bridge (story `796-7fa3`, 2026-09-20) — **Rust, needs a `make dev` restart**
@@ -1008,10 +1008,10 @@ The session's MCP entry moved from an HTTP URL to the `tuic-bridge` sidecar on
 stdio. Every test here stops at the wire shape TUICommander writes; what none of
 them reaches is ego actually spawning that binary and calling a tool through it.
 
-- [ ] With **Remote Access off** (Settings → Remote Access), open the AI Chat panel and ask ego to list the open terminal sessions. It must answer with them. Before this change the same question got a refusal or an empty answer, because the session carried no MCP server at all — that is the whole bug.
-- [ ] Turn Remote Access **on**, start a new chat session, ask again. Same answer. The switch must no longer change what ego can reach.
+- [ ] With **Remote Access off** (Settings → Remote Access), open the AI Chat panel and ask ego to list the open terminal sessions. It must answer with them. Before this change the same question got a refusal or an empty answer, because the session carried no MCP server at all — that is the whole bug. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
+- [ ] Turn Remote Access **on**, start a new chat session, ask again. Same answer. The switch must no longer change what ego can reach. _(NOT VERIFIED 2026-09-29: Needs real ego agent through tuic-bridge; Remote Access toggle A/B.)_
 - [x] Check the tool surface is still the collapsed one. _(verified: covered on both sides instead — `tuic-bridge` `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own` asserts the proxied `initialize` still carries `clientInfo.name = ego` and that the bridge's own session opens under its own name, and `mcp_transport::tests::the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded` asserts `tuic-bridge` does NOT earn the collapsed surface by itself. Falsified by mutation: renaming the forwarded client turns the bridge test red.)_
-- [ ] Launch a second instance with `TUIC_APP_INSTANCE=qa`, open AI Chat there, and ask ego which repositories it can see. It must see the `qa` instance's repositories, never the default instance's.
+- [ ] Launch a second instance with `TUIC_APP_INSTANCE=qa`, open AI Chat there, and ask ego which repositories it can see. It must see the `qa` instance's repositories, never the default instance's. _(NOT VERIFIED 2026-09-29: Needs real ego configured and asked via AI Chat in second instance)_
 
 ## PR review, changelog and improvement scan run on ego (story `795-320b`, 2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -1020,13 +1020,13 @@ variants and four new HTTP routes are all new Rust, and none of them load into a
 running `make dev`. The parsers, the confidence gate and the stores are unit
 tested; what no test reaches is a real ego process answering a real diff.
 
-- [ ] Open a PR's detail popover and click **Run** under AI Review. It must produce findings (or "No findings" with a reviewed-file count and "by ego"), never a blank panel. Tick a finding with a line number and click **Post review**; the comment must appear on the PR in GitHub.
-- [ ] A finding with **no** line number must be listed but its checkbox disabled — GitHub refuses an inline comment without a line.
+- [ ] Open a PR's detail popover and click **Run** under AI Review. It must produce findings (or "No findings" with a reviewed-file count and "by ego"), never a blank panel. Tick a finding with a line number and click **Post review**; the comment must appear on the PR in GitHub. _(NOT VERIFIED 2026-09-29: Needs ego to run the review plus a real GitHub PR and posting a review comment to GitHub.)_
+- [ ] A finding with **no** line number must be listed but its checkbox disabled — GitHub refuses an inline comment without a line. _(NOT VERIFIED 2026-09-29: PR review on ego needs ego binary and a real GitHub PR.)_
 - [ ] Rename `ego_executable` in Settings → General to something that does not exist and run the review again. The popover must show ego's own sentence, not an empty finding list. Put the real path back.
-- [ ] GitHub panel header → the document icon opens the Changelog modal. It must produce markdown for the merged PRs since the last tag, and **Copy** and **Save** must both work on the result.
-- [ ] Open the **Ops Dashboard** (the chart icon in the same header). Click each of `refactor`, `testing` and `perf`. Each scan must fill the Proposals column with at most five cards, and **Create issue** on one of them must file a real GitHub issue.
-- [ ] While a review is running, the dashboard's Review findings column must show the PR as Working and then Done with a count — that is the `review-progress` event arriving over the bus.
-- [ ] From a browser (not the Tauri app) at `localhost:9876`, run the same review and the same scan. Both must work: these routes are deliberately not desktop-gated.
+- [ ] GitHub panel header → the document icon opens the Changelog modal. It must produce markdown for the merged PRs since the last tag, and **Copy** and **Save** must both work on the result. _(NOT VERIFIED 2026-09-29: Changelog/scan/review run on ego (real agent) plus real GitHub PRs/issues (external account))_
+- [ ] Open the **Ops Dashboard** (the chart icon in the same header). Click each of `refactor`, `testing` and `perf`. Each scan must fill the Proposals column with at most five cards, and **Create issue** on one of them must file a real GitHub issue. _(NOT VERIFIED 2026-09-29: Needs ego scans and creating a real GitHub issue (account/paid).)_
+- [ ] While a review is running, the dashboard's Review findings column must show the PR as Working and then Done with a count — that is the `review-progress` event arriving over the bus. _(NOT VERIFIED 2026-09-29: PR review runs on ego with real GitHub PR; needs ego and account)_
+- [ ] From a browser (not the Tauri app) at `localhost:9876`, run the same review and the same scan. Both must work: these routes are deliberately not desktop-gated. _(NOT VERIFIED 2026-09-29: Needs ego and a real PR; the route works from a browser but the run depends on ego + GitHub.)_
 
 ## The terminal stream is compressed over a remote connection (story `794-832e`, 2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -1056,7 +1056,7 @@ a real ssh process.
       loopback and untagged runs above, and the client decoded every deflated frame it
       received — `decode_errors: 0` on all three.)_
 - [ ] Settings → Services → SSH Tunnels → edit a profile: **Compress the channel (ssh -C)** is on. Save, start the tunnel, and confirm with `ps ax | grep "[s]sh -N"` that the command line holds `-o Compression=yes`. Untick it, restart the tunnel, confirm `Compression=no`. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
-- [ ] Open a repository through an **SSH remote connection** and attach a terminal. The stream socket asks for `compress=deflate` (the client sees a remote connection) but the daemon answers identity tags because the peer is loopback — the terminal must still work, and the saving comes from the tunnel instead.
+- [ ] Open a repository through an **SSH remote connection** and attach a terminal. The stream socket asks for `compress=deflate` (the client sees a remote connection) but the daemon answers identity tags because the peer is loopback — the terminal must still work, and the saving comes from the tunnel instead. _(NOT VERIFIED 2026-09-29: Needs SSH remote connection to a second machine)_
       _(NOTE 2026-09-20: the **daemon half is proven** — the same probe run on mac-mint
       against `127.0.0.1:9879` with `?compress=deflate` got 10 tagged frames and **not
       one** `TextDeflate`, where a remote peer on the identical workload got 2. The
@@ -1072,12 +1072,12 @@ against event sequences and the frontend against a double; what no test reaches
 is a real ego process, which is every item below.
 
 - [ ] With **ego executable** empty, a prompt saved with `executionMode: "api"` is listed but disabled, and hovering it says ego is not configured and names *General* then *AI Providers*.
-- [ ] With ego configured but no repository or terminal open, the same prompt is disabled and says ego needs a working directory.
-- [ ] With a real ego and a repository open, run an `api` prompt whose output target is the clipboard. The clipboard must hold ego's final text, trimmed, with no reasoning in it.
-- [ ] While it runs: `ps ax | grep ego` shows exactly one extra process, and it is gone within a second of the answer arriving. Run the prompt three times — no ego process accumulates.
-- [ ] The AI Chat panel's own connection is untouched: open the panel, send a turn, then run an `api` prompt. The panel's conversation must survive, and the prompt must not appear in it.
-- [ ] Ask an `api` prompt to do something that needs a tool ("list the files in this directory"). It must come back refused, saying how many permissions were declined — not as an empty answer, and never hanging.
-- [ ] Run one with the output target set to *commit message*: the Git panel's commit box must fill.
+- [ ] With ego configured but no repository or terminal open, the same prompt is disabled and says ego needs a working directory. _(NOT VERIFIED 2026-09-29: Needs ego configured to see the disabled-with-reason state (ego binary/account))_
+- [ ] With a real ego and a repository open, run an `api` prompt whose output target is the clipboard. The clipboard must hold ego's final text, trimmed, with no reasoning in it. _(NOT VERIFIED 2026-09-29: Needs a real ego and model provider producing the final text into the clipboard.)_
+- [ ] While it runs: `ps ax | grep ego` shows exactly one extra process, and it is gone within a second of the answer arriving. Run the prompt three times — no ego process accumulates. _(NOT VERIFIED 2026-09-29: Needs ego binary running Smart Prompts api mode (ps ax | grep ego).)_
+- [ ] The AI Chat panel's own connection is untouched: open the panel, send a turn, then run an `api` prompt. The panel's conversation must survive, and the prompt must not appear in it. _(NOT VERIFIED 2026-09-29: Needs real ego for AI Chat panel and api Smart Prompt.)_
+- [ ] Ask an `api` prompt to do something that needs a tool ("list the files in this directory"). It must come back refused, saying how many permissions were declined — not as an empty answer, and never hanging. _(NOT VERIFIED 2026-09-29: Smart Prompts api mode runs on ego; needs a real ego session)_
+- [ ] Run one with the output target set to *commit message*: the Git panel's commit box must fill. _(NOT VERIFIED 2026-09-29: Needs a real ego run to produce commit message.)_
 
 ## AI Providers tab over ego's configuration (story `786-4a6d`, 2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -1088,11 +1088,11 @@ prove the join and the failure shapes against a double, never against ego.
 - [ ] With **Experimental Features** off, the Settings nav has no *AI Providers* entry and searching for "default model" finds nothing. Turn it on: the tab appears.
 - [ ] With **ego executable** empty, open the tab. It must name the field to fill (General → AI Chat), not render an empty list, and launch nothing.
 - [ ] Point the setting at a path that does not exist. The tab must say the executable could not be *started* — a different message from "not configured" — and show what the OS reported.
-- [ ] With a real ego: the provider rows must match `ego doctor --json`, the model list `ego models --json`, and the picker's selection `ego config ls --json`'s `model`.
-- [ ] Change the default model, then `ego config ls --json` in a terminal: the new value must be there, quoted. Restart TUICommander — the tab must still show it. (This is the criterion no test can reach: ego holds it, TUIC does not.)
-- [ ] Press **Refresh from providers** and watch the network (or ego's own logs): the refresh must be the only outbound call, and opening the tab must make none.
-- [ ] Break one provider (revoke a token, or point ego at an unreachable base URL) and press Refresh. The failure must be shown in ego's own words with the command and exit code, not swallowed into an empty list.
-- [ ] Log out of one provider (`ego auth logout <provider>`) and confirm its row reads "no credential" while the others stay "stored" — a missing credential must not blank out the whole tab.
+- [ ] With a real ego: the provider rows must match `ego doctor --json`, the model list `ego models --json`, and the picker's selection `ego config ls --json`'s `model`. _(NOT VERIFIED 2026-09-29: Needs real ego (`ego doctor/models/config ls --json`) to compare against.)_
+- [ ] Change the default model, then `ego config ls --json` in a terminal: the new value must be there, quoted. Restart TUICommander — the tab must still show it. (This is the criterion no test can reach: ego holds it, TUIC does not.) _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
+- [ ] Press **Refresh from providers** and watch the network (or ego's own logs): the refresh must be the only outbound call, and opening the tab must make none. _(NOT VERIFIED 2026-09-29: Needs ego provider refresh and network observation of real providers.)_
+- [ ] Break one provider (revoke a token, or point ego at an unreachable base URL) and press Refresh. The failure must be shown in ego's own words with the command and exit code, not swallowed into an empty list. _(NOT VERIFIED 2026-09-29: Needs real ego provider config with broken token/URL and ego CLI output)_
+- [ ] Log out of one provider (`ego auth logout <provider>`) and confirm its row reads "no credential" while the others stay "stored" — a missing credential must not blank out the whole tab. _(NOT VERIFIED 2026-09-29: Needs real ego with stored provider credentials and `ego auth logout <provider>`.)_
 
 ## AI Chat runs on ego (story `785-58ca`, 2026-09-20) — frontend, Vite HMR picks it up, but it needs a real ego binary
 
@@ -1100,16 +1100,16 @@ Everything below is proven against a test double at the IPC boundary. What no
 test can reach is the live process: these are the checks that need one.
 
 - [ ] With **ego executable** empty, open the panel: it must say ACP is not configured, show no input box, and launch nothing.
-- [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes.
-- [ ] Let ego ask for permission. The buttons must be the ones ego published, and answering must clear the card in every open window — not only the one that answered.
-- [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there.
+- [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes. _(NOT VERIFIED 2026-09-29: Needs real ego streaming a turn with reasoning and tool calls.)_
+- [ ] Let ego ask for permission. The buttons must be the ones ego published, and answering must clear the card in every open window — not only the one that answered. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
+- [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there. _(NOT VERIFIED 2026-09-29: Needs real ego processes (ps ax | grep ego) per repo root.)_
 - [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_
 
 ## Launch-scoped native agent status signals (story `746-30a9`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] [HUMAN] After restarting `make dev`, launch Codex 0.154, complete a turn, and confirm its payload contains `type`, `turn-id`, and `last-assistant-message`, OSC 7770 idle reaches the PTY, and the existing Codex `notify` command receives the unchanged JSON argument. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
-- [ ] On a machine that has `fish` installed, run `cargo nextest run --lib -E 'test(shell_integration)'`. The `tests::launch` matrix runs the inject / skip-when-user-passed / setting-off cases against every shell it finds, but fish is absent from this Mac and from the `ubuntu-22.04` CI image, so the fish half of that matrix has never executed — the fish wrapper is covered only by the structural `fish_wrappers_cover_inject_user_override_skip_and_setting_off` grep. Nothing to change if it passes; delete this item.
+- [ ] On a machine that has `fish` installed, run `cargo nextest run --lib -E 'test(shell_integration)'`. The `tests::launch` matrix runs the inject / skip-when-user-passed / setting-off cases against every shell it finds, but fish is absent from this Mac and from the `ubuntu-22.04` CI image, so the fish half of that matrix has never executed — the fish wrapper is covered only by the structural `fish_wrappers_cover_inject_user_override_skip_and_setting_off` grep. Nothing to change if it passes; delete this item. _(NOT VERIFIED 2026-09-29: Needs a host with fish installed (absent on this Mac and CI); run nextest filter there)_
 
 Features to test when TUICommander is more usable.
 
@@ -1281,7 +1281,7 @@ live agent-frame check cannot be replayed.
   captured menu screen — footer row included — inside a fenced code block. Its tab
   must stay "working": no `?` in the sidebar, `awaiting_input` false in
   `GET /sessions`.
-- [ ] In the same session, open a real interactive menu (any agent prompt that
+- [ ] In the same session, open a real interactive menu (any agent prompt that _(NOT VERIFIED 2026-09-29: Needs real agent drawing an Ink selection footer and an agent quoting it.)_
   draws the selection footer) and confirm the `?` still appears. The regression to
   fear is the opposite one: an over-tight anchor that silences real menus for
   agents whose frame indents them.
@@ -1374,13 +1374,13 @@ runs in the backend, so nothing changes until the Rust process is rebuilt.
 `auto_retry_on_error`, default `false`, and it is currently unset in
 `config.json`, so with it off you only get the red error badge and no retry.
 
-- [ ] Reach a real `API Error: 500 Internal server error. This is a server-side
+- [ ] Reach a real `API Error: 500 Internal server error. This is a server-side _(NOT VERIFIED 2026-09-29: Needs a real Claude Code API 500 server-side error message)_
   issue…` in a Claude tab. `GET http://localhost:9876/logs` shows
   `[ApiError] … pattern=claude-server-error-friendly kind=server` followed by
   `[AutoRetry] claude: attempt 1/3 in 5s`.
-- [ ] The tab does NOT play the error sound and does NOT show the red awaiting
+- [ ] The tab does NOT play the error sound and does NOT show the red awaiting _(NOT VERIFIED 2026-09-29: Needs real Claude prose 5xx error message and retry timing.)_
   badge while a retry is pending — only after the 3rd attempt is exhausted.
-- [ ] `continue` is injected after 5s and the turn resumes.
+- [ ] `continue` is injected after 5s and the turn resumes. _(NOT VERIFIED 2026-09-29: Needs real Claude Code emitting its prose 5xx error and auto-continue)_
 - [ ] With auto-retry disabled for Claude, the same error sets the red badge
   immediately and injects nothing.
 - [ ] The message wraps across terminal rows (narrow the window before it
@@ -1397,45 +1397,45 @@ on 2026-09-19 with the Codex App Server and Grok ACP integrations loaded.
 it now drives all supported usage providers. Codex and Grok must be logged in
 through their own CLIs.
 
-- [ ] Focus a tab running Claude: the status bar ticker is labelled `Claude` and
+- [ ] Focus a tab running Claude: the status bar ticker is labelled `Claude` and _(NOT VERIFIED 2026-09-29: Needs real Claude/Codex/Grok CLI accounts with usage data)_
   shows the `5h` / `7d` numbers as before. Clicking it still opens the Claude
   Usage dashboard tab.
-- [ ] Focus a tab running Codex: the label becomes `Codex` and the text shows
+- [ ] Focus a tab running Codex: the label becomes `Codex` and the text shows _(NOT VERIFIED 2026-09-29: Needs real Codex/Claude usage data (accounts).)_
   the Codex windows (e.g. `7d: 100% -1d`). The switch happens on tab focus,
   without waiting for the 5-minute poll.
-- [ ] Clicking the Codex ticker opens a **Codex Usage Dashboard** tab (a
+- [ ] Clicking the Codex ticker opens a **Codex Usage Dashboard** tab (a _(NOT VERIFIED 2026-09-29: Needs real Codex/Claude/Grok agent in terminal to drive usage ticker)_
   singleton — clicking again focuses the existing tab, it does not duplicate).
-- [ ] Focus a tab running Grok: the ticker is labelled `Grok`, shows the
+- [ ] Focus a tab running Grok: the ticker is labelled `Grok`, shows the _(NOT VERIFIED 2026-09-29: Needs a real Grok CLI tab and provider billing data.)_
   provider's billing period and percentage, and opens a singleton **Grok Usage
   Dashboard** with tier and billing amounts.
-- [ ] Switch to a plain shell tab: the ticker keeps showing the last agent
+- [ ] Switch to a plain shell tab: the ticker keeps showing the last agent _(NOT VERIFIED 2026-09-29: Needs real Claude/Codex/Grok sessions to drive usage ticker.)_
   rather than blanking or reverting to Claude.
-- [ ] Switch Claude → Codex → Claude quickly. No stale value from the previous
+- [ ] Switch Claude → Codex → Claude quickly. No stale value from the previous _(NOT VERIFIED 2026-09-29: Needs real Claude and Codex agents with usage tickers.)_
   agent lands on the ticker (the seq guard should drop late responses).
 - [x] `curl http://localhost:9877/codex/usage` returns the JSON payload and
   contains **no** `email`, `user_id` or `account_id` field.
   _(verified 2026-09-19 against an isolated `tuic-remote` on :9877: the official
   App Server replacement returned HTTP 200 with plan and rate-limit data and no
   identity fields)_
-- [ ] Log Codex out through the Codex CLI and focus a Codex tab: the ticker
+- [ ] Log Codex out through the Codex CLI and focus a Codex tab: the ticker _(NOT VERIFIED 2026-09-29: Needs real Codex CLI login/logout)_
   reports the authentication failure without displaying a cached reading.
-- [ ] With the Claude Usage toggle off, no usage ticker appears for Claude,
+- [ ] With the Claude Usage toggle off, no usage ticker appears for Claude, _(NOT VERIFIED 2026-09-29: Needs real Claude/Codex/Grok agent tabs and usage accounts.)_
   Codex, or Grok.
 
 ### Codex Usage Dashboard
 
 The active backend now includes `get_codex_usage_stats` and `GET /codex/stats`.
 
-- [ ] **Rate Limits** section shows the account windows first with plain `5h` /
+- [ ] **Rate Limits** section shows the account windows first with plain `5h` / _(NOT VERIFIED 2026-09-29: Needs real Codex account rate-limit data)_
   `7d` names, then the per-model windows prefixed with the model name. A window
   at 100% is red, ≥70% amber, below that normal.
 - [ ] **Tokens per Day** renders one bar per day; hovering a bar shows the date
   and the token count. The tallest bar is the busiest day, and a near-zero day
   is still visible as a sliver rather than invisible.
-- [ ] **Insights** shows the fields the official App Server supplies (lifetime
+- [ ] **Insights** shows the fields the official App Server supplies (lifetime _(NOT VERIFIED 2026-09-29: Needs real Codex account/App Server for Insights fields.)_
   tokens, peak day, streak, longest turn). Fields absent from that API are not
   invented and do not render as misleading zeroes.
-- [ ] Kill the network and open the dashboard: a cached snapshot is used only
+- [ ] Kill the network and open the dashboard: a cached snapshot is used only _(NOT VERIFIED 2026-09-29: Needs Codex account usage dashboard and network cut-off.)_
   for up to 30 minutes; authentication failures are always surfaced.
 - [x] `curl http://localhost:9877/codex/stats` contains **no** `profile` object
   (no username, display name or avatar URL).
@@ -1458,7 +1458,7 @@ The active backend now includes `get_grok_usage_api` and `GET /grok/usage`.
   live 26% weekly period, tier, end date and billing cards rendered correctly;
   `GrokUsageDashboard.test.tsx` separately proves null renders as `--` while a
   real zero renders as `0.00`)_
-- [ ] A logged-out Grok CLI surfaces an authentication error instead of a stale
+- [ ] A logged-out Grok CLI surfaces an authentication error instead of a stale _(NOT VERIFIED 2026-09-29: Needs real Grok CLI logged out)_
   cached percentage.
 
 ## `index.lock` owner probe now fails closed (#694-4fcc)
@@ -1479,7 +1479,7 @@ cleared eventually.
   `Keeping index.lock … ownership could not be determined`.
 - [ ] The log names *which* failure it was — `could not run` vs `outlived its 2s
   deadline`. The two are not interchangeable and the message must say which.
-- [ ] Watch for a lock kept longer than it used to be during ordinary work. The
+- [ ] Watch for a lock kept longer than it used to be during ordinary work. The _(NOT VERIFIED 2026-09-29: Observational over ordinary real-world work (lock retention latency); not a discrete check.)_
   measured `lsof` latency here is 0.32–3.7 s against a 2 s deadline, so
   `DeadlineExceeded` is routine, not exotic — if that turns out to be noisy in
   practice, the deadline is the knob, not the policy.
@@ -1597,11 +1597,11 @@ What is left genuinely needs eyes on a real agent:
 `mcp_proxy/registry.rs`). The running instance still has the old serialized
 behaviour.
 
-- [ ] Settings → Services → MCP: click **Authorize** on two different upstreams
+- [ ] Settings → Services → MCP: click **Authorize** on two different upstreams _(NOT VERIFIED 2026-09-29: Needs real upstream MCP OAuth servers and external browser consent)_
   back to back. Both show the consent dialog and open a browser tab within a
   second. Previously the second click hung silently for 5 minutes: no browser,
   no dialog, no error, while the row already read "Awaiting authorization…".
-- [ ] Click **Authorize**, then **Cancel** before completing consent: the row
+- [ ] Click **Authorize**, then **Cancel** before completing consent: the row _(NOT VERIFIED 2026-09-29: Needs a real upstream MCP OAuth server to reach 'Awaiting authorization' and complete/cancel consent in a browser.)_
   leaves "Awaiting authorization…" immediately and Authorize works again on the
   next click (no queue built up behind it).
 - [ ] Click **Authorize** and then do nothing for >5 minutes. The row returns to
@@ -1609,12 +1609,12 @@ behaviour.
   `GET http://localhost:9876/logs?source=mcp_oauth` shows
   `Cleaned up expired OAuth flows` naming the upstream. It must not stay stuck
   on "Awaiting authorization…".
-- [ ] Click **Authorize**, wait out the full 5-minute timeout *in the browser*,
+- [ ] Click **Authorize**, wait out the full 5-minute timeout *in the browser*, _(NOT VERIFIED 2026-09-29: Needs real upstream MCP OAuth provider, browser consent and 5-minute timeout with an external account.)_
   then complete consent. The browser shows the TUIC "Authentication failed" card
   reading "This authorization request expired or was cancelled…" plus "press
   Authorize again" — **not** the browser's own "can't connect to the server"
   page.
-- [ ] A normal successful authorization still lands on the green
+- [ ] A normal successful authorization still lands on the green _(NOT VERIFIED 2026-09-29: Needs a real upstream OAuth MCP server and browser authorization flow (external service))_
   "Authentication complete" card and the upstream goes `ready`.
 
 ### Terminal: no grid wipe on tab switch, resubscribe on reattach (#657-4345)
@@ -1642,7 +1642,7 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   `READER THREAD PANICKED` leaves no residual CPU and its tab stops repainting.
   Enable diagnostics and watch `thread count` stay flat after such a log line.
 
-- [ ] (story 645-9bfb, Rust — needs a `make dev` restart) Resize an alternate-screen
+- [ ] (story 645-9bfb, Rust — needs a `make dev` restart) Resize an alternate-screen _(NOT VERIFIED 2026-09-29: Needs real grok agent streaming in alternate screen.)_
   agent (grok) while it is streaming, then let it ask a low-confidence question.
   The tab must badge within about a second of the resize. Before the fix the resize
   grace re-armed on every chunk, so questions, rate-limit and API-error events and
@@ -1718,7 +1718,7 @@ never reported again. The input path now parks the reset on `SilenceState` and
 the reader drains it. Covered by `pty::tests::user_submission_rearms_the_api_error_dedup`;
 the item below is only the live confirmation that the notification really fires.
 
-- [ ] Provoke or wait for an `API Error: 5xx` in an agent tab — the error toast/sound
+- [ ] Provoke or wait for an `API Error: 5xx` in an agent tab — the error toast/sound _(NOT VERIFIED 2026-09-29: Needs a real agent tab emitting API Error 5xx twice with user input between (pty/tests.rs:7310 fixture covers logic).)_
   must fire. Submit a prompt, provoke the same error again: it must notify a
   SECOND time instead of staying silent for the rest of the session.
 
@@ -1749,10 +1749,10 @@ and the `repo` tool never dispatched its GitHub issue actions.
 The shared HTTP client had no timeout at all, so a dropped VPN wedged the poller
 on a socket the peer never answers.
 
-- [ ] Start the GitHub poller, then drop the network (turn off Wi-Fi or the VPN).
+- [ ] Start the GitHub poller, then drop the network (turn off Wi-Fi or the VPN). _(NOT VERIFIED 2026-09-29: Needs GitHub token and cutting host network (Wi-Fi/VPN), disruptive.)_
   Within ~30 s the request must fail and the poller must log the error and carry
   on, not sit silent forever.
-- [ ] With the network still down, disable GitHub polling in Settings. It must
+- [ ] With the network still down, disable GitHub polling in Settings. It must _(NOT VERIFIED 2026-09-29: Needs real GitHub polling with network outage/token; network fault injection)_
   stop immediately, not after the in-flight request gives up.
 
 ## Git status and index.lock ownership (story 673-19fa, Rust — needs `make dev` restart)
@@ -1773,7 +1773,7 @@ The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
 `src-tauri/.cargo/audit.toml`. The workflow only runs on Mondays or on demand,
 so nothing local can prove the install step resolves.
 
-- [ ] Trigger `audit.yml` manually (`gh workflow run audit.yml`) and confirm the
+- [ ] Trigger `audit.yml` manually (`gh workflow run audit.yml`) and confirm the _(NOT VERIFIED 2026-09-29: Needs GitHub Actions run (gh workflow run audit.yml) on the remote; external service, not local.)_
   `Install cargo-audit` step resolves `taiki-e/install-action@cargo-audit` and
   the scan runs to completion.
 
@@ -1850,15 +1850,15 @@ cannot be checked from a test.
 Behaviour must be IDENTICAL to before; five characterization tests assert that,
 so these checks are looking for what a test cannot see on a live agent.
 
-- [ ] On a live Claude tab and a live grok tab: the state badge still moves
+- [ ] On a live Claude tab and a live grok tab: the state badge still moves _(NOT VERIFIED 2026-09-29: Needs real live Claude and grok agent tabs to judge state badge feel)_
   working → idle → awaiting as it did. The chunk path was reordered around the
   chrome cutoff and the SilenceState locks; the tests cover the events, not the
   feel.
-- [ ] A slash menu (`/` in Claude Code) still opens and is detected. This is the
+- [ ] A slash menu (`/` in Claude Code) still opens and is detected. This is the _(NOT VERIFIED 2026-09-29: Needs real Claude Code rendering its slash menu below the input box; parse_slash_menu has unit tests (output_parser.rs:5388) but live menu needs the agent.)_
   case that killed the proposed optimisation — the menu renders BELOW the input
   box, so it is the first thing to break if the cutoff order is ever touched
   again (`DEFERRED (2026-09-06)` at `pty.rs:4911`).
-- [ ] A choice dialog and an Ink question footer still badge the tab as awaiting,
+- [ ] A choice dialog and an Ink question footer still badge the tab as awaiting, _(NOT VERIFIED 2026-09-29: Needs real agent choice dialog / Ink footer for awaiting badge set and clear.)_
   and the badge still CLEARS afterwards.
 - [ ] **Observability trade — check this deliberately.** The DECRST-leak
   `error!` and the "Anomalous ANSI sequence" `warn!` no longer appear unless
@@ -1867,7 +1867,7 @@ so these checks are looking for what a test cannot see on a live agent.
   reappear in `GET /logs`. If either turns out to be load-bearing for an open
   bug while OFF, revert the three `&& crate::cpu_watchdog::diagnostic_mode()`
   guards at `pty.rs:5025`, `pty.rs:8014`, `pty.rs:8042` — they are isolated.
-- [ ] Resize a tab mid-turn on an agent that was busy: the resize grace still
+- [ ] Resize a tab mid-turn on an agent that was busy: the resize grace still _(NOT VERIFIED 2026-09-29: Needs a real busy agent whose turn is resized mid-turn)_
   suppresses the false idle. `on_resize` and the `is_resize_grace` read now run
   BEFORE `stamp_last_output_now` rather than after (`pty.rs:5741-5770`). Both
   touch only `SilenceState.last_resize_at`, but that machinery has a long
@@ -1914,7 +1914,7 @@ that blocked for over a minute.
 - [ ] After the `make dev` restart: a small **untracked** file opens with an
   empty gutter; a tracked file with an unsaved-vs-HEAD edit still shows its
   markers; the diff viewer still shows the untracked file as all added.
-- [ ] Desktop app (WKWebView), after the fix that installs the document with
+- [ ] Desktop app (WKWebView), after the fix that installs the document with _(NOT VERIFIED 2026-09-29: Needs WKWebView desktop app smoothness with a 23 MB file; perf is engine-specific.)_
   `EditorView.setState` instead of a whole-document dispatch: the same 23 MB
   file must scroll smoothly, and a small file must still highlight, show its
   git gutter and its inline blame, and keep undo working across an external
@@ -1928,13 +1928,13 @@ the composer footer (`Enter to send` → Ready) and the interrupt hint
 (`Ctrl+C to interrupt` → Working), with the hint checked first so a working
 screen is never downgraded. Captured live off goose 1.49.0.
 
-- [ ] Open a goose tab, let it sit at the composer: the badge must read idle,
+- [ ] Open a goose tab, let it sit at the composer: the badge must read idle, _(NOT VERIFIED 2026-09-29: Needs a real goose agent session)_
   not "working". This is the whole bug — before the adapter it latched busy
   from the moment the process started.
-- [ ] Send it a prompt: the badge must go to working for the whole turn (the
+- [ ] Send it a prompt: the badge must go to working for the whole turn (the _(NOT VERIFIED 2026-09-29: Needs real goose agent turn.)_
   spinner message is whimsical and changes every second — the badge must not
   flicker with it) and back to idle when the composer returns.
-- [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay
+- [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay _(NOT VERIFIED 2026-09-29: Needs real goose agent turn with Ctrl+C interrupt)_
   working.
 - [ ] amp, cursor and droid are still **not** adapted (see the DEFERRED note on
   `has_ready_screen_adapter`). If you run one of those, expect the old
@@ -2057,7 +2057,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   and unindexed, run a cross-repo content search (`?` in the command palette, all-repos
   on) for a string that is not in the active repo: the empty state must read
   "N not indexed" and must NOT promise "retry shortly" for repos nothing is building.
-- [ ] Rust change, needs a `make dev` restart (story #650-b0a0). With the app started
+- [ ] Rust change, needs a `make dev` restart (story #650-b0a0). With the app started _(NOT VERIFIED 2026-09-29: Needs a valid external relay server URL/token and killing the relay server; external service.)_
   while **Cloud Relay is off**, turn it on in Settings → Services with a valid relay URL
   and token: the status dot must go green with no app restart, and `GET :9876/logs`
   must show `relay: connecting to …`. Turn it off: the dot goes grey and the log shows
@@ -2099,7 +2099,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   string now, not `{text}`. Last, set a non-default audio output in notification
   settings and trigger a notification from the browser tab: it must play on the chosen
   device, which is what the added `device` field in the HTTP body carries.
-- [ ] Rust change, needs a `make dev` restart (story #670-b9a2). Grid delivery got three
+- [ ] Rust change, needs a `make dev` restart (story #670-b9a2). Grid delivery got three _(NOT VERIFIED 2026-09-29: Needs the desktop WebView with tauri::ipc::Channel, blocking the app JS thread via devtools; not reachable from HTTP/MCP on a test instance.)_
   changes that only show up in a live WebView. (1) **Frame ordering:** zoom/resize a busy
   session repeatedly (the resize path cuts a FULL frame off-thread while the ticker cuts
   deltas) — no blank or half-stale screen may survive the zoom, and any frame that loses
@@ -2127,7 +2127,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   synchronously on the calling thread (including from async tokio tasks) — confirm the
   daily-rotated log file still receives entries during normal use and on graceful
   shutdown (no lines silently dropped by the leaked `WorkerGuard`).
-- [ ] Rust change, needs a `make dev` restart. Dictation speech gates: the transcriber
+- [ ] Rust change, needs a `make dev` restart. Dictation speech gates: the transcriber _(NOT VERIFIED 2026-09-29: Needs real microphone silence/speech and Whisper gating.)_
   now rejects a window in three steps — the RMS floor, Whisper's own
   `no_speech_probability`, and the phrase filter — and the first two read their
   thresholds from `dictation-config.json` (`rms_threshold`, `no_speech_threshold`)
@@ -2144,7 +2144,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   detected (no_speech 0.91 > 0.60)"). (4) **Both sliders persist** across an app
   restart, and a `dictation-config.json` written before this change keeps the defaults
   (0.001 / 0.60) instead of reading 0.
-- [ ] Rust change, needs a `make dev` restart. Per-tab agent resume (issue #119): with
+- [ ] Rust change, needs a `make dev` restart. Per-tab agent resume (issue #119): with _(NOT VERIFIED 2026-09-29: Needs several real Claude tabs in one folder to verify per-tab session discovery)_
   several Claude tabs open in the SAME folder, each tab must now hold its own session.
   Before this change discovery took "the newest unclaimed transcript in the project
   dir", so tabs stole each other's session or got none — measured live on 6 Claude
@@ -2288,7 +2288,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   not beat (command is `INTENTIONALLY_UNMAPPED`) and must not produce errors in
   the console or 404s in the log.
 
-- [ ] **Resume finds the session the alias hid** — **Rust + frontend change,
+- [ ] **Resume finds the session the alias hid** — **Rust + frontend change, _(NOT VERIFIED 2026-09-29: Needs real Claude with c/c2 aliases and two config dirs, resume into real conversation.)_
   needs a `make dev` restart.** Fixes `c2 --resume <id>` → `No conversation
   found with session ID` when the session belongs to the *other* config dir.
   (1) **Discovery captures the real command:** open a tab, launch Claude with
@@ -2920,10 +2920,10 @@ Still owed, and only these — all of them are about what is drawn:
 
 ## Protocol-ranked agent state (story `745-8ff1`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting `make dev`, run an instrumented agent turn for longer
+- [ ] After restarting `make dev`, run an instrumented agent turn for longer _(NOT VERIFIED 2026-09-29: Needs a real hook-instrumented agent turn longer than the silence threshold)_
       than the ordinary silence threshold. A stale Ready repaint must not turn
       the tab idle before the agent's protocol completion signal arrives.
-- [ ] Disable native/global status instrumentation for one agent and confirm
+- [ ] Disable native/global status instrumentation for one agent and confirm _(NOT VERIFIED 2026-09-29: Needs a real agent with native/global status instrumentation disabled and its Ready screen returning the tab to idle.)_
       its existing Ready-screen fallback still returns the tab to idle.
 
 ## Vendored fxhash in the bm25 fork (story `758-ff0d`, 2026-09-13) — **Rust, needs a `make dev` restart**
@@ -2981,7 +2981,7 @@ strings until the backend is restarted; nothing below can be checked before that
       suggestion bar. Compare against a capture of the old output if in doubt.
 - [x] In a connected agent, ask for the `repo` tool schema: its description must _(obsolete, verified 2026-09-29: repo tool now has only progress_list: REPO_ACTIONS at mcp_http/mcp_transport.rs:1148 lists a single progress_* action, not nine; text obsolete.)_
       now document all nine `progress_*` actions, which it never did before.
-- [ ] Watch one agent session for a turn. It must still emit `ack` exactly once
+- [ ] Watch one agent session for a turn. It must still emit `ack` exactly once _(NOT VERIFIED 2026-09-29: Needs a real agent session observing ack/intent output over a turn.)_
       per connection and `intent:` at each phase change — the markers moved not
       at all, but this is the cheapest way to notice if they did.
 
@@ -3026,7 +3026,7 @@ that the process table actually answered was logged as `agent-ready-screen`,
 indistinguishable from a screen-only guess (#771-4733). Rust-only — the running
 app keeps the old logging until restart.
 
-- [ ] After restart, let an agent tab finish a turn with nothing running under
+- [ ] After restart, let an agent tab finish a turn with nothing running under _(NOT VERIFIED 2026-09-29: Needs a real agent tab finishing a turn to see activity_source=process.)_
       it, then `curl 'http://localhost:9876/logs' | grep 'Shell state'`: the
       close must read `activity_source=process rank=Process`, not
       `agent-ready-screen`.
@@ -3047,11 +3047,11 @@ and the master terminal was never told. A new BUSY→IDLE edge now re-arms the
 budget before chasing the notice. Rust-only — the running app keeps the old
 behaviour until restart.
 
-- [ ] Type a draft into the orchestrator's composer (do not submit), have a peer
+- [ ] Type a draft into the orchestrator's composer (do not submit), have a peer _(NOT VERIFIED 2026-09-29: Needs real orchestrator agent composer with a draft and peer agent send.)_
       `agent action=send` to it, then clear the draft and let the turn settle.
       Within a few seconds the orchestrator must be handed the
       `agent action=inbox` line. Before the fix nothing ever arrived.
-- [ ] The payload must never appear on the orchestrator's screen — only the
+- [ ] The payload must never appear on the orchestrator's screen — only the _(NOT VERIFIED 2026-09-29: Needs real orchestrator agent screen and wake behaviour.)_
       pointer to the inbox.
 - [ ] A notice already being typed must not be duplicated by a concurrent idle
       edge: one wake per group, not two.
@@ -3090,7 +3090,7 @@ build has the old behaviour until restart.
       dialog must stay readable — it is `min(680px, 100vw - 48px)` wide and the
       text wraps with `overflow-wrap: anywhere` — and the header must keep the
       blocked-only toggle and the close button on one row (778-a9a6 criterion 8).
-- [ ] After the restart has proved the new store works, delete the stale
+- [ ] After the restart has proved the new store works, delete the stale _(NOT VERIFIED 2026-09-29: Destructive cleanup of Boss's real ~/Gits/**/.tuic files, not a verification; leave to Boss.)_
       per-repo databases. They are not migrated by design. Delete the **files**,
       not the directory:
       `find ~/Gits -maxdepth 5 -path '*/.tuic/progress.sqlite3*' -delete`
@@ -3103,7 +3103,7 @@ build has the old behaviour until restart.
       Verified 2026-09-18: 43 `.tuic` directories (not 42; `agent2__wt/`
       `analysis-ai-risk-score-20260918` is new), 0 contain `tunnels/`, and every
       file in all 43 matches `progress.sqlite3*`.)_
-- [ ] Run diff-scoped mutation testing once on the final HEAD of this batch:
+- [ ] Run diff-scoped mutation testing once on the final HEAD of this batch: _(NOT VERIFIED 2026-09-29: Overnight diff-scoped mutation job (~5 min per mutant), not a headless verification; orchestrator batch task)_
       `make mutants RANGE=<commit before the Progress rewrite>`. It is an
       overnight-class job (~5 min per viable mutant), so it is deliberately not
       run during the day — 780-e99a criterion 4.
@@ -3135,16 +3135,16 @@ closure and catches that unwind (`src-tauri/src/native_dialog.rs`). Automated
 tests cover the wire contract and the wrapper's mapping; the panels themselves
 need a window server, so these are by hand.
 
-- [ ] Sidebar → add a repository: the folder picker opens, a pick registers the
+- [ ] Sidebar → add a repository: the folder picker opens, a pick registers the _(NOT VERIFIED 2026-09-29: Native OS file/folder dialogs need a human at the desktop window)_
       repo, and Cancel leaves the sidebar unchanged.
 - [ ] Cmd+O (open file) and the open-folder action: both return a path and the
       chosen file opens in an editor tab.
-- [ ] New File (save panel): the suggested name is pre-filled and the file is
+- [ ] New File (save panel): the suggested name is pre-filled and the file is _(NOT VERIFIED 2026-09-29: Native OS save/open panels need a human (maccontrol can drive but item covers native dialog UX))_
       created at the chosen location.
-- [ ] Settings → Plugins → Install from ZIP: the type filter still restricts the
+- [ ] Settings → Plugins → Install from ZIP: the type filter still restricts the _(NOT VERIFIED 2026-09-29: Native OS file dialog (Install from ZIP) filter cannot be driven over HTTP/web UI; needs a human or macOS UI automation on the desktop build.)_
       selection to `.zip` — that filter is the one option most likely to have
       been dropped in the move.
-- [ ] Settings → Plugins → Install from Folder, and Tunnels → the SSH identity
+- [ ] Settings → Plugins → Install from Folder, and Tunnels → the SSH identity _(NOT VERIFIED 2026-09-29: Native OS file-picker dialogs (Tauri dialog replacement) need a human on desktop.)_
       file browse button: both still pick.
 - [ ] **[HUMAN]** The crash path itself: let the Mac sleep with the display off, _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       wake it, and immediately open a picker. It must either open, or show the
@@ -3178,7 +3178,7 @@ headless build of this tree.
 Frontend-only, but it changes where every repo-scoped call goes, so it needs the
 same restart as the item above and the same daemon (`mac-mint:9877`).
 
-- [ ] With the connection Connected, add a remote repo from it. The sidebar shows
+- [ ] With the connection Connected, add a remote repo from it. The sidebar shows _(NOT VERIFIED 2026-09-29: Needs remote machine mac-mint over SSH to compare git status)_
       the repo with its remote badge and the git status, branch and file tree are
       the **remote machine's** — compare against `ssh mac-mint git -C <path> status`.
 - [ ] Open a terminal on that repo. It spawns on mac-mint: `hostname` and `pwd` _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
@@ -3187,9 +3187,9 @@ same restart as the item above and the same daemon (`mac-mint:9877`).
 - [ ] Edit a file on mac-mint by hand while the repo is open locally. The git _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       panel and file tree refresh by themselves — the remote watcher and its SSE
       stream are doing it.
-- [ ] Commit and stage from the git panel on the remote repo. The commit lands on
+- [ ] Commit and stage from the git panel on the remote repo. The commit lands on _(NOT VERIFIED 2026-09-29: Needs a second machine (mac-mint) as the remote repo host.)_
       mac-mint, not on any local repo.
-- [ ] A local repo behaves exactly as before — no extra latency, no remote call.
+- [ ] A local repo behaves exactly as before — no extra latency, no remote call. _(NOT VERIFIED 2026-09-29: Needs remote machine (second machine/SSH) for remote repos; local part only checks logs.)_
       Confirm with `GET http://localhost:9876/logs?source=network`.
 - [ ] Stop `tuic-remote` on mac-mint with the repo still open. Repo operations _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       report "Remote connection … not connected" rather than showing local data.
@@ -3221,7 +3221,7 @@ point of the story — plus the two things only the backend can do.
 - [ ] Disconnect: the tab's remote sessions stop being routed, the SSH tunnel is _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       gone (`ps aux | grep ssh` on this machine), and the Tunnels panel shows no
       leftover `__remote_*` profile — the tunnel is built in memory now.
-- [ ] Quit TUICommander with an SSH-transport connection live. No orphan `ssh`
+- [ ] Quit TUICommander with an SSH-transport connection live. No orphan `ssh` _(NOT VERIFIED 2026-09-29: Needs a live SSH-transport connection to a second machine and quitting the desktop app to inspect orphan ssh processes.)_
       process and no `__remote_<id>` profile file is left behind.
 
 ## Remote sessions report idle / busy / question (#791-055e) — needs a `make dev` restart
@@ -3254,14 +3254,14 @@ dir removed).
       `session-closed {"session_id":"3b19ac21…","reason":"remote-disconnected"}`
       on the local `/events`, and `GET /sessions` then held no row with a
       `connection_id`.)_
-- [ ] Make a remote **agent** ask a question. The question badge and the
+- [ ] Make a remote **agent** ask a question. The question badge and the _(NOT VERIFIED 2026-09-29: Needs a real agent on another machine asking a question.)_
       notification are the same ones a local agent raises. Answer it: the badge
       clears. _(Not covered above: the probe drove a plain shell, so
       `awaiting_input` never moved. Needs a real agent on the other machine.)_
-- [ ] While the remote agent is mid-turn, queue a command from the Compose
+- [ ] While the remote agent is mid-turn, queue a command from the Compose _(NOT VERIFIED 2026-09-29: Needs a real remote agent mid-turn to mirror busy state.)_
       panel. The `N queued` badge moves and the command is delivered at the
       agent's next idle window — the queue gate reads the mirrored state.
-- [ ] Commit something on the remote repo from a shell there. The local panels
+- [ ] Commit something on the remote repo from a shell there. The local panels _(NOT VERIFIED 2026-09-29: Needs a repo on a remote machine committing from a shell there (second machine))_
       for that repo still refresh (this used to come from `remoteEventBridge.ts`;
       it now arrives on the mirrored `repo-changed`, through the same coalescer a
       local change uses). Needs a repo registered on the remote machine.
@@ -3276,7 +3276,7 @@ dir removed).
 - [ ] Open an agent tab and the Ideas panel. Each idea shows a queue button
       (stacked lines) left of the ▶ send button. On a plain shell tab the queue
       button is absent and only ▶ remains.
-- [ ] Click queue while the agent is mid-turn: nothing is typed into the prompt,
+- [ ] Click queue while the agent is mid-turn: nothing is typed into the prompt, _(NOT VERIFIED 2026-09-29: Needs a real agent mid-turn to observe queue-on-busy and idle delivery)_
       the Compose `N queued` badge goes up by one, and the idea gets its used
       timestamp. The idea is delivered at the agent's next idle window.
 - [ ] Detach the Ideas panel to its own window. The queue button is always shown
@@ -3289,11 +3289,11 @@ dir removed).
 
 ## Updater — symlinked binary path (2026-09-19)
 
-- [ ] Settings -> General -> Updates -> Check Now, on a build whose binary sits
+- [ ] Settings -> General -> Updates -> Check Now, on a build whose binary sits _(NOT VERIFIED 2026-09-29: Tauri updater Check Now UI is desktop-only (not in web mode) and needs a symlinked build; maccontrol lacks screen access.)_
       under a symlinked path (a `make dev` build: `src-tauri/target` is an mbx
       target view). It must print a muted "In-app updates are unavailable…"
       hint and NOT the red "Update failed" dialog nor the red hint.
-- [ ] The same build on a release install with no symlink in the path still
+- [ ] The same build on a release install with no symlink in the path still _(NOT VERIFIED 2026-09-29: Needs a release install (symlink-free path) updater check)_
       reports "You are on the latest version" or the available version.
 - [ ] After the Notes→Ideas rename: existing ideas still load. The store reads
       the same `notes.json` through the same `load_notes`/`save_notes` commands,
@@ -3350,7 +3350,7 @@ the path it resolves for `tuic-bridge`.
 
 - [ ] Start the daemon and confirm `<config dir>/mcp.sock` exists (Windows: _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
       the `tuicommander-mcp` named pipe) while it runs.
-- [ ] Put `tuic-bridge` next to `tuic-remote`, launch an agent in a tab bound to
+- [ ] Put `tuic-bridge` next to `tuic-remote`, launch an agent in a tab bound to _(NOT VERIFIED 2026-09-29: Needs a real tuic-remote daemon on another host and a real agent listing tools)_
       a repo on that machine, and confirm it lists the `tuicommander` tools —
       `session`, `repo`, `progress`, `agent` — not an empty tool list.
 - [ ] `repo action=worktree_list` from that agent answers about the daemon's
@@ -3363,7 +3363,7 @@ the path it resolves for `tuic-bridge`.
 - [ ] Cross-repo content search (Cmd+P → search file contents) against the
       daemon returns results for the pre-warmed repo instead of reporting every
       repo pending forever.
-- [ ] Leave the daemon running for an hour and confirm the maintenance sweep
+- [ ] Leave the daemon running for an hour and confirm the maintenance sweep _(NOT VERIFIED 2026-09-29: Requires an hour-long real tuic-remote soak.)_
       logs reaped MCP sessions rather than growing without bound.
 
 ## `tools/list` gained a 2026-07-28 cache envelope — needs a `make dev` restart (#3c1b)
@@ -3399,12 +3399,12 @@ restart, not before.
 - [ ] Settings has no Providers tab and no AI Chat tab, and its search returns _(NOTE 2026-09-29: description stale — an AI Chat settings tab exists (SettingsPanel.tsx:78, settingsSearchIndex.ts:625); re-write the expectation before testing)_
       nothing for "provider", "triage" or "watcher".
 - [ ] The toolbar has no watcher eye next to the notification bell.
-- [ ] A PR detail popover opens and shows checks, files and comments with no AI
+- [ ] A PR detail popover opens and shows checks, files and comments with no AI _(NOT VERIFIED 2026-09-29: Needs a real GitHub PR (gh account) for PR detail popover.)_
       review section and no error in its place.
 - [ ] The GitHub Ops dashboard renders three columns — auto-fix sessions,
       conflict assists, CI/merge readiness — and conflict assist still populates
       its column when a conflicting PR is opened.
-- [ ] Smart Prompts still run in shell, inject and headless modes.
+- [ ] Smart Prompts still run in shell, inject and headless modes. _(NOT VERIFIED 2026-09-29: Headless mode runs a real agent CLI; shell/inject only partial.)_
 - [ ] A terminal's command knowledge still records: run a failing command, then
       a passing one, and confirm the session's knowledge survives a restart
       (this is the one part of `ai_agent/` that was kept).
@@ -3415,7 +3415,7 @@ restart, not before.
 - [ ] The AI Chat panel still detaches into its own window and the main window
       shows the *Bring back* placeholder; closing the detached window restores
       the docked shell.
-- [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose
+- [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose _(NOT VERIFIED 2026-09-29: Needs a real ego conversation whose first answer starts with the ack line.)_
       first answer starts with `TUICommander v1.7.7 is connected.` followed by
       `intent:`. The status appears and no clipped acknowledgement such as
       `.7.7 is connected.` remains in the transcript.
@@ -3449,13 +3449,13 @@ needs the `make dev` restart that #781-9652 is waiting on.
 - [ ] With mac-mint connected, `+` opens the menu; picking it opens the browser _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       showing `/` on **mac-mint**, not this Mac. Compare against
       `ssh mac-mint ls /`.
-- [ ] Walk to `/home/stefano/Gits`, press **Add This Folder** on a real repo. It
+- [ ] Walk to `/home/stefano/Gits`, press **Add This Folder** on a real repo. It _(NOT VERIFIED 2026-09-29: Needs remote machine with /home/stefano/Gits (second machine).)_
       lands in the sidebar with the remote badge, and its git status is the remote
       machine's.
 - [ ] Only folders are listed — no files.
 - [ ] Type a path that does not exist on mac-mint into the field and press Enter: _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       the daemon's own message must show, not an empty folder.
-- [ ] Close the picker and reopen it for the same machine: it must resume where it
+- [ ] Close the picker and reopen it for the same machine: it must resume where it _(NOT VERIFIED 2026-09-29: Remote repo picker needs a real remote machine)_
       was left, not at `/`.
 - [ ] **[VISUAL]** The list scrolls inside the dialog without breaking its layout
       on a directory with many entries (`/usr/lib` is a good one).
@@ -3473,7 +3473,7 @@ needs the `make dev` restart that #781-9652 is waiting on.
       `[TUIC] message available`, the sender received
       `wake_notification_and_inbox`, and `agent action=inbox` returned exactly one
       untouched `RESULT live-wake-797-8549`.)_
-- [ ] Repeat with text partially typed in the parent composer: the route must be
+- [ ] Repeat with text partially typed in the parent composer: the route must be _(NOT VERIFIED 2026-09-29: Needs real parent agent composer with partially typed draft and orchestrator RESULT wake)_
       `inbox_only` and the draft must remain unchanged. The focused Rust regression
       covers this mechanically; this item retains the live composer check.
 
@@ -3511,7 +3511,7 @@ has it: no `make dev` restart needed.
       tooltip points at Settings -> Remote Machines.
 - [ ] The sidebar badge on that repo reads `offline` in red instead of `remote`,
       and its tooltip names the machine and its state.
-- [ ] Reconnect the machine: the status-bar pill disappears and the badge goes
+- [ ] Reconnect the machine: the status-bar pill disappears and the badge goes _(NOT VERIFIED 2026-09-29: Needs a remote machine to disconnect/reconnect)_
       back to a muted `remote` without a reload.
 - [ ] A remote machine with NO registered repo must NOT appear in the status bar _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       while disconnected — that is its normal resting state.
@@ -3549,14 +3549,14 @@ the mirror task running against a machine that no longer existed in the config.
 There is now one teardown path (`remote_runtime::teardown`) and both the IPC and
 the HTTP delete route call it.
 
-- [ ] Connect an SSH-transport machine, confirm `ssh` is running
+- [ ] Connect an SSH-transport machine, confirm `ssh` is running _(NOT VERIFIED 2026-09-29: Needs SSH-transport remote machine (second machine mac-mint) and ssh process)_
       (`pgrep -fl ssh`), then delete the machine from Settings -> Remote
       Machines. The `ssh` process must be gone within a second, and the app must
       not show a status push for the deleted id afterwards.
 - [ ] Do the same over HTTP against the dev instance:
       `curl -X DELETE http://127.0.0.1:9877/config/remote-connections/<id>` —
       same result. Before this change the HTTP route stopped nothing.
-- [ ] Any sessions that machine had mirrored disappear from the session list on
+- [ ] Any sessions that machine had mirrored disappear from the session list on _(NOT VERIFIED 2026-09-29: Needs a real connected remote machine with mirrored sessions.)_
       delete, and no `session-state-changed` for them arrives after it.
 - [ ] Delete a machine that was never connected: no error, nothing logged as a
       failure.
@@ -3565,12 +3565,12 @@ the HTTP delete route call it.
 
 Same restart caveat — Rust.
 
-- [ ] Connect a machine, then stop `tuic-remote` on it. The badge goes to
+- [ ] Connect a machine, then stop `tuic-remote` on it. The badge goes to _(NOT VERIFIED 2026-09-29: Needs a real tuic-remote daemon to stop and start)_
       `error` and its mirrored sessions retire from the list.
 - [ ] Start the daemon again and WAIT — do not press Connect. Within one poll
       interval the badge must return to `connected` by itself and the machine's
       sessions must reappear.
-- [ ] Wrong password: the badge reads `unauthenticated`, and for an SSH-transport
+- [ ] Wrong password: the badge reads `unauthenticated`, and for an SSH-transport _(NOT VERIFIED 2026-09-29: Needs SSH-transport remote machine with wrong password (second machine))_
       machine no `ssh` process is left behind (`pgrep -fl ssh`).
 
 ## A dropped request must not leak an ego process (#804-2ec8)
@@ -3584,12 +3584,12 @@ independent task and only settled connections are pruned. The turn now runs on
 its own task, the launch has its own 60s budget and the turn 240s, so the whole
 call fits inside the router's bound.
 
-- [ ] Run a Smart Prompt in `api` mode, then close the tab / kill the request
+- [ ] Run a Smart Prompt in `api` mode, then close the tab / kill the request _(NOT VERIFIED 2026-09-29: Needs a real ego process running a live turn (POST /acp/one-shot, kill mid-turn, pgrep ego); no ego/provider in headless run.)_
       mid-turn (`curl ... & sleep 2; kill %1` against
       `POST http://127.0.0.1:9877/acp/one-shot`). Within a few seconds
       `pgrep -fl ego` must show no leftover process.
-- [ ] `GET /acp/connections` must not list a connection for the abandoned turn.
-- [ ] A normal Smart Prompt still answers, and a long one that runs out of time
+- [ ] `GET /acp/connections` must not list a connection for the abandoned turn. _(NOT VERIFIED 2026-09-29: Needs ego ACP turn abandoned by dropped request.)_
+- [ ] A normal Smart Prompt still answers, and a long one that runs out of time _(NOT VERIFIED 2026-09-29: Needs real ego and a 240 s timeout turn (oneshot.rs:333).)_
       reports "ego did not finish the turn within 240s" rather than a bare 408.
 - [ ] Point `ego_executable` at something that starts and never speaks (e.g. a
       `sleep 600` wrapper) and press Connect in AI Chat: it must fail within a
@@ -3614,7 +3614,7 @@ reads `ws.protocol` in `onopen` before the first frame.
       `Sec-WebSocket-Protocol: tuic.deflate` on the 101.
 - [ ] Open a terminal on the same machine (local session). The socket asks for
       nothing: no `compress=deflate` in the URL and no subprotocol on the 101.
-- [ ] Point a current build at an **older** `tuic-remote` (one without this
+- [ ] Point a current build at an **older** `tuic-remote` (one without this _(NOT VERIFIED 2026-09-29: Needs an older tuic-remote binary from an earlier commit)_
       commit). The terminal must render correctly — untagged framing — and the
       app log must carry "asked for compression and the server did not take it"
       rather than "could not decode a compressed frame" once per frame.
@@ -3627,16 +3627,16 @@ reads `ws.protocol` in `onopen` before the first frame.
 
 Frontend only — Vite HMR picks this up, no `make dev` restart needed.
 
-- [ ] Open AI Chat on two different repo roots so two ego connections are live.
+- [ ] Open AI Chat on two different repo roots so two ego connections are live. _(NOT VERIFIED 2026-09-29: Needs two live ego connections on two repo roots.)_
       Stop ego on the first (or disconnect it). The second panel must keep
       streaming — no "Not receiving updates" banner on the root that did not end.
-- [ ] Press Recover after a gap. The connection list must show ONE connection
+- [ ] Press Recover after a gap. The connection list must show ONE connection _(NOT VERIFIED 2026-09-29: Needs live AI Chat/ego connections and a gap recovery.)_
       afterwards, not the dead one plus the fresh one, and the fresh panel must
       keep receiving updates rather than freezing a second later.
-- [ ] Send a prompt while ego is wedged or the session is not accepting prompts.
+- [ ] Send a prompt while ego is wedged or the session is not accepting prompts. _(NOT VERIFIED 2026-09-29: Needs a wedged/non-accepting real ego session in AI Chat.)_
       The message must disappear from the transcript rather than sitting there as
       a turn that was never received.
-- [ ] Attach to a session id ego does not have. The transcript that was on screen
+- [ ] Attach to a session id ego does not have. The transcript that was on screen _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
       must come back rather than being left blank under a live session.
 
 ## The headless build announces repo-op progress too (#808-84e1)
@@ -3648,15 +3648,15 @@ binary: `cargo build --bin tuic-remote --no-default-features`.
 `tuic-remote`. The three routes are in `build_router`; `build_remote_router`
 does not carry them, so `tuic-remote` answers 404 (#810-4986).
 
-- [ ] Start the headless mode of a `--no-default-features` build, open the web
+- [ ] Start the headless mode of a `--no-default-features` build, open the web _(NOT VERIFIED 2026-09-29: Needs PR review (ego/GitHub account) on a --no-default-features headless build.)_
       UI against it, and start a PR review on a repo. The Review findings column
       must move from "running" to a result on its own. Before this commit it
       stayed on "running" forever, because the `review-progress` event was
       dropped on that build.
-- [ ] Same daemon, run an improvement scan. The proposals must appear in the
+- [ ] Same daemon, run an improvement scan. The proposals must appear in the _(NOT VERIFIED 2026-09-29: Improvement scan runs on ego against a real daemon; needs ego)_
       panel when the scan finishes — the return value never populates it, only
       the `proposals-ready` event does.
-- [ ] Same daemon, run conflict assist on a PR with conflicts. The status must
+- [ ] Same daemon, run conflict assist on a PR with conflicts. The status must _(NOT VERIFIED 2026-09-29: Needs a real GitHub PR with conflicts, conflict assist (ego) on a headless daemon.)_
       reach the panel rather than leaving it idle.
 - [ ] `curl -N http://127.0.0.1:<port>/events` against that daemon while each of
       the three runs. The `review-progress`, `proposals-ready` and
@@ -3681,7 +3681,7 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
       backend must keep retrying — the wait doubles from 2s to a 60s ceiling.
       `GET http://localhost:9876/logs?source=remote` shows one `Connecting` line
       per attempt, spaced by a growing gap.
-- [ ] With the app running and the machine offline, turn the machine ON. It must
+- [ ] With the app running and the machine offline, turn the machine ON. It must _(NOT VERIFIED 2026-09-29: Needs a remote machine to switch on/off)_
       go `connected` by itself within one backoff window. No click.
 - [ ] Press Connect on a machine that is off. The button must report the failure
       (that attempt's own error), AND the retry must continue afterwards.
@@ -3745,7 +3745,7 @@ TUIC_POCKET_BUNDLE_DIR=<bundle> [TUIC_POCKET_VOICE=<voice>] \
       port sound like the Italian that was approved, and is int8 (125 MB per
       language) good enough against fp32 (400 MB)? The second answer decides what
       the downloader in story 813 offers.
-- [ ] Windows and Linux: the adapter loads `onnxruntime.dll` / `libonnxruntime.so`
+- [ ] Windows and Linux: the adapter loads `onnxruntime.dll` / `libonnxruntime.so` _(NOT VERIFIED 2026-09-29: Requires Windows and Linux hosts for onnxruntime library loading.)_
       from beside the models by an explicit path. Only macOS/arm64 has been run,
       and a missing library must still report `ModelUnavailable` rather than
       taking the process down inside `ort`.
@@ -3771,18 +3771,18 @@ and disarm before walking away.
       input`. `GET /dictation/hands-free` must agree with what arm returned, and
       `POST /dictation/hands-free/disarm` must report `wasArmed: true` once and
       `wasArmed: false` on a second call.
-- [ ] Arm, then speak one short Italian sentence and stop. Within about a second
+- [ ] Arm, then speak one short Italian sentence and stop. Within about a second _(NOT VERIFIED 2026-09-29: Needs real microphone speech input (Italian sentence))_
       of the pause the text must appear as a `voice_command` entry in
       `GET /sessions/{id}/queue`, and reach the agent on its next idle window.
       `GET /dictation/hands-free` must walk `waiting` → `capturing` →
       `transcribing` → `holding_back` → `delivered` across the turn; a phase that
       never leaves `capturing` means end-of-speech was not detected.
-- [ ] Arm, then close the bound session from the UI. The mode must disarm itself
+- [ ] Arm, then close the bound session from the UI. The mode must disarm itself _(NOT VERIFIED 2026-09-29: Needs microphone hands-free arm and real bound session.)_
       with `TargetClosed` and release the microphone without a disarm call —
       check `GET /dictation/hands-free` reads `armed: false` and that the app log
       carries `Hands-free disarmed: TargetClosed`. This is the path that keeps a
       dead tab from holding the device open.
-- [ ] Arm, then unplug or switch away the input device. After the silence
+- [ ] Arm, then unplug or switch away the input device. After the silence _(NOT VERIFIED 2026-09-29: Needs physically unplugging/switching real input device)_
       timeout the mode must disarm with `DeviceFailed` and name the device in the
       message, rather than sitting armed and deaf.
 - [ ] `owner` is now checked against the one adapter that exists. Any value other _(NOTE 2026-09-29: description stale — a browser audio owner now exists (continuous.rs:321); the refusal text was not found by rg 'Audio endpoint' in Rust)_
@@ -3790,7 +3790,7 @@ and disarm before walking away.
       available on this build` and must leave the mode unarmed — the browser
       endpoint is story 818. This is a behaviour change: arming from a remote
       client used to bind and now fails at the endpoint.
-- [ ] Push-to-talk must be unaffected. With hands-free armed, run a normal
+- [ ] Push-to-talk must be unaffected. With hands-free armed, run a normal _(NOT VERIFIED 2026-09-29: Needs real audio capture for push-to-talk plus hands-free.)_
       push-to-talk recording: it must capture and transcribe as usual, and must
       neither disarm hands-free nor be disarmed by it. Then disarm hands-free and
       confirm push-to-talk still works. The two modes hold separate captures.
@@ -3808,7 +3808,7 @@ Rust — needs a `make dev` restart. **There is no UI control for the phrase**;
 `DictationSettings.tsx` has no field for it, so the only way to set one today is
 the config surface. A Dictation control belongs to story 818.
 
-- [ ] With `hands_free_activation_phrase` empty, arm and speak: every recognised
+- [ ] With `hands_free_activation_phrase` empty, arm and speak: every recognised _(NOT VERIFIED 2026-09-29: Needs real spoken utterances through recognizer into Compose queue.)_
       utterance must reach the Compose queue exactly as it did before this
       story. An empty phrase must change nothing.
 - [ ] Set the phrase to `attività tuic`, then save something unrelated from the
@@ -3816,26 +3816,26 @@ the config surface. A Dictation control belongs to story 818.
       `GET /dictation/config`: the phrase and `hands_free_hold_back_ms` must
       **still be there**. This is the defect the store fix closes; before it,
       every save from the UI silently reset both fields to their defaults.
-- [ ] Armed with that phrase, speak "che ore sono" alone: nothing must reach the
+- [ ] Armed with that phrase, speak "che ore sono" alone: nothing must reach the _(NOT VERIFIED 2026-09-29: Needs spoken audio input.)_
       queue. Then "attività tuic che ore sono": the queue must receive
       `che ore sono` with the phrase stripped. Then, within 15 seconds, speak a
       bare follow-up: it must go through without the phrase. Wait past 15 seconds
       and the phrase must be required again.
-- [ ] Say "tuicommander che ore sono" with the phrase set to `tuic`: it must NOT
+- [ ] Say "tuicommander che ore sono" with the phrase set to `tuic`: it must NOT _(NOT VERIFIED 2026-09-29: Needs real spoken audio input with activation phrase)_
       activate. A longer word that merely starts with the phrase is a different
       word, not a prefix match.
-- [ ] Disarm and re-arm while a window is open: the first utterance after the
+- [ ] Disarm and re-arm while a window is open: the first utterance after the _(NOT VERIFIED 2026-09-29: Needs real speech through a microphone to test the activation phrase window.)_
       fresh arm must need the phrase again. Every disarm closes the window.
 
 ## Resume banner names the work
 
-- [ ] Leave an agent tab running with a declared `intent:` (or a typed prompt),
+- [ ] Leave an agent tab running with a declared `intent:` (or a typed prompt), _(NOT VERIFIED 2026-09-29: Needs real agent tab with declared intent and app quit/reopen resume banner.)_
       quit the app, reopen it and select that branch. The
       "Agent session was active — click to resume" banner must now carry
       `Intent: <...>` (or `Prompt: <...>` when no intent was declared), truncated
       with an ellipsis and with the full text in the tooltip. A tab that never
       had either must show the banner exactly as before.
-- [ ] The Context bar (`Show last prompt` setting) on the restored tab must show
+- [ ] The Context bar (`Show last prompt` setting) on the restored tab must show _(NOT VERIFIED 2026-09-29: Needs a real resumed agent tab to declare intent and restore context bar values.)_
       the same restored values, and must be replaced by the live ones as soon as
       the resumed agent declares a new intent or the user sends a prompt.
 
@@ -3880,7 +3880,7 @@ expected to complete rather than 404 on its last file.
 - [ ] `{"asset":"italian"}` downloads about 125 MB into
       `<config>/models/speech/italian/` and the list then reports `ready`,
       including `voices/giovanni.safetensors`.
-- [ ] The failure path still needs checking, and no longer happens by itself:
+- [ ] The failure path still needs checking, and no longer happens by itself: _(NOT VERIFIED 2026-09-29: Needs network interruption or bad URL fault injection during a real download)_
       interrupt the network mid-download (or point one `Fetch` at a bad URL) and
       confirm the failure leaves `state` at `absent` with no `.staging`
       directory behind. That behaviour was previously proven for free by the
@@ -3896,34 +3896,34 @@ opens the conversation **without** a voice. That is no longer a blocker: the
 `speech-voices-v1` release was cut on 2026-09-22, so install the bundle through
 the download items above first, then work through these.
 
-- [ ] Arm hands-free against a throwaway session on the restarted build, then
+- [ ] Arm hands-free against a throwaway session on the restarted build, then _(NOT VERIFIED 2026-09-29: Arming hands-free needs a microphone and installed Italian voice.)_
       `curl 'localhost:9877/dictation/speech/status'`. `available` must be
       `true`, `sessionId` must be that session, and `voice` must name the
       installed Italian voice.
-- [ ] `curl -X POST localhost:9877/dictation/speech/speak -H 'content-type:
+- [ ] `curl -X POST localhost:9877/dictation/speech/speak -H 'content-type: _(NOT VERIFIED 2026-09-29: Needs audio output heard by a human in Italian.)_
       application/json' -d '{"text":"Ciao, sto parlando."}'` must answer
       `state: "queued"` with an `utteranceId` — never `"finished"`. Listen: the
       reply comes out of the speaker in Italian.
-- [ ] Poll `GET /dictation/speech/status?utterance=<id>` while it plays. It must
+- [ ] Poll `GET /dictation/speech/status?utterance=<id>` while it plays. It must _(NOT VERIFIED 2026-09-29: Needs audible playback; 'finished only after last word audible' and barge-in need human ears/mic)_
       walk `queued` → `rendering` → `speaking` → `finished`, and only reach
       `finished` **after** the last word is audible.
-- [ ] **Barge-in.** Queue a long reply, then start talking over it. The speaker
+- [ ] **Barge-in.** Queue a long reply, then start talking over it. The speaker _(NOT VERIFIED 2026-09-29: Needs speaker output and speech barge-in by voice.)_
       must stop within a beat, the utterance must report `interrupted` rather
       than `finished`, and `turn` must have advanced. What you said must arrive
       in the terminal as a new turn — not appended behind the reply.
-- [ ] Re-send the same reply quoting the **old** `turn`. It must be refused with
+- [ ] Re-send the same reply quoting the **old** `turn`. It must be refused with _(NOT VERIFIED 2026-09-29: Needs live hands-free voice conversation turns and speech output)_
       a message naming both turns, not spoken.
-- [ ] `POST /dictation/speech/stop` while a reply plays: silence immediately,
+- [ ] `POST /dictation/speech/stop` while a reply plays: silence immediately, _(NOT VERIFIED 2026-09-29: Needs a spoken reply actually playing through audio output to verify immediate silence.)_
       the queue empties, and the returned `turn` is higher than before.
-- [ ] Disarm while a reply is playing. The audio must stop, and a `speak` after
+- [ ] Disarm while a reply is playing. The audio must stop, and a `speak` after _(NOT VERIFIED 2026-09-29: Needs audible playback interrupt during a reply.)_
       that must be refused with "Hands-free is not armed".
-- [ ] From a **second** terminal's Claude Code, `voice action=status`: it must
+- [ ] From a **second** terminal's Claude Code, `voice action=status`: it must _(NOT VERIFIED 2026-09-29: Needs two real Claude Code sessions plus audible speech.)_
       report the binding refusal, not the first conversation's queue. From the
       armed terminal's own Claude Code, `voice action=speak` must be heard.
 - [ ] With nothing armed, `GET /dictation/speech/status` must answer
       `available: false`, `unavailableReason: "Hands-free is not armed"` — never
       an error.
-- [ ] In Claude Code connected to this build, `voice` must appear in the tool
+- [ ] In Claude Code connected to this build, `voice` must appear in the tool _(NOT VERIFIED 2026-09-29: Needs real Claude Code connected to this build for tool-list/status.)_
       list on a fresh connection without any list-change notification, and
       `action=status` must answer rather than erroring.
 
@@ -3935,33 +3935,33 @@ serves it exists as of 2026-09-22, so install it first. The point of every one
 of these items is the same — the
 model must never answer in a language the user is not speaking.
 
-- [ ] Set Dictation language to **Italian**, arm hands-free, and say something in
+- [ ] Set Dictation language to **Italian**, arm hands-free, and say something in _(NOT VERIFIED 2026-09-29: Needs real speech, real agent and reading its Italian reply)_
       Italian. The terminal entry must read `<what you said> (reply in Italian)`,
       on one line, and the agent must answer **in Italian**. Instruction
       delivery is not the proof: read the agent's reply.
-- [ ] With the same setup, listen to the spoken reply. It must be the Italian
+- [ ] With the same setup, listen to the spoken reply. It must be the Italian _(NOT VERIFIED 2026-09-29: Needs listening to the Italian TTS voice reading Italian.)_
       voice reading Italian — not Italian text read by another language's voice,
       and not an English sentence.
-- [ ] Set the language to **Auto** and disarm/re-arm. Before you say anything,
+- [ ] Set the language to **Auto** and disarm/re-arm. Before you say anything, _(NOT VERIFIED 2026-09-29: Re-arm with Auto language requires microphone arming; status endpoint itself is HTTP.)_
       `curl 'localhost:9877/dictation/speech/status'` must answer
       `available: false`, `language: ""` and a reason naming Auto. Nothing may be
       spoken in this state.
-- [ ] Still on Auto, say something in Italian. `status` must then report
+- [ ] Still on Auto, say something in Italian. `status` must then report _(NOT VERIFIED 2026-09-29: Needs spoken Italian/English input and real agent reply.)_
       `language: "it"`, and the entry must carry `(reply in Italian)`. Say the
       next turn in **English**: the entry must carry `(reply in English)` and the
       agent must switch with it.
-- [ ] Set the language to **Korean** (transcribed, no voice bundle) and arm.
+- [ ] Set the language to **Korean** (transcribed, no voice bundle) and arm. _(NOT VERIFIED 2026-09-29: Arming hands-free needs real microphone input and speech)_
       `status` must answer `available: false` with
       `No speech bundle ships for language "ko"`. It must **not** fall back to
       the Italian voice.
-- [ ] While a reply is being spoken, change the Dictation language in Settings.
+- [ ] While a reply is being spoken, change the Dictation language in Settings. _(NOT VERIFIED 2026-09-29: Needs audible speech interrupted mid-sentence.)_
       The speaker must stop mid-sentence and `status` must report the new
       language. Then change only the **RMS threshold** while another reply
       plays: that one must keep playing to the end.
-- [ ] Turn the hands-free entry/exit hints **off** (story 821's setting, when it
+- [ ] Turn the hands-free entry/exit hints **off** (story 821's setting, when it _(NOT VERIFIED 2026-09-29: Needs real speech, real agent reply)_
       lands) and repeat the first item. The `(reply in …)` requirement must still
       be in the entry — it is not a hint.
-- [ ] In the armed terminal's Claude Code, `voice action=status` must report
+- [ ] In the armed terminal's Claude Code, `voice action=status` must report _(NOT VERIFIED 2026-09-29: Needs a real Claude Code in an armed terminal calling voice action=status.)_
       `language`, and the tool schema must offer no way to pass a language or a
       voice.
 
@@ -3980,27 +3980,27 @@ Run every item against a throwaway tab in the worktree build, never Boss's live
 sessions. Settings > Dictation now carries **Notify model when hands-free
 changes** (on by default).
 
-- [ ] Arm hands-free on a Claude tab. The tab must receive a line saying voice
+- [ ] Arm hands-free on a Claude tab. The tab must receive a line saying voice _(NOT VERIFIED 2026-09-29: Needs real Claude tab responding to voice notice.)_
       is on for this terminal, submitted as its own turn. Then say something
       ordinary and read the reply: the agent should either call the voice tool
       or explain why it cannot — **not** ignore the notice.
-- [ ] Disarm. The tab must receive the "voice is off, reply as text" line, and
+- [ ] Disarm. The tab must receive the "voice is off, reply as text" line, and _(NOT VERIFIED 2026-09-29: Needs real agent tab responding in text after hands-free disarm.)_
       the next thing you type must be answered in text with no voice attempt.
-- [ ] **Rapid arm/disarm while the agent is busy.** Arm and disarm again within
+- [ ] **Rapid arm/disarm while the agent is busy.** Arm and disarm again within _(NOT VERIFIED 2026-09-29: Needs armed hands-free (microphone) with a busy real agent)_
       a second or two while the agent is mid-task. The start notice must
       disappear from the Compose queue and **no** stop notice may appear — the
       agent must end up with neither line, not with a lone "voice is off".
-- [ ] Arm, wait for the agent to read the start notice, then close the bound
+- [ ] Arm, wait for the agent to read the start notice, then close the bound _(NOT VERIFIED 2026-09-29: Needs hands-free with real agent reading the start notice.)_
       tab. The runtime disarms itself; confirm the log shows the end notice was
       attempted and reports honestly that the target was gone.
-- [ ] Turn the setting off, arm and disarm. Neither line may appear anywhere.
+- [ ] Turn the setting off, arm and disarm. Neither line may appear anywhere. _(NOT VERIFIED 2026-09-29: Arming hands-free needs real microphone; arm/disarm notice lines in a real agent)_
       Then, still with it off, arm and check that speech itself still works
       (`voice action=status` must report `available: true` once a language is
       known) — the setting must silence the notices and nothing else.
-- [ ] Arm with the setting **on**, let the agent read the start notice, then
+- [ ] Arm with the setting **on**, let the agent read the start notice, then _(NOT VERIFIED 2026-09-29: Needs a real model reading start/stop notices and reacting.)_
       turn the setting off in Settings while still armed, then disarm. The stop
       notice must still be sent: the agent was already told voice was on.
-- [ ] Hold the push-to-talk hotkey and dictate a sentence. No notice of either
+- [ ] Hold the push-to-talk hotkey and dictate a sentence. No notice of either _(NOT VERIFIED 2026-09-29: Needs real push-to-talk hotkey and dictation audio.)_
       kind may appear, the hands-free badge must stay off, and `voice
       action=status` must still report `available: false`.
 - [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other
@@ -4023,20 +4023,20 @@ sessions.
       one row the other's progress — and each row must end at Downloaded.
 - [ ] Cancel a download halfway. The row must go back to Not Downloaded with no
       progress bar left behind, and no partially installed files may remain.
-- [ ] With Italian ready, the **Voice** control must appear and list `giovanni`.
+- [ ] With Italian ready, the **Voice** control must appear and list `giovanni`. _(NOT VERIFIED 2026-09-29: Requires hearing reply in chosen voice; Italian voice assets)_
       Pick it, then arm a conversation and hear a reply in that voice.
-- [ ] Change the voice while a reply is being spoken. The reply must stop
+- [ ] Change the voice while a reply is being spoken. The reply must stop _(NOT VERIFIED 2026-09-29: Needs audible spoken reply cut mid-sentence when voice is changed.)_
       mid-sentence rather than finish in the other voice.
-- [ ] **Opening Settings > Dictation must not light the microphone indicator.**
+- [ ] **Opening Settings > Dictation must not light the microphone indicator.** _(NOT VERIFIED 2026-09-29: Needs human to observe the macOS microphone indicator.)_
       Neither must starting the app. Nothing arms by itself.
-- [ ] Start a conversation from the panel, then press the dictation hotkey. The
+- [ ] Start a conversation from the panel, then press the dictation hotkey. The _(NOT VERIFIED 2026-09-29: Needs dictation hotkey press, real capture and voice queue.)_
       conversation must stop — capture, queue and voice — and the status line
       must say how many spoken entries had already been typed.
-- [ ] Press the hotkey with nothing armed. It must record as usual, not report a
+- [ ] Press the hotkey with nothing armed. It must record as usual, not report a _(NOT VERIFIED 2026-09-29: Needs global hotkey and microphone recording)_
       stopped conversation.
-- [ ] Let a conversation end by itself (close the bound terminal), then press the
+- [ ] Let a conversation end by itself (close the bound terminal), then press the _(NOT VERIFIED 2026-09-29: Needs global hotkey and microphone recording.)_
       hotkey. It must record — a stale armed flag must not eat the keypress.
-- [ ] Set an activation phrase, then speak a sentence without it: nothing may be
+- [ ] Set an activation phrase, then speak a sentence without it: nothing may be _(NOT VERIFIED 2026-09-29: Needs real spoken sentences with activation phrase)_
       sent. Speak one with it: the phrase itself must not reach the terminal.
 - [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must
       line up with the Whisper model rows above them, and the phase line must
@@ -4122,11 +4122,11 @@ stream gets the identical body. Only a restart loads them.
       named `speech-download-progress` carrying `asset`, `downloaded`, `total`
       and `percent`. A Whisper-model download on the same stream must be named
       `dictation-download-progress` and must **not** carry `asset`.
-- [ ] Arm hands-free, let a reply play, and watch the same stream: one
+- [ ] Arm hands-free, let a reply play, and watch the same stream: one _(NOT VERIFIED 2026-09-29: Needs armed hands-free with audible reply playback.)_
       `speech-utterance` frame per transition, in the order
       `queued → rendering → speaking → finished`, with no polling of
       `GET /dictation/speech/status`.
-- [ ] Talk over a reply and confirm the last frame for that utterance is
+- [ ] Talk over a reply and confirm the last frame for that utterance is _(NOT VERIFIED 2026-09-29: Needs talking over a real spoken reply (audio in/out))_
       `interrupted` rather than `finished`, and that it arrives — the transition
       happens on the render thread after `speak` has long returned, which is the
       case a polling client used to miss entirely.
@@ -4182,7 +4182,7 @@ or credential is touched.
 
 ## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting an isolated test instance, connect the Installed-service
+- [ ] After restarting an isolated test instance, connect the Installed-service _(NOT VERIFIED 2026-09-29: Needs real SSH connection to aws-graviton remote host and credentials.)_
       `aws-graviton` remote (56481148) over SSH. It should progress from
       Connecting to Connected once the local forward listens and `/health`
       answers, without an intermediate "installed daemon not answering" error.
@@ -4233,7 +4233,7 @@ or credential is touched.
 
 ## CircleCI failure logs — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting the worktree build, open a failed CircleCI check on a remote-only PR, including a PR with a failed GitHub Actions job. Its Log button shows only that CircleCI check's log and the end of a long failed step, with a truncation marker when the beginning was dropped; a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart.
+- [ ] After restarting the worktree build, open a failed CircleCI check on a remote-only PR, including a PR with a failed GitHub Actions job. Its Log button shows only that CircleCI check's log and the end of a long failed step, with a truncation marker when the beginning was dropped; a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs real CircleCI remote-only PR with failed check (external account).)_
 
 ## Safe linked-worktree removal — **Rust, needs a `make dev` restart**
 
@@ -4268,12 +4268,12 @@ or credential is touched.
       `GET /sessions` row reports `tuic_session` equal to its `session_id` before
       the agent calls MCP, then close both sessions. The current backend cannot
       load this Rust binding change until restart.
-- [ ] Restart the isolated `make dev` test instance and run
+- [ ] Restart the isolated `make dev` test instance and run _(NOT VERIFIED 2026-09-29: Canary script drives a real Claude PTY for PEER_MAIL_WAKE.)_
       `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude`.
       Confirm the disposable Claude PTY shows `PEER_MAIL_WAKE` within 20 seconds.
       See `docs/guides/development-setup.md` for the instance setup; the Rust
       change does not hot reload into the current process.
-- [ ] On that rebuilt isolated instance, run
+- [ ] On that rebuilt isolated instance, run _(NOT VERIFIED 2026-09-29: canary script `claude --capacity` drives a real Claude agent)_
       `TUIC_CANARY_URL=http://127.0.0.1:9877 python3 scripts/canary-peer-mail-wake.py claude --capacity`.
       Confirm mail 101 is accepted and returned after the first 100 were read.
 
@@ -4291,7 +4291,7 @@ or credential is touched.
 
 ## Claude transcript activity after restart
 
-- [ ] After restarting `make dev` with the story 1121 Rust build, put a throwaway Claude session in detailed transcript view after a hook idle, then deliver a peer mail wake. If Claude does not begin a turn, confirm the session returns to idle after the five-minute stale submission window and the app log contains both shell transitions. The current running backend cannot load this Rust change without a restart.
+- [ ] After restarting `make dev` with the story 1121 Rust build, put a throwaway Claude session in detailed transcript view after a hook idle, then deliver a peer mail wake. If Claude does not begin a turn, confirm the session returns to idle after the five-minute stale submission window and the app log contains both shell transitions. The current running backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: Needs a real Claude session in detailed transcript view and a five-minute stale window)_
 
 ## WebView reload resource cleanup — Rust, needs a `make dev` restart
 
@@ -4312,12 +4312,12 @@ or credential is touched.
 
 ## Push-to-talk Italian hallucination filter — Rust restart required
 
-- [ ] After restarting `make dev`, use a disposable terminal to verify that a bare “Grazie a tutti.” recognition does not reach the composer, while a genuine instruction containing those words does. The current backend cannot load the Rust change until restart. The sustained-speech activity gate remains pending real quiet-speech recordings (story 1135-b600).
+- [ ] After restarting `make dev`, use a disposable terminal to verify that a bare “Grazie a tutti.” recognition does not reach the composer, while a genuine instruction containing those words does. The current backend cannot load the Rust change until restart. The sustained-speech activity gate remains pending real quiet-speech recordings (story 1135-b600). _(NOT VERIFIED 2026-09-29: Needs real speech recognition input; filter itself is unit-level (HALLUCINATION_EXACT in tuic-dictation transcribe.rs:393) but item is voice.)_
 
 ## MCP initialize storm — Rust restart required (#1148-c25f)
 
 - [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.
-- [ ] After that Rust restart, let an isolated disposable MCP protocol session pass the one-hour TTL (or invoke the maintenance sweep in a test build). Confirm its protocol session, route, reverse route, and broadcast sender all disappear while an addressable PTY peer and any live sibling remain usable. This checks the reaper cleanup added for story 1148; the source of the incident's 27.3 GB malloc growth is still unknown.
+- [ ] After that Rust restart, let an isolated disposable MCP protocol session pass the one-hour TTL (or invoke the maintenance sweep in a test build). Confirm its protocol session, route, reverse route, and broadcast sender all disappear while an addressable PTY peer and any live sibling remain usable. This checks the reaper cleanup added for story 1148; the source of the incident's 27.3 GB malloc growth is still unknown. _(NOT VERIFIED 2026-09-29: Needs a one-hour TTL wait or a test build invoking the maintenance sweep; not drivable in an isolated instance)_
 
 ## Worktree removal preview — Rust restart and visual review (#1138-ed2e)
 
@@ -4379,11 +4379,11 @@ or credential is touched.
 
 ## AI Chat copy, links and parallel tabs (story 1142-f09c)
 
-- [ ] [VISUAL] After `make dev`, in an AI Chat conversation select and copy a paragraph of transcript text and confirm it lands on the clipboard; click an http(s) link in a reply and confirm it opens in the external browser; click a local file path and confirm it opens through TUIC's file/editor opener. Open a second chat tab and confirm it runs an independent ACP session in parallel with the first. Component/DOM tests cover selection, copy, link routing and tab lifecycle; the live interaction remains to be checked.
+- [ ] [VISUAL] After `make dev`, in an AI Chat conversation select and copy a paragraph of transcript text and confirm it lands on the clipboard; click an http(s) link in a reply and confirm it opens in the external browser; click a local file path and confirm it opens through TUIC's file/editor opener. Open a second chat tab and confirm it runs an independent ACP session in parallel with the first. Component/DOM tests cover selection, copy, link routing and tab lifecycle; the live interaction remains to be checked. _(NOT VERIFIED 2026-09-29: Needs a real ego ACP conversation, external browser opener and system clipboard; two parallel live sessions.)_
 
 ## AI Chat session settings dialog (story 1145-3abd)
 
-- [ ] [VISUAL] After `make dev`, open AI Chat and confirm the control bar shows a compact model/mode summary with one settings button. Open a new chat tab and confirm the summary is not blank. Open the settings dialog and confirm it lists one labeled row per ACP select config option (name, description, current value); change a value and confirm the summary updates from the agent's reply. Targeted Vitest covers the dialog and the late-options case; the live rendering remains to be checked.
+- [ ] [VISUAL] After `make dev`, open AI Chat and confirm the control bar shows a compact model/mode summary with one settings button. Open a new chat tab and confirm the summary is not blank. Open the settings dialog and confirm it lists one labeled row per ACP select config option (name, description, current value); change a value and confirm the summary updates from the agent's reply. Targeted Vitest covers the dialog and the late-options case; the live rendering remains to be checked. _(NOT VERIFIED 2026-09-29: Needs live ego ACP agent providing select config options.)_
 
 ## Codex questions on mobile PWA (story 1201-ae16)
 
