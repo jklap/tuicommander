@@ -157,7 +157,7 @@ The desktop server also serves the frontend, so any path that matches no route
 falls through to a catch-all. That catch-all splits on the first path segment:
 
 - **API path** — the first segment is one of `agent`, `agents`, `ai`, `api`,
-  `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
+  `attachments`, `audio`, `claude`, `codex`, `config`, `debug`, `diagnostics`, `dictation`,
   `events`, `exec`, `fs`, `generators`, `github`, `health`, `logs`, `mcp`,
   `metrics`, `plugins`, `process`, `prompt`, `registry`, `repo`, `sessions`,
   `stats`, `system`, `terminal`, `tunnels`, `watchers`, `worktrees`. The

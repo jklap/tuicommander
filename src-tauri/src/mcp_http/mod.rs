@@ -755,6 +755,7 @@ const API_PREFIXES: &[&str] = &[
     "agents",
     "ai",
     "api",
+    "attachments",
     "audio",
     "circleci",
     "claude",
@@ -6668,6 +6669,7 @@ mod tests {
             "/fs/no-such-endpoint",
             "/worktrees/a/b/c",
             "/api/no-such-endpoint",
+            "/attachments/no-such-endpoint",
             "/dictation/no-such-endpoint",
         ] {
             let resp = app
