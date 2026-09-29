@@ -497,7 +497,7 @@ async fn post_story_action(
         return r;
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::stories::story_action_for_session(
+        crate::stories::story_action_for_http(
             &state,
             &q.path,
             input.action,
@@ -512,6 +512,41 @@ async fn post_story_action(
 
 async fn get_story_capabilities() -> Json<bool> {
     Json(true)
+}
+
+async fn post_workflow_definition_action(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(action): Json<crate::workflows::WorkflowAction>,
+) -> Response {
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    let result =
+        tokio::task::spawn_blocking(move || crate::workflows::definition_action(&q.path, action))
+            .await
+            .map_err(|error| format!("workflow definition task failed: {error}"))
+            .and_then(|result| result);
+    json_result(result)
+}
+async fn post_workflow_run_action(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(action): Json<crate::workflows::RunAction>,
+) -> Response {
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::workflows::run_action_with_events(&state, &q.path, action)
+    })
+    .await
+    .map_err(|error| format!("workflow run task failed: {error}"))
+    .and_then(|result| result);
+    json_result(result)
 }
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -790,6 +825,7 @@ const API_PREFIXES: &[&str] = &[
     "terminal",
     "tunnels",
     "watchers",
+    "workflows",
     "worktrees",
 ];
 
@@ -890,6 +926,11 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/flow/detail", post(post_progress_flow_detail))
         .route("/stories/action", post(post_story_action))
         .route("/stories/capabilities", get(get_story_capabilities))
+        .route(
+            "/workflows/definition/action",
+            post(post_workflow_definition_action),
+        )
+        .route("/workflows/run/action", post(post_workflow_run_action))
         // Session lifecycle
         .route(
             "/sessions",
@@ -3527,6 +3568,70 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
         }
+    }
+
+    #[tokio::test]
+    async fn loopback_story_action_without_session_is_local_api_not_human() {
+        use crate::stories::{
+            NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStatus, StoryStore,
+            StoryTransitionActor,
+        };
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let store = StoryStore::open().expect("stories");
+        let plan = store
+            .create_plan(NewPlan {
+                project: project
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let path = format!("/stories/action?path={}", project.path().display());
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let app = build_router(test_state(), false, true);
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
+            "action": { "action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual" }
+        }), local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let started = store.get_story(&story.id).unwrap();
+        assert_eq!(
+            store.transition_history(&story.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .unwrap();
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .unwrap();
+        let response = app.oneshot(mcp_post_from(&path, &serde_json::json!({
+            "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
+        }), local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_story(&story.id).unwrap().status,
+            StoryStatus::Done
+        );
+        assert_eq!(
+            store.transition_history(&story.id).unwrap().last().unwrap().actor,
+            StoryTransitionActor::LocalApi
+        );
     }
 
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a

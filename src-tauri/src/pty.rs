@@ -10001,6 +10001,27 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
         }),
     );
 
+    // A managed workflow child may exit without calling workflow_report. Persist
+    // the interruption before presenting another run state; exit code zero is
+    // not evidence that its story criteria passed.
+    if crate::config::config_dir()
+        .join("workflow_runs.sqlite3")
+        .is_file()
+    {
+        match crate::workflows::RunStore::open()
+            .and_then(|store| store.interrupt_agent_session(session_id))
+        {
+            Ok(changed_runs) => {
+                for run in changed_runs {
+                    crate::workflows::emit_run_changed(state, &run.project, &run.id, run.sequence);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(source = "workflows", session_id, %error, "record workflow agent exit")
+            }
+        }
+    }
+
     // SIMP-1: drain HTML tabs registered by this session and emit close.
     // Same helper used by `session(close)` and `session(kill)` so all three
     // exit paths drain `session_html_tabs` identically (no orphan tabs).

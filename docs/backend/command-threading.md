@@ -60,6 +60,9 @@ and restart verification await without blocking the IPC main thread.
 
 `story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
 
+`workflow_definition_action` and its HTTP twin use `spawn_blocking` around graph validation and SQLite publication for the same reason.
+`workflow_run_action` and its HTTP twin also use `spawn_blocking` for SQLite run transitions and event paging.
+
 391 `#[tauri::command]` declarations, 222 of them syntactically sync. Most are
 correctly sync — cached getters, atomic reads, in-memory state. What follows is
 the part of the inventory that matters, so this class of bug does not regrow
