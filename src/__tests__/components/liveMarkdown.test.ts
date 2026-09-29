@@ -1,7 +1,14 @@
-import { deleteCharBackward, deleteCharForward, cursorCharLeft, cursorCharRight, history, undo } from "@codemirror/commands";
-import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
-import { openSearchPanel, search, searchPanelOpen } from "@codemirror/search";
+import {
+	cursorCharLeft,
+	cursorCharRight,
+	deleteCharBackward,
+	deleteCharForward,
+	history,
+	undo,
+} from "@codemirror/commands";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { openSearchPanel, search, searchPanelOpen } from "@codemirror/search";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -62,7 +69,9 @@ describe("marks hidden off the cursor line", () => {
 	it("hides heading, emphasis, inline code and link marks on other lines", () => {
 		// catches: marks left visible everywhere (no live effect)
 		const s = stateOf(DOC, DOC.length);
-		expect(texts(s, liveHiddenRanges(s)).sort()).toEqual(["# ", "**", "**", "*", "*", "`", "`", "[", "](http://x.io)"].sort());
+		expect(texts(s, liveHiddenRanges(s)).sort()).toEqual(
+			["# ", "**", "**", "*", "*", "`", "`", "[", "](http://x.io)"].sort(),
+		);
 	});
 
 	it("shows every mark on the line holding the cursor", () => {
@@ -109,6 +118,13 @@ describe("lossless round trip", () => {
 		v.dispatch({ changes: { from: WITH_TWEAK.indexOf("# T") + 1, insert: "X" }, userEvent: "input.type" });
 		expect(text(v.state)).toBe(WITH_TWEAK.replace("# T", "#X T"));
 		expect(parseInlineTweakComments(text(v.state))).toHaveLength(1);
+	});
+
+	it("treats LF inside a tweak comment as part of the comment, not as mixed endings", () => {
+		// catches: Live refused (or CRLF lost) on CRLF files the viewer commented on
+		const doc = `# T\r\n\r\nx ${inline("c1", "w", "n")}\r\n`;
+		expect(liveModeSupported(doc)).toBe(true);
+		expect(text(stateOf(doc))).toBe(doc);
 	});
 
 	it("declines mixed line endings and large files", () => {

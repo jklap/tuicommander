@@ -3,9 +3,9 @@ import { ensureSyntaxTree, type LanguageSupport, syntaxTree } from "@codemirror/
 import { languages } from "@codemirror/language-data";
 import {
 	Annotation,
+	type Range as CmRange,
 	EditorState,
 	type Extension,
-	type Range as CmRange,
 	StateField,
 	Transaction,
 	type TransactionSpec,
@@ -39,20 +39,32 @@ export function loadMarkdownLanguage(): LanguageSupport {
 	return markdown({ base: markdownLanguage, codeLanguages: languages });
 }
 
+/** The text outside tweak syntax. The viewer's writer emits LF inside comments whatever the
+ *  file uses, so those bytes say nothing about the file's own line endings. */
+function withoutTweakSyntax(text: string): string {
+	if (!text.includes("<!--tweak") && !text.includes("<!-- tweak-comments")) return text;
+	const { spans, standalone } = findTweakSyntax(text);
+	const regions = [...spans.flatMap((s) => [s.begin, s.end]), ...standalone].sort((a, b) => b.from - a.from);
+	let rest = text;
+	for (const r of regions) rest = rest.slice(0, r.from) + rest.slice(r.to);
+	return rest;
+}
+
 /**
  * True when Live mode can save the file byte for byte. CodeMirror keeps one line
  * separator per document, so mixed endings (or a lone CR) would be rewritten.
  */
 export function liveModeSupported(text: string): boolean {
 	if (text.length > LIVE_MAX_CHARS) return false;
-	if (/\r(?!\n)/.test(text)) return false;
-	return !(text.includes("\r\n") && /(?<!\r)\n/.test(text));
+	const rest = withoutTweakSyntax(text);
+	if (/\r(?!\n)/.test(rest)) return false;
+	return !(rest.includes("\r\n") && /(?<!\r)\n/.test(rest));
 }
 
 /** Pin the separator to the file's own so `state.sliceDoc()` reproduces it. Also stops CM
  *  from splitting on U+2028/U+2029, which it would otherwise turn into newlines. */
 export function liveLineSeparator(text: string): Extension {
-	return EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n");
+	return EditorState.lineSeparator.of(withoutTweakSyntax(text).includes("\r\n") ? "\r\n" : "\n");
 }
 
 interface LiveValue {
@@ -81,17 +93,19 @@ function buildLive(state: EditorState): LiveValue {
 	const doc = state.doc;
 	const source = doc.toString();
 	const { spans, standalone } = findTweakSyntax(source);
-	const tweakRegions: Range[] = [
-		...spans.flatMap((s) => [s.begin, s.end]),
-		...standalone,
-	].sort((a, b) => a.from - b.from);
+	const tweakRegions: Range[] = [...spans.flatMap((s) => [s.begin, s.end]), ...standalone].sort(
+		(a, b) => a.from - b.from,
+	);
 	const tweakAtomic = Decoration.set(tweakRegions.map((r) => hide.range(r.from, r.to)));
 
 	const decos: CmRange<Decoration>[] = tweakRegions.map((r) => hide.range(r.from, r.to));
 	for (const s of spans) {
 		if (s.highlight.to > s.highlight.from) {
 			decos.push(
-				Decoration.mark({ class: "tweak-highlight", attributes: { title: s.comment } }).range(s.highlight.from, s.highlight.to),
+				Decoration.mark({ class: "tweak-highlight", attributes: { title: s.comment } }).range(
+					s.highlight.from,
+					s.highlight.to,
+				),
 			);
 		}
 	}
@@ -197,7 +211,9 @@ export function protectTweakEdits(
 	for (const edit of edits) {
 		let { from, to } = edit;
 		if (from === to) {
-			const inside = [...spans.flatMap((s) => [s.begin, s.end]), ...standalone].find((r) => from > r.from && from < r.to);
+			const inside = [...spans.flatMap((s) => [s.begin, s.end]), ...standalone].find(
+				(r) => from > r.from && from < r.to,
+			);
 			out.push({ from: inside ? inside.from : from, to: inside ? inside.from : to, insert: edit.insert });
 			continue;
 		}
@@ -291,7 +307,7 @@ export function addTweakCommentAtSelection(view: EditorView, comment: Omit<Tweak
 	const source = view.state.sliceDoc();
 	const highlighted = view.state.sliceDoc(from, to);
 	// `source` spells a line break with two characters in a CRLF file, the document with one.
-	const sourceFrom = source.includes("\r\n") ? from + view.state.doc.lineAt(from).number - 1 : from;
+	const sourceFrom = view.state.lineBreak === "\r\n" ? from + view.state.doc.lineAt(from).number - 1 : from;
 	// `insertTweakComment` counts occurrences the way the viewer's DOM does; find the one at the selection.
 	let occurrence = 0;
 	for (let n = 0; ; n++) {
@@ -302,7 +318,7 @@ export function addTweakCommentAtSelection(view: EditorView, comment: Omit<Tweak
 	}
 	const updated = insertTweakComment(source, { ...comment, highlighted }, occurrence);
 	// Diff in CodeMirror's coordinates (one character per line break, whatever the file uses).
-	const crlf = source.includes("\r\n");
+	const crlf = view.state.lineBreak === "\r\n";
 	const before = view.state.doc.toString();
 	const after = updated.replace(/\r\n/g, "\n");
 	let start = 0;

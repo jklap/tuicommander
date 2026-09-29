@@ -33,6 +33,8 @@ import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import { CommentOverlay } from "./CommentOverlay";
+import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
+import { liveModeSupported } from "./liveMarkdown";
 import s from "./MarkdownTab.module.css";
 
 export interface MarkdownTabProps {
@@ -478,6 +480,15 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	const [liveMode, setLiveMode] = createSignal(false);
+	const [liveDirty, setLiveDirty] = createSignal(false);
+	const liveAvailable = () => props.tab.type === "file" && liveModeSupported(content());
+	const toggleLive = () => {
+		if (liveMode() && liveDirty() && !window.confirm(t("markdownTab.liveDiscard", "Discard unsaved changes?"))) return;
+		setLiveDirty(false);
+		setLiveMode(!liveMode());
+	};
+
 	const handleEdit = () => {
 		const tab = props.tab;
 		if (tab.type === "file") {
@@ -585,6 +596,23 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						</svg>
 						{t("markdownTab.editBtn", "Edit")}
 					</button>
+					<button
+						class={e.btn}
+						classList={{ [e.active]: liveMode() }}
+						disabled={!liveMode() && !liveAvailable()}
+						onClick={toggleLive}
+						title={
+							liveAvailable() || liveMode()
+								? t("markdownTab.live", "Live edit: marks hidden off the cursor line")
+								: t(
+										"markdownTab.liveUnavailable",
+										"Live edit needs LF or CRLF line endings throughout and a file under 500 KB",
+									)
+						}
+					>
+						{t("markdownTab.liveBtn", "Live")}
+						<Show when={liveDirty()}> ●</Show>
+					</button>
 					<Show when={(props.tab as FileTab).repoPath}>
 						<button
 							class={e.btn}
@@ -654,37 +682,49 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				matchCount={matchCount()}
 			/>
 
-			<div class={s.content} ref={(el) => setScrollEl(el)}>
-				<Show when={searchVisible()}>
-					<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
-				</Show>
-				<ContentRenderer
-					content={content()}
-					commentableBlocks={props.tab.type === "file"}
-					baseDir={baseDir()}
-					onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
-					onCheckboxToggle={(idx, mark, col) => {
-						void handleCheckboxToggle(idx, mark, col);
-					}}
-					contentRef={(el) => {
-						contentRef = el;
-						setOverlayContentEl(el);
-					}}
-					fontSize={props.tab.fontSize}
-					emptyMessage={
-						loading()
-							? t("markdownTab.loading", "Loading...")
-							: error()
-								? `${t("markdownTab.error", "Error:")} ${error()}`
-								: t("markdownTab.noContent", "No content")
-					}
-				/>
-			</div>
+			<Show
+				when={liveMode()}
+				fallback={
+					<div class={s.content} ref={(el) => setScrollEl(el)}>
+						<Show when={searchVisible()}>
+							<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
+						</Show>
+						<ContentRenderer
+							content={content()}
+							commentableBlocks={props.tab.type === "file"}
+							baseDir={baseDir()}
+							onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
+							onCheckboxToggle={(idx, mark, col) => {
+								void handleCheckboxToggle(idx, mark, col);
+							}}
+							contentRef={(el) => {
+								contentRef = el;
+								setOverlayContentEl(el);
+							}}
+							fontSize={props.tab.fontSize}
+							emptyMessage={
+								loading()
+									? t("markdownTab.loading", "Loading...")
+									: error()
+										? `${t("markdownTab.error", "Error:")} ${error()}`
+										: t("markdownTab.noContent", "No content")
+							}
+						/>
+					</div>
+				}
+			>
+				<LiveMarkdownEditor content={content()} onSave={writeTweakedSource} onDirtyChange={setLiveDirty} />
+			</Show>
 
 			{/* Mount CommentOverlay ONLY for the active file tab — otherwise every
           open markdown tab would attach its own selectionchange listener and
           they'd all fire on every cursor move across the app. */}
-			<Show when={props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()} keyed>
+			<Show
+				when={
+					!liveMode() && props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()
+				}
+				keyed
+			>
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}

@@ -545,7 +545,8 @@ export function findTweakSyntax(source: string): { spans: TweakInlineSpan[]; sta
 	}
 	for (const re of [BLOCK_RE, ITEM_RE]) {
 		re.lastIndex = 0;
-		while ((match = re.exec(source)) !== null) standalone.push({ from: match.index, to: match.index + match[0].length });
+		while ((match = re.exec(source)) !== null)
+			standalone.push({ from: match.index, to: match.index + match[0].length });
 	}
 	standalone.sort((a, b) => a.from - b.from);
 	return { spans, standalone };

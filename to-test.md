@@ -1,3 +1,7 @@
+## Markdown Live mode (1278-33f5)
+
+- [ ] Open a `.md` file with headings, `**bold**`, `*italic*`, `` `code` ``, a link, a fenced ```js block and at least one tweak comment (add one from the viewer). Click **Live**: marks disappear off the cursor line and reappear on it; the tweak highlight shows amber with the comment on hover; the caret jumps over hidden tweak markers; Backspace/Delete beside a highlight never leaves a stray `<!--tweak:...` when you press **Live** off and read the raw file. Select text, **Comment**, type, Enter: the same `<!--tweak:begin/end-->` format as the viewer writes. Cmd+F searches the text. Edit, click **Save** (or Cmd+S), `git diff` shows only the lines you touched. Make no edit on a CRLF file and save an edit: line endings stay CRLF.
+
 ## MCP reaper refresh race (1259-62e3) — Rust restart required
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, keep a disposable MCP bridge with a stable `x-tuic-session` active across the one-hour idle boundary and send a ping near a maintenance sweep. Confirm no reap log for the refreshed protocol session and that `agent action=inbox` still resolves its identity. The deterministic race and expiry cases are covered by Rust tests; the running backend does not hot-reload this fix.
