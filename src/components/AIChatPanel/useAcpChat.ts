@@ -379,7 +379,11 @@ export function createAcpChat(
 		},
 
 		/** Send a turn, starting ego first when this is the first message. */
-		async send(text: string, images: Extract<AcpContentBlock, { type: "image" }>[] = [], files: { name: string; path: string }[] = []): Promise<void> {
+		async send(
+			text: string,
+			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
+			files: { name: string; path: string }[] = [],
+		): Promise<void> {
 			if (!text.trim() && images.length === 0 && files.length === 0) return;
 			let current = pair();
 			if (!current) {
@@ -388,9 +392,11 @@ export function createAcpChat(
 			}
 			if (!current) return;
 			const { id, session } = current;
-			await guard("sending the turn", () => files.length
-				? client.prompt(id, session, text, images, viewedRepo(), files)
-				: client.prompt(id, session, text, images, viewedRepo()));
+			await guard("sending the turn", () =>
+				files.length
+					? client.prompt(id, session, text, images, viewedRepo(), files)
+					: client.prompt(id, session, text, images, viewedRepo()),
+			);
 		},
 
 		async cancel(): Promise<void> {

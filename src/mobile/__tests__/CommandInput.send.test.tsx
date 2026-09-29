@@ -21,15 +21,23 @@ afterEach(() => {
 });
 
 it("stages an uploaded file path in the PTY draft without pressing Enter", async () => {
-	vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-notes.txt", size: 5 }), {
-		status: 200,
-		headers: { "content-type": "application/json" },
-	})));
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(
+			async () =>
+				new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-notes.txt", size: 5 }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		),
+	);
 	const { container } = render(() => <CommandInput sessionId="disposable" />);
 	const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
 	expect(picker).toBeTruthy();
 	fireEvent.change(picker, { target: { files: [new File(["hello"], "notes.txt", { type: "text/plain" })] } });
-	await waitFor(() => expect(container.querySelector("textarea")?.value).toContain("@/repo/.tuic/attachments/1-notes.txt"));
+	await waitFor(() =>
+		expect(container.querySelector("textarea")?.value).toContain("@/repo/.tuic/attachments/1-notes.txt"),
+	);
 	expect(writes.map((write) => write.data)).toEqual(["@/repo/.tuic/attachments/1-notes.txt"]);
 });
 
@@ -60,7 +68,9 @@ describe("mobile slash submission", () => {
 		));
 		const input = container.querySelector("textarea")!;
 		fireEvent.input(input, { target: { value: command.slice(0, 3) } });
-		fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes(command))!);
+		fireEvent.click(
+			Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes(command))!,
+		);
 		fireEvent.click(container.querySelector("button.send")!);
 		await waitFor(() => expect(writes.some((write) => write.data === "\r")).toBe(true));
 		expect(writes.map((write) => write.data)).toEqual([command.slice(0, 3), command.slice(3) + " ", "\r"]);
@@ -77,7 +87,9 @@ describe("mobile slash submission", () => {
 
 	it("does not press Enter while the final mobile write is still in flight", async () => {
 		let releaseWrite!: () => void;
-		const inFlight = new Promise<void>((resolve) => { releaseWrite = resolve; });
+		const inFlight = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
 		vi.mocked(rpc).mockImplementationOnce(async (_command, args) => {
 			writes.push({ data: args?.data as string, at: Date.now() });
 			await inFlight;

@@ -13,7 +13,10 @@ export function MobileChatScreen() {
 	const linkedSession = new URLSearchParams(location.search).get("session");
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
-	const chat = createAcpChat(() => linkedRepository, () => true);
+	const chat = createAcpChat(
+		() => linkedRepository,
+		() => true,
+	);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
 
@@ -36,7 +39,11 @@ export function MobileChatScreen() {
 					const response = await cache.match(key);
 					if (!response) throw new Error("Shared file is no longer available.");
 					const name = response.headers.get("x-file-name") || "shared-file";
-					setSharedFile(new File([await response.blob()], name, { type: response.headers.get("content-type") || "application/octet-stream" }));
+					setSharedFile(
+						new File([await response.blob()], name, {
+							type: response.headers.get("content-type") || "application/octet-stream",
+						}),
+					);
 					await cache.delete(key);
 					const nextUrl = new URL(location.href);
 					nextUrl.searchParams.delete("shared");
@@ -62,7 +69,11 @@ export function MobileChatScreen() {
 				<strong>AI Chat</strong>
 			</header>
 			<Show when={sharedFileError()}>
-				{(message) => <div class={styles.banner} role="alert">{message()}</div>}
+				{(message) => (
+					<div class={styles.banner} role="alert">
+						{message()}
+					</div>
+				)}
 			</Show>
 			<Show when={chat.gap()}>
 				{(gap) => (
@@ -138,7 +149,12 @@ export function MobileChatScreen() {
 				/>
 			</Transcript>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
-				<Composer chat={chat} mobileAttachments sharedFile={sharedFile()} onSharedFileConsumed={() => setSharedFile(null)} />
+				<Composer
+					chat={chat}
+					mobileAttachments
+					sharedFile={sharedFile()}
+					onSharedFileConsumed={() => setSharedFile(null)}
+				/>
 			</Show>
 		</section>
 	);
