@@ -1313,6 +1313,26 @@ hold payloads, sorted biggest first.
  "maps":[{"name":"grid.vt_log_buffers","entries":15,"bytes":94371840}, …]}
 ```
 
+### Session overload attribution (diagnostics)
+
+```
+GET /diagnostics/sessions
+```
+
+Answers "which session is hot right now" on demand — the same numbers the CPU
+watchdog's `CPU SPIKE`/`SESSION OVERLOAD` log lines report, without waiting for
+either to fire. A peek, not a drain: reading this never resets the counters the
+watchdog's own next tick relies on to compute a rate. Only sessions with at
+least one nonzero counter, or an outstanding grid frame, are listed.
+
+```json
+{"sessions":[
+  {"session_id":"...", "events_since_last_tick":42,
+   "output_bytes_since_last_tick":2048, "cumulative_ws_lag_since_last_tick":7,
+   "outstanding_grid_frames":0}
+]}
+```
+
 `accounted_bytes` far below the footprint is itself the finding: the growth is
 outside `AppState`. Available on every instance, `tuic-remote` included.
 

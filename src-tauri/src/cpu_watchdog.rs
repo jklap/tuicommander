@@ -42,6 +42,97 @@ const CONSECUTIVE_THRESHOLD: u32 = 2;
 const STARTUP_DELAY: Duration = Duration::from_secs(30);
 const COOLDOWN_BETWEEN_REPORTS: Duration = Duration::from_secs(60);
 
+/// Once a broadcast receiver has fallen this far behind, a per-connection
+/// consumer of a `tokio::sync::broadcast` channel should disconnect rather
+/// than keep looping and re-lagging indefinitely — see
+/// [`should_disconnect_for_lag`]. Shared by every such consumer (the two
+/// per-session WS handlers in `mcp_http/session.rs`, and the global-bus SSE
+/// handler in `mcp_http/sse_routes.rs`) so the threshold cannot drift between
+/// them the way three independent ad hoc constants would.
+///
+/// Also the threshold this watchdog uses on its own `top_sessions_by_ws_lag`
+/// attribution (see [`check_session_overload`]) — the same "this much lag is
+/// clearly abnormal" judgment applies whether it is a single connection
+/// deciding to disconnect or the watchdog deciding to name a session.
+///
+/// ~4x a single channel's capacity (256, `AppState::subscribe_pty_events`).
+pub(crate) const MAX_CUMULATIVE_LAG: u64 = 1000;
+/// Three `Lagged` in a row with no clean `Ok(event)` recv between them means
+/// the receiver isn't merely behind, it's stuck.
+pub(crate) const MAX_CONSECUTIVE_LAG: u32 = 3;
+
+/// Decide whether a broadcast receiver that just lagged should be disconnected
+/// rather than allowed to keep looping.
+///
+/// These are lifecycle/diff events with no cheap in-place resync — unlike the
+/// grid *frame* `watch` channel, which just re-sends the current full frame on
+/// a gap. Once a receiver is behind badly enough that it can't be trusted to
+/// reflect current reality, the correct move is the one the client already
+/// has to handle on any disconnect: close and reconnect, which re-fetches a
+/// fresh snapshot before re-subscribing. Without this, a lagging receiver logs
+/// a warning and loops forever — the exact shape of the `0b421c3a` incident,
+/// where per-session WS lag climbed from 419ms to 12.4s with no self-correction.
+///
+/// `consecutive` resets to 0 on any clean recv; `cumulative` never resets for
+/// the life of the connection — "is it stuck right now" vs. "how bad has this
+/// connection's history been."
+pub(crate) fn should_disconnect_for_lag(consecutive: u32, cumulative: u64) -> bool {
+    consecutive >= MAX_CONSECUTIVE_LAG || cumulative >= MAX_CUMULATIVE_LAG
+}
+
+/// Per-tick event count above which a single session is independently flagged
+/// as overloading the system, regardless of whether total process CPU ever
+/// crosses `CPU_THRESHOLD_PCT`. This is the gap the `cddded98` incident
+/// exposed: it drove sustained 100-200%+ process CPU for minutes via its own
+/// screen/lifecycle repaint churn, but nothing named it as the cause until a
+/// human manually correlated logs, `explain_state`, and `lsof` by hand.
+/// Tunable — chosen as "clearly more than routine agent chatter," not measured
+/// against production traffic.
+const SESSION_EVENT_RATE_THRESHOLD: u64 = 500;
+/// Per-tick output-byte count above which a single session is independently
+/// flagged. 4 MiB in one 5-10s tick is far above a normal interactive agent's
+/// output rate. Tunable, same caveat as `SESSION_EVENT_RATE_THRESHOLD`.
+const SESSION_OUTPUT_BYTES_THRESHOLD: u64 = 4 * 1024 * 1024;
+/// How many names `top_sessions_by_*` keeps — enough to see the top few
+/// offenders without the CPU SPIKE line growing unbounded as session count does.
+const TOP_N: usize = 5;
+/// Minimum gap between two `SESSION OVERLOAD` reports for the *same*
+/// `(session_id, axis)` pair — mirrors `COOLDOWN_BETWEEN_REPORTS`'s role for
+/// `CPU SPIKE`, for the identical reason: a session sustaining overload for
+/// several minutes (the `cddded98` incident's actual duration) would
+/// otherwise log one near-duplicate line every tick (5-10s) the whole time.
+/// Per-`(session, axis)` rather than global, so one loud session never
+/// silences a report about a different session or a different axis.
+const SESSION_OVERLOAD_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// FIXED (found in code review, 2026-09-29): `SESSION_EVENT_RATE_THRESHOLD`/
+/// `SESSION_OUTPUT_BYTES_THRESHOLD` are expressed as counts "per nominal
+/// `POLL_INTERVAL`" — but the tick length actually varies (`POLL_INTERVAL` 5s
+/// vs. `DIAGNOSTIC_POLL_INTERVAL` 10s once diagnostic mode is on, or a tick
+/// that simply ran long under load). Comparing a raw per-tick count straight
+/// against these constants made the same sustained per-second rate take twice
+/// as long to trip the trigger with diagnostic mode on — backwards from what
+/// someone enabling it to investigate a live problem would expect.
+/// `sessions_exceeding_thresholds` now normalizes each raw count to what it
+/// would have been at a nominal-length tick before comparing, using the
+/// tick's real elapsed wall-time (`run()` already computes this as
+/// `wall_gap`, right before the sleep/wake check — no new timer needed).
+/// Deliberately NOT applied to the `ws_lag` axis: lag isn't a steady
+/// per-second production rate the way events/bytes are — a bad connection can
+/// accumulate a large backlog in a fraction of a second, and that's exactly
+/// as bad regardless of how long the tick containing it happened to be.
+fn normalize_to_nominal_tick(raw: u64, elapsed: Duration) -> u64 {
+    let elapsed_secs = elapsed.as_secs_f64();
+    if elapsed_secs <= 0.0 {
+        // Never expected in practice (`run()` only calls this after a real
+        // `sleep(interval)`), but a raw count is a safe fallback over a
+        // division by zero.
+        return raw;
+    }
+    let nominal_secs = POLL_INTERVAL.as_secs_f64();
+    ((raw as f64) * nominal_secs / elapsed_secs).round() as u64
+}
+
 /// Footprint at which the memory report is logged for the first time.
 ///
 /// A healthy backend sits at a few hundred MB. 4 GB is an order of magnitude
@@ -274,16 +365,146 @@ fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
     }
 }
 
-fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
+/// One tick's worth of per-session counters, drained (read-and-reset) once
+/// per tick from `state.session_maps`. A single drain feeds both
+/// [`log_spike`] (when it fires this tick) and [`check_session_overload`]
+/// (which runs every tick) — draining twice in the same tick would make
+/// whichever ran second see zeros for numbers the first already consumed.
+struct SessionRates {
+    event_counts: Vec<(String, u64)>,
+    output_bytes: Vec<(String, u64)>,
+    ws_lag: Vec<(String, u64)>,
+}
+
+fn collect_session_rates(state: &Arc<AppState>) -> SessionRates {
+    SessionRates {
+        event_counts: crate::state::drain_counter_map(&state.session_maps.session_event_counts),
+        output_bytes: crate::state::drain_counter_map(&state.session_maps.session_output_bytes),
+        ws_lag: crate::state::drain_counter_map(&state.session_maps.session_ws_lag),
+    }
+}
+
+/// The `n` highest-count entries, highest first. Pure and separately
+/// unit-tested so the ranking logic doesn't need a live process to verify.
+fn top_n(counts: &[(String, u64)], n: usize) -> Vec<(String, u64)> {
+    let mut sorted = counts.to_vec();
+    sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
+    sorted.truncate(n);
+    sorted
+}
+
+/// One session's per-tick number crossed the hard threshold for `axis`.
+/// `axis` names which of the three counters tripped, for the log line.
+struct Overload {
+    session_id: String,
+    axis: &'static str,
+    value: u64,
+}
+
+/// Pure decision logic behind [`check_session_overload`], split out so the
+/// threshold behavior is unit-testable without a live process or a tracing
+/// subscriber to capture log output against. `elapsed` is the real wall-time
+/// this tick actually took (`run()`'s own `wall_gap`) — each raw count is
+/// normalized to what it would have been at a nominal-length tick before
+/// comparing, per `normalize_to_nominal_tick`'s doc comment. `ws_lag` is
+/// deliberately compared against its raw, un-normalized value — see the same
+/// doc comment for why.
+fn sessions_exceeding_thresholds(rates: &SessionRates, elapsed: Duration) -> Vec<Overload> {
+    let mut overloaded = Vec::new();
+    for (session_id, n) in &rates.event_counts {
+        let normalized = normalize_to_nominal_tick(*n, elapsed);
+        if normalized >= SESSION_EVENT_RATE_THRESHOLD {
+            overloaded.push(Overload {
+                session_id: session_id.clone(),
+                axis: "events_per_tick",
+                value: normalized,
+            });
+        }
+    }
+    for (session_id, n) in &rates.output_bytes {
+        let normalized = normalize_to_nominal_tick(*n, elapsed);
+        if normalized >= SESSION_OUTPUT_BYTES_THRESHOLD {
+            overloaded.push(Overload {
+                session_id: session_id.clone(),
+                axis: "output_bytes_per_tick",
+                value: normalized,
+            });
+        }
+    }
+    for (session_id, n) in &rates.ws_lag {
+        if *n >= MAX_CUMULATIVE_LAG {
+            overloaded.push(Overload {
+                session_id: session_id.clone(),
+                axis: "ws_lag_per_tick",
+                value: *n,
+            });
+        }
+    }
+    overloaded
+}
+
+/// Pure decision behind the cooldown, split out so it's unit-testable without
+/// a tracing subscriber to capture `check_session_overload`'s log output
+/// against. `None` (never reported) always reports.
+fn overload_cooldown_elapsed(now: Instant, last_reported: Option<Instant>) -> bool {
+    match last_reported {
+        None => true,
+        Some(last) => now.duration_since(last) >= SESSION_OVERLOAD_COOLDOWN,
+    }
+}
+
+/// Independent of the process-wide CPU-spike trigger: names a session whose
+/// own per-tick numbers crossed a hard threshold, even on a tick where total
+/// process CPU never crossed `CPU_THRESHOLD_PCT`. Runs every tick — see
+/// `run()` — because the `cddded98` incident's whole shape was several
+/// *individually* unremarkable-looking ticks whose combined effect was a
+/// sustained process-wide spike with no single tick naming the cause.
+///
+/// `last_reported`, owned by `run()`'s loop and threaded through by `&mut`,
+/// rate-limits repeats per `(session_id, axis)` pair to
+/// `SESSION_OVERLOAD_COOLDOWN` — without it, a session sustaining overload for
+/// the several-minute duration the motivating incident actually had would log
+/// one near-duplicate line every single tick for the whole time (a code
+/// review caught this asymmetry with `CPU SPIKE`'s own cooldown).
+fn check_session_overload(
+    rates: &SessionRates,
+    elapsed: Duration,
+    last_reported: &mut std::collections::HashMap<(String, &'static str), Instant>,
+) {
+    let now = Instant::now();
+    for o in sessions_exceeding_thresholds(rates, elapsed) {
+        let key = (o.session_id.clone(), o.axis);
+        if !overload_cooldown_elapsed(now, last_reported.get(&key).copied()) {
+            continue;
+        }
+        last_reported.insert(key, now);
+        tracing::warn!(
+            source = "diagnostics",
+            session_id = %o.session_id,
+            axis = o.axis,
+            value = o.value,
+            "SESSION OVERLOAD: {} crossed {} = {} in one tick",
+            o.session_id,
+            o.axis,
+            o.value,
+        );
+    }
+}
+
+fn log_spike(state: &Arc<AppState>, cpu_pct: f64, rates: &SessionRates) {
     let s = collect_snapshot(state, cpu_pct);
     let children = child_process_summary();
+    let top_events = top_n(&rates.event_counts, TOP_N);
+    let top_bytes = top_n(&rates.output_bytes, TOP_N);
+    let top_lag = top_n(&rates.ws_lag, TOP_N);
 
     tracing::warn!(
         source = "diagnostics",
         "CPU SPIKE {:.1}% | threads={} fds={} sessions={} \
          index_building={:?} sem_permits={} in_flight_stuck={:?} \
          bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={} \
-         state_lane={}\n  children: {}",
+         state_lane={} top_sessions_by_event_rate={:?} \
+         top_sessions_by_output_bytes={:?} top_sessions_by_ws_lag={:?}\n  children: {}",
         s.cpu_pct,
         s.threads,
         s.open_fds,
@@ -295,6 +516,9 @@ fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
         s.git_cache_ttl_fallbacks,
         s.head_emits_suppressed,
         s.state_lane_depth,
+        top_events,
+        top_bytes,
+        top_lag,
         children,
     );
 }
@@ -433,6 +657,10 @@ fn run(state: Arc<AppState>) {
     let mut last_spike_report = Instant::now() - COOLDOWN_BETWEEN_REPORTS;
     let mut last_periodic_report = Instant::now();
     let mut last_poll_wall = Instant::now();
+    // Per-`(session_id, axis)` cooldown for `SESSION OVERLOAD` — see
+    // `SESSION_OVERLOAD_COOLDOWN`'s doc comment.
+    let mut last_overload_reported: std::collections::HashMap<(String, &'static str), Instant> =
+        std::collections::HashMap::new();
 
     // Trend tracking for FD / thread growth
     let mut baseline_fds: Option<usize> = None;
@@ -489,13 +717,20 @@ fn run(state: Arc<AppState>) {
         let pct = current.cpu_pct_since(&prev);
         prev = current;
 
+        // --- Session overload attribution (always on) ---
+        // One drain per tick, shared with `log_spike` below when it fires this
+        // same tick — see `SessionRates`'s doc comment for why this must not
+        // drain twice.
+        let session_rates = collect_session_rates(&state);
+        check_session_overload(&session_rates, wall_gap, &mut last_overload_reported);
+
         // --- CPU spike detection (always on) ---
         if pct >= CPU_THRESHOLD_PCT {
             consecutive_high += 1;
             if consecutive_high >= CONSECUTIVE_THRESHOLD
                 && last_spike_report.elapsed() >= COOLDOWN_BETWEEN_REPORTS
             {
-                log_spike(&state, pct);
+                log_spike(&state, pct, &session_rates);
                 last_spike_report = Instant::now();
                 consecutive_high = 0;
             }
@@ -628,6 +863,234 @@ mod tests {
             collect_snapshot(&state, 0.0).state_lane_depth,
             3,
             "every queued event must be counted while it waits to be applied"
+        );
+    }
+
+    #[test]
+    fn a_receiver_within_bounds_is_not_disconnected() {
+        assert!(!should_disconnect_for_lag(0, 0));
+        assert!(!should_disconnect_for_lag(MAX_CONSECUTIVE_LAG - 1, 0));
+        assert!(!should_disconnect_for_lag(0, MAX_CUMULATIVE_LAG - 1));
+    }
+
+    #[test]
+    fn three_consecutive_lags_disconnect_even_with_small_cumulative_lag() {
+        // Three Lagged in a row with no clean recv between means the receiver
+        // is stuck right now, regardless of how small each individual gap was.
+        assert!(should_disconnect_for_lag(MAX_CONSECUTIVE_LAG, 3));
+    }
+
+    #[test]
+    fn cumulative_lag_past_the_cap_disconnects_even_with_a_low_consecutive_count() {
+        // This is the `0b421c3a` shape: never 3-in-a-row, but the total kept
+        // climbing (419ms -> 3.5s -> ... -> 12.4s) with clean recvs between —
+        // consecutive resets each time, so only cumulative catches it.
+        assert!(should_disconnect_for_lag(1, MAX_CUMULATIVE_LAG));
+    }
+
+    #[test]
+    fn top_n_sorts_descending_and_truncates() {
+        let counts = vec![
+            ("a".to_string(), 3),
+            ("b".to_string(), 10),
+            ("c".to_string(), 1),
+            ("d".to_string(), 7),
+        ];
+        assert_eq!(
+            top_n(&counts, 2),
+            vec![("b".to_string(), 10), ("d".to_string(), 7)]
+        );
+    }
+
+    #[test]
+    fn top_n_never_returns_more_than_asked() {
+        let counts = vec![("a".to_string(), 1), ("b".to_string(), 2)];
+        assert_eq!(
+            top_n(&counts, 5).len(),
+            2,
+            "asking for more than exists is not an error"
+        );
+    }
+
+    #[test]
+    fn a_session_under_every_threshold_is_not_flagged() {
+        let rates = SessionRates {
+            event_counts: vec![("s1".to_string(), SESSION_EVENT_RATE_THRESHOLD - 1)],
+            output_bytes: vec![("s1".to_string(), SESSION_OUTPUT_BYTES_THRESHOLD - 1)],
+            ws_lag: vec![("s1".to_string(), MAX_CUMULATIVE_LAG - 1)],
+        };
+        assert!(sessions_exceeding_thresholds(&rates, POLL_INTERVAL).is_empty());
+    }
+
+    #[test]
+    fn a_session_over_any_single_threshold_is_flagged_on_that_axis_only() {
+        let rates = SessionRates {
+            event_counts: vec![("hot".to_string(), SESSION_EVENT_RATE_THRESHOLD)],
+            output_bytes: vec![("quiet".to_string(), 10)],
+            ws_lag: vec![],
+        };
+        let flagged = sessions_exceeding_thresholds(&rates, POLL_INTERVAL);
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(flagged[0].session_id, "hot");
+        assert_eq!(flagged[0].axis, "events_per_tick");
+    }
+
+    #[test]
+    fn a_session_over_multiple_thresholds_is_flagged_once_per_axis() {
+        // This is the "one session is the whole incident" shape — it should
+        // be nameable on every axis it actually blew past, not just the first.
+        let rates = SessionRates {
+            event_counts: vec![("hot".to_string(), SESSION_EVENT_RATE_THRESHOLD)],
+            output_bytes: vec![("hot".to_string(), SESSION_OUTPUT_BYTES_THRESHOLD)],
+            ws_lag: vec![("hot".to_string(), MAX_CUMULATIVE_LAG)],
+        };
+        let flagged = sessions_exceeding_thresholds(&rates, POLL_INTERVAL);
+        assert_eq!(flagged.len(), 3);
+        assert!(flagged.iter().all(|o| o.session_id == "hot"));
+    }
+
+    #[test]
+    fn normalize_to_nominal_tick_is_a_no_op_at_the_nominal_interval() {
+        assert_eq!(normalize_to_nominal_tick(500, POLL_INTERVAL), 500);
+    }
+
+    #[test]
+    fn normalize_to_nominal_tick_scales_down_a_longer_tick() {
+        // Diagnostic mode's 10s tick is 2x POLL_INTERVAL (5s) — the same raw
+        // count over twice the time is half the rate, so it must normalize
+        // down to half, not pass through unchanged.
+        assert_eq!(
+            normalize_to_nominal_tick(500, DIAGNOSTIC_POLL_INTERVAL),
+            250
+        );
+    }
+
+    #[test]
+    fn normalize_to_nominal_tick_scales_up_a_shorter_tick() {
+        assert_eq!(normalize_to_nominal_tick(100, Duration::from_secs(1)), 500);
+    }
+
+    /// This is the exact bug a code review caught: without normalization, a
+    /// session sustaining the SAME per-second rate that would trip the
+    /// threshold at a normal 5s tick produces a raw count over
+    /// `DIAGNOSTIC_POLL_INTERVAL` (10s, 2x longer) that's twice as large —
+    /// and comparing that larger raw count straight against the same
+    /// constant would (before this fix) have made the threshold effectively
+    /// *harder* to hit per unit of real time while diagnostic mode is on,
+    /// silently desensitizing the detector at the exact moment someone
+    /// turned diagnostic mode on to look closer.
+    #[test]
+    fn a_rate_that_trips_the_threshold_at_a_normal_tick_still_trips_it_during_a_longer_diagnostic_tick()
+     {
+        // The same 100 events/sec rate that produces exactly the threshold
+        // (500) over a normal 5s tick produces DOUBLE that raw count (1000)
+        // over DIAGNOSTIC_POLL_INTERVAL's 10s — normalizing 1000 back down by
+        // (5s/10s) gives exactly 500 again, which must still trip.
+        let same_rate_raw_over_a_doubled_tick = SESSION_EVENT_RATE_THRESHOLD * 2;
+        let rates = SessionRates {
+            event_counts: vec![("hot".to_string(), same_rate_raw_over_a_doubled_tick)],
+            output_bytes: vec![],
+            ws_lag: vec![],
+        };
+        assert!(
+            sessions_exceeding_thresholds(&rates, DIAGNOSTIC_POLL_INTERVAL)
+                .iter()
+                .any(|o| o.session_id == "hot"),
+            "a sustained rate that would trip the threshold at a normal tick \
+             must still trip it during diagnostic mode's longer tick"
+        );
+    }
+
+    #[test]
+    fn ws_lag_axis_is_never_normalized_by_tick_length() {
+        // Lag isn't a steady per-second production rate — a backlog can build
+        // in a fraction of a second and is exactly as bad regardless of how
+        // long the tick containing it happened to be. A longer tick must NOT
+        // shrink an already-over-threshold lag value below the threshold.
+        let rates = SessionRates {
+            event_counts: vec![],
+            output_bytes: vec![],
+            ws_lag: vec![("hot".to_string(), MAX_CUMULATIVE_LAG)],
+        };
+        let flagged = sessions_exceeding_thresholds(&rates, DIAGNOSTIC_POLL_INTERVAL);
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(flagged[0].value, MAX_CUMULATIVE_LAG);
+    }
+
+    #[test]
+    fn overload_cooldown_reports_the_first_time_with_no_prior_entry() {
+        assert!(overload_cooldown_elapsed(Instant::now(), None));
+    }
+
+    #[test]
+    fn overload_cooldown_suppresses_a_report_within_the_window() {
+        let now = Instant::now();
+        assert!(!overload_cooldown_elapsed(now, Some(now)));
+    }
+
+    #[test]
+    fn overload_cooldown_reports_again_once_the_window_has_passed() {
+        let last = Instant::now();
+        let now = last + SESSION_OVERLOAD_COOLDOWN;
+        assert!(
+            overload_cooldown_elapsed(now, Some(last)),
+            "exactly at the boundary must report — the incident this exists for \
+             lasted several MINUTES, a one-tick-early re-report is harmless"
+        );
+    }
+
+    /// End-to-end proof (not just the pure decision fn) that a sustained
+    /// overload logs once, then stays silent for the cooldown window, rather
+    /// than once per tick for the incident's whole multi-minute duration —
+    /// the exact log-spam shape a code review caught missing entirely.
+    #[test]
+    fn check_session_overload_only_updates_last_reported_once_within_the_cooldown() {
+        let rates = SessionRates {
+            event_counts: vec![("hot".to_string(), SESSION_EVENT_RATE_THRESHOLD)],
+            output_bytes: vec![],
+            ws_lag: vec![],
+        };
+        let mut last_reported = std::collections::HashMap::new();
+        check_session_overload(&rates, POLL_INTERVAL, &mut last_reported);
+        let first_stamp = *last_reported
+            .get(&("hot".to_string(), "events_per_tick"))
+            .expect("first overload tick must record a timestamp");
+
+        // A second tick, still overloaded, immediately after — must NOT
+        // advance the stamp (proves the cooldown actually suppressed it,
+        // not merely that the map entry happens to exist).
+        check_session_overload(&rates, POLL_INTERVAL, &mut last_reported);
+        assert_eq!(
+            *last_reported
+                .get(&("hot".to_string(), "events_per_tick"))
+                .unwrap(),
+            first_stamp,
+            "a re-check within the cooldown window must not touch the timestamp"
+        );
+    }
+
+    /// The watchdog drains `session_event_counts` once per tick — draining it
+    /// a second time in the same tick (e.g. if a future change called
+    /// `collect_session_rates` from two places) would make whichever call ran
+    /// second see zeros for numbers the first already consumed. This pins the
+    /// read-and-reset contract `drain_counter_map` promises.
+    #[test]
+    fn collecting_session_rates_drains_the_underlying_counters() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_maps
+            .session_event_counts
+            .entry("s1".to_string())
+            .or_default()
+            .fetch_add(5, Ordering::Relaxed);
+
+        let first = collect_session_rates(&state);
+        assert_eq!(first.event_counts, vec![("s1".to_string(), 5)]);
+
+        let second = collect_session_rates(&state);
+        assert!(
+            second.event_counts.is_empty(),
+            "a second collection in the same tick must not double-count"
         );
     }
 }
