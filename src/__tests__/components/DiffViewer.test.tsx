@@ -1,5 +1,31 @@
 import { render } from "@solidjs/testing-library";
-import { describe, expect, it } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+
+// DiffView itself needs a real Canvas for text measurement (see the
+// "DiffViewer component" describe block's own note below) — mocked here,
+// keeping every other real export (DiffModeEnum, DiffFile via
+// @git-diff-view/core), so these tests exercise DiffViewer's OWN
+// `toModeEnum` mapping against a non-empty diff without needing Canvas.
+const diffViewCalls = vi.hoisted(() => [] as unknown[]);
+vi.mock("@git-diff-view/solid", async (importOriginal) => {
+	const { createEffect } = await import("solid-js");
+	const actual = await importOriginal<typeof import("@git-diff-view/solid")>();
+	return {
+		...actual,
+		DiffView: (props: { diffViewMode: number }) => {
+			// A Solid component function body runs once at mount — reading
+			// `props.diffViewMode` there would only ever capture the FIRST
+			// value. Wrap the read in an effect so it re-runs on every mode
+			// change, the same way the real DiffView's JSX binding would.
+			createEffect(() => {
+				diffViewCalls.push(props.diffViewMode);
+			});
+			return null;
+		},
+	};
+});
+
 import { classifyLine, DiffViewer, parseDiff, parseDiffFiles } from "../../components/ui/DiffViewer";
 
 describe("parseDiff", () => {
@@ -137,5 +163,47 @@ describe("DiffViewer component", () => {
 		const empty = container.querySelector(".diff-empty");
 		expect(empty).not.toBeNull();
 		expect(empty!.textContent).toBe("Unable to render this diff");
+	});
+});
+
+describe("DiffViewer mode mapping", () => {
+	const DIFF = "diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new";
+
+	it("maps mode='split' to the library's Split enum", async () => {
+		diffViewCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} mode="split" />);
+		await Promise.resolve();
+		expect(diffViewCalls.length).toBeGreaterThan(0);
+		const { DiffModeEnum } = await import("@git-diff-view/solid");
+		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Split);
+	});
+
+	it("maps mode='unified' to the library's Unified enum", async () => {
+		diffViewCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} mode="unified" />);
+		await Promise.resolve();
+		const { DiffModeEnum } = await import("@git-diff-view/solid");
+		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Unified);
+	});
+
+	it("an omitted mode falls back to Split, not Unified — `toModeEnum` only special-cases the string 'unified'", async () => {
+		diffViewCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} />);
+		await Promise.resolve();
+		const { DiffModeEnum } = await import("@git-diff-view/solid");
+		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Split);
+	});
+
+	it("re-renders with the new mode when the mode prop changes (split <-> unified switching)", async () => {
+		const { DiffModeEnum } = await import("@git-diff-view/solid");
+		const [mode, setMode] = createSignal<"split" | "unified">("split");
+		diffViewCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} mode={mode()} />);
+		await Promise.resolve();
+		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Split);
+
+		setMode("unified");
+		await Promise.resolve();
+		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Unified);
 	});
 });

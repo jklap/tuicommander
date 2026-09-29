@@ -91,6 +91,7 @@
 - [Error Classification](./backend/error-classification.md)
 - [Git Operations](./backend/git.md)
   - [Native Worktree Recycling Measurement](./evidence/worktree-recycling-1705-native.md)
+- [Session Diff Review](./backend/session-review.md)
 - [GitHub Integration](./backend/github.md)
 - [Workflow Trigger Admission](./backend/workflow-trigger-admission.md)
 - [Workflow HTTP Connectors](./backend/workflow-http-connectors.md)
