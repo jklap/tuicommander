@@ -58,7 +58,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	const chat = createAcpChat(viewed, () => props.visible);
 	// Toasts keep clear of this panel's rendered width (see ToastContainer).
 	let panelEl!: HTMLDivElement;
-	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelWidth(width))));
+	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
 	const keyDown = (event: KeyboardEvent) => {
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
