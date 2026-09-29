@@ -3,6 +3,13 @@ import { testInScope, testInScopeAsync } from "../helpers/store";
 
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 const mockSetBadgeCount = vi.fn().mockResolvedValue(undefined);
+const nativeSend = vi.fn();
+
+vi.mock("@tauri-apps/plugin-notification", () => ({
+	isPermissionGranted: vi.fn().mockResolvedValue(true),
+	requestPermission: vi.fn().mockResolvedValue("granted"),
+	sendNotification: nativeSend,
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
@@ -62,6 +69,7 @@ describe("notificationsStore", () => {
 		vi.resetModules();
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 		mockSetBadgeCount.mockReset().mockResolvedValue(undefined);
+		nativeSend.mockReset();
 		localStorage.clear();
 
 		vi.doMock("@tauri-apps/api/core", () => ({
@@ -398,6 +406,29 @@ describe("notificationsStore", () => {
 	});
 
 	describe("playQuestion()", () => {
+		it("sends a native notification naming the terminal while the window is unfocused", async () => {
+			vi.stubGlobal("__TAURI_INTERNALS__", {});
+			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+			const oldNotification = window.Notification;
+			vi.stubGlobal("Notification", { permission: "denied" });
+			vi.doMock("../../stores/terminals", () => ({
+				terminalsStore: { get: () => ({ name: "Deploy Agent" }) },
+			}));
+			try {
+				await store.playQuestion("term-1");
+				await vi.waitFor(() =>
+					expect(nativeSend).toHaveBeenCalledWith({
+						title: "Agent needs input",
+						body: "Deploy Agent",
+					}),
+				);
+			} finally {
+				focus.mockRestore();
+				vi.stubGlobal("Notification", oldNotification);
+				vi.unstubAllGlobals();
+			}
+		});
+
 		it("plays question sound via play()", async () => {
 			await store.playQuestion();
 			expect(mockManager.play).toHaveBeenCalledWith("question");

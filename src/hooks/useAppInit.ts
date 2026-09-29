@@ -2,6 +2,7 @@ import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { editorTabsStore } from "../stores/editorTabs";
@@ -245,7 +246,8 @@ function assignSessionToRepoBranch(
 	// Which repo the user would have to register to fix this. Without it the
 	// warning named only the symptom.
 	const unregisteredRoot = unregisteredRepoRootFor(cwd);
-	const registeredRoot = unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
+	const registeredRoot =
+		unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
 	if (registeredRoot) {
 		// A just-created sibling worktree can arrive before the repo's worktree
 		// list does. Refresh the registered repo and move this parked tab home
@@ -394,6 +396,11 @@ export async function initApp(deps: AppInitDeps) {
 			},
 		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
+	if (isTauri()) {
+		void listenForNativeNoticeClicks()
+			.then((unlisten) => window.addEventListener("beforeunload", unlisten, { once: true }))
+			.catch((err) => appLogger.error("app", "Failed to register native notification click listener", err));
+	}
 
 	// Recover log entries from Rust backend (survives webview reloads)
 	appLogger.hydrateFromRust().catch(() => {});
