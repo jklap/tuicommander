@@ -21752,9 +21752,12 @@ mod tests {
             .find(|row| row.session_id == sid)
             .unwrap();
         assert_eq!(row.tuic_session.as_deref(), Some(sid));
-        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
         let prompt =
             wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         let output = handle_session(
             &state,
             &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
@@ -21907,9 +21910,12 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
         let prompt =
             wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         handle_session(
             &state,
             &serde_json::json!({"action":"kill", "session_id":sid}),
