@@ -13,8 +13,87 @@ pub(crate) enum NativeNoticeTarget {
     },
 }
 
-/// The Tauri plugin sends desktop notices but drops notify-rust's response
-/// handle. On macOS retain that handle so a click can open the exact target.
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::{ffi::CString, os::raw::c_char, sync::OnceLock};
+
+    use tauri::{Emitter, Manager};
+
+    use super::NativeNoticeTarget;
+
+    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+    static APPLICATION_ID: OnceLock<Result<(), String>> = OnceLock::new();
+
+    unsafe extern "C" {
+        fn tuic_send_native_notification(
+            title: *const c_char,
+            body: *const c_char,
+            target: *const c_char,
+        );
+    }
+
+    pub(super) fn send(
+        app: tauri::AppHandle,
+        title: String,
+        body: String,
+        target: NativeNoticeTarget,
+    ) -> Result<(), String> {
+        APPLICATION_ID
+            .get_or_init(|| {
+                let identifier = if tauri::is_dev() {
+                    "com.apple.Terminal"
+                } else {
+                    &app.config().identifier
+                };
+                match mac_notification_sys::set_application(identifier) {
+                    Ok(())
+                    | Err(mac_notification_sys::error::Error::Application(
+                        mac_notification_sys::error::ApplicationError::AlreadySet(_),
+                    )) => Ok(()),
+                    Err(error) => Err(error.to_string()),
+                }
+            })
+            .clone()?;
+
+        let title = CString::new(title).map_err(|error| error.to_string())?;
+        let body = CString::new(body).map_err(|error| error.to_string())?;
+        let target =
+            CString::new(serde_json::to_string(&target).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        APP.get_or_init(|| app);
+        // The Objective-C bridge copies all strings and queues delivery on AppKit's
+        // main thread. No thread waits for a Notification Center interaction.
+        unsafe { tuic_send_native_notification(title.as_ptr(), body.as_ptr(), target.as_ptr()) };
+        Ok(())
+    }
+
+    /// NSUserNotificationCenter calls this on the main run loop when an alert is clicked.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn tuic_native_notice_clicked(target: *const c_char) {
+        let _ = std::panic::catch_unwind(|| {
+            if target.is_null() {
+                return;
+            }
+            let Some(app) = APP.get() else {
+                return;
+            };
+            let Ok(json) = (unsafe { std::ffi::CStr::from_ptr(target) }).to_str() else {
+                return;
+            };
+            let Ok(target) = serde_json::from_str::<NativeNoticeTarget>(json) else {
+                return;
+            };
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            let _ = app.emit("native-notification-click", target);
+        });
+    }
+}
+
+/// Send a click-aware macOS notification. Other desktop platforms use the
+/// Tauri notification plugin directly from the frontend.
 #[tauri::command]
 pub(crate) async fn show_native_notification(
     app: tauri::AppHandle,
@@ -24,45 +103,7 @@ pub(crate) async fn show_native_notification(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        use tauri::{Emitter, Manager};
-
-        let identifier = app.config().identifier.clone();
-        let handle = tauri::async_runtime::spawn_blocking(move || {
-            notify_rust::set_application(if tauri::is_dev() {
-                "com.apple.Terminal"
-            } else {
-                &identifier
-            })
-            .map_err(|error| error.to_string())?;
-            notify_rust::Notification::new()
-                .summary(&title)
-                .body(&body)
-                .show()
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Err(error) =
-                handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
-                    if !matches!(response, notify_rust::NotificationResponse::Default) {
-                        return;
-                    }
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    let _ = app.emit("native-notification-click", target);
-                })
-            {
-                tracing::warn!(
-                    source = "native_notification",
-                    "Native notification failed: {error}"
-                );
-            }
-        });
-        Ok(())
+        macos::send(app, title, body, target)
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Native desktop alerts** — Agent questions and Progress outcomes send system notifications while TUICommander is unfocused, with a short duplicate suppression window. Clicking one on macOS returns to its terminal or Progress project.
+- **Native desktop alerts** — Agent questions and Progress outcomes send system notifications while TUICommander is unfocused, with a short duplicate suppression window. Clicking one on macOS returns to its terminal or Progress project. The macOS sender accepts repeated requests without holding a backend thread per unanswered alert.
 - **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
 - **Queued Codex confirmation** — A stop hook can delay the Working screen for several seconds. Queued submissions now wait long enough for that confirmation before showing an uncertain-delivery error.
 
