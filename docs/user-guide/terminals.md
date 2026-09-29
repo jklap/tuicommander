@@ -305,6 +305,8 @@ The Compose panel can leave work for an agent without steering its current turn:
 
 Queueing is available only for detected agent sessions, not plain shells.
 
+After a queued command reaches Codex, TUICommander allows several seconds for a stop hook to finish before deciding whether the agent accepted it. If no Working screen appears, check the transcript and composer before pressing Enter again; TUICommander will not replay an uncertain command automatically.
+
 ### Submitting through MCP
 
 Automation that must start a new managed-agent turn uses one

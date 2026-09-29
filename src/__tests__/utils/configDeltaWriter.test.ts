@@ -7,6 +7,13 @@ vi.mock("../../invoke", () => ({ invoke: (...args: unknown[]) => mockInvoke(...a
 describe("configDeltaWriter", () => {
 	beforeEach(() => mockInvoke.mockReset().mockResolvedValue(undefined));
 
+	it("rejects a save before the configuration has loaded", async () => {
+		const writer = createConfigDeltaWriter<{ enabled: boolean }>("save_ui_prefs");
+
+		await expect(writer.save({ enabled: true })).rejects.toThrow("refused before config load");
+		expect(mockInvoke).not.toHaveBeenCalled();
+	});
+
 	it("sends the loaded snapshot as base and advances it after a successful save", async () => {
 		const writer = createConfigDeltaWriter<{ left: number; right: number }>("save_ui_prefs");
 		const loaded = { left: 1, right: 2 };
