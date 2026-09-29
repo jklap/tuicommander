@@ -779,6 +779,19 @@ export const GitHubTab: Component = () => {
 					/>
 				</ExpertSetting>
 
+				<ExpertSetting
+					configKey="repo_defaults.orphan_cleanup_countdown_seconds"
+					value={repoDefaultsStore.state.orphanCleanupCountdownSeconds}
+				>
+					<SettingSelect
+						label="Safe orphan cleanup countdown"
+						value={String(repoDefaultsStore.state.orphanCleanupCountdownSeconds)}
+						onChange={(v) => repoDefaultsStore.setOrphanCleanupCountdownSeconds(Number(v))}
+						options={[5, 10, 20, 30].map((seconds) => ({ value: String(seconds), label: `${seconds} seconds` }))}
+						hint="Automatically remove clean orphaned worktrees after this countdown"
+					/>
+				</ExpertSetting>
+
 				<SettingSelect
 					label="PR Merge Strategy"
 					value={repoDefaultsStore.state.prMergeStrategy}

@@ -749,7 +749,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	load_config: { map: () => ({ method: "GET", path: "/config" }) },
 	save_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
 	load_app_config: { map: () => ({ method: "GET", path: "/config" }) },
-	save_app_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
+	save_app_config: {
+		map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }),
+	},
 	hash_password: {
 		map: (args) => ({
 			method: "POST",
@@ -1546,11 +1548,27 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	detect_orphan_worktrees: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-worktrees?repoPath=${p("repoPath")}` }),
 	},
+	assess_orphan_cleanup: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup-assessment?repoPath=${p("repoPath")}` }),
+	},
+	begin_orphan_cleanup: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/orphan-cleanup/begin",
+			body: { repoPath: args.repoPath, paths: args.paths },
+		}),
+	},
+	pending_orphan_cleanup_answer: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup/pending?repoPath=${p("repoPath")}` }),
+	},
+	clear_orphan_cleanup: {
+		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath } }),
+	},
 	remove_orphan_worktree: {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/remove-orphan",
-			body: { repoPath: args.repoPath, worktreePath: args.worktreePath },
+			body: { repoPath: args.repoPath, worktreePath: args.worktreePath, safeOnly: args.safeOnly ?? false },
 		}),
 	},
 	run_setup_script: {
@@ -1918,7 +1936,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Notes ---
 	load_notes: { map: () => ({ method: "GET", path: "/config/notes" }) },
-	save_notes: { map: (args) => ({ method: "PUT", path: "/config/notes", body: { base: args.base, config: args.config } }) },
+	save_notes: {
+		map: (args) => ({ method: "PUT", path: "/config/notes", body: { base: args.base, config: args.config } }),
+	},
 
 	// --- Recent commits ---
 	get_recent_commits: {
@@ -1934,7 +1954,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
 	save_remote_connection: {
-		map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: { base: args.base, connection: args.connection } }),
+		map: (args) => ({
+			method: "PUT",
+			path: "/config/remote-connections",
+			body: { base: args.base, connection: args.connection },
+		}),
 	},
 	delete_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),

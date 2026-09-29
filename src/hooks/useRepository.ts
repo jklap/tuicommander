@@ -422,9 +422,27 @@ export function useRepository() {
 		}
 	}
 
+	async function assessOrphanCleanup(
+		repoPath: string,
+	): Promise<Array<{ path: string; safe: boolean; reason?: string }>> {
+		return await invoke("assess_orphan_cleanup", { repoPath });
+	}
+
+	async function beginOrphanCleanup(repoPath: string, paths: string[]): Promise<void> {
+		await invoke("begin_orphan_cleanup", { repoPath, paths });
+	}
+
+	async function pendingOrphanCleanupAnswer(repoPath: string): Promise<boolean | null> {
+		return await invoke<boolean | null>("pending_orphan_cleanup_answer", { repoPath });
+	}
+
+	async function clearOrphanCleanup(repoPath: string): Promise<void> {
+		await invoke("clear_orphan_cleanup", { repoPath });
+	}
+
 	/** Remove a detached-HEAD worktree by path (no branch to look up). */
-	async function removeOrphanWorktree(repoPath: string, worktreePath: string): Promise<void> {
-		await invoke("remove_orphan_worktree", { repoPath, worktreePath });
+	async function removeOrphanWorktree(repoPath: string, worktreePath: string, safeOnly = false): Promise<void> {
+		await invoke("remove_orphan_worktree", { repoPath, worktreePath, safeOnly });
 	}
 
 	/** Merge a PR via GitHub REST API. merge_method: "merge" | "squash" | "rebase" */
@@ -487,6 +505,10 @@ export function useRepository() {
 		getRepoDiffStats,
 		checkoutRemoteBranch,
 		detectOrphanWorktrees,
+		assessOrphanCleanup,
+		beginOrphanCleanup,
+		pendingOrphanCleanupAnswer,
+		clearOrphanCleanup,
 		removeOrphanWorktree,
 		mergePrViaGithub,
 		listLocalBranches,

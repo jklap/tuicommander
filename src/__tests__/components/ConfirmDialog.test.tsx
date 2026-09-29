@@ -76,4 +76,54 @@ describe("ConfirmDialog", () => {
 		));
 		expect(queryByText("Don't Save")).toBeNull();
 	});
+
+	it("shows a removal countdown and confirms only when it expires", () => {
+		vi.useFakeTimers();
+		try {
+			const onConfirm = vi.fn();
+			const onClose = vi.fn();
+			const { getByText } = render(() => (
+				<ConfirmDialog
+					{...baseProps}
+					confirmLabel="Remove"
+					autoConfirmMs={10_000}
+					onConfirm={onConfirm}
+					onClose={onClose}
+				/>
+			));
+			expect(getByText("Remove (10)")).toBeTruthy();
+			vi.advanceTimersByTime(9_000);
+			expect(getByText("Remove (1)")).toBeTruthy();
+			expect(onConfirm).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1_000);
+			expect(onConfirm).toHaveBeenCalledTimes(1);
+			expect(onClose).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("Keep cancels a pending auto-confirm", () => {
+		vi.useFakeTimers();
+		try {
+			const onConfirm = vi.fn();
+			const onClose = vi.fn();
+			const { getByText } = render(() => (
+				<ConfirmDialog
+					{...baseProps}
+					autoConfirmMs={10_000}
+					cancelLabel="Keep"
+					onConfirm={onConfirm}
+					onClose={onClose}
+				/>
+			));
+			expect(getByText("OK (10)")).toBeTruthy();
+			fireEvent.click(getByText("Keep"));
+			vi.advanceTimersByTime(10_000);
+			expect(onClose).toHaveBeenCalledTimes(1);
+			expect(onConfirm).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

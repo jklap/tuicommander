@@ -1136,7 +1136,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list";
+const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1277,15 +1277,16 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list" },
+                "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
                 "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove and branch_delete; optional for worktree_create)" },
+                "decision": { "type": "string", "description": "action=orphan_cleanup_answer: remove or keep the pending orphan cleanup for path" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
                 "input": { "type": "object", "description": "Typed action payload for progress_list. Defaults to 10 entries; follow nextCursor until null. Unknown fields are rejected.", "properties": {
@@ -3702,6 +3703,32 @@ async fn handle_worktree(
                 Err(e) => serde_json::json!({
                     "error": format!("worktree removal task failed to complete: {e}")
                 }),
+            }
+        }
+        "orphan_cleanup_answer" => {
+            let path = match require_path(args, "orphan_cleanup_answer") {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let remove = match args["decision"].as_str() {
+                Some("remove") => true,
+                Some("keep") => false,
+                _ => return serde_json::json!({"error": "decision must be remove or keep"}),
+            };
+            let state = state.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::worktree::answer_orphan_cleanup_internal(&state, &path, remove)
+            })
+            .await
+            {
+                Ok(Ok(())) => serde_json::json!({"ok": true}),
+                Ok(Err(error)) => serde_json::json!({"error": error}),
+                Err(error) => {
+                    serde_json::json!({"error": format!("orphan cleanup answer task failed: {error}")})
+                }
             }
         }
         "branch_delete" => {
@@ -7231,7 +7258,11 @@ async fn handle_repo(
     match action {
         "list" | "active" => handle_repo_listing(state, args),
         "status" => handle_github(state, args).await,
-        "worktree_list" | "worktree_lifecycle" | "worktree_create" | "worktree_remove"
+        "worktree_list"
+        | "worktree_lifecycle"
+        | "worktree_create"
+        | "worktree_remove"
+        | "orphan_cleanup_answer"
         | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
         "progress_list" => {
             let path = match require_path(args, action) {
