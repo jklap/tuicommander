@@ -1,17 +1,22 @@
 .bar {
   display: flex;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 0 12px;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
   flex-shrink: 0;
+}
+
+.bar::-webkit-scrollbar {
+  display: none;
 }
 
 .key {
   flex-shrink: 0;
-  height: 32px;
+  height: 44px;
   min-width: 44px;
   padding: 0 10px;
   border-radius: var(--radius-md);
