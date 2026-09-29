@@ -500,7 +500,7 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`.
 - [ ] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing.
 - [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak. _(NOT VERIFIED 2026-09-29: 'still speak' requires hearing audio output; listing part is browser-checkable)_
-- [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language".
+- [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language". _(NOT VERIFIED 2026-09-29: partial: ?language=xx -> error naming xx; ?language=it with no bundle -> []; picker UI and bundle-present listing not checked)_
 - Note: an isolated `TUIC_APP_INSTANCE` debug instance binds no TCP port while remote access is off; reach it with `curl --unix-socket <tuic-mcp-*.sock>` (the path is in its log).
 
 ## Side panels follow an agent click to another repo (2026-09-24) — frontend, HMR
@@ -2088,7 +2088,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   empty for a full minute means that nudge did not land. Same stub check against
   `tuic-remote` (headless): the HTTP server must bind immediately instead of waiting on
   `gh`, and `GET /repo/issues` must answer once the probe lands.
-- [ ] Rust change, needs a `make dev` restart (story #642-3741). `mod dictation_routes`
+- [ ] Rust change, needs a `make dev` restart (story #642-3741). `mod dictation_routes` _(NOT VERIFIED 2026-09-29: partial: /dictation/status, /models, /devices, /config, /system/relay-status and /system/check-update?channel=nightly answer JSON (unix-socket router); browser dictation record/inject and output device need a microphone/speaker)_
   was never declared, so 12 handlers never compiled, and 7 more COMMAND_TABLE paths hit
   no route at all. Against the restarted build: `curl :9876/dictation/status` and
   `/dictation/models`, `/dictation/devices`, `/dictation/config`, `/system/relay-status`
@@ -2270,7 +2270,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   check `curl http://127.0.0.1:<port>/claude/usage` answers instead of 404/500.
   Desktop behaviour must be unchanged — the same endpoint on :9876 still works.
 
-- [ ] **Frontend liveness watchdog + WebView reload escape hatch** — **Rust +
+- [ ] **Frontend liveness watchdog + WebView reload escape hatch** — **Rust + _(NOT VERIFIED 2026-09-29: partial: /logs?source=diagnostics has no 'Frontend unresponsive' on a healthy start; POST /debug/reload_webview -> {ok:true, action:navigate} and both PTY sessions remain. Note: it navigated the desktop window to http://127.0.0.1:1421/ (Vite dev URL), so repaint, the 40 s block and sleep cases were not observed)_
   frontend change, needs a `make dev` restart.**
   (1) **Quiet when healthy:** after the restart, `curl
   'localhost:9876/logs?source=diagnostics'` must NOT contain `Frontend
