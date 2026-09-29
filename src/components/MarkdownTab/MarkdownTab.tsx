@@ -540,7 +540,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 			const noun = count === 1 ? "comment" : "comments";
 			const outcome = await pty.enqueueCommand(
 				sessionId,
-				`Open ${path}, apply the ${count} embedded tweak review ${noun}, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+				`Open ${path}, re-read the whole file: apply the ${count} embedded tweak review ${noun}, treat every other change since your last write (checkbox toggles, edited text) as the user's answer, remove each resolved tweak marker, and leave unrelated files unchanged.`,
 			);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
