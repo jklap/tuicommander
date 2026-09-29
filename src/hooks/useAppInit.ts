@@ -245,7 +245,8 @@ function assignSessionToRepoBranch(
 	// Which repo the user would have to register to fix this. Without it the
 	// warning named only the symptom.
 	const unregisteredRoot = unregisteredRepoRootFor(cwd);
-	const registeredRoot = unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
+	const registeredRoot =
+		unregisteredRoot && repositoriesStore.getPaths().find((path) => sameDir(path, unregisteredRoot));
 	if (registeredRoot) {
 		// A just-created sibling worktree can arrive before the repo's worktree
 		// list does. Refresh the registered repo and move this parked tab home

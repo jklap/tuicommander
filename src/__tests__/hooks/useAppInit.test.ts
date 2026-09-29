@@ -647,12 +647,12 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
-			expect(bySession("sess-context")).toMatchObject({
-				agentIntent: "Answering a question",
-				lastPrompt: "what is the role",
-				lastActivityAt: 1_234_567,
-			});
-			expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null, lastActivityAt: null });
+		expect(bySession("sess-context")).toMatchObject({
+			agentIntent: "Answering a question",
+			lastPrompt: "what is the role",
+			lastActivityAt: 1_234_567,
+		});
+		expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null, lastActivityAt: null });
 	});
 
 	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {

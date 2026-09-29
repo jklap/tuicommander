@@ -6,7 +6,10 @@ export interface AttachmentReceipt {
 	size: number;
 }
 
-export async function uploadAttachment(file: File, target: { kind: "pty"; id: string } | { kind: "acp"; id: string }): Promise<AttachmentReceipt> {
+export async function uploadAttachment(
+	file: File,
+	target: { kind: "pty"; id: string } | { kind: "acp"; id: string },
+): Promise<AttachmentReceipt> {
 	const connection = target.kind === "pty" ? getSessionConnection(target.id) : undefined;
 	const baseUrl = connection ? getRemoteBaseUrl(connection) : undefined;
 	if (connection && !baseUrl) throw new Error("Remote session is not connected");
@@ -19,13 +22,22 @@ export async function uploadAttachment(file: File, target: { kind: "pty"; id: st
 	});
 	if (!response.ok) {
 		const body: unknown = await response.json().catch(() => null);
-		const reason = typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
-			? body.error : `Attachment upload failed (${response.status})`;
+		const reason =
+			typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+				? body.error
+				: `Attachment upload failed (${response.status})`;
 		throw new Error(reason);
 	}
 	const receipt: unknown = await response.json();
-	if (typeof receipt !== "object" || receipt === null || !("path" in receipt) || typeof receipt.path !== "string" ||
-		!("size" in receipt) || typeof receipt.size !== "number" || !Number.isSafeInteger(receipt.size)) {
+	if (
+		typeof receipt !== "object" ||
+		receipt === null ||
+		!("path" in receipt) ||
+		typeof receipt.path !== "string" ||
+		!("size" in receipt) ||
+		typeof receipt.size !== "number" ||
+		!Number.isSafeInteger(receipt.size)
+	) {
 		throw new Error("Attachment server returned an invalid receipt");
 	}
 	return { path: receipt.path, size: receipt.size };

@@ -735,7 +735,8 @@ describe("tweakComments parser/serializer", () => {
 
 		// Catches: removing the final legacy marker leaves stale convention text in the file.
 		it("removes the legacy header when its last comment is deleted", () => {
-			const source = legacyHeader + "Hello <!--tweak:begin:c_1-->world<!--tweak:end:c_1 @2026-09-27T12:00:00.000Z\nnote-->";
+			const source =
+				legacyHeader + "Hello <!--tweak:begin:c_1-->world<!--tweak:end:c_1 @2026-09-27T12:00:00.000Z\nnote-->";
 			expect(removeTweakComment(source, "c_1")).toBe("Hello world");
 		});
 

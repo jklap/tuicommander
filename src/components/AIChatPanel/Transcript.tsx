@@ -298,7 +298,14 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<div class={s.messageList} ref={container} aria-label="Chat transcript" tabIndex={0} onKeyDown={onKeyDown} onScroll={onScroll}>
+		<div
+			class={s.messageList}
+			ref={container}
+			aria-label="Chat transcript"
+			tabIndex={0}
+			onKeyDown={onKeyDown}
+			onScroll={onScroll}
+		>
 			<Show when={finding()}>
 				<div class={s.findBar}>
 					<input

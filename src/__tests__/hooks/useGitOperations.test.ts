@@ -1809,7 +1809,10 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/active", "main", { worktreePath: "/active" });
 			repositoriesStore.setActive("/parked");
 			repositoriesStore.setPark("/parked", true);
-			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/active" }), merged_branches: [] });
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/active" }),
+				merged_branches: [],
+			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 
 			await gitOps.refreshAllBranchStats();
@@ -3653,9 +3656,7 @@ describe("useGitOperations", () => {
 				getDefaultFontSize: () => 14,
 				getMaxTabNameLength: () => 25,
 			});
-			mockRepo.detectOrphanWorktrees
-				.mockResolvedValueOnce(["/wt/kept"])
-				.mockResolvedValueOnce(["/wt/kept", "/wt/new"]);
+			mockRepo.detectOrphanWorktrees.mockResolvedValueOnce(["/wt/kept"]).mockResolvedValueOnce(["/wt/kept", "/wt/new"]);
 
 			await askGitOps.refreshAllBranchStats();
 			await askGitOps.refreshAllBranchStats();

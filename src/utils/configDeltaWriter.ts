@@ -17,7 +17,10 @@ export function createConfigDeltaWriter<T>(command: string, field: "config" | "l
 				base = desired;
 			};
 			const operation = tail ? tail.then(write) : write();
-			const settled = operation.then(() => undefined, () => undefined);
+			const settled = operation.then(
+				() => undefined,
+				() => undefined,
+			);
 			tail = settled;
 			void settled.then(() => {
 				if (tail === settled) tail = null;

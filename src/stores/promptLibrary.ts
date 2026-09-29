@@ -3,8 +3,8 @@ import { createStore, reconcile } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { SMART_PROMPTS_BUILTIN } from "../data/smartPromptsBuiltIn";
 import { invoke } from "../invoke";
-import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { isTauri } from "../transport";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 /** Prompt category */
@@ -70,7 +70,9 @@ interface PromptLibraryState {
 
 const LEGACY_STORAGE_KEY = "tui-commander-prompt-library";
 const MAX_RECENT = 10;
-const promptWriter = createConfigDeltaWriter<{ prompts: Array<{ id: string; label: string; text: string; pinned: boolean }> }>("save_prompt_library");
+const promptWriter = createConfigDeltaWriter<{
+	prompts: Array<{ id: string; label: string; text: string; pinned: boolean }>;
+}>("save_prompt_library");
 
 /** Generate a unique ID */
 function generateId(): string {
@@ -88,9 +90,9 @@ function savePrompts(prompts: Record<string, SavedPrompt>): void {
 			text: JSON.stringify(p),
 			pinned: p.isFavorite,
 		}));
-		promptWriter.save({ prompts: promptArray }).catch((err) =>
-			appLogger[isTauri() ? "error" : "debug"]("store", "Failed to save prompt library", err),
-		);
+		promptWriter
+			.save({ prompts: promptArray })
+			.catch((err) => appLogger[isTauri() ? "error" : "debug"]("store", "Failed to save prompt library", err));
 	}, 500);
 }
 
@@ -119,7 +121,9 @@ function createPromptLibraryStore() {
 							text: JSON.stringify(p),
 							pinned: p.isFavorite,
 						}));
-						const current = await invoke<{ prompts: Array<{ id: string; label: string; text: string; pinned: boolean }> }>("load_prompt_library");
+						const current = await invoke<{
+							prompts: Array<{ id: string; label: string; text: string; pinned: boolean }>;
+						}>("load_prompt_library");
 						promptWriter.loaded(current ?? { prompts: [] });
 						await promptWriter.save({ prompts: promptArray });
 						localStorage.removeItem(LEGACY_STORAGE_KEY);

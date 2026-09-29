@@ -31,7 +31,12 @@ export interface ScrollbarThumb {
 	top: number;
 }
 
-export function scrollbarThumb({ trackH, visibleRows, historySize, displayOffset }: ScrollbarThumbInput): ScrollbarThumb {
+export function scrollbarThumb({
+	trackH,
+	visibleRows,
+	historySize,
+	displayOffset,
+}: ScrollbarThumbInput): ScrollbarThumb {
 	const ratio = Math.min(1, visibleRows / (historySize + visibleRows));
 	const height = Math.min(trackH, Math.max(MIN_THUMB_PX, trackH * ratio));
 	const range = trackH - height;

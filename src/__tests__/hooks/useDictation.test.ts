@@ -237,9 +237,7 @@ describe("useDictation", () => {
 
 			// The text still lands — it is the part that was transcribed.
 			expect(mockPty.write).toHaveBeenCalledWith("sess-trunc", "tail of a long recording");
-			expect(mockSetStatusInfo).toHaveBeenCalledWith(
-				"Dictation: 42s of audio were lost before transcription",
-			);
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Dictation: 42s of audio were lost before transcription");
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith("Ready");
 		});
 

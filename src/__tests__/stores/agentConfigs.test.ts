@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 // Import the store once (it's a singleton)
-import { agentConfigsStore as store, createAgentConfigsStore } from "../../stores/agentConfigs";
+import { createAgentConfigsStore, agentConfigsStore as store } from "../../stores/agentConfigs";
 import { testInScopeAsync } from "../helpers/store";
 
 const configWithClaude = (): AgentsConfig => ({
@@ -38,7 +38,8 @@ describe("agentConfigsStore", () => {
 
 	describe("hydrate()", () => {
 		it("reports a failed load and permits a later successful retry", async () => {
-			const load = vi.fn()
+			const load = vi
+				.fn()
 				.mockRejectedValueOnce(new Error("RPC load_agents_config failed: 404"))
 				.mockResolvedValueOnce(configWithClaude());
 			const machine = createAgentConfigsStore({ load, save: vi.fn() });
@@ -53,7 +54,8 @@ describe("agentConfigsStore", () => {
 		});
 
 		it("keeps the last good config when a refresh fails", async () => {
-			const load = vi.fn()
+			const load = vi
+				.fn()
 				.mockResolvedValueOnce(configWithClaude())
 				.mockRejectedValueOnce(new Error("connection lost"));
 			const machine = createAgentConfigsStore({ load, save: vi.fn() });

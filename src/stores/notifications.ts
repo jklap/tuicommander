@@ -72,9 +72,7 @@ function copyDefaults(): NotificationConfig {
 
 /** Persist config to Rust backend (fire-and-forget) */
 function saveConfig(config: NotificationConfig): void {
-	notificationWriter.save(config).catch((err) =>
-		appLogger.debug("config", "Failed to save notification config", err),
-	);
+	notificationWriter.save(config).catch((err) => appLogger.debug("config", "Failed to save notification config", err));
 }
 
 /** Notifications store state */

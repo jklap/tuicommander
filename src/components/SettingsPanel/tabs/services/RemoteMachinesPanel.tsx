@@ -568,8 +568,12 @@ export const RemoteMachinesPanel: Component = () => {
 										<Show when={connState.outOfDate}>
 											<span style={{ "font-size": "11px", color: "var(--attention)" }}>Remote out of date</span>
 										</Show>
-										<Show when={connState.outOfDate && connState.liveSessions !== undefined && connState.liveSessions > 0}>
-											<span style={{ "font-size": "11px", color: "var(--attention)" }}>{connState.liveSessions} live sessions. Update available.</span>
+										<Show
+											when={connState.outOfDate && connState.liveSessions !== undefined && connState.liveSessions > 0}
+										>
+											<span style={{ "font-size": "11px", color: "var(--attention)" }}>
+												{connState.liveSessions} live sessions. Update available.
+											</span>
 										</Show>
 									</div>
 									<div

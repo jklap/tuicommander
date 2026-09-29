@@ -151,7 +151,8 @@ describe("repoDefaultsStore", () => {
 		it("save includes full config with all fields", () => {
 			testInScope(() => {
 				store.setBaseBranch("develop");
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", {
+					base: expect.anything(),
 					config: {
 						base_branch: "develop",
 						copy_ignored_files: false,

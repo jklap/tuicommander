@@ -137,9 +137,12 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	createEffect(() => {
 		if (!sessionState()?.awaiting_input) setCodexQuestionOpen(false);
 	});
-	const codexQuestionWaiting = () => sessionState()?.agent_type === "codex"
-		&& sessionState()?.awaiting_input && sessionState()?.question_confident
-		&& !sessionState()?.choice_prompt && props.sessionExists;
+	const codexQuestionWaiting = () =>
+		sessionState()?.agent_type === "codex" &&
+		sessionState()?.awaiting_input &&
+		sessionState()?.question_confident &&
+		!sessionState()?.choice_prompt &&
+		props.sessionExists;
 
 	async function openCodexQuestion() {
 		if (openingQuestion()) return;
@@ -251,8 +254,23 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					</Show>
 				</button>
 				<Show when={codexQuestionWaiting()}>
-					<button type="button" class={styles.headerAction} onClick={openCodexQuestion} disabled={openingQuestion()} aria-label="Open Codex question" title="Open Codex question">
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+					<button
+						type="button"
+						class={styles.headerAction}
+						onClick={openCodexQuestion}
+						disabled={openingQuestion()}
+						aria-label="Open Codex question"
+						title="Open Codex question"
+					>
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							aria-hidden="true"
+						>
 							<circle cx="12" cy="12" r="9" />
 							<path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" />
 							<circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none" />

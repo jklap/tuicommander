@@ -655,7 +655,13 @@ describe("transport", () => {
 				["speak_reply", { text: "Fatto.", turn: 3 }, "POST", "/dictation/speech/speak", { text: "Fatto.", turn: 3 }],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
-				["set_dictation_config", { base: { enabled: false }, config: { enabled: true } }, "PUT", "/dictation/config", { base: { enabled: false }, config: { enabled: true } }],
+				[
+					"set_dictation_config",
+					{ base: { enabled: false }, config: { enabled: true } },
+					"PUT",
+					"/dictation/config",
+					{ base: { enabled: false }, config: { enabled: true } },
+				],
 				// The body is camelCase on both transports: the Rust request type
 				// renames its fields to match, so one store works unchanged.
 				[

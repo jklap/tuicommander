@@ -45,6 +45,8 @@ describe("mobile terminal states", () => {
 	});
 
 	it("keeps a question visible above working and completed signals", () => {
-		expect(card({ agent_state: "completed", shell_state: "busy", awaiting_input: true }).textContent).toContain("Input");
+		expect(card({ agent_state: "completed", shell_state: "busy", awaiting_input: true }).textContent).toContain(
+			"Input",
+		);
 	});
 });

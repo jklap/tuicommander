@@ -118,10 +118,18 @@ describe("dictationStore", () => {
 		addToast.mockClear();
 		// Rust always returns required fields plus defaults for old documents.
 		mockInvoke.mockImplementation((command: string) =>
-			Promise.resolve(command === "get_dictation_config" ? {
-				enabled: false, hotkey: "F5", language: "auto", model: "large-v3-turbo", device: null,
-				rms_threshold: 0.001,
-			} : undefined),
+			Promise.resolve(
+				command === "get_dictation_config"
+					? {
+							enabled: false,
+							hotkey: "F5",
+							language: "auto",
+							model: "large-v3-turbo",
+							device: null,
+							rms_threshold: 0.001,
+						}
+					: undefined,
+			),
 		);
 		store = (await import("../../stores/dictation")).dictationStore;
 	});
@@ -874,7 +882,7 @@ describe("dictationStore", () => {
 		/** Field names declared by `DictationConfig` in the Rust source. */
 		function rustConfigFields(): string[] {
 			const source = readFileSync(join(process.cwd(), "src-tauri/src/config.rs"), "utf8");
-			const struct = source.match(/pub struct DictationConfig \{([\s\S]*?)\n    \}/);
+			const struct = source.match(/pub struct DictationConfig \{([\s\S]*?)\n {4}\}/);
 			if (!struct) throw new Error("DictationConfig not found in config.rs");
 			const fields = [...struct[1].matchAll(/^\s*pub ([a-z0-9_]+):/gm)].map((match) => match[1]);
 			if (fields.length === 0) throw new Error("DictationConfig parsed to zero fields");
@@ -1450,7 +1458,7 @@ describe("dictationStore", () => {
 					store.setHandsFreeEarcons(false);
 					await vi.waitFor(() => expect(store.state.handsFreeEarcons).toBe(false));
 					expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
-					base: expect.anything(),
+						base: expect.anything(),
 						config: expect.objectContaining({ hands_free_earcons: false }),
 					});
 					store.setHandsFreeEarcons(true);

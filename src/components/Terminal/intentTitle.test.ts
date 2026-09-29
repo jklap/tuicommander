@@ -58,15 +58,41 @@ describe("spawn name precedence", () => {
 		});
 
 		it("an intent title still refines a spawn name", () => {
-			const id = terminalsStore.add({ sessionId: null, fontSize: 14, name: "call-map", cwd: null, awaitingInput: null, nameFromSpawn: true });
-			handleIntentEvent({ terminalId: id, text: "Mapping calls", title: "Call mapping", globalEnabled: true, perAgentEnabled: true });
+			const id = terminalsStore.add({
+				sessionId: null,
+				fontSize: 14,
+				name: "call-map",
+				cwd: null,
+				awaitingInput: null,
+				nameFromSpawn: true,
+			});
+			handleIntentEvent({
+				terminalId: id,
+				text: "Mapping calls",
+				title: "Call mapping",
+				globalEnabled: true,
+				perAgentEnabled: true,
+			});
 			expect(terminalsStore.get(id)?.name).toBe("Call mapping");
 		});
 
 		it("a user rename still replaces a spawn name, and then outranks the intent title", () => {
-			const id = terminalsStore.add({ sessionId: null, fontSize: 14, name: "call-map", cwd: null, awaitingInput: null, nameFromSpawn: true });
+			const id = terminalsStore.add({
+				sessionId: null,
+				fontSize: 14,
+				name: "call-map",
+				cwd: null,
+				awaitingInput: null,
+				nameFromSpawn: true,
+			});
 			terminalsStore.update(id, { name: "mine", nameIsCustom: true });
-			handleIntentEvent({ terminalId: id, text: "Mapping calls", title: "Call mapping", globalEnabled: true, perAgentEnabled: true });
+			handleIntentEvent({
+				terminalId: id,
+				text: "Mapping calls",
+				title: "Call mapping",
+				globalEnabled: true,
+				perAgentEnabled: true,
+			});
 			expect(terminalsStore.get(id)?.name).toBe("mine");
 		});
 	});

@@ -27,7 +27,18 @@ export const CODEX_ENTER_GAP_MS = 200;
 
 // Keep in step with Rust's injection_enter_gap: an unrecognized type must use
 // the Codex-safe default until its input semantics are known.
-const SHORT_ENTER_GAP_AGENTS = new Set(["claude", "gemini", "opencode", "aider", "amp", "cursor", "goose", "grok", "droid", "pi"]);
+const SHORT_ENTER_GAP_AGENTS = new Set([
+	"claude",
+	"gemini",
+	"opencode",
+	"aider",
+	"amp",
+	"cursor",
+	"goose",
+	"grok",
+	"droid",
+	"pi",
+]);
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

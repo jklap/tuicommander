@@ -1,4 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
+import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
@@ -6,7 +7,6 @@ import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { getAgentCommands } from "../config/agentCommands";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
-import { uploadAttachment } from "../../services/uploadAttachment";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
 import { SlashMenuOverlay } from "./SlashMenuOverlay";
@@ -42,8 +42,8 @@ export function CommandInput(props: CommandInputProps) {
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const [localSlashMenuOpen, setLocalSlashMenuOpen] = createSignal(false);
 	let slashDraft = "";
-	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt
-		&& !props.codexQuestionOpen && !codexNotesMode();
+	const atomicReply = () =>
+		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
 	createEffect(() => {
 		if (!props.choicePrompt) setChoiceSending(false);
 	});
@@ -357,7 +357,13 @@ export function CommandInput(props: CommandInputProps) {
 
 	return (
 		<div class={styles.form} style={{ position: "relative" }}>
-			<Show when={uploading()}>{(name) => <div class={styles.uploading} role="status">Uploading {name()}…</div>}</Show>
+			<Show when={uploading()}>
+				{(name) => (
+					<div class={styles.uploading} role="status">
+						Uploading {name()}…
+					</div>
+				)}
+			</Show>
 			<Show when={showChoicePrompt()}>
 				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
 			</Show>
@@ -384,12 +390,35 @@ export function CommandInput(props: CommandInputProps) {
 				rows={1}
 				disabled={props.sessionExists === false}
 			/>
-			<input ref={fileInput} type="file" accept="image/*,application/pdf,text/*" aria-label="Choose attachment" hidden onChange={(event) => {
-				const file = event.currentTarget.files?.[0];
-				if (file) void attachFile(file);
-			}} />
-			<button class={styles.attach} type="button" aria-label="Attach file" disabled={!!uploading() || props.sessionExists === false || atomicReply()} onClick={() => fileInput?.click()}>
-				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" /></svg>
+			<input
+				ref={fileInput}
+				type="file"
+				accept="image/*,application/pdf,text/*"
+				aria-label="Choose attachment"
+				hidden
+				onChange={(event) => {
+					const file = event.currentTarget.files?.[0];
+					if (file) void attachFile(file);
+				}}
+			/>
+			<button
+				class={styles.attach}
+				type="button"
+				aria-label="Attach file"
+				disabled={!!uploading() || props.sessionExists === false || atomicReply()}
+				onClick={() => fileInput?.click()}
+			>
+				<svg
+					width="20"
+					height="20"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					aria-hidden="true"
+				>
+					<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
+				</svg>
 			</button>
 			<button
 				class={styles.send}
