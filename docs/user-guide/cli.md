@@ -142,11 +142,13 @@ that invocation.
 Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
 once while the command runs in a separate process group. The command's stdout
 and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
-When it finishes, `tuic` requests one `BG DONE exit=<code> log=<log> cmd=…`
+When it finishes, `tuic` requests a `BG DONE exit=<code> log=<log> cmd=…`
 wake for the originating session. If that session is busy, the wake is queued
-until it becomes idle. `<log>.wake` records the request outcome as JSON:
-`{"status":"queued"}`, `{"status":"mailed","queue_error":"…"}`, or
-`{"status":"failed","error":"…"}`. A queue lookup or request failure falls
+until it becomes idle. Temporary queue failures (including EAGAIN, connection
+refusal, and HTTP 5xx) retry with increasing pauses for at most five minutes.
+Each attempt first tries the queue, then MCP mail. `<log>.wake` records the
+final outcome as JSON with `session_id` and `attempts`, plus `status` (`queued`,
+`mailed`, or `failed`) and the applicable error. A queue lookup or request failure falls
 back to MCP agent mail addressed to the same `TUIC_SESSION`; that mail includes
 the `BG DONE` text and the queue error. `queued` means the queue took the
 request, not that the agent later submitted it. `mailed` means the mail was
@@ -163,6 +165,11 @@ and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`
 for command completion and `.wake` for both queue and mail failures. Both
 errors are also appended to the log. Neither status file can start a new agent
 turn while TUICommander is unavailable.
+
+The instance config directory also holds `bg-wakes/<TUIC_SESSION>.json`. It is
+marked `retrying` while a background command is active or its wake is being
+retried, then records the final result. Automatic managed-child idle closure
+reads this record and keeps a child open after a failed wake.
 
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)

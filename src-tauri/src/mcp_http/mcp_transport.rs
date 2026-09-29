@@ -314,7 +314,7 @@ fn pending_parent_id(mcp_session_id: &str) -> String {
 }
 
 /// A placeholder is a routing key, not a session: never publish it as a parent.
-pub(super) fn is_pending_parent(parent: &str) -> bool {
+pub(crate) fn is_pending_parent(parent: &str) -> bool {
     parent.starts_with(PENDING_PARENT_PREFIX)
 }
 

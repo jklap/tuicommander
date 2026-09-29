@@ -33,6 +33,10 @@
 
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. The current live backend has not loaded this Rust change.
 
+## Background command wake retry (story 1233-4738) — CLI rebuild required
+
+- [ ] After rebuilding the `tuic` sidecar and restarting `make dev` in an isolated instance, run a disposable `tuic bg` job while its queue temporarily refuses a wake. Confirm the same job eventually sends one `BG DONE`, and its `.wake` file names the caller session and the number of attempts. A failed final wake must keep the managed child open.
+
 ## AI Chat prompt parking (story 1228-becb)
 
 - [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.

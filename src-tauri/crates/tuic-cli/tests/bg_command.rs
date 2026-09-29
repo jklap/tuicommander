@@ -26,6 +26,12 @@ fn socket_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
+fn bg_command(log: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuic"));
+    command.env("TUIC_BG_WAKE_DIR", format!("{}.markers", log.display()));
+    command
+}
+
 fn read_request(stream: &mut std::os::unix::net::UnixStream) -> (String, serde_json::Value) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut line = String::new();
@@ -100,7 +106,7 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         .output()
         .unwrap();
     let start = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -161,6 +167,69 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
 }
 
 #[test]
+fn bg_retries_transient_wake_failures_and_records_session_and_attempts() {
+    let log = test_path("retry.log");
+    let socket = socket_path("retry.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let first = read_request(&mut stream);
+        let unavailable = r#"{"error":"temporarily unavailable"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{unavailable}",
+            unavailable.len()
+        )
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let initialize = read_request(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{unavailable}",
+            unavailable.len()
+        )
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let retry = read_request(&mut stream);
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let queue = read_request(&mut stream);
+        reply(&mut stream, r#"{"typed":false,"queued":1}"#);
+        (first, initialize, retry, queue)
+    });
+    let output = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    wait_for(&wake_file);
+    let wake: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
+    assert_eq!(wake["status"], "queued");
+    assert_eq!(wake["session_id"], "caller-1");
+    assert_eq!(wake["attempts"], 2);
+    let marker = std::path::PathBuf::from(format!("{}.markers/caller-1.json", log.display()));
+    let latest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+    assert_eq!(latest, wake);
+    let (first, initialize, retry, queue) = server.join().unwrap();
+    assert_eq!(first.0, "GET /sessions HTTP/1.1");
+    assert_eq!(initialize.0, "POST /mcp HTTP/1.1");
+    assert_eq!(retry.0, "GET /sessions HTTP/1.1");
+    assert_eq!(queue.0, "POST /sessions/pty-1/queue HTTP/1.1");
+    std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
+    std::fs::remove_file(wake_file).unwrap();
+    std::fs::remove_file(log).unwrap();
+    std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
 fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
     let log = test_path("unbound.log");
     let socket = socket_path("unbound.sock");
@@ -192,7 +261,7 @@ fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
         reply(&mut stream, &response.to_string());
         (lookup, initialize, mail)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -254,7 +323,7 @@ fn bg_does_not_call_inbox_only_mail_a_wake() {
         reply(&mut stream, &response.to_string());
         (lookup, initialize, mail)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 3"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -308,7 +377,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
         .unwrap();
         (first, second)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 7"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -334,10 +403,10 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
 }
 
 #[test]
-fn bg_records_wake_failure_when_tuic_is_unavailable() {
+fn bg_retries_a_missing_socket_until_tuic_returns() {
     let log = test_path("tuic-down.log");
     let missing_socket = socket_path("tuic-down.sock");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 9"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &missing_socket)
@@ -346,27 +415,49 @@ fn bg_records_wake_failure_when_tuic_is_unavailable() {
     assert!(output.status.success());
     let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
     let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    let marker = std::path::PathBuf::from(format!("{}.markers/caller-1.json", log.display()));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while serde_json::from_slice::<serde_json::Value>(&std::fs::read(&marker).unwrap_or_default())
+        .ok()
+        .and_then(|record| record["attempts"].as_u64())
+        .unwrap_or(0)
+        == 0
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let retrying: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(retrying["status"], "retrying");
+    let listener = UnixListener::bind(&missing_socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        reply(&mut stream, r#"{"typed":false,"queued":1}"#);
+    });
     wait_for(&wake_file);
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "9");
     let wake_status: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
-    assert_eq!(wake_status["status"], "failed");
-    assert!(
-        wake_status["error"]
-            .as_str()
-            .unwrap()
-            .contains("Cannot connect")
-    );
+    assert_eq!(wake_status["status"], "queued");
+    assert_eq!(wake_status["session_id"], "caller-1");
+    assert!(wake_status["attempts"].as_u64().unwrap() >= 2);
+    server.join().unwrap();
     std::fs::remove_file(exit_file).unwrap();
     std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
+    std::fs::remove_file(missing_socket).unwrap();
 }
 
 #[test]
 fn bg_refuses_to_start_without_a_managed_session() {
     let log = test_path("missing.log");
     let marker = test_path("missing.marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -402,7 +493,7 @@ fn bg_creates_missing_log_directories_and_wakes_caller() {
         reply(&mut stream, r#"{"typed":false,"queued":1}"#);
         (first, second)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo five"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -428,7 +519,7 @@ fn bg_refuses_an_uncreatable_log_before_running_command() {
     let marker = test_path("blocked-marker");
     std::fs::write(&parent_file, "not a directory").unwrap();
     let log = parent_file.join("job.log");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -459,6 +550,21 @@ fn bg_command_survives_killing_its_launchers_process_group() {
 
     let log = test_path("group.log");
     let marker = test_path("group.marker");
+    let socket = socket_path("group.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        reply(&mut stream, "[]");
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let body = r#"{"error":"mail unavailable"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
     let mut shell = Command::new("sh");
     shell.args([
         "-c",
@@ -470,7 +576,8 @@ fn bg_command_survives_killing_its_launchers_process_group() {
     ]);
     shell
         .env("TUIC_SESSION", "caller-1")
-        .env("TUIC_SOCKET", socket_path("absent.sock"))
+        .env("TUIC_SOCKET", &socket)
+        .env("TUIC_BG_WAKE_DIR", format!("{}.markers", log.display()))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
@@ -495,7 +602,10 @@ fn bg_command_survives_killing_its_launchers_process_group() {
         marker.exists(),
         "detached command died with the launcher group"
     );
+    wait_for(&std::path::PathBuf::from(format!("{}.wake", log.display())));
+    server.join().unwrap();
     std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(marker).unwrap();
+    std::fs::remove_file(socket).unwrap();
 }

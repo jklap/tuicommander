@@ -92,7 +92,13 @@ fn observation(
     runner_commands: &[String],
 ) -> Option<(Observation, u64)> {
     if !state.session_maps.sessions.contains_key(session_id)
-        || !state.session_maps.session_parent.contains_key(session_id)
+        || !state
+            .session_maps
+            .session_parent
+            .get(session_id)
+            .is_some_and(|parent| {
+                !crate::mcp_http::mcp_transport::is_pending_parent(parent.value())
+            })
         || state.keep_open_sessions.contains(session_id)
         || live_bg_runner_for_session(runner_commands, session_id)
         || bg_wake_blocks_close(session_id)
@@ -344,10 +350,15 @@ mod tests {
         std::fs::write(&marker, "committed work").unwrap();
         live_child(&state, "managed-child", worktree.clone());
         live_child(&state, "manual-session", worktree);
+        live_child(&state, "pending-parent", temp.path().to_path_buf());
         state
             .session_maps
             .session_parent
             .insert("managed-child".into(), "parent".into());
+        state
+            .session_maps
+            .session_parent
+            .insert("pending-parent".into(), "pending-mcp:unbound".into());
         state.peer_agents.insert(
             "managed-child".into(),
             crate::state::PeerAgent {
@@ -365,6 +376,7 @@ mod tests {
         sweep_with_commands(&state, &mut tracker, 900_000, &[]);
         assert!(!state.session_maps.sessions.contains_key("managed-child"));
         assert!(state.session_maps.sessions.contains_key("manual-session"));
+        assert!(state.session_maps.sessions.contains_key("pending-parent"));
         assert_eq!(std::fs::read_to_string(marker).unwrap(), "committed work");
         let notices = state.agent_inbox.get("parent").unwrap();
         let notice: serde_json::Value =
@@ -373,6 +385,7 @@ mod tests {
         assert_eq!(notice["name"], "worker");
         drop(notices);
         crate::mcp_http::mcp_transport::close_idle_managed_session(&state, "manual-session");
+        crate::mcp_http::mcp_transport::close_idle_managed_session(&state, "pending-parent");
     }
 
     #[cfg(unix)]
