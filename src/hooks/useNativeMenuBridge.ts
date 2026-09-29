@@ -4,11 +4,9 @@ import { setLastMenuActionTime } from "../menuDedup";
 import { togglePanel } from "../panelRouter";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
-import { diffTabsStore } from "../stores/diffTabs";
 import { errorLogStore } from "../stores/errorLog";
 import { mcpPopupStore } from "../stores/mcpPopup";
 import { promptLibraryStore } from "../stores/promptLibrary";
-import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
@@ -176,14 +174,9 @@ export function dispatchNativeMenuAction(action: string, options: NativeMenuBrid
 		case "git-operations":
 			togglePanel("git");
 			break;
-		case "diff-scroll": {
-			const repoPath = repositoriesStore.state.activeRepoPath;
-			if (repoPath) {
-				uiStore.setDiffViewMode("scroll");
-				diffTabsStore.add(repoPath, "", "M");
-			}
+		case "diff-scroll":
+			shortcutHandlers.toggleDiffScroll();
 			break;
-		}
 		case "branches":
 			uiStore.isDetached("git") ? togglePanel("git") : uiStore.toggleGitPanelOnTab("branches");
 			break;
