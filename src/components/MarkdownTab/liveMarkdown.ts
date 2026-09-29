@@ -198,6 +198,8 @@ export function tweakHiddenRanges(state: EditorState): Range[] {
  * comment behind.
  *  - An edit that covers all the highlighted text of a comment grows to remove
  *    the whole comment, markers and body included.
+ *  - A bare delete of a hidden marker (Backspace/Delete beside a comment) deletes the
+ *    adjacent highlighted character instead.
  *  - Any other edit is trimmed so it never cuts into marker syntax, which is
  *    hidden and cannot be edited by hand. Standalone comments (block, item,
  *    convention header) are removed only when an edit covers them entirely.
@@ -216,6 +218,14 @@ export function protectTweakEdits(
 			);
 			out.push({ from: inside ? inside.from : from, to: inside ? inside.from : to, insert: edit.insert });
 			continue;
+		}
+		// Backspace/Delete beside a comment targets its hidden marker; act on the nearest highlighted char instead.
+		if (!edit.insert) {
+			for (const s of spans) {
+				if (s.highlight.to === s.highlight.from) continue;
+				if (from === s.end.from && to === s.end.to) [from, to] = [s.highlight.to - 1, s.highlight.to];
+				else if (from === s.begin.from && to === s.begin.to) [from, to] = [s.highlight.from, s.highlight.from + 1];
+			}
 		}
 		for (let grown = true; grown; ) {
 			grown = false;

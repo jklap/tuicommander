@@ -194,20 +194,29 @@ describe("tweak markers are atomic", () => {
 		expect(v.state.selection.main.head).toBe(begin);
 	});
 
-	it("Backspace right after the end marker cannot leave an orphan begin", () => {
-		// catches: orphan marker after deletion
+	it("Backspace right after the end marker deletes the last highlighted char and keeps the pair", () => {
+		// catches: Backspace after a comment doing nothing, or orphaning a marker
 		const end = DOC.indexOf(" b");
 		const v = viewOf(DOC, end);
 		deleteCharBackward(v);
 		assertBalanced(text(v.state));
-		expect(text(v.state)).toBe(DOC);
+		expect(parseInlineTweakComments(text(v.state))[0].highlighted).toBe("wor");
 	});
 
-	it("Delete right before the begin marker cannot leave an orphan end", () => {
-		// catches: orphan marker after forward delete
+	it("Delete right before the begin marker deletes the first highlighted char and keeps the pair", () => {
+		// catches: Delete before a comment doing nothing, or orphaning a marker
 		const v = viewOf(DOC, begin);
 		deleteCharForward(v);
 		assertBalanced(text(v.state));
+		expect(parseInlineTweakComments(text(v.state))[0].highlighted).toBe("ord");
+	});
+
+	it("Backspace after a one-character comment removes the whole pair", () => {
+		// catches: empty highlight pair left behind
+		const doc = `a ${inline("c1", "w", "n")} b`;
+		const v = viewOf(doc, doc.indexOf(" b"));
+		deleteCharBackward(v);
+		expect(text(v.state)).toBe("a  b");
 	});
 
 	it("selecting all the highlighted text and deleting removes the whole pair", () => {

@@ -713,7 +713,15 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					</div>
 				}
 			>
-				<LiveMarkdownEditor content={content()} onSave={writeTweakedSource} onDirtyChange={setLiveDirty} />
+				<LiveMarkdownEditor
+					content={content()}
+					onSave={writeTweakedSource}
+					readDisk={() => {
+						const ft = props.tab as FileTab;
+						return readFileContent(ft.fsRoot || ft.repoPath, ft.filePath);
+					}}
+					onDirtyChange={setLiveDirty}
+				/>
 			</Show>
 
 			{/* Mount CommentOverlay ONLY for the active file tab — otherwise every
