@@ -11529,8 +11529,7 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let session_id = spawned["session_id"].as_str().unwrap();
-        let actual =
-            wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await;
+        let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await;
         assert_eq!(
             actual,
             format!("/caller|{session_id}|parent-peer|caller|present|2")
@@ -11668,8 +11667,7 @@ mod tests {
             .arg(&command)
             .spawn()
             .unwrap();
-        let content =
-            wait_for_file_content_async(&output, std::time::Duration::from_secs(2)).await;
+        let content = wait_for_file_content_async(&output, std::time::Duration::from_secs(2)).await;
         assert_eq!(
             content, "ready",
             "must wait past the truncate-then-delayed-write window, not read the empty file"
@@ -22059,7 +22057,10 @@ mod tests {
             None,
         );
         if task.is_empty() {
-            panic!("managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}", std::fs::read_to_string(&observed_keys));
+            panic!(
+                "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
+                std::fs::read_to_string(&observed_keys)
+            );
         }
         assert!(
             task.contains("say READY"),
