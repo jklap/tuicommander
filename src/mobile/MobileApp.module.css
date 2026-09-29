@@ -18,6 +18,8 @@
   color-scheme: dark;
 }
 
+:global(html[data-theme="vscode-light"]) .shell { color-scheme: light; }
+
 .content {
   flex: 1;
   min-height: 0;

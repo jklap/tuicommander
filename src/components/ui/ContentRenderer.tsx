@@ -46,6 +46,8 @@ export interface ContentRendererProps {
 	onCheckboxToggle?: (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) => void;
 	/** Absolute directory path of the source file, used to resolve relative image src attributes */
 	baseDir?: string;
+	/** Browser URL for a relative image, when local asset URLs are unavailable. */
+	imageSrc?: (relativePath: string) => string;
 	/** Ref callback to expose the rendered content container for search */
 	contentRef?: (el: HTMLDivElement) => void;
 	/** Override the root font size in pixels (children use em, so everything scales). */
@@ -292,7 +294,10 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
  * At offset 0 — the whole-document path — every step below is exactly what it
  * has always been.
  */
-function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOffset: number }): string {
+function renderMarkdownSegment(
+	source: string,
+	opts: { baseDir?: string; imageSrc?: (path: string) => string; lineOffset: number },
+): string {
 	const raw = stripAnsiOutsideCodeBlocks(source);
 	try {
 		// 1. Convert [~] to [ ] so marked renders them as standard GFM task-list items.
@@ -314,10 +319,11 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 
 		// 4. Rewrite relative image src attributes to loadable asset:// URLs.
 		const baseDir = opts.baseDir;
-		if (baseDir) {
+		if (baseDir || opts.imageSrc) {
 			html = html.replace(
 				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
-				(_, prefix, relativePath) => `${prefix}${convertFileSrc(`${baseDir}/${relativePath}`)}"`,
+				(_, prefix, relativePath) =>
+					`${prefix}${opts.imageSrc ? opts.imageSrc(relativePath) : convertFileSrc(`${baseDir}/${relativePath}`)}"`,
 			);
 		}
 
@@ -394,7 +400,9 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	// Whole-document path: one parse of everything, exactly as before.
 	const processedContent = createMemo(() =>
-		props.incremental ? "" : renderMarkdownSegment(props.content ?? "", { baseDir: props.baseDir, lineOffset: 0 }),
+		props.incremental
+			? ""
+			: renderMarkdownSegment(props.content ?? "", { baseDir: props.baseDir, imageSrc: props.imageSrc, lineOffset: 0 }),
 	);
 
 	/**
@@ -409,6 +417,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let renderedHtml: string[] = [];
 	let renderedFor: MarkdownSegment[] = [];
 	let renderedBaseDir: string | undefined;
+	let renderedImageSrc: ContentRendererProps["imageSrc"];
 	const incrementalContent = createMemo(() => {
 		if (!props.incremental) return { committed: [] as string[], tail: "" };
 		split = splitStream(props.content ?? "", split);
@@ -417,8 +426,9 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		// Segment identity is not the whole cache key: `baseDir` rewrites image
 		// src values, so cached HTML from another directory points at the wrong
 		// files.
-		if (props.baseDir !== renderedBaseDir) {
+		if (props.baseDir !== renderedBaseDir || props.imageSrc !== renderedImageSrc) {
 			renderedBaseDir = props.baseDir;
+			renderedImageSrc = props.imageSrc;
 			renderedHtml = [];
 			renderedFor = [];
 		} else if (n > committed.length || (n > 0 && committed[n - 1] !== renderedFor[n - 1])) {
@@ -427,13 +437,21 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		}
 		for (let i = renderedFor.length; i < committed.length; i++) {
 			renderedHtml.push(
-				renderMarkdownSegment(committed[i].text, { baseDir: props.baseDir, lineOffset: committed[i].lineOffset }),
+				renderMarkdownSegment(committed[i].text, {
+					baseDir: props.baseDir,
+					imageSrc: props.imageSrc,
+					lineOffset: committed[i].lineOffset,
+				}),
 			);
 			renderedFor.push(committed[i]);
 		}
 		return {
 			committed: renderedHtml.slice(),
-			tail: renderMarkdownSegment(split.tail.text, { baseDir: props.baseDir, lineOffset: split.tail.lineOffset }),
+			tail: renderMarkdownSegment(split.tail.text, {
+				baseDir: props.baseDir,
+				imageSrc: props.imageSrc,
+				lineOffset: split.tail.lineOffset,
+			}),
 		};
 	});
 

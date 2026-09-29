@@ -10,9 +10,14 @@ const files = new Map([
 	["src/hello.txt", "hello\n"],
 	["src/guide.md", "# Guide\n\n**Important** note.\n"],
 	["src/null.dat", "abc\0def"],
+	[
+		"src/deep/guide.md",
+		"![Local](images/diagram.png) ![Web](https://example.com/logo.png) ![Inline](data:image/png;base64,AAAA)",
+	],
 ]);
 const calls: string[] = [];
 let failSave = false;
+let delayedSearch: Promise<Array<{ name: string; path: string; is_dir: boolean; size: number }>> | null = null;
 
 vi.mock("../../transport", () => ({
 	rpc: vi.fn(async (command: string, args?: Record<string, string>) => {
@@ -27,8 +32,22 @@ vi.mock("../../transport", () => ({
 					{ name: "image.bin", path: "src/image.bin", is_dir: false, size: 32 },
 					{ name: "null.dat", path: "src/null.dat", is_dir: false, size: 7 },
 				];
-			return [{ name: "src", path: "src", is_dir: true, size: 0 }];
+			return [
+				{ name: ".claude", path: ".claude", is_dir: true, size: 0 },
+				{ name: "src", path: "src", is_dir: true, size: 0 },
+				{ name: ".mdkb", path: ".mdkb", is_dir: true, size: 0 },
+				{ name: "docs", path: "docs", is_dir: true, size: 0 },
+			];
 		}
+		if (command === "search_files") {
+			if (delayedSearch) return delayedSearch;
+			return args?.query === "config"
+				? [{ name: "config.ts", path: "src/deep/config.ts", is_dir: false, size: 12 }]
+				: [];
+		}
+		if (command === "stat_path") return { exists: true, is_dir: false, size: 110 };
+		if (command === "resolve_terminal_path")
+			return { absolute_path: "/repo-one/src/deep/guide.md", is_directory: false };
 		if (command === "fs_read_file") {
 			if (args?.file === "src/image.bin") throw new Error("Failed to read file: stream did not contain valid UTF-8");
 			return files.get(args?.file ?? "") ?? "";
@@ -53,9 +72,76 @@ afterEach(() => {
 	files.set("src/guide.md", "# Guide\n\n**Important** note.\n");
 	calls.length = 0;
 	failSave = false;
+	delayedSearch = null;
 });
 
 describe("FilesScreen", () => {
+	it("shows the complete repository path on a long press", async () => {
+		const view = render(() => <FilesScreen />);
+		const repository = await waitFor(() => view.getByRole("button", { name: /repo-one/ }));
+		await fireEvent.touchStart(repository);
+		await waitFor(
+			() => expect(view.getByRole("dialog", { name: "Repository path" }).textContent).toContain("/repo-one"),
+			{
+				timeout: 900,
+			},
+		);
+		await fireEvent.touchEnd(repository);
+		await fireEvent.click(repository);
+		expect(calls).not.toContain("list_directory");
+	});
+
+	it("keeps file actions in the title bar in both viewing and editing", async () => {
+		const view = render(() => <FilesScreen />);
+		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+		await openRepo(view.getByRole);
+		await fireEvent.click(view.getByRole("button", { name: /hello.txt/ }));
+		await waitFor(() => expect(view.getByRole("button", { name: "Edit" })).toBeTruthy());
+		expect(view.getByRole("button", { name: "Edit" }).closest("header")).toBe(
+			view.getByRole("button", { name: "Back" }).closest("header"),
+		);
+		await fireEvent.click(view.getByRole("button", { name: "Edit" }));
+		expect(view.getByRole("button", { name: "Cancel" }).closest("header")).toBeTruthy();
+		expect(view.getByRole("button", { name: "Save" }).closest("header")).toBeTruthy();
+	});
+	it("places normal folders before hidden folders in the tree", async () => {
+		const view = render(() => <FilesScreen />);
+		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+		await fireEvent.click(view.getByRole("button", { name: /repo-one/ }));
+		await waitFor(() => expect(view.getByRole("button", { name: /docs/ })).toBeTruthy());
+		const order = Array.from(view.container.querySelectorAll("button"))
+			.map((button) => button.textContent?.trim())
+			.filter(Boolean);
+		expect(order.indexOf("▸ src")).toBeLessThan(order.indexOf("▸ .claude"));
+		expect(order.indexOf("▸ docs")).toBeLessThan(order.indexOf("▸ .mdkb"));
+	});
+
+	it("finds a file in a nested folder from the repository tree", async () => {
+		const view = render(() => <FilesScreen />);
+		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+		await fireEvent.click(view.getByRole("button", { name: /repo-one/ }));
+		await fireEvent.input(view.getByRole("searchbox", { name: "Search files" }), {
+			target: { value: "config" },
+		});
+		await waitFor(() => expect(view.getByRole("button", { name: /src\/deep\/config.ts/ })).toBeTruthy());
+		expect(view.queryByRole("button", { name: /\.claude/ })).toBeNull();
+	});
+
+	it("restores the tree when a cleared search returns late", async () => {
+		let finishSearch!: (results: Array<{ name: string; path: string; is_dir: boolean; size: number }>) => void;
+		delayedSearch = new Promise((resolve) => {
+			finishSearch = resolve;
+		});
+		const view = render(() => <FilesScreen />);
+		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
+		await fireEvent.click(view.getByRole("button", { name: /repo-one/ }));
+		const search = view.getByRole("searchbox", { name: "Search files" });
+		await fireEvent.input(search, { target: { value: "config" } });
+		await fireEvent.input(search, { target: { value: "" } });
+		finishSearch([{ name: "config.ts", path: "src/deep/config.ts", is_dir: false, size: 12 }]);
+		await waitFor(() => expect(view.getByRole("button", { name: /src/ })).toBeTruthy());
+		expect(view.queryByRole("button", { name: /src\/deep\/config.ts/ })).toBeNull();
+	});
 	it("lists configured repositories and navigates into and out of a directory", async () => {
 		const view = render(() => <FilesScreen />);
 		await waitFor(() => expect(view.getByRole("button", { name: /repo-one/ })).toBeTruthy());
@@ -96,6 +182,23 @@ describe("FilesScreen", () => {
 		await waitFor(() => expect(view.container.querySelector("#markdown-content h2")?.textContent).toBe("Revised"));
 		expect(files.get("src/guide.md")).toBe("## Revised\n\nSaved from mobile.\n");
 		expect(view.queryByRole("textbox")).toBeNull();
+	});
+
+	it("serves nested Markdown images from the file directory while retaining absolute image sources", async () => {
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/deep/guide.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(3));
+		const images = view.container.querySelectorAll<HTMLImageElement>("#markdown-content img");
+		const local = new URL(images[0].src);
+		expect(local.pathname).toBe("/fs/markdown-image");
+		expect(local.searchParams.get("repoPath")).toBe("/repo-one");
+		expect(local.searchParams.get("file")).toBe("src/deep/images/diagram.png");
+		expect(images[1].getAttribute("src")).toBe("https://example.com/logo.png");
+		expect(images[2].getAttribute("src")).toBe("data:image/png;base64,AAAA");
 	});
 
 	it("refuses large and binary files without offering an editor", async () => {

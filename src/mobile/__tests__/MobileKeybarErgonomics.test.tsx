@@ -21,6 +21,42 @@ afterEach(() => {
 });
 
 describe("mobile terminal controls", () => {
+	it("shows Claude's actual choices without generic Yes or No buttons", () => {
+		const session: SessionInfo = {
+			session_id: "claude-question",
+			cwd: "/repo",
+			worktree_path: null,
+			worktree_branch: null,
+			state: {
+				agent_type: "claude",
+				awaiting_input: true,
+				question_confident: true,
+				rate_limited: false,
+				last_activity_ms: 1,
+				choice_prompt: {
+					title: "Which color do you prefer?",
+					selection_mode: "navigate-enter",
+					options: [
+						{ key: "1", label: "Red", highlighted: true, destructive: false },
+						{ key: "2", label: "Green", highlighted: false, destructive: false },
+					],
+				},
+			},
+		};
+		render(() => (
+			<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+		));
+		expect(screen.getByRole("button", { name: /2\s*Green/ })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "No" })).toBeNull();
+	});
+
+	it("keeps generic confirmations for an awaiting question without choices", () => {
+		render(() => <TerminalKeybar sessionId="plain-question" agentType="claude" awaitingInput={true} questionConfident={true} />);
+		expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "No" })).toBeTruthy();
+	});
+
 	it("opens the keybar slash choices without typing into the agent until a choice is picked", async () => {
 		let triggerSlash: (() => void) | undefined;
 		render(() => (

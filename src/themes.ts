@@ -307,7 +307,7 @@ const [themeGeneration, bumpThemeGeneration] = createSignal(0);
 export { themeGeneration };
 
 /** Apply an app theme by setting CSS custom properties on the document root */
-export function applyAppTheme(key: string): void {
+export function applyAppTheme(key: string, syncAnsi = true): void {
 	const appTheme = themes.get(key);
 	if (!appTheme) {
 		appLogger.warn("app", `Unknown theme "${key}", falling back to ${DEFAULT_THEME}`);
@@ -333,7 +333,7 @@ export function applyAppTheme(key: string): void {
 			ansiRgb.push([0, 0, 0]);
 		}
 	}
-	if (ansiRgb.length === 16) {
+	if (syncAnsi && ansiRgb.length === 16) {
 		invoke("set_ansi_colors", { colors: ansiRgb }).catch((e: unknown) => {
 			appLogger.warn("app", "Failed to sync ANSI colors to backend", { error: e });
 		});
