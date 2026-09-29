@@ -236,7 +236,7 @@ fn now_unix_ms() -> u64 {
 
 /// Peer ownership spans several DashMaps, so registration/reconnect takeover
 /// must update them as one critical section rather than racing map-by-map.
-static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(super) static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// A bridge checks liveness every three seconds. A session is an active owner
 /// while it has a real SSE subscriber, or while requests arrived recently enough
