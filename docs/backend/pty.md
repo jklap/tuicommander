@@ -38,6 +38,10 @@ agent state. After the configured per-agent delay it sends the parent an
 path without removing the worktree. Activity restarts the window; unread mail,
 background work, a live detached runner, a failed background wake, and keep-open
 disable closure while they remain present.
+The five-second idle sweep reads in-memory state first and requests a process
+inventory only when an eligible child's delay has expired. A failed inventory
+defers closure; a panicking sweep logs the error and restarts its timer state on
+the next tick.
 
 ## Tauri Commands
 
