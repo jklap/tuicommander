@@ -3480,15 +3480,26 @@ async fn handle_worktree(
                 return error;
             }
             let workspace_id = match args["branch"].as_str() {
-                Some(id) => id,
+                Some(id) => id.to_owned(),
                 None => {
                     return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'branch' parameter"});
                 }
             };
-            to_json_or_error(crate::worktree::inspect_workspace_lifecycle(
-                std::path::Path::new(&path),
-                workspace_id,
-            ))
+            let state = Arc::clone(state);
+            match tokio::task::spawn_blocking(move || {
+                crate::worktree::inspect_worktree_removal(
+                    &state,
+                    std::path::Path::new(&path),
+                    &workspace_id,
+                )
+            })
+            .await
+            {
+                Ok(preview) => to_json_or_error(preview),
+                Err(error) => {
+                    serde_json::json!({"error": format!("worktree lifecycle task failed: {error}")})
+                }
+            }
         }
         "worktree_create" => {
             let path = match require_path(args, "worktree_create") {
@@ -3596,9 +3607,16 @@ async fn handle_worktree(
             }
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
+            let preview_state = Arc::clone(state);
             let result = tokio::task::spawn_blocking(move || {
+                let warnings = crate::worktree::inspect_worktree_removal(
+                    &preview_state,
+                    std::path::Path::new(&path_for_remove),
+                    &workspace_id_for_remove,
+                )
+                .warnings;
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
-                crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+                let outcome = crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
                     &path_for_remove,
                     &workspace_id_for_remove,
                     delete_branch,
@@ -3606,20 +3624,23 @@ async fn handle_worktree(
                     force,
                     override_lock,
                     expected_fingerprint.as_deref(),
-                )
+                )?;
+                Ok::<_, String>((outcome, warnings))
             })
             .await;
             match result {
-                Ok(Ok(outcome)) => {
+                Ok(Ok((outcome, warnings))) => {
                     state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                         repo_path: path.clone(),
                         workspace_id: workspace_id.clone(),
                         branch: outcome.branch,
                     });
-                    worktree_remove_success_response(
+                    let mut response = worktree_remove_success_response(
                         outcome.branch_delete_warning,
                         &outcome.removal_rule,
-                    )
+                    );
+                    response["warnings"] = serde_json::json!(warnings);
+                    response
                 }
                 Ok(Err(e)) => serde_json::json!({"error": e}),
                 Err(e) => serde_json::json!({
@@ -8733,6 +8754,22 @@ mod tests {
             body.contains("let force = args[\"force\"].as_bool().unwrap_or(false)")
                 && body.contains("archive.as_deref(),\n                    force,"),
             "native MCP removal must default force to false and forward an explicit true"
+        );
+    }
+
+    #[test]
+    fn native_mcp_worktree_lifecycle_uses_the_blocking_pool() {
+        let source = include_str!("mcp_transport.rs");
+        let at = source
+            .find("\"worktree_lifecycle\" => {")
+            .expect("worktree_lifecycle action");
+        let body = source[at..]
+            .split("\"worktree_create\" => {")
+            .next()
+            .expect("lifecycle arm");
+        assert!(
+            body.contains("tokio::task::spawn_blocking"),
+            "lifecycle Git and session inspection must not park the async worker"
         );
     }
 

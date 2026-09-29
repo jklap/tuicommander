@@ -410,7 +410,7 @@ const App: Component = () => {
 	const smartPrompts = useSmartPrompts();
 
 	// Auto-delete local branches when their PR is merged/closed
-	useAutoDeleteBranch({ confirm: (opts) => dialogs.confirm(opts) });
+	useAutoDeleteBranch({ confirm: (opts) => dialogs.confirm(opts), setStatusInfo });
 
 	// Offer to switch to newly created worktrees (from MCP) + activity notification,
 	// and prune the sidebar row when a worktree is removed backend-side.

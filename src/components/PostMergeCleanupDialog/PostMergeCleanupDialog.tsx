@@ -24,6 +24,8 @@ export interface PostMergeCleanupDialogProps {
 	hasDirtyFiles?: boolean;
 	/** The branch's own worktree has uncommitted changes — archiving or deleting it destroys them */
 	worktreeDirty?: boolean;
+	/** Backend removal preview, including branch history and live sessions. */
+	removalWarnings?: string[];
 	submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	onExecute: (steps: CleanupStep[], options?: { unstash?: boolean }) => void;
 	onSkip: () => void;
@@ -173,6 +175,11 @@ export const PostMergeCleanupDialog: Component<PostMergeCleanupDialogProps> = (p
 												</span>
 											</Show>
 										</div>
+										<Show when={step.id === "worktree" && step.checked && props.removalWarnings?.length}>
+											<div class={s.dirtyWarning} data-testid="worktree-removal-warnings">
+												<For each={props.removalWarnings}>{(warning) => <div>{warning}</div>}</For>
+											</div>
+										</Show>
 										<Show when={step.id === "worktree" && step.checked && props.worktreeDirty}>
 											<div class={s.dirtyWarning} data-testid="worktree-dirty-warning">
 												{props.worktreeAction === "delete"

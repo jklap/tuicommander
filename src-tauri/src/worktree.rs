@@ -71,6 +71,107 @@ pub(crate) fn inspect_workspace_lifecycle(
     )
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct WorktreeRemovalPreview {
+    #[serde(flatten)]
+    pub lifecycle: WorkspaceLifecycleStatus,
+    pub untracked_files: Option<usize>,
+    pub live_sessions: Vec<WorktreeLiveSession>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WorktreeLiveSession {
+    pub session_id: String,
+    pub name: String,
+}
+
+pub(crate) fn inspect_worktree_removal(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+) -> WorktreeRemovalPreview {
+    let lifecycle = inspect_workspace_lifecycle(repo_path, workspace_id);
+    let worktree_path = resolve_any_workspace(repo_path, workspace_id)
+        .ok()
+        .map(|workspace| PathBuf::from(workspace.path));
+    let untracked_files = worktree_path.as_ref().and_then(|path| {
+        git_cmd(path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .ok()
+            .map(|output| {
+                output
+                    .stdout
+                    .lines()
+                    .filter(|line| line.starts_with("??"))
+                    .count()
+            })
+    });
+    let mut live_sessions = Vec::new();
+    if let Some(worktree_path) = &worktree_path {
+        let root = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.clone());
+        for entry in &state.session_maps.sessions {
+            let session = entry.value().lock();
+            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+                session
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.path.clone())
+            });
+            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+                live_sessions.push(WorktreeLiveSession {
+                    session_id: entry.key().clone(),
+                    name: session
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| entry.key().clone()),
+                });
+            }
+        }
+        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    }
+    let mut warnings = Vec::new();
+    match lifecycle.commit_status {
+        WorkspaceCommitStatus::InSync => {
+            warnings.push("This branch has nothing of its own, not merged work".to_string())
+        }
+        WorkspaceCommitStatus::Merged => {
+            warnings.push("This branch's commits are in the default branch".to_string())
+        }
+        WorkspaceCommitStatus::Unmerged => {
+            warnings.push("This branch has unmerged commits".to_string())
+        }
+        WorkspaceCommitStatus::Unknown => {
+            warnings.push("Branch history could not be verified".to_string())
+        }
+    }
+    if let Some(total) = lifecycle.dirty_files.filter(|total| *total > 0) {
+        let untracked = untracked_files.unwrap_or(0);
+        warnings.push(format!(
+            "{total} uncommitted files, including {untracked} untracked files"
+        ));
+    }
+    warnings.extend(
+        live_sessions
+            .iter()
+            .map(|session| format!("Live session: {}", session.name)),
+    );
+    WorktreeRemovalPreview {
+        lifecycle,
+        untracked_files,
+        live_sessions,
+        warnings,
+    }
+}
+
 pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     repo_path: &str,
     workspace_id: &str,
@@ -597,6 +698,31 @@ pub(crate) fn finalize_merged_worktree_impl(
     )
 }
 
+/// Both one-click merge cleanup and post-merge finalization use this review
+/// gate. Before the merge, an unmerged commit is expected; afterwards, only
+/// merged work may be cleaned up without an explicit confirmation.
+fn cleanup_needs_lifecycle_confirmation(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+    action: &str,
+    force: bool,
+    dirt: &WorktreeDirtiness,
+    require_merged: bool,
+) -> bool {
+    if cleanup_needs_confirmation(action, force, dirt) {
+        return true;
+    }
+    if force || (action != "archive" && action != "delete") {
+        return false;
+    }
+    let preview = inspect_worktree_removal(state, repo_path, workspace_id);
+    preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
+        || !preview.live_sessions.is_empty()
+        || preview.lifecycle.commit_status == WorkspaceCommitStatus::Unknown
+        || (require_merged && preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged)
+}
+
 pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -618,7 +744,15 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     }
 
     let dirt = worktree_dirtiness(&base_repo, &workspace_id);
-    if cleanup_needs_confirmation(&action, force, &dirt) {
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &action,
+        force,
+        &dirt,
+        true,
+    ) {
         return Ok(MergeArchiveResult {
             merged: true, // The merge itself already happened; only cleanup stopped.
             action: "needs_confirmation".to_string(),
@@ -779,7 +913,15 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     //    the branch carries commits. `commits_ahead` is reported alongside so the
     //    dialog can also say that an empty branch's merge would be a no-op.
     let preflight = merge_preflight(&repo_path, &branch_name, &workspace_id, &target_branch);
-    if cleanup_needs_confirmation(&after_merge, force, &preflight.worktree_dirty) {
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &after_merge,
+        force,
+        &preflight.worktree_dirty,
+        false,
+    ) {
         return Ok(MergeArchiveResult {
             merged: false,
             action: "needs_confirmation".to_string(),
@@ -925,13 +1067,17 @@ pub(crate) fn check_worktree_dirty(
     tuic_git::worktree::check_worktree_dirty(repo_path, workspace_id)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) async fn get_workspace_lifecycle(
+    state: State<'_, Arc<AppState>>,
     repo_path: String,
     workspace_id: String,
-) -> Result<WorkspaceLifecycleStatus, String> {
+) -> Result<WorktreeRemovalPreview, String> {
+    let state = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
-        Ok(inspect_workspace_lifecycle(
+        Ok(inspect_worktree_removal(
+            &state,
             Path::new(&repo_path),
             &workspace_id,
         ))
@@ -999,6 +1145,61 @@ mod tests {
     use tuic_git::test_fixtures::{
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-work", false);
+        fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
+        fs::write(worktree.join("README.md"), "changed").expect("modified file");
+        fs::write(worktree.join("new-a.txt"), "a").expect("first untracked file");
+        fs::write(worktree.join("new-b.txt"), "b").expect("second untracked file");
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "pty-active");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-active",
+            &worktree.join("nested").to_string_lossy(),
+        );
+        state
+            .session_maps
+            .sessions
+            .get("pty-active")
+            .unwrap()
+            .lock()
+            .display_name = Some("Codex: gate work".to_string());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-other");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-other",
+            &repo.path().to_string_lossy(),
+        );
+
+        let preview = inspect_worktree_removal(&state, repo.path(), "active-work");
+
+        assert_eq!(preview.lifecycle.dirty_files, Some(3));
+        assert_eq!(preview.untracked_files, Some(2));
+        assert_eq!(
+            preview.live_sessions,
+            vec![WorktreeLiveSession {
+                session_id: "pty-active".to_string(),
+                name: "Codex: gate work".to_string(),
+            }]
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Codex: gate work"))
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("2 untracked"))
+        );
+    }
 
     /// The post-merge cleanup dialog runs these one after another, and each was
     /// a plain `fn` command: a checkout, a branch delete that can take a whole
@@ -1165,6 +1366,78 @@ mod tests {
     }
 
     #[test]
+    fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
+        let (_cfg, _guard) = isolated_config();
+        for action in ["archive", "delete"] {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "active-feature", true);
+            let original_head = git_cmd(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .run()
+                .unwrap()
+                .stdout;
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+            crate::state::tests_support::set_session_cwd(
+                &state,
+                "active-agent",
+                &worktree.to_string_lossy(),
+            );
+
+            let result = merge_and_archive_worktree_impl(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(result.action, "needs_confirmation", "{action}");
+            assert!(
+                !result.merged,
+                "{action} must wait for approval before merging"
+            );
+            assert_eq!(
+                git_cmd(repo.path())
+                    .args(["rev-parse", "HEAD"])
+                    .run()
+                    .unwrap()
+                    .stdout,
+                original_head
+            );
+            assert!(worktree.exists(), "{action} must leave the checkout intact");
+
+            let fingerprint = inspect_worktree_removal(&state, repo.path(), "active-feature")
+                .lifecycle
+                .dirty_fingerprint
+                .expect("confirmed checkout fingerprint");
+            let confirmed = merge_and_archive_worktree_impl_with_confirmation(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                true,
+                Some(&fingerprint),
+            )
+            .unwrap();
+            assert_eq!(
+                confirmed.action,
+                if action == "archive" {
+                    "archived"
+                } else {
+                    "deleted"
+                }
+            );
+            assert!(!worktree.exists(), "{action} proceeds after confirmation");
+        }
+    }
+
+    #[test]
     fn merge_and_archive_in_ask_mode_never_blocks() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
@@ -1287,6 +1560,10 @@ mod tests {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         worktree_with(repo.path(), "feat-finalize-clean", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-finalize-clean", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
 
         let res = finalize_merged_worktree_impl(
@@ -1302,10 +1579,64 @@ mod tests {
     }
 
     #[test]
+    fn automatic_archive_keeps_a_clean_untouched_worktree() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "untouched-archive", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "untouched-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-archive", true);
+        git_cmd(repo.path())
+            .args(["merge", "active-archive", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "active-agent",
+            &worktree.to_string_lossy(),
+        );
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "active-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
     fn automatic_archive_leaves_a_locked_worktree_untouched() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let worktree = worktree_with(repo.path(), "feat-archive-locked", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-archive-locked", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
         git_cmd(repo.path())
             .args(["worktree", "lock", &worktree.to_string_lossy()])
             .run()
