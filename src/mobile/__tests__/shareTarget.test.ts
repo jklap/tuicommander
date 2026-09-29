@@ -5,24 +5,38 @@ import { expect, it } from "vitest";
 it("accepts a shared Android file and opens the mobile chat with a recoverable draft", async () => {
 	const manifest = JSON.parse(readFileSync("public/mobile-manifest.json", "utf8"));
 	expect(manifest.share_target).toMatchObject({
-		action: "/mobile/share", method: "POST", enctype: "multipart/form-data",
+		action: "/mobile/share",
+		method: "POST",
+		enctype: "multipart/form-data",
 		params: { files: [{ name: "attachment" }] },
 	});
 	const handlers = new Map<string, (event: unknown) => void>();
 	const stored = new Map<string, Response>();
 	runInNewContext(readFileSync("public/sw.js", "utf8"), {
 		self: { addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler) },
-		caches: { open: async () => ({ put: async (key: string, value: Response) => { stored.set(key, value); } }) },
-		Request, Response, URL,
+		caches: {
+			open: async () => ({
+				put: async (key: string, value: Response) => {
+					stored.set(key, value);
+				},
+			}),
+		},
+		Request,
+		Response,
+		URL,
 		crypto: { randomUUID: () => "shared-1" },
 	});
 	let response: Promise<Response> | undefined;
 	handlers.get("fetch")?.({
 		request: {
-			url: "https://tuic.example/mobile/share", method: "POST", mode: "navigate",
+			url: "https://tuic.example/mobile/share",
+			method: "POST",
+			mode: "navigate",
 			formData: async () => new Map([["attachment", new File(["report"], "report.pdf", { type: "application/pdf" })]]),
 		},
-		respondWith: (result: Promise<Response>) => { response = result; },
+		respondWith: (result: Promise<Response>) => {
+			response = result;
+		},
 	});
 	expect(response).toBeDefined();
 	expect((await response)?.headers.get("location")).toBe("/mobile?shared=shared-1");

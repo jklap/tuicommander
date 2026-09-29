@@ -1459,6 +1459,34 @@ fn preserve_missing_worktree_modules(
     )
 }
 
+fn path_entry_exists(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Cannot inspect {}: {error}", path.display())),
+    }
+}
+
+fn finish_unregistered_worktree_removal(worktree: &WorktreeInfo) -> Result<(), String> {
+    if registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?.is_some()
+        || path_entry_exists(&worktree.path.join(".git"))?
+    {
+        return Err("Cannot finish removal: worktree is still registered".into());
+    }
+    // Once Git has removed its registration, no later warm may recreate the
+    // checkout. A failed cleanup reports the actual remaining path to callers.
+    clear_warm(&worktree.path);
+    if path_entry_exists(&worktree.path)? {
+        std::fs::remove_dir_all(&worktree.path).map_err(|error| {
+            format!(
+                "Worktree has no Git registration but its directory remains at {}: {error}",
+                worktree.path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn remove_worktree_internal_with_lock(
     worktree: &WorktreeInfo,
     force: bool,
@@ -1488,14 +1516,14 @@ fn remove_worktree_internal_with_lock(
         ));
     }
     if let Some(expected_missing) = expected_missing_checkout {
-        if expected_missing != !worktree.path.exists() {
+        if expected_missing == path_entry_exists(&worktree.path)? {
             return Err(
                 "Worktree presence changed since confirmation; review it before removal".into(),
             );
         }
     }
     let admin = registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?;
-    if !worktree.path.exists() {
+    if !path_entry_exists(&worktree.path)? {
         if let Some(admin) = admin {
             if admin.join("locked").exists() && !override_lock {
                 return Err(format!(
@@ -1530,30 +1558,15 @@ fn remove_worktree_internal_with_lock(
         return Ok(());
     }
     if admin.is_none() {
-        if worktree.path.join(".git").exists() {
-            return Err("Cannot remove worktree: its Git registration is missing".into());
-        }
-        clear_warm(&worktree.path);
-        return Err(format!(
-            "Worktree directory remains without Git registration: {}",
-            worktree.path.display()
-        ));
-    }
-    if admin.is_none() {
         // Only a warm token proves that TUIC previously created this checkout.
         // Without one, this could be an unrelated directory at the same path.
         if warm_lock.is_none() {
-            return Err("Cannot remove worktree: path is not a registered worktree".into());
-        }
-        clear_warm(&worktree.path);
-        if !force {
             return Err(format!(
-                "Worktree directory still exists after removal: {}",
+                "Worktree directory remains without Git registration at {}; refusing unverified cleanup",
                 worktree.path.display()
             ));
         }
-        return std::fs::remove_dir_all(&worktree.path)
-            .map_err(|error| format!("Failed to remove worktree directory: {error}"));
+        return finish_unregistered_worktree_removal(worktree);
     }
     if has_operation_in_progress(&wt_path_str) {
         return Err("Cannot remove worktree: a Git operation is in progress".into());
@@ -1690,35 +1703,30 @@ fn remove_worktree_internal_with_lock(
         }
         Err(e) => {
             tracing::error!(source = "worktree", branch = %worktree.name, "git worktree remove FAILED: {e}");
+            if registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?.is_none()
+                && !path_entry_exists(&worktree.path.join(".git"))?
+            {
+                tracing::warn!(
+                    source = "worktree",
+                    branch = %worktree.name,
+                    "Git removed the registration before failing; finishing directory cleanup"
+                );
+                return finish_unregistered_worktree_removal(worktree);
+            }
             return Err(crate::git_locks::describe_stale_lock(&worktree.base_repo)
                 .unwrap_or_else(|| format!("Git worktree remove failed: {e}")));
         }
     }
 
-    // Git has now removed this registration. A queued warm must not recreate
-    // the checkout even if leftover path cleanup below fails.
-    clear_warm(&worktree.path);
-
-    // A non-force request must not turn a failed Git cleanup into recursive deletion.
-    if worktree.path.exists() {
-        if !force {
-            return Err(format!(
-                "Worktree directory still exists after removal: {}",
-                worktree.path.display()
-            ));
-        }
+    if path_entry_exists(&worktree.path)? {
         tracing::warn!(
             source = "worktree",
             branch = %worktree.name,
             path = %wt_path_str,
-            "directory still exists after git worktree remove — running rm -rf"
+            "directory still exists after git worktree remove — finishing cleanup"
         );
-        std::fs::remove_dir_all(&worktree.path)
-            .map_err(|e| format!("Failed to remove worktree directory: {e}"))?;
-        tracing::info!(source = "worktree", branch = %worktree.name, "directory removed");
-    } else {
-        tracing::info!(source = "worktree", branch = %worktree.name, "directory already gone after git worktree remove");
     }
+    finish_unregistered_worktree_removal(worktree)?;
 
     tracing::info!(source = "worktree", branch = %worktree.name, "remove_worktree_internal: done");
     Ok(())
@@ -1964,7 +1972,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     // the workspace-id representation at the call site.
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
-    let missing_checkout = !worktree_path.exists();
+    let missing_checkout = !path_entry_exists(&worktree_path)?;
     if let Some(expected_missing) = expected_missing_checkout {
         if expected_missing != missing_checkout {
             return Err(
@@ -3506,6 +3514,94 @@ mod tests {
         assert!(
             !worktree.path.exists(),
             "Worktree path should not exist after removal"
+        );
+    }
+
+    #[test]
+    fn interrupted_git_removal_clears_the_owned_checkout_without_deleting_its_branch() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "interrupted-removal");
+        let worktree = WorktreeInfo {
+            name: "interrupted-removal".into(),
+            path: path.clone(),
+            branch: Some("interrupted-removal".into()),
+            base_repo: repo.clone(),
+        };
+        begin_warm(&path);
+
+        // Reproduce the persisted state observed after Git reported
+        // "Directory not empty": registration is gone, but checkout files remain.
+        git_cmd(&repo)
+            .args(["worktree", "remove", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("remaining-tracked-file"), "old checkout\n").unwrap();
+
+        remove_worktree_internal(&worktree, false).unwrap();
+        assert!(
+            !path.exists(),
+            "an interrupted removal must not leave an orphan"
+        );
+        assert!(
+            git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/interrupted-removal"])
+                .run()
+                .is_ok(),
+            "directory cleanup alone must keep the branch ref"
+        );
+    }
+
+    #[test]
+    fn interrupted_removal_does_not_delete_a_new_checkout_at_the_same_path() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "replacement-checkout");
+        let worktree = WorktreeInfo {
+            name: "replacement-checkout".into(),
+            path: path.clone(),
+            branch: Some("replacement-checkout".into()),
+            base_repo: repo.clone(),
+        };
+        begin_warm(&path);
+        git_cmd(&repo)
+            .args(["worktree", "remove", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join(".git"), "replacement marker\n").unwrap();
+        fs::write(path.join("keep.txt"), "new checkout\n").unwrap();
+
+        assert!(remove_worktree_internal(&worktree, false).is_err());
+        assert_eq!(
+            fs::read_to_string(path.join("keep.txt")).unwrap(),
+            "new checkout\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_removal_reports_a_broken_link_at_the_checkout_path() {
+        use std::os::unix::fs::symlink;
+
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "broken-link-removal");
+        let worktree = WorktreeInfo {
+            name: "broken-link-removal".into(),
+            path: path.clone(),
+            branch: Some("broken-link-removal".into()),
+            base_repo: repo.clone(),
+        };
+        begin_warm(&path);
+        git_cmd(&repo)
+            .args(["worktree", "remove", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        symlink(repo.join("target-does-not-exist"), &path).unwrap();
+
+        let result = remove_worktree_internal(&worktree, false);
+        assert!(
+            result.is_err() || fs::symlink_metadata(&path).is_err(),
+            "a successful removal must not leave a broken link at the checkout path"
         );
     }
 
