@@ -43,10 +43,24 @@ fn post(
         &extra,
         read_timeout,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock =>
+            "TUICommander reply timed out; the server may still complete the action. Check its state before retrying.".to_string(),
+        _ => error.to_string(),
+    })
 }
 
-fn wait_read_timeout(tool: &str, arguments: &Value) -> Option<std::time::Duration> {
+fn mcp_read_timeout(tool: &str, arguments: &Value) -> Option<std::time::Duration> {
+    if tool == "repo"
+        && matches!(
+            arguments.get("action").and_then(Value::as_str),
+            Some("worktree_create" | "worktree_remove")
+        )
+    {
+        // The server allows 301 s for a cold worktree operation. Keep a margin
+        // so the server's own timeout response reaches the caller first.
+        return Some(std::time::Duration::from_secs(305));
+    }
     if !matches!(tool, "agent" | "session")
         || arguments.get("action").and_then(Value::as_str) != Some("wait")
     {
@@ -185,7 +199,7 @@ impl McpClient {
             &call,
             Some(&self.session),
             self.tuic_session.as_deref(),
-            wait_read_timeout(tool, &arguments),
+            mcp_read_timeout(tool, &arguments),
         )?;
         unwrap_tool_text(&response)
     }

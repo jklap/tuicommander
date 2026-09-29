@@ -5,7 +5,6 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 
-#[cfg(unix)]
 pub(crate) fn config_dir() -> std::path::PathBuf {
     dirs::config_dir()
         .map(|d| d.join("com.tuic.commander"))

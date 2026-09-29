@@ -48,6 +48,9 @@ export default function MobileApp() {
 	// the fixed shell. html/body are height:auto so the document has no
 	// scrollable content — iOS can't scroll the page on keyboard open.
 	onMount(() => {
+		void import("./mobileTheme")
+			.then(({ loadMobileTheme }) => loadMobileTheme())
+			.catch((error: unknown) => appLogger.warn("app", "Could not load mobile theme", error));
 		const vv = window.visualViewport;
 		if (!vv) return;
 		let raf = 0;

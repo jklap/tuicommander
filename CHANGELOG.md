@@ -6,7 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Background command wakes** — `tuic bg` retries temporary queue failures for up to five minutes, records the caller session and attempt count in `.wake`, and keeps an idle managed child open while its wake is retrying or has failed.
+- **Managed child idle close** — Idle managed agent children close after a configurable delay, while unread mail, background work, keep-open, or a failed background wake keeps them available.
+
+- **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
+
+- **Claude questions on mobile** — The session shows every AskUserQuestion option and offers those choices instead of generic Yes/No. Tapping a choice navigates Claude's menu and submits it with Enter.
+
+- **Mobile Codex questions** — Open queued questions from the session header, see their choices, and answer with one tap or typed notes. The question overlay does not reduce terminal space.
+
+- **CLI MCP worktree timeouts** — On Unix, `tuic mcp` and `tuic repo` wait up to 305 seconds for worktree creation and removal. Other commands retain their short timeout. A timed-out MCP request now warns that the server may still complete it, so callers can inspect state before retrying.
+
+- **Mobile Markdown images** — Relative images in repository Markdown now load from the file's directory through an authenticated image route. Paths outside the selected repository and non-image files are refused.
+- **Mobile Progress, Activity and Settings** — Long journal messages expand on demand, Activity shows local times and minute durations, and Settings shows app and server versions and offers a light theme saved separately from the desktop theme in server preferences.
+
+- **Mobile Files** — Repository paths keep their end visible and reveal the full path on long press. The tree puts hidden folders after normal ones and searches nested files. File actions share the title row; the editor fills the available height and wraps lines.
+- **Compact mobile session header** — A 56 px row shows the agent logo, state, session name, and tasks count. Intent, tasks, and session progress open temporary sheets; Files, output search, Ideas, and quick commands remain reachable from overflow without reducing terminal space.
 
 - **AI Chat prompt parking** — `Ctrl+S` parks a draft and its images while you ask something else; the parked draft returns after Send. The composer control also works on phones.
 

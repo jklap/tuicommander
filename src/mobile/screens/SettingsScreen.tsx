@@ -1,5 +1,6 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
+import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
 import styles from "./SettingsScreen.module.css";
 
 const SOUND_KEY = "tuic-mobile-sounds";
@@ -21,13 +22,32 @@ type PushState = "unsupported" | "requires-https" | "requires-install" | "denied
 export function SettingsScreen(props: SettingsScreenProps) {
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
+	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
+	const [theme, setTheme] = createSignal(mobileTheme());
+	const [themeReady, setThemeReady] = createSignal(false);
+	const [themeError, setThemeError] = createSignal<string | null>(null);
 	const [pushState, setPushState] = createSignal<PushState>("unsupported");
 	const [pushLoading, setPushLoading] = createSignal(false);
 	const [pushError, setPushError] = createSignal<string | null>(null);
 
-	onMount(async () => {
+	onMount(() => {
 		setServerUrl(window.location.origin);
-		setPushState(await detectPushState());
+		void detectPushState().then(setPushState);
+		void loadMobileTheme()
+			.then(setTheme)
+			.catch((error: unknown) => {
+				appLogger.warn("app", "Could not load mobile theme", error);
+				setThemeError("Could not load theme preference");
+			})
+			.finally(() => setThemeReady(true));
+		void fetch("/api/version")
+			.then(async (response) => {
+				if (response.ok) {
+					const data = (await response.json()) as { version?: string };
+					setServerVersion(data.version ?? null);
+				}
+			})
+			.catch((error: unknown) => appLogger.warn("network", "Could not load server version", error));
 	});
 
 	async function detectPushState(): Promise<PushState> {
@@ -190,6 +210,49 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						{props.isConnected ? "Connected" : "Disconnected"}
 					</span>
 				</div>
+				<div class={styles.row}>
+					<span class={styles.label}>App version</span>
+					<span class={styles.value}>{__APP_VERSION__}</span>
+				</div>
+				<div class={styles.row}>
+					<span class={styles.label}>Server version</span>
+					<span class={styles.value}>{serverVersion() ?? "Unavailable"}</span>
+				</div>
+			</section>
+
+			<section class={styles.section}>
+				<h3 class={styles.sectionTitle}>APPEARANCE</h3>
+				<label class={styles.row}>
+					<span class={styles.label}>Theme</span>
+					<select
+						class={styles.select}
+						aria-label="Theme"
+						value={theme()}
+						disabled={!themeReady()}
+						onChange={(event) => {
+							const next = event.currentTarget.value === "vscode-light" ? "vscode-light" : "commander";
+							const previous = theme();
+							setTheme(next);
+							setThemeReady(false);
+							setThemeError(null);
+							void setMobileTheme(next)
+								.catch((error: unknown) => {
+									setTheme(previous);
+									appLogger.warn("app", "Could not save mobile theme", error);
+									setThemeError("Could not save theme preference");
+								})
+								.finally(() => setThemeReady(true));
+						}}
+					>
+						<option value="commander">Dark</option>
+						<option value="vscode-light">Light</option>
+					</select>
+				</label>
+				<Show when={themeError()}>
+					<div class={styles.hint} role="alert" style={{ color: "var(--error)" }}>
+						{themeError()}
+					</div>
+				</Show>
 			</section>
 
 			<section class={styles.section}>

@@ -7,7 +7,12 @@ const { invoke } = vi.hoisted(() => ({
 	invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
 		if (command !== "progress_list") return {};
 		const project = args?.project;
-		const text = project === "/newer" ? "Later work is blocked." : "Earlier work shipped.";
+		const text =
+			project === "/long"
+				? Array.from({ length: 12 }, (_, n) => `Result line ${n + 1}`).join("\n")
+				: project === "/newer"
+					? "Later work is blocked."
+					: "Earlier work shipped.";
 		return {
 			project,
 			entries: [
@@ -61,5 +66,14 @@ describe("mobile Progress", () => {
 		render(() => <ProgressDialog embedded projects={undefined} projectsError="Connection lost" />);
 		expect(screen.getByText("Progress projects are unavailable.")).toBeTruthy();
 		expect(screen.queryByText("No progress recorded for this project yet.")).toBeNull();
+	});
+
+	it("collapses a long mobile progress message until More is pressed", async () => {
+		render(() => <ProgressDialog embedded projects={["/long"]} />);
+		await waitFor(() => expect(screen.getByText(/Result line 12/)).toBeTruthy());
+		const more = screen.getByRole("button", { name: "More" });
+		expect(more.getAttribute("aria-expanded")).toBe("false");
+		fireEvent.click(more);
+		expect(screen.getByRole("button", { name: "Less" }).getAttribute("aria-expanded")).toBe("true");
 	});
 });

@@ -109,7 +109,7 @@ never all expert: in basic mode it would show an empty page.
 | **Reset Panel Sizes** | — | Restore sidebar and panel widths to defaults (**Layout** section) |
 | **UI Legend** | — | Visual reference for colors, symbols, and badges used in the app |
 
-The terminal and app color theme is on the [Terminal](#terminal) page.
+The terminal and app color theme is on the [Terminal](#terminal) page. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
 
 #### Show agents under branches
 

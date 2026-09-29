@@ -347,6 +347,11 @@ impl OutputRingBuffer {
 
 VT100-aware extractor that captures clean log lines from PTY output. Designed for mobile/browser clients that need readable text without ANSI noise or TUI screen garbage.
 
+An open Claude Ink choice dialog is retained in the mobile screen payload;
+its highlighted `❯ N. option` row must not act as a composer cutoff. The
+agent-specific choice parser publishes its navigation contract through
+`SessionState.choice_prompt.selection_mode`.
+
 ```rust
 impl VtLogBuffer {
     fn new(rows: u16, cols: u16, capacity: usize) -> Self  // Create with terminal size

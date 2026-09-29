@@ -1,35 +1,42 @@
 .screen {
-	min-height: 100%;
+	height: 100%;
+	min-height: 0;
 	display: flex;
 	flex-direction: column;
 	background: var(--bg-primary);
+	overflow-y: auto;
 }
 
 .header {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	min-height: 48px;
-	padding: 8px 16px;
+	padding: 8px 12px;
 	background: var(--bg-secondary);
 	border-bottom: 1px solid var(--border);
 }
 
 .title {
+	flex: 1;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
 	font-size: var(--font-lg);
 }
 
 .back,
-.actions button {
+.action {
+	min-height: 44px;
+	min-width: 44px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg-tertiary);
 	color: var(--fg-primary);
-	padding: 8px 12px;
+	padding: 8px 10px;
 	font: inherit;
 }
 
@@ -53,23 +60,64 @@
 .row:active { background: var(--bg-highlight); }
 
 .name { font-size: var(--font-base); }
-.path { color: var(--fg-muted); font-size: var(--font-xs); overflow-wrap: anywhere; }
+.path {
+	max-width: 100%;
+	overflow: hidden;
+	color: var(--fg-muted);
+	font-size: var(--font-xs);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	direction: rtl;
+	text-align: left;
+}
 .status { padding: 16px; color: var(--fg-muted); }
 .error { margin: 0; padding: 12px 16px; color: var(--error); }
 
-.actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
+.search {
+	display: block;
 	padding: 8px 16px;
 	border-bottom: 1px solid var(--border);
+}
+
+.search input {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-tertiary);
+	color: var(--fg-primary);
+	font: inherit;
+}
+
+.pathPreviewBackdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 20px;
+	background: color-mix(in srgb, var(--bg-primary) 75%, transparent);
+}
+
+.pathPreview {
+	box-sizing: border-box;
+	width: min(100%, 440px);
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-secondary);
+	overflow-wrap: anywhere;
 }
 
 .viewer,
 .editor {
 	box-sizing: border-box;
 	width: 100%;
-	min-height: 50vh;
+	flex: 1;
+	min-height: 0;
 	margin: 0;
 	padding: 16px;
 	border: 0;
@@ -81,7 +129,7 @@
 	tab-size: 4;
 }
 
-.editor { resize: vertical; outline: none; }
+.editor { resize: none; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
 .viewer { -webkit-user-select: text; user-select: text; }
 .editor { -webkit-user-select: text; user-select: text; }
 
@@ -91,4 +139,4 @@
 	user-select: text;
 }
 
-.markdownView { min-height: 50vh; }
+.markdownView { flex: 1; min-height: 0; overflow: auto; }

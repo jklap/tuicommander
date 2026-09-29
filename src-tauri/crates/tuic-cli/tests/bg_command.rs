@@ -77,6 +77,20 @@ fn wait_for(path: &std::path::Path) {
     assert!(path.exists(), "{} was not written", path.display());
 }
 
+fn wait_for_terminal_wake(path: &std::path::Path) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while Instant::now() < deadline {
+        if let Ok(contents) = std::fs::read(path) {
+            let status: serde_json::Value = serde_json::from_slice(&contents).unwrap();
+            if status["status"] != "retrying" {
+                return status;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("{} never reached a terminal wake state", path.display());
+}
+
 #[test]
 fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
     let log = test_path("wake.log");
@@ -101,10 +115,7 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         (first, second)
     });
     // Warm the freshly linked executable before measuring only launcher behavior.
-    Command::new(env!("CARGO_BIN_EXE_tuic"))
-        .arg("--version")
-        .output()
-        .unwrap();
+    bg_command(&log).arg("--version").output().unwrap();
     let start = Instant::now();
     let output = bg_command(&log)
         .args([
@@ -135,6 +146,12 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         "launcher wrote the exit before the command ended"
     );
     assert!(!wake_file.exists(), "launcher left a stale wake failure");
+    let active_marker: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.markers/caller-1.json", log.display())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(active_marker["status"], "retrying");
+    assert_eq!(active_marker["session_id"], "caller-1");
     wait_for(&exit_file);
     wait_for(&wake_file);
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "7");
@@ -167,66 +184,95 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
 }
 
 #[test]
-fn bg_retries_transient_wake_failures_and_records_session_and_attempts() {
-    let log = test_path("retry.log");
-    let socket = socket_path("retry.sock");
+fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
+    let log = test_path("retry-timeout.log");
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    let socket = socket_path("retry-timeout.sock");
     let listener = UnixListener::bind(&socket).unwrap();
+    let server_wake_file = wake_file.clone();
+    let marker_dir = std::path::PathBuf::from(format!("{}.markers", log.display()));
+    let marker = marker_dir.join("caller-1.json");
+    let server_marker = marker.clone();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let first = read_request(&mut stream);
-        let unavailable = r#"{"error":"temporarily unavailable"}"#;
-        write!(
-            stream,
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{unavailable}",
-            unavailable.len()
-        )
-        .unwrap();
+        assert_eq!(first.0, "GET /sessions HTTP/1.1");
+        // The real Unix socket read deadline is three seconds. Withhold the
+        // first response long enough for the client to observe EAGAIN.
+        std::thread::sleep(Duration::from_secs(4));
+        drop(stream);
+
         let (mut stream, _) = listener.accept().unwrap();
-        let initialize = read_request(&mut stream);
-        write!(
-            stream,
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{unavailable}",
-            unavailable.len()
-        )
-        .unwrap();
-        let (mut stream, _) = listener.accept().unwrap();
-        let retry = read_request(&mut stream);
-        reply(
-            &mut stream,
-            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
-        );
-        let (mut stream, _) = listener.accept().unwrap();
-        let queue = read_request(&mut stream);
-        reply(&mut stream, r#"{"typed":false,"queued":1}"#);
-        (first, initialize, retry, queue)
+        let fallback = read_request(&mut stream);
+        assert_eq!(fallback.0, "POST /mcp HTTP/1.1");
+        drop(stream);
+
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut requests = Vec::new();
+        while requests.len() < 2 && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_request(&mut stream);
+                    if request.0 == "GET /sessions HTTP/1.1" {
+                        let in_progress: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(&server_wake_file).unwrap())
+                                .unwrap();
+                        assert_eq!(in_progress["status"], "retrying");
+                        assert_eq!(in_progress["tuic_session"], "caller-1");
+                        assert_eq!(in_progress["attempts"], 1);
+                        let marker: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(&server_marker).unwrap())
+                                .unwrap();
+                        assert_eq!(marker["session_id"], "caller-1");
+                        assert_eq!(marker["status"], "retrying");
+                        reply(
+                            &mut stream,
+                            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+                        );
+                    } else if request.0 == "POST /sessions/pty-1/queue HTTP/1.1" {
+                        reply(&mut stream, r#"{"typed":false,"queued":1}"#);
+                    }
+                    requests.push(request.0);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+        requests
     });
-    let output = bg_command(&log)
-        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
+
+    bg_command(&log).arg("--version").output().unwrap();
+    let launch = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 0"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
         .output()
         .unwrap();
-    assert!(output.status.success());
-    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
-    wait_for(&wake_file);
-    let wake: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
-    assert_eq!(wake["status"], "queued");
-    assert_eq!(wake["session_id"], "caller-1");
-    assert_eq!(wake["attempts"], 2);
-    let marker = std::path::PathBuf::from(format!("{}.markers/caller-1.json", log.display()));
-    let latest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
-    assert_eq!(latest, wake);
-    let (first, initialize, retry, queue) = server.join().unwrap();
-    assert_eq!(first.0, "GET /sessions HTTP/1.1");
-    assert_eq!(initialize.0, "POST /mcp HTTP/1.1");
-    assert_eq!(retry.0, "GET /sessions HTTP/1.1");
-    assert_eq!(queue.0, "POST /sessions/pty-1/queue HTTP/1.1");
+    assert!(launch.status.success());
+    let outcome = wait_for_terminal_wake(&wake_file);
+    let requests = server.join().unwrap();
+    assert_eq!(outcome["status"], "queued", "{outcome}");
+    assert_eq!(outcome["tuic_session"], "caller-1");
+    assert!(outcome["attempts"].as_u64().unwrap_or(0) >= 2, "{outcome}");
+    let final_marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(final_marker["status"], "queued");
+    assert_eq!(final_marker["session_id"], "caller-1");
+    assert_eq!(
+        requests,
+        [
+            "GET /sessions HTTP/1.1",
+            "POST /sessions/pty-1/queue HTTP/1.1"
+        ]
+    );
     std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
     std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(marker_dir).unwrap();
 }
 
 #[test]
@@ -391,6 +437,14 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
     let wake_status: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
     assert_eq!(wake_status["status"], "failed");
+    assert_eq!(wake_status["attempts"], 1);
+    assert_eq!(wake_status["tuic_session"], "caller-1");
+    let failed_marker: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.markers/caller-1.json", log.display())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(failed_marker["status"], "failed");
+    assert_eq!(failed_marker["session_id"], "caller-1");
     assert!(wake_status["error"].as_str().unwrap().contains("HTTP 400"));
     assert!(wake_status["error"].as_str().unwrap().contains("mail:"));
     let (first, second) = server.join().unwrap();
@@ -403,7 +457,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
 }
 
 #[test]
-fn bg_retries_a_missing_socket_until_tuic_returns() {
+fn bg_records_wake_failure_when_tuic_is_unavailable() {
     let log = test_path("tuic-down.log");
     let missing_socket = socket_path("tuic-down.sock");
     let output = bg_command(&log)
@@ -415,42 +469,20 @@ fn bg_retries_a_missing_socket_until_tuic_returns() {
     assert!(output.status.success());
     let exit_file = std::path::PathBuf::from(format!("{}.exit", log.display()));
     let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
-    let marker = std::path::PathBuf::from(format!("{}.markers/caller-1.json", log.display()));
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while serde_json::from_slice::<serde_json::Value>(&std::fs::read(&marker).unwrap_or_default())
-        .ok()
-        .and_then(|record| record["attempts"].as_u64())
-        .unwrap_or(0)
-        == 0
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let retrying: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
-    assert_eq!(retrying["status"], "retrying");
-    let listener = UnixListener::bind(&missing_socket).unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        reply(
-            &mut stream,
-            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
-        );
-        let (mut stream, _) = listener.accept().unwrap();
-        reply(&mut stream, r#"{"typed":false,"queued":1}"#);
-    });
-    wait_for(&wake_file);
+    let wake_status = wait_for_terminal_wake(&wake_file);
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "9");
-    let wake_status: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&wake_file).unwrap()).unwrap();
-    assert_eq!(wake_status["status"], "queued");
-    assert_eq!(wake_status["session_id"], "caller-1");
-    assert!(wake_status["attempts"].as_u64().unwrap() >= 2);
-    server.join().unwrap();
+    assert_eq!(wake_status["status"], "failed");
+    assert_eq!(wake_status["attempts"], 6);
+    assert_eq!(wake_status["tuic_session"], "caller-1");
+    assert!(
+        wake_status["error"]
+            .as_str()
+            .unwrap()
+            .contains("Cannot connect")
+    );
     std::fs::remove_file(exit_file).unwrap();
     std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
-    std::fs::remove_file(missing_socket).unwrap();
 }
 
 #[test]
@@ -509,6 +541,8 @@ fn bg_creates_missing_log_directories_and_wakes_caller() {
     let (first, second) = server.join().unwrap();
     assert_eq!(first.0, "GET /sessions HTTP/1.1");
     assert_eq!(second.0, "POST /sessions/pty-1/queue HTTP/1.1");
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    assert_eq!(wait_for_terminal_wake(&wake_file)["status"], "queued");
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_file(socket).unwrap();
 }
@@ -550,21 +584,6 @@ fn bg_command_survives_killing_its_launchers_process_group() {
 
     let log = test_path("group.log");
     let marker = test_path("group.marker");
-    let socket = socket_path("group.sock");
-    let listener = UnixListener::bind(&socket).unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        reply(&mut stream, "[]");
-        let (mut stream, _) = listener.accept().unwrap();
-        let _ = read_request(&mut stream);
-        let body = r#"{"error":"mail unavailable"}"#;
-        write!(
-            stream,
-            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .unwrap();
-    });
     let mut shell = Command::new("sh");
     shell.args([
         "-c",
@@ -576,7 +595,7 @@ fn bg_command_survives_killing_its_launchers_process_group() {
     ]);
     shell
         .env("TUIC_SESSION", "caller-1")
-        .env("TUIC_SOCKET", &socket)
+        .env("TUIC_SOCKET", socket_path("absent.sock"))
         .env("TUIC_BG_WAKE_DIR", format!("{}.markers", log.display()))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -602,10 +621,7 @@ fn bg_command_survives_killing_its_launchers_process_group() {
         marker.exists(),
         "detached command died with the launcher group"
     );
-    wait_for(&std::path::PathBuf::from(format!("{}.wake", log.display())));
-    server.join().unwrap();
     std::fs::remove_file(format!("{}.exit", log.display())).unwrap();
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(marker).unwrap();
-    std::fs::remove_file(socket).unwrap();
 }
