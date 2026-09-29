@@ -62,7 +62,7 @@
 
 ## Mobile Files and editor (story 1225-60e7)
 
-- [ ] On a 360×800 phone PWA, open Files and long-press a repository path: the full path should appear without opening the repository. Open a deep folder and confirm the header keeps its final folder name visible, while paths ending in `src/.claude/` keep the slash on the right. Check that ordinary folders precede hidden folders; search for a file in a nested folder and open it. In View and Edit, Back, file name, and actions should share one row with touch-sized buttons; the editor should fill the space above the bottom tabs and wrap long lines. Return to a session with an unsent draft and confirm Browse Files did not submit or change the draft.
+- [ ] On a 360×800 phone PWA, open Files and long-press a repository path: the full path should appear without opening the repository. Open a deep folder and confirm the header keeps its final folder name visible, while paths ending in `src/.claude/` keep the slash on the right. Check that ordinary folders precede hidden folders; search for a file in a nested folder and open it. In View and Edit, Back, file name, and actions should share one row with touch-sized buttons; the editor should fill the space above the bottom tabs and wrap long lines. Return to a session with an unsent draft and confirm Browse Files did not submit or change the draft. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Claude dismissed question (story 1213-82e1) — Rust restart required
 
@@ -70,19 +70,19 @@
 
 ## Mobile session header (story 1203-fe36)
 
-- [ ] [HUMAN] After the frontend reloads, open Codex and Claude sessions on a 360×800 phone. Confirm each shows the correct 24 px logo and state dot, the display name remains readable, and the 56 px header leaves the terminal starting near y58 with no lost rows. Tap the name, Tasks, and overflow Progress to inspect the temporary sheets; check Files, Search, Ideas, Commands, and terminate remain reachable from overflow. Automated component tests cover the button actions and session binding; a real phone check remains.
+- [ ] [HUMAN] After the frontend reloads, open Codex and Claude sessions on a 360×800 phone. Confirm each shows the correct 24 px logo and state dot, the display name remains readable, and the 56 px header leaves the terminal starting near y58 with no lost rows. Tap the name, Tasks, and overflow Progress to inspect the temporary sheets; check Files, Search, Ideas, Commands, and terminate remain reachable from overflow. Automated component tests cover the button actions and session binding; a real phone check remains. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat prompt parking (story 1228-becb)
 
-- [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.
+- [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile global AI Chat (story 1208-b371)
 
-- [ ] On the phone PWA after `make dev` serves this frontend, tap Chat with multiple repositories registered. Confirm there is no repository picker, the same titled conversations as desktop appear, and a push link opens its conversation without changing the chat root. Switch to a session and confirm the terminal keeps the same visible row count as before this change.
+- [ ] On the phone PWA after `make dev` serves this frontend, tap Chat with multiple repositories registered. Confirm there is no repository picker, the same titled conversations as desktop appear, and a push link opens its conversation without changing the chat root. Switch to a session and confirm the terminal keeps the same visible row count as before this change. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile terminal states (story 1211-e1f4)
 
-- [ ] On a 360×800 phone PWA, check a working, idle, awaiting-input and completed-unseen terminal in the session list. Verify the corresponding blue, green, orange and purple status colors. Open the completed session: the header should show Idle and the terminal should retain the same visible row count as before this change.
+- [ ] On a 360×800 phone PWA, check a working, idle, awaiting-input and completed-unseen terminal in the session list. Verify the corresponding blue, green, orange and purple status colors. Open the completed session: the header should show Idle and the terminal should retain the same visible row count as before this change. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Dictation Metal release link (story 1198-535b) — Rust rebuild required
 
@@ -90,7 +90,7 @@
 
 ## Mobile slash commands (story 1199-7b8d)
 
-- [ ] On the phone PWA, open disposable Claude Code and Codex sessions. Type a supported slash command (`/help` in Claude, `/status` in Codex) and press Send; confirm it opens once. In each session, type a slash prefix, choose that command from the suggested slash menu, then press Send; confirm it opens once. In Claude, submit `/model` with an argument and confirm the argument reaches the command. Confirm the Codex quick-command widget offers `/status` and that it opens Status. The current `make dev` frontend must reload the new bundle before this check.
+- [ ] On the phone PWA, open disposable Claude Code and Codex sessions. Type a supported slash command (`/help` in Claude, `/status` in Codex) and press Send; confirm it opens once. In each session, type a slash prefix, choose that command from the suggested slash menu, then press Send; confirm it opens once. In Claude, submit `/model` with an argument and confirm the argument reaches the command. Confirm the Codex quick-command widget offers `/status` and that it opens Status. The current `make dev` frontend must reload the new bundle before this check. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## PTY close reason logging (story 1194-31e8) — Rust restart required
 
@@ -132,15 +132,15 @@
 
 ## Push-to-talk sustained speech (story 1135-b600) — Rust restart required
 
-- [ ] [HUMAN] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, record a short noise burst, ordinary speech, and quiet genuine speech with push-to-talk. Confirm that only sustained speech reaches the prompt and that a rejected capture shows `no sustained speech` in the dictation ring. The synthetic command tests cover duration and threshold boundaries; the real microphone separation remains unverified and is tracked by story 1117.
+- [ ] [HUMAN] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, record a short noise burst, ordinary speech, and quiet genuine speech with push-to-talk. Confirm that only sustained speech reaches the prompt and that a rejected capture shows `no sustained speech` in the dictation ring. The synthetic command tests cover duration and threshold boundaries; the real microphone separation remains unverified and is tracked by story 1117. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Push-to-talk final skip reason (story 1140-28e3) — Rust restart required
 
-- [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, use a microphone capture that triggers a final RMS or Whisper speech gate. Confirm the dictation status and ring show the specific gate reason. An empty successful transcript still shows `no speech detected`. The focused Rust command tests prove response mapping without a microphone; live audio remains unverified.
+- [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, use a microphone capture that triggers a final RMS or Whisper speech gate. Confirm the dictation status and ring show the specific gate reason. An empty successful transcript still shows `no speech detected`. The focused Rust command tests prove response mapping without a microphone; live audio remains unverified. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat persistent approval (story 1147-33ec)
 
-- [ ] **[HUMAN]** In an isolated AI Chat conversation, trigger a permission request offering both Allow once and Allow always. Confirm Allow always appears enabled and visually distinct from a disabled control, then click it and confirm the persistent option is selected. The component test verifies the click and success-color token; automated screenshot attempts timed out in agent-browser, and macOS denied Screen Recording to both capture tools.
+- [ ] **[HUMAN]** In an isolated AI Chat conversation, trigger a permission request offering both Allow once and Allow always. Confirm Allow always appears enabled and visually distinct from a disabled control, then click it and confirm the persistent option is selected. The component test verifies the click and success-color token; automated screenshot attempts timed out in agent-browser, and macOS denied Screen Recording to both capture tools. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat layout and composer (story 1166-ef2f)
 
@@ -162,12 +162,12 @@
 
 ## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## ACP ego peer identity (story 1073-3431) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open AI Chat with ego configured and verify its MCP bridge appears in `agent list_peers` as an `ego` peer without a terminal; send mail, reconnect, restart, and verify the same peer UUID can read it with `agent wait`.
-- [ ] Spawn a child from that ACP bridge and verify `parent_session_id` equals the AI Chat peer UUID. Submit blocked progress and verify the desktop progress event carries the ACP conversation ID and the away-state mobile push is emitted when push is configured.
+- [ ] Spawn a child from that ACP bridge and verify `parent_session_id` equals the AI Chat peer UUID. Submit blocked progress and verify the desktop progress event carries the ACP conversation ID and the away-state mobile push is emitted when push is configured. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Codex approval cancellation (story 1125-f4ea) — Rust restart required
 
@@ -183,7 +183,7 @@
 
 ## AI Chat image paste (story 1085-fa65)
 
-- [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified.
+- [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat conversation recovery (story 1071-46c9) — Rust restart required
 
@@ -191,7 +191,7 @@
 
 ## Windows Codex npm launcher — Rust restart required (story 987-c0ca)
 
-- [ ] On a Windows build with npm's adjacent `codex` and `codex.cmd` shims, restart TUICommander and launch Codex from the agent menu. Confirm the help probe selects `codex.cmd`, reports `--no-alt-screen` support, and the new session stays on the primary screen. The targeted Rust test passed for the adjacent shims; native Windows execution remains to be checked.
+- [ ] On a Windows build with npm's adjacent `codex` and `codex.cmd` shims, restart TUICommander and launch Codex from the agent menu. Confirm the help probe selects `codex.cmd`, reports `--no-alt-screen` support, and the new session stays on the primary screen. The targeted Rust test passed for the adjacent shims; native Windows execution remains to be checked. _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
 
 ## Agent Enter gap (stories 974-254a, 975-1de1) — Rust restart required
 
@@ -280,13 +280,13 @@
 
 ## Mobile remote sessions, Progress, and Activity — Rust restart required
 
-- [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone.
-- [ ] [HUMAN] A connected remote session should show live output through WebSocket; create and close only a throwaway remote session from mobile, then confirm it disappears on its owner. Disconnect that machine and confirm the stale session shows unavailable rather than a misleading local 404.
-- [ ] [HUMAN] Open mobile Progress with no desktop repository selected. It should select the newest journal project, show saved done/blocked entries, and allow switching projects. Open Activity and confirm persisted active events appear while dismissed events stay hidden. The backend routes and store shape have targeted automated tests; the real phone remains to be checked.
+- [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] A connected remote session should show live output through WebSocket; create and close only a throwaway remote session from mobile, then confirm it disappears on its owner. Disconnect that machine and confirm the stale session shows unavailable rather than a misleading local 404. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] Open mobile Progress with no desktop repository selected. It should select the newest journal project, show saved done/blocked entries, and allow switching projects. Open Activity and confirm persisted active events appear while dismissed events stay hidden. The backend routes and store shape have targeted automated tests; the real phone remains to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Progress toast dismissal (story 1061-7694) — after the fixed frontend loads
 
-- [ ] Tap a Progress toast body on desktop while another repository is active; it should close without changing the repository or terminal. On a second toast, use **Go to repo** and confirm it opens the reporting workspace. On mobile, tapping the toast body should close it without opening its action. Targeted component tests verify these paths; check the loaded UI after this branch is integrated.
+- [ ] Tap a Progress toast body on desktop while another repository is active; it should close without changing the repository or terminal. On a second toast, use **Go to repo** and confirm it opens the reporting workspace. On mobile, tapping the toast body should close it without opening its action. Targeted component tests verify these paths; check the loaded UI after this branch is integrated. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Embedded external links (story 989-63fa) — after Rust rebuild
 
@@ -294,7 +294,7 @@
 
 ## Mobile repository files (story 1063-3fe1) — real phone
 
-- [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, open a `.md` file in rendered View, switch to Edit, change its source and save, then confirm the updated rendered View and saved content from the desktop. Check another text file stays plain text and that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior.
+- [ ] [HUMAN] On a phone connected to an isolated TUICommander test instance, open Files, select a disposable repository, browse into a directory, open a `.md` file in rendered View, switch to Edit, change its source and save, then confirm the updated rendered View and saved content from the desktop. Check another text file stays plain text and that a file over 1 MB and a binary file show a refusal. Targeted Vitest covers these flows; a responsive desktop-browser screenshot does not verify touch and mobile keyboard behavior. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Editor links and external Markdown tabs (2026-09-27)
 
@@ -319,7 +319,7 @@
 
 ## Mobile notification tags (story 1042-f5ca) — updated service worker
 
-- [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification.
+- [ ] [HUMAN] On a real subscribed phone after the updated service worker takes control, receive questions from two different sessions. Confirm both notifications stay visible and each opens its own session. Send another push for one session and confirm the other remains. The targeted service-worker test verifies tag replacement and both click deep links; the phone's notification UI requires real device verification. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Rust test temp root (story 980-420e) — Rust, needs `make dev` restart
 
@@ -327,7 +327,7 @@
 
 ## Mobile completion push limit (story 1041-cdc7) — Rust, needs `make dev` restart
 
-- [ ] [HUMAN] After restarting `make dev` when Boss is ready to end the current sessions, use a real subscribed phone while the desktop is away. Trigger a titled question followed immediately by session completion; confirm the phone displays one notification. Real phone delivery and display cannot be verified by the local HTTP push receiver. The targeted Rust test verifies accepted push requests, expiry after 30 seconds, and independent session limits.
+- [ ] [HUMAN] After restarting `make dev` when Boss is ready to end the current sessions, use a real subscribed phone while the desktop is away. Trigger a titled question followed immediately by session completion; confirm the phone displays one notification. Real phone delivery and display cannot be verified by the local HTTP push receiver. The targeted Rust test verifies accepted push requests, expiry after 30 seconds, and independent session limits. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Managed agent workspace trust (2026-09-26) — Rust, needs `make dev` restart
 
@@ -352,7 +352,7 @@
 ## Remote update and restart — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once through the daemon restart, live sessions show a manual offer with a count that refreshes while connected, and a failed update shows its error. During automatic transfer, confirm the manual update button is disabled; a stalled transfer eventually reports a timeout and resumes connection checks. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart.
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 
 ## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart
 
@@ -396,7 +396,7 @@
 
 ## Codex dictation auto-send (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check.
+- [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## File browser default (2026-09-25) — Rust, needs `make dev` restart
 
@@ -422,7 +422,7 @@
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
-- [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_
+- [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_ _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
 ## Streaming Progress intents (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `make dev` instance, stream an `intent:` line in a narrow Codex or Ink terminal. The Progress journal gets the complete text and title once, including an indented hard-wrap row; closing a tab with a title-less open intent preserves one final entry. Check that a token in a done/blocked report is redacted in the journal.
@@ -473,7 +473,7 @@
 - [x] After a `make dev` restart, with a `config.json` that has no `disabled_native_tools` key (use `TUIC_APP_INSTANCE=<id>` and remove the key from that instance's config), the `config` and `debug` MCP tools are absent from `tools/list` and show as disabled in Settings. _(verified 2026-09-29: instance config.json has no disabled_native_tools key; tools/list omits config and debug (Settings display not checked here))_
 ## Agent list on the `+` buttons (2026-09-25) — frontend, HMR
 
-- [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu.
+- [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
 
@@ -481,7 +481,7 @@
 
 ## Mobile terminal prose reflow (2026-09-24) — frontend, refresh PWA
 
-- [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment.
+- [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Voice library, voice files, Listen and loudness sliders (2026-09-24) — Rust + frontend, needs `make dev` restart
 
@@ -491,7 +491,7 @@ Settings > Voice > Spoken replies, with the Italian bundle and the runtime downl
 - [ ] [VISUAL] Take a screenshot of the Spoken replies section. The group titles (Installed, Downloadable, Yours), the voice rows, the Listen button beside the voice picker and the two slider labels follow `docs/frontend/STYLE_GUIDE.md`.
 - [ ] Download one catalogue voice from Downloadable. The progress bar moves; when it ends, the row moves to Installed and the voice appears in the voice picker.
 - [ ] Click "Add voice file…" and choose a valid Italian `.safetensors` voice. It appears under Yours and in the picker, and it speaks when selected. Choose a 24-layer (French) voice or a file that is not a voice: the reason shows under the button and nothing is added. The × on a Yours row deletes the file. Add a file with the same name as a voice under Yours: it is refused with "You already have a voice called … delete it first or choose another name", and the stored voice still speaks as before.
-- [ ] [HUMAN] With no hands-free conversation, click Listen and listen: the sample is audible, in the selected voice, at the Voice volume level, and the saved voice does not change. Start hands-free, let the agent speak a reply, and click Listen while it plays: the refusal shows inline. _(2026-09-24 isolated instance voice0924: `POST /dictation/speech/voices/preview` with hands-free not armed returned 200 for giovanni, alba and an imported voice, and the output device accepted the audio; UI Listen with alba showed no error. Nobody listened, so audibility is unverified.)_
+- [ ] [HUMAN] With no hands-free conversation, click Listen and listen: the sample is audible, in the selected voice, at the Voice volume level, and the saved voice does not change. Start hands-free, let the agent speak a reply, and click Listen while it plays: the refusal shows inline. _(2026-09-24 isolated instance voice0924: `POST /dictation/speech/voices/preview` with hands-free not armed returned 200 for giovanni, alba and an imported voice, and the output device accepted the audio; UI Listen with alba showed no error. Nobody listened, so audibility is unverified.)_ _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] Move Voice volume and Levelling and release. The next reply is louder or quieter and more or less even, without a restart. At -12 dB with Strong there is no clipping.
 
 HTTP import and delete (use the test instance on `:9877`):
@@ -509,7 +509,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Spoken replies at one level (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping.
+- [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] Set `speech_volume_db` to -24 in `dictation-config.json` through the settings save (`set_dictation_config`) while a reply is queued. The queued reply is not cut off, and the next reply is quieter. The same change is also available from the Voice volume slider in Settings > Voice > Spoken replies.
 - [ ] An existing `dictation-config.json` with neither field loads with -18 dB and 0.67 levelling (`GET /dictation/config` or `get_dictation_config`).
 
@@ -547,7 +547,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Hands-free from the Command Palette (2026-09-23) — frontend only, Vite HMR
 
-- [ ] [HUMAN] With dictation enabled, open the Command Palette on an agent tab and run "Start hands-free conversation". Speak a sentence: it reaches that tab and the first earcon plays (priming happened inside the palette click). Switch tabs and reopen the palette: the entry reads "Stop hands-free conversation"; run it and the conversation stops.
+- [ ] [HUMAN] With dictation enabled, open the Command Palette on an agent tab and run "Start hands-free conversation". Speak a sentence: it reaches that tab and the first earcon plays (priming happened inside the palette click). Switch tabs and reopen the palette: the entry reads "Stop hands-free conversation"; run it and the conversation stops. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Reply language stated once per hands-free conversation (2026-09-23) — Rust, needs `make dev` restart
 
@@ -561,7 +561,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Activation phrase survives Whisper's spelling (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] [HUMAN] After a `make dev` restart, with the activation phrase `senti mac`, arm hands-free and say three sentences that begin with "senti mac". Each one is queued, without the phrase. Then say "senti, ma che ore sono?" to someone else: it is dropped. For every dropped turn, `curl 'localhost:9876/logs?source=dictation'` shows the line `Hands-free turn dropped…` with a `heard=` field that holds the first four words Whisper wrote.
+- [ ] [HUMAN] After a `make dev` restart, with the activation phrase `senti mac`, arm hands-free and say three sentences that begin with "senti mac". Each one is queued, without the phrase. Then say "senti, ma che ore sono?" to someone else: it is dropped. For every dropped turn, `curl 'localhost:9876/logs?source=dictation'` shows the line `Hands-free turn dropped…` with a `heard=` field that holds the first four words Whisper wrote. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Parked voice turns leave together (2026-09-23) — Rust, needs `make dev` restart
 
@@ -575,14 +575,14 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Echo reference covers the whole reply (2026-09-23) — Rust, needs a `make dev` restart
 
-- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask for a reply of at least 10 seconds. The reply plays to the end without cutting itself off, and no turn arrives that repeats its words. In `tuic.log`, no `speech: hushed` line appears during the reply, and there is no `echo: far-end reference full` warning.
-- [ ] [HUMAN] Talk over a long reply after its first 3 seconds. It stops. The log shows `speech: hushed` with `speaking=true` and an `into_playback_ms` above 3000, then `Hands-free turn accepted heard=` with your words.
+- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask for a reply of at least 10 seconds. The reply plays to the end without cutting itself off, and no turn arrives that repeats its words. In `tuic.log`, no `speech: hushed` line appears during the reply, and there is no `echo: far-end reference full` warning. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] Talk over a long reply after its first 3 seconds. It stops. The log shows `speech: hushed` with `speaking=true` and an `into_playback_ms` above 3000, then `Hands-free turn accepted heard=` with your words. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Barge-in waits for sustained speech (2026-09-23) — Rust, needs a `make dev` restart
 
-- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask a question. The spoken reply plays to the end unless you talk over it. Talk over a second reply: it stops within about a quarter of a second, and your first words are in the transcript.
-- [ ] [HUMAN] After the restart, in hands-free, say half a sentence, pause about a second, and finish it before the hold-back ends. One turn arrives with both halves; the first half is not sent alone.
-- [ ] [HUMAN] After the restart, arm hands-free with the activation phrase on the desktop. Say a phrase, pause about four seconds, then continue without the phrase. The pending text gains the continuation and the agent receives one message after the final five-second window. Check the microphone level while TTS plays and whether the reply's own words appear as a new turn; these acoustic and gain observations require the real device.
+- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask a question. The spoken reply plays to the end unless you talk over it. Talk over a second reply: it stops within about a quarter of a second, and your first words are in the transcript. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] After the restart, in hands-free, say half a sentence, pause about a second, and finish it before the hold-back ends. One turn arrives with both halves; the first half is not sent alone. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] After the restart, arm hands-free with the activation phrase on the desktop. Say a phrase, pause about four seconds, then continue without the phrase. The pending text gains the continuation and the agent receives one message after the final five-second window. Check the microphone level while TTS plays and whether the reply's own words appear as a new turn; these acoustic and gain observations require the real device. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Calm hands-free voice meter (2026-09-23) — frontend via HMR; the Rust level fallback needs a `make dev` restart
 
@@ -605,7 +605,7 @@ HTTP import and delete (use the test instance on `:9877`):
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
 - [x] Download reaches Ready with no hash error _(verified 2026-09-23: `POST /dictation/speech/assets/download` for onnxruntime, italian, english, french; all `ready`, sha256 checked during install)_
-- [ ] [HUMAN] A hands-free reply in Italian is spoken with the giovanni voice (`/dictation/speech/speak` refuses while hands-free is not armed).
+- [ ] [HUMAN] A hands-free reply in Italian is spoken with the giovanni voice (`/dictation/speech/speak` refuses while hands-free is not armed). _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] **Rust, needs another `make dev` restart:** arm hands-free on a hand-opened Claude tab, then `voice action=status` from that tab reports `available: true` instead of "Speech is bound to another session" (caller now resolved to its live PTY, `resolve_mcp_origin_pty`).
 - [ ] Settings → Dictation → Spoken replies lists English, French, German, Italian, Portuguese and Spanish. Set the Whisper language to English, download English, and a hands-free reply is spoken in English with the alba voice.
 - [ ] French (24-layer, ~390 MB): download and speak one reply. The engine reads the layer count from `bundle.json`, but no 24-layer bundle has been run here before.
@@ -644,7 +644,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Mobile Progress header (story 1214-2b95)
 
-- [ ] [HUMAN] On a 360 px and a 390 px phone, open the Progress tab with a project available. Confirm the title, project and terminal selectors, **List | Flow**, and **Blocked only** are visible without horizontal scrolling; tap both view choices and the filter. Browser geometry at those widths is checked separately; this item covers real touch and device rendering.
+- [ ] [HUMAN] On a 360 px and a 390 px phone, open the Progress tab with a project available. Confirm the title, project and terminal selectors, **List | Flow**, and **Blocked only** are visible without horizontal scrolling; tap both view choices and the filter. Browser geometry at those widths is checked separately; this item covers real touch and device rendering. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Progress Flow view (2026-09-23) — **Rust, needs a `make dev` restart**
 
@@ -830,13 +830,13 @@ tab being closed.
       hotkey and the microphone-device list must be **absent**.
 - [ ] Press Start on a terminal running an agent. The browser must ask for
       microphone permission, and the phase must reach `waiting`.
-- [ ] **[HUMAN]** Hold a complete turn: speak, see the transcript delivered to
+- [ ] **[HUMAN]** Hold a complete turn: speak, see the transcript delivered to _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       the agent, and hear the reply **through the browser's speakers** — not
       through the machine running TUICommander. Check the other machine is
       silent.
-- [ ] **[HUMAN]** Barge in mid-reply. The reply must stop where you are, not
+- [ ] **[HUMAN]** Barge in mid-reply. The reply must stop where you are, not _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       merely stop being sent.
-- [ ] **[HUMAN]** Close the tab mid-utterance. The conversation must disarm
+- [ ] **[HUMAN]** Close the tab mid-utterance. The conversation must disarm _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       (`GET /dictation/hands-free` reports `armed: false`), nothing may stay
       queued, and nothing may be left speaking.
 - [ ] Arm from the desktop app while a browser tab holds an audio socket. The
@@ -954,12 +954,12 @@ handlers. The window emit is now limited to `session-state-changed` and
 `session-closed`, every mirrored payload carries `__tuic_origin`, and a frame
 that already has one is dropped.
 
-- [ ] Connect mac-mint, start a PTY **on mac-mint** (ssh in, `tuic session` there,
+- [ ] Connect mac-mint, start a PTY **on mac-mint** (ssh in, `tuic session` there, _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       or its own UI). This Mac must show it as a session-list row with the remote
       badge and **no new tab** — no `PTY: Session N`.
 - [ ] Its busy/idle/question badge still moves from here while it works. That is
       the one thing the window emit is still allowed to carry.
-- [ ] Open a repo folder on mac-mint from its own UI: no repository appears in
+- [ ] Open a repo folder on mac-mint from its own UI: no repository appears in _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       this Mac's sidebar, and no git work runs here for that path.
 - [x] Add a **Direct** connection whose URL is this machine's own daemon
       (`http://127.0.0.1:9876`). Connect must fail with "this very TUICommander
@@ -1055,7 +1055,7 @@ a real ssh process.
       _(verified 2026-09-20: zero occurrences in the daemon log after the remote,
       loopback and untagged runs above, and the client decoded every deflated frame it
       received — `decode_errors: 0` on all three.)_
-- [ ] Settings → Services → SSH Tunnels → edit a profile: **Compress the channel (ssh -C)** is on. Save, start the tunnel, and confirm with `ps ax | grep "[s]sh -N"` that the command line holds `-o Compression=yes`. Untick it, restart the tunnel, confirm `Compression=no`.
+- [ ] Settings → Services → SSH Tunnels → edit a profile: **Compress the channel (ssh -C)** is on. Save, start the tunnel, and confirm with `ps ax | grep "[s]sh -N"` that the command line holds `-o Compression=yes`. Untick it, restart the tunnel, confirm `Compression=no`. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 - [ ] Open a repository through an **SSH remote connection** and attach a terminal. The stream socket asks for `compress=deflate` (the client sees a remote connection) but the daemon answers identity tags because the peer is loopback — the terminal must still work, and the saving comes from the tunnel instead.
       _(NOTE 2026-09-20: the **daemon half is proven** — the same probe run on mac-mint
       against `127.0.0.1:9879` with `?compress=deflate` got 10 tagged frames and **not
@@ -1107,8 +1107,8 @@ test can reach is the live process: these are the checks that need one.
 
 ## Launch-scoped native agent status signals (story `746-30a9`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab.
-- [ ] [HUMAN] After restarting `make dev`, launch Codex 0.154, complete a turn, and confirm its payload contains `type`, `turn-id`, and `last-assistant-message`, OSC 7770 idle reaches the PTY, and the existing Codex `notify` command receives the unchanged JSON argument.
+- [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] After restarting `make dev`, launch Codex 0.154, complete a turn, and confirm its payload contains `type`, `turn-id`, and `last-assistant-message`, OSC 7770 idle reaches the PTY, and the existing Codex `notify` command receives the unchanged JSON argument. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] On a machine that has `fish` installed, run `cargo nextest run --lib -E 'test(shell_integration)'`. The `tests::launch` matrix runs the inject / skip-when-user-passed / setting-off cases against every shell it finds, but fish is absent from this Mac and from the `ubuntu-22.04` CI image, so the fish half of that matrix has never executed — the fish wrapper is covered only by the structural `fish_wrappers_cover_inject_user_override_skip_and_setting_off` grep. Nothing to change if it passes; delete this item.
 
 Features to test when TUICommander is more usable.
@@ -1960,7 +1960,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
 `SessionStart`, `Stop`, `UserPromptSubmit`) and **0** TUIC references. The
 `699-c6e0` premise and the hook-reinstall item are both unchanged.
 
-- [ ] [HUMAN] Install any of `amp`, `cursor-agent`, `goose` or `droid` and capture an
+- [ ] [HUMAN] Install any of `amp`, `cursor-agent`, `goose` or `droid` and capture an _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   idle and a mid-turn screen for it (story `699-c6e0`). All four are offered as
   launchable agents (`src/agents.ts:188-275`) but none has a ready-screen adapter
   (`has_ready_screen_adapter`, `pty.rs:3245`), so a tab running one latches busy for
@@ -1975,13 +1975,13 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   enough. Hand the files over — writing the adapter is code work and stays on
   `699-c6e0`, not a check.
 
-- [ ] [HUMAN] Under `make dev`, edit any file in `src/` to force a Vite full reload
+- [ ] [HUMAN] Under `make dev`, edit any file in `src/` to force a Vite full reload _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   (story #716-031e). Every terminal pane must come back filling its pane, with no
   window resize: no small canvas in the top-left corner with black around it, and
   scrolling must show every row. Split a pane and reload again — both halves. Canvas
   geometry is not observable over HTTP, which is why this is by eye.
 
-- [ ] [HUMAN] Reinstall the TUIC hooks from Settings → Agents, then confirm
+- [ ] [HUMAN] Reinstall the TUIC hooks from Settings → Agents, then confirm _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   `~/.claude/settings.json` gains TUIC references (measured 2026-09-06: 5 hook
   events present, **0** TUIC references). Then trigger a real elicitation — a
   Context7 sign-in prompt will do — and check the tab badges as awaiting and
@@ -1993,28 +1993,28 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   `POST /diagnostics/capture` — and hand the `.tcap` over; the fixture is code
   work and becomes a story, not a check.
 
-- [ ] [HUMAN] In a release `.app`, hold `j`/`l`/`i` in vim: the cursor repeats and no
+- [ ] [HUMAN] In a release `.app`, hold `j`/`l`/`i` in vim: the cursor repeats and no _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   accent picker appears. Option-key composition must still produce accented
   characters, and a user with `defaults write -g ApplePressAndHoldEnabled -bool true`
   must keep their override (the registration domain is lowest priority). Needs the
   release bundle domain — `press_and_hold.rs`, called from the `lib.rs` setup — and
   real key-repeat hardware. (#79)
-- [ ] [HUMAN] Settings → Notifications → Attention → Test in a rebuilt app: the native
+- [ ] [HUMAN] Settings → Notifications → Attention → Test in a rebuilt app: the native _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   engine matches the sample Boss approved on 2026-08-09 (triangular G4→G4→E5,
   75/75/140 ms, 50 ms gaps, gain 0.8) and stays identifiable from another room
   without being irritating. Audio, judged by ear.
-- [ ] [HUMAN] Copy a long Claude message out of the terminal and paste it into Slack:
+- [ ] [HUMAN] Copy a long Claude message out of the terminal and paste it into Slack: _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   no `▎` gutter and no gutter NBSPs, while lists, blank lines, indentation, `:wave:`
   and the body spacing survive unchanged. The text itself is asserted by nine Rust
   tests (`cargo nextest -E 'test(copied_selection)'`, `tuic-terminal/src/terminal_grid.rs:1687`); the
   paste is not. Tried twice from automation — `agent-browser clipboard read` fails
   with `Resource temporarily unavailable (os error 35)`.
-- [ ] [HUMAN] Drag a file out of the file browser onto Finder, and drop a large folder
+- [ ] [HUMAN] Drag a file out of the file browser onto Finder, and drop a large folder _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   from Finder into the app. The first is a real cross-application OS drag. The second
   confirms a **deliberate** gap, not a regression: `fs_transfer_paths` (`fs.rs:1624`)
   is still synchronous on the main thread because it is the drag-and-drop backend and
   D&D changes need Boss's approval.
-- [ ] [HUMAN] Install `zed`, put a comment, a trailing comma and hand-tuned indentation
+- [ ] [HUMAN] Install `zed`, put a comment, a trailing comma and hand-tuned indentation _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   in `~/.config/zed/settings.json`, install the bridge from Settings → Agents, and
   confirm Zed still starts, still shows every setting, and lists the `tuicommander`
   context server — `diff` against `<config dir>/mcp-backups/zed-settings.json.orig`
@@ -2022,28 +2022,28 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   confirm each client lost only its `tuicommander` entry and a relaunch does not put
   it back. Zed is not installed here, and a real client reading the file afterwards
   is the one thing the splice tests cannot cover. (issue #115)
-- [ ] [HUMAN] Compare OSC 133 gutter marks side by side, browser at `:9876` against the
+- [ ] [HUMAN] Compare OSC 133 gutter marks side by side, browser at `:9876` against the _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   desktop app, on the same session: same rows, same size, neither client stealing the
   other's dirty rows. Canvas painting is not observable over HTTP, and both clients
   have to be visible at once. (Port corrected 2026-09-07 from `:9877` — only one
   instance runs, and it serves 9876; a browser pointed at 9877 gets nothing.)
-- [ ] [HUMAN] Open `vim` or `htop`: the wheel still goes to the app, `Shift+wheel`
+- [ ] [HUMAN] Open `vim` or `htop`: the wheel still goes to the app, `Shift+wheel` _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   scrolls TUIC history, and quitting restores the shell scrollback unchanged. The
   enter/exit half is covered by the `gh-run-watch.raw` replay test; mouse-reporting
   forwarding needs a real wheel. `lazygit` is not installed.
-- [ ] [HUMAN] Print a fullwidth char and overwrite half of it — `printf '\e[1;5H中'`
+- [ ] [HUMAN] Print a fullwidth char and overwrite half of it — `printf '\e[1;5H中'` _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   then `printf '\e[1;6HX'` — and confirm no ghost `中` survives beside the `X`. Scroll
   away and back to prove it is not just hidden by a later full-row reship. Canvas
   painting.
-- [ ] [HUMAN] Raise an MCP `ui action=confirm` and answer it on a phone at
+- [ ] [HUMAN] Raise an MCP `ui action=confirm` and answer it on a phone at _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   `/mobile.html`: the desktop dialog must disappear by itself, and the reverse must
   work too. Then, with a push subscription registered and the PWA closed, confirm the
   push carries the title. Needs a real phone and a real subscription.
-- [ ] [HUMAN] Comment a word that repeats many times in a markdown preview ("reason"
+- [ ] [HUMAN] Comment a word that repeats many times in a markdown preview ("reason" _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   ×18) and confirm the highlight lands on the occurrence you selected, and that
   selecting across an existing highlight hides "Add comment". The offsets are asserted
   in `tweakComments.test.ts`; where the highlight is *drawn* is not.
-- [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It
+- [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   is 58 GiB and a Trim forces a full rebuild of the running dev app, so no agent may
   run it. Trim against other repos' `target/` is covered.
 - [ ] Rust change, needs a `make dev` restart (stories #5525 / #8c80). Switch to a repo
@@ -3082,11 +3082,11 @@ build has the old behaviour until restart.
       instead answer `progress_tracking_disabled` on a report.
 - [ ] `repo action=progress_list` must still work; `progress_status`,
       `progress_pause`, `progress_clear` and `progress_export` must be gone.
-- [ ] The mobile PWA's Progress tab must render the same list full-bleed.
-- [ ] **[HUMAN]** Screenshot check against `docs/frontend/STYLE_GUIDE.md`:
+- [ ] The mobile PWA's Progress tab must render the same list full-bleed. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
+- [ ] **[HUMAN]** Screenshot check against `docs/frontend/STYLE_GUIDE.md`: _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       blocked entries red, `intent` muted and italic, the divider legible, the
       delete button appearing on row hover.
-- [ ] **[HUMAN]** Narrow the window to ~480px with a long entry on screen: the
+- [ ] **[HUMAN]** Narrow the window to ~480px with a long entry on screen: the _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       dialog must stay readable — it is `min(680px, 100vw - 48px)` wide and the
       text wraps with `overflow-wrap: anywhere` — and the header must keep the
       blocked-only toggle and the close button on one row (778-a9a6 criterion 8).
@@ -3146,7 +3146,7 @@ need a window server, so these are by hand.
       been dropped in the move.
 - [ ] Settings → Plugins → Install from Folder, and Tunnels → the SSH identity
       file browse button: both still pick.
-- [ ] **[HUMAN]** The crash path itself: let the Mac sleep with the display off,
+- [ ] **[HUMAN]** The crash path itself: let the Mac sleep with the display off, _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       wake it, and immediately open a picker. It must either open, or show the
       "system file dialog is unavailable" error — the app must NOT exit. This
       needs real standby, which no automated check here can reach.
@@ -3158,7 +3158,7 @@ Boss's running session. Restart first. A daemon to test against is already up:
 `mac-mint:9877`, user `stefano`, systemd user unit `tuic-remote`, running a
 headless build of this tree.
 
-- [ ] Settings → Services → Remote Machines → add a Direct connection to
+- [ ] Settings → Services → Remote Machines → add a Direct connection to _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       `http://mac-mint:9877` with the username and password. Connect: the status
       goes **Connected**, not "Not authenticated".
 - [ ] Same connection with a wrong password: the status reads **Not
@@ -3167,7 +3167,7 @@ headless build of this tree.
 - [ ] Edit an existing connection: the password field shows the "stored — leave
       blank to keep it" placeholder, and saving with it blank keeps the
       connection working.
-- [ ] Restart `tuic-remote` on mac-mint under a live connection. The daemon mints
+- [ ] Restart `tuic-remote` on mac-mint under a live connection. The daemon mints _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       a new token; within one poll (5s) the connection re-authenticates by itself
       and stays Connected.
 - [ ] **[VISUAL]** The password field and the vault hint render inside the
@@ -3181,17 +3181,17 @@ same restart as the item above and the same daemon (`mac-mint:9877`).
 - [ ] With the connection Connected, add a remote repo from it. The sidebar shows
       the repo with its remote badge and the git status, branch and file tree are
       the **remote machine's** — compare against `ssh mac-mint git -C <path> status`.
-- [ ] Open a terminal on that repo. It spawns on mac-mint: `hostname` and `pwd`
+- [ ] Open a terminal on that repo. It spawns on mac-mint: `hostname` and `pwd` _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       answer for the remote box, typing and resizing work, and closing the tab
       ends the session there (`ssh mac-mint` + check the daemon's `/sessions`).
-- [ ] Edit a file on mac-mint by hand while the repo is open locally. The git
+- [ ] Edit a file on mac-mint by hand while the repo is open locally. The git _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       panel and file tree refresh by themselves — the remote watcher and its SSE
       stream are doing it.
 - [ ] Commit and stage from the git panel on the remote repo. The commit lands on
       mac-mint, not on any local repo.
 - [ ] A local repo behaves exactly as before — no extra latency, no remote call.
       Confirm with `GET http://localhost:9876/logs?source=network`.
-- [ ] Stop `tuic-remote` on mac-mint with the repo still open. Repo operations
+- [ ] Stop `tuic-remote` on mac-mint with the repo still open. Repo operations _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       report "Remote connection … not connected" rather than showing local data.
 - [ ] Open a file from the remote repo in the editor and use Go to definition.
       mdkb has no remote route, so it runs locally against a path this machine
@@ -3206,7 +3206,7 @@ run in the backend; `remoteConnections.ts` only renders what the backend pushes.
 Every item below must behave exactly as it did before the move — that is the
 point of the story — plus the two things only the backend can do.
 
-- [ ] Connect a remote machine from Settings → Remote Machines. The status goes
+- [ ] Connect a remote machine from Settings → Remote Machines. The status goes _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       Connecting → Connected and the panel shows the protocol version.
 - [ ] Connect the same machine from a second client (browser at
       `http://localhost:9876/`) while the desktop app is open. **Both** panels
@@ -3218,7 +3218,7 @@ point of the story — plus the two things only the backend can do.
       connection re-authenticates by itself and stays Connected. This is now a
       Rust task, so it keeps working with the TUICommander window closed to the
       tray or the WebView asleep — the case the WebView implementation lost.
-- [ ] Disconnect: the tab's remote sessions stop being routed, the SSH tunnel is
+- [ ] Disconnect: the tab's remote sessions stop being routed, the SSH tunnel is _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       gone (`ps aux | grep ssh` on this machine), and the Tunnels panel shows no
       leftover `__remote_*` profile — the tunnel is built in memory now.
 - [ ] Quit TUICommander with an SSH-transport connection live. No orphan `ssh`
@@ -3348,7 +3348,7 @@ of every agent installed on the machine it runs on — including this one, whose
 agent configs Boss uses. Running an unisolated daemon here rewrites them with
 the path it resolves for `tuic-bridge`.
 
-- [ ] Start the daemon and confirm `<config dir>/mcp.sock` exists (Windows:
+- [ ] Start the daemon and confirm `<config dir>/mcp.sock` exists (Windows: _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
       the `tuicommander-mcp` named pipe) while it runs.
 - [ ] Put `tuic-bridge` next to `tuic-remote`, launch an agent in a tab bound to
       a repo on that machine, and confirm it lists the `tuicommander` tools —
@@ -3395,7 +3395,7 @@ restart, not before.
 - [ ] With the master toggle ON, the AI Chat panel opens and shows the
       "moving to ego" shell with the focused terminal's name in its header; with
       it OFF the panel, its shortcut and its command-palette entry are absent.
-- [ ] SSH Tunnels still opens — it shares that master toggle.
+- [ ] SSH Tunnels still opens — it shares that master toggle. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 - [ ] Settings has no Providers tab and no AI Chat tab, and its search returns
       nothing for "provider", "triage" or "watcher".
 - [ ] The toolbar has no watcher eye next to the notification bell.
@@ -3446,14 +3446,14 @@ needs the `make dev` restart that #781-9652 is waiting on.
 
 - [ ] With **no** machine connected, the sidebar `+` must behave exactly as before:
       straight to the local native dialog, no menu. The picker must not appear.
-- [ ] With mac-mint connected, `+` opens the menu; picking it opens the browser
+- [ ] With mac-mint connected, `+` opens the menu; picking it opens the browser _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       showing `/` on **mac-mint**, not this Mac. Compare against
       `ssh mac-mint ls /`.
 - [ ] Walk to `/home/stefano/Gits`, press **Add This Folder** on a real repo. It
       lands in the sidebar with the remote badge, and its git status is the remote
       machine's.
 - [ ] Only folders are listed — no files.
-- [ ] Type a path that does not exist on mac-mint into the field and press Enter:
+- [ ] Type a path that does not exist on mac-mint into the field and press Enter: _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       the daemon's own message must show, not an empty folder.
 - [ ] Close the picker and reopen it for the same machine: it must resume where it
       was left, not at `/`.
@@ -3506,14 +3506,14 @@ Boss added a repo from mac-mint, the daemon went unreachable, and the only place
 that said so was Settings -> Remote Machines. Frontend-only, so Vite HMR already
 has it: no `make dev` restart needed.
 
-- [ ] With a remote machine in `error`/`disconnected` and at least one repo
+- [ ] With a remote machine in `error`/`disconnected` and at least one repo _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       registered on it, the status bar shows `Offline: <machine>` in red, and the
       tooltip points at Settings -> Remote Machines.
 - [ ] The sidebar badge on that repo reads `offline` in red instead of `remote`,
       and its tooltip names the machine and its state.
 - [ ] Reconnect the machine: the status-bar pill disappears and the badge goes
       back to a muted `remote` without a reload.
-- [ ] A remote machine with NO registered repo must NOT appear in the status bar
+- [ ] A remote machine with NO registered repo must NOT appear in the status bar _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       while disconnected — that is its normal resting state.
 
 ## Adding a remote repo must open ONE tab, not two (`usePty` pre-registration)
@@ -3524,7 +3524,7 @@ create is routed over HTTP to the daemon, whose `session-created` echo was not
 deduped because the guard keyed on `isTauri()` instead of "is this call routed
 to a remote connection". Covered by two new tests in `usePty.test.ts`.
 
-- [ ] Add a repo from a connected remote machine. Exactly one shell tab appears.
+- [ ] Add a repo from a connected remote machine. Exactly one shell tab appears. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 - [ ] Adding a LOCAL repo still opens one tab and the backend still mints the id.
 
 ### Root cause found while testing the above
@@ -3536,7 +3536,7 @@ store held nothing, so the status bar, the sidebar badge and `Sidebar.tsx`'s own
 dead one. Now hydrated once at startup in `useAppInit`; `hydrate()` is
 idempotent, so the panel still calls it.
 
-- [ ] Start the app WITHOUT opening Settings. A down remote machine holding a
+- [ ] Start the app WITHOUT opening Settings. A down remote machine holding a _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       repo must already show `Offline: <name>` in the status bar.
 
 ## Deleting a remote machine must take its connection with it (#803-f875)
@@ -3595,7 +3595,7 @@ call fits inside the router's bound.
       `sleep 600` wrapper) and press Connect in AI Chat: it must fail within a
       minute with "the agent did not answer initialize within 60s" instead of
       spinning forever, and leave no child behind.
-- [ ] Press Connect on a remote machine and navigate away immediately. The
+- [ ] Press Connect on a remote machine and navigate away immediately. The _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       machine must still reach `connected` (or `error`) — never stay stuck on
       `connecting`, which used to make every later Connect a silent no-op.
 
@@ -3609,7 +3609,7 @@ and the client then read the first byte of a grid row as a tag. The server now
 selects the `tuic.deflate` subprotocol when it is going to tag, and the client
 reads `ws.protocol` in `onopen` before the first frame.
 
-- [ ] Open a terminal on a remote machine over a **direct** (non-tunnel) link.
+- [ ] Open a terminal on a remote machine over a **direct** (non-tunnel) link. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       It renders normally, and DevTools shows the stream socket with
       `Sec-WebSocket-Protocol: tuic.deflate` on the 101.
 - [ ] Open a terminal on the same machine (local session). The socket asks for
@@ -3618,7 +3618,7 @@ reads `ws.protocol` in `onopen` before the first frame.
       commit). The terminal must render correctly — untagged framing — and the
       app log must carry "asked for compression and the server did not take it"
       rather than "could not decode a compressed frame" once per frame.
-- [ ] Open a terminal through an **SSH tunnel**. The frames must be tagged but
+- [ ] Open a terminal through an **SSH tunnel**. The frames must be tagged but _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       never deflated (`ssh -C` already compressed the channel), which is the
       `::ffff:127.0.0.1` case the canonical-address fix covers. Check CPU on the
       daemon stays flat while an agent repaints.
@@ -3674,10 +3674,10 @@ SUCCESS branch of a connect, which is why a machine whose first attempt failed
 sat in `error` until somebody pressed Connect — measured on mac-mint, answering
 200 throughout while the app showed it unreachable for forty minutes.
 
-- [ ] Start the app with a remote machine registered and REACHABLE, without
+- [ ] Start the app with a remote machine registered and REACHABLE, without _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       touching Settings. It must reach `connected` on its own, and the sidebar
       badge must read `remote` rather than `offline`.
-- [ ] Start the app with the remote machine OFF. It must show `offline`, and the
+- [ ] Start the app with the remote machine OFF. It must show `offline`, and the _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       backend must keep retrying — the wait doubles from 2s to a 60s ceiling.
       `GET http://localhost:9876/logs?source=remote` shows one `Connecting` line
       per attempt, spaced by a growing gap.
@@ -3694,7 +3694,7 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
 - [ ] Give a machine the WRONG password and connect. It must land in
       `unauthenticated` and STOP: no repeated attempts in the logs. Fix the
       password, press Connect, and it must start again.
-- [ ] Delete a remote machine while it is retrying. Nothing may keep probing it,
+- [ ] Delete a remote machine while it is retrying. Nothing may keep probing it, _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       and no entry for it may remain in the status bar.
 
 ## The website names warm copy-on-write worktrees
@@ -4058,16 +4058,16 @@ reverberation, no noise floor, no speaker distortion). See
 
 Needs a real microphone and a real speaker, in a room, with no headphones.
 
-- [ ] **[HUMAN]** Arm hands-free, ask something with a long answer, and let the
+- [ ] **[HUMAN]** Arm hands-free, ask something with a long answer, and let the _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       reply play **out of the laptop speaker**. Say nothing for the whole reply.
       The reply must finish. A reply that cuts itself off is the echo path
       failing on real reverberation, which the modelled room cannot produce.
-- [ ] **[HUMAN]** Same again, and talk over it after a couple of seconds. The
+- [ ] **[HUMAN]** Same again, and talk over it after a couple of seconds. The _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       reply must stop within about a quarter of a second, and the transcript
       that reaches the terminal must contain your **first** word — that is the
       pre-roll doing its job. A transcript that starts mid-sentence is the
       failure to report.
-- [ ] **[HUMAN]** Repeat both at a high speaker volume, close to the
+- [ ] **[HUMAN]** Repeat both at a high speaker volume, close to the _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       microphone. This is the case the linear room model is least like: a
       driven speaker clips, and AEC3 cannot subtract what the amplifier added.
       Report whether false interruptions appear and at roughly what volume.
@@ -4085,7 +4085,7 @@ serves `italian-giovanni.safetensors` at the pinned sha256, so a first run can
 download a voice. Browser capture/playback is story `832-e730`, which is not
 built. Do not mark that item from a mock — record it as blocked.
 
-- [ ] **[HUMAN]** In an isolated instance (`TUIC_APP_INSTANCE=voice-check`) and
+- [ ] **[HUMAN]** In an isolated instance (`TUIC_APP_INSTANCE=voice-check`) and _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       against a throwaway terminal: download the speech assets, arm hands-free,
       speak a question, and let it run to the end — automatic end of turn, the
       agent answering out loud, and talking over the answer to interrupt it.
@@ -4095,18 +4095,18 @@ built. Do not mark that item from a mock — record it as blocked.
       --run-ignored ignored-only -E 'test(/dictation::speech::pocket/)'` with
       `TUIC_POCKET_BUNDLE_DIR` and `ORT_DYLIB_PATH` set, 3/3 green. What is left
       here is the microphone, the speaker and the interruption._
-- [ ] **[HUMAN]** Ask the **model** to speak through the `voice` MCP tool while
+- [ ] **[HUMAN]** Ask the **model** to speak through the `voice` MCP tool while _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       that same conversation is armed, and confirm it reaches the same speaker
       and the same queue as a reply the desktop asked for.
-- [ ] **[HUMAN]** The same conversation from a browser tab against the same
+- [ ] **[HUMAN]** The same conversation from a browser tab against the same _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       instance: the microphone and the speaker must be the **browser's**, not
       the desktop's, and the desktop must behave identically.
       _Blocked: browser audio transport is story `832-e730`._
-- [ ] **[HUMAN]** Record, with numbers: time from the end of speech to the
+- [ ] **[HUMAN]** Record, with numbers: time from the end of speech to the _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       first audible word of the reply, and the process footprint before arming,
       while speaking and after disarming (`GET /diagnostics/memory`). A
       conversation that leaks per turn is the failure to look for.
-- [ ] **[HUMAN]** Repeat the first item on Windows and on Linux from a release
+- [ ] **[HUMAN]** Repeat the first item on Windows and on Linux from a release _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       build. Cross-platform evidence cannot come from this Mac.
 
 ## Speech and download progress on `/events` (story `833-6fd4`, 2026-09-22) — **Rust, needs a `make dev` restart**
@@ -4227,7 +4227,7 @@ or credential is touched.
       in Settings → General.
 ## Mobile Basic Auth recovery (2026-09-25) — **Rust, needs a `make dev` restart**
 
-- [ ] **[HUMAN]** On a phone PWA with remote access enabled and a stale cached Basic
+- [ ] **[HUMAN]** On a phone PWA with remote access enabled and a stale cached Basic _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
       credential, navigate until the browser shows its Basic Auth challenge. Enter the
       current password without reloading. The app must reconnect and resume the session.
 
@@ -4249,11 +4249,11 @@ or credential is touched.
 
 ## Ask Boss from the mobile PWA (2026-09-26) — Rust, needs a `make dev` restart
 
-- [ ] **[HUMAN]** After this Rust parser change is landed and Boss restarts `make dev` when current PTYs can be interrupted, open the HTTPS mobile PWA on a real phone at 360×800. In a disposable Codex session, trigger `request_user_input` with two choices and `Other`. Confirm its waiting badge, tap the question control in the existing session header, read the title and all options, select an option once, and verify Codex receives exactly one answer and the overlay clears. Repeat with `Other` and type a note; verify it reaches the question rather than the main composer. Check the terminal has lost zero rows. The running backend cannot load the Rust parser change before restart.
+- [ ] **[HUMAN]** After this Rust parser change is landed and Boss restarts `make dev` when current PTYs can be interrupted, open the HTTPS mobile PWA on a real phone at 360×800. In a disposable Codex session, trigger `request_user_input` with two choices and `Other`. Confirm its waiting badge, tap the question control in the existing session header, read the title and all options, select an option once, and verify Codex receives exactly one answer and the overlay clears. Repeat with `Other` and type a note; verify it reaches the question rather than the main composer. Check the terminal has lost zero rows. The running backend cannot load the Rust parser change before restart. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
-- [ ] **[HUMAN]** After restarting the desktop app when its current PTY sessions can be interrupted, enable Remote Access and Tailscale HTTPS, then open the shown HTTPS `/mobile` URL on the phone. On iPhone, launch the installed Home Screen PWA. In mobile Settings, turn Push notifications off and on to replace the old subscription, grant permission, and confirm a test push appears on the phone. Do not change Tailscale/network configuration as part of this check.
-- [ ] **[HUMAN]** With the desktop window left focused but no Mac HID input for two minutes, have a managed agent report `progress type=blocked` with an identifiable question. Confirm one phone notification contains the question, opens that exact session, and one typed reply reaches it once. During a confident free-text question, leave an automated peer message queued: the phone answer must reach the question first and the peer message must remain parked until the question clears. Repeat with the desktop actively used: no duplicate push. The running app cannot load these Rust changes until restart.
-- [ ] **[HUMAN]** After the separate question-state change is integrated, trigger a real Claude AskUserQuestion with a visible title. Confirm the phone push contains that title rather than the hook's empty awaiting signal or an Ink footer, then answer it from the opened session.
+- [ ] **[HUMAN]** After restarting the desktop app when its current PTY sessions can be interrupted, enable Remote Access and Tailscale HTTPS, then open the shown HTTPS `/mobile` URL on the phone. On iPhone, launch the installed Home Screen PWA. In mobile Settings, turn Push notifications off and on to replace the old subscription, grant permission, and confirm a test push appears on the phone. Do not change Tailscale/network configuration as part of this check. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] **[HUMAN]** With the desktop window left focused but no Mac HID input for two minutes, have a managed agent report `progress type=blocked` with an identifiable question. Confirm one phone notification contains the question, opens that exact session, and one typed reply reaches it once. During a confident free-text question, leave an automated peer message queued: the phone answer must reach the question first and the peer message must remain parked until the question clears. Repeat with the desktop actively used: no duplicate push. The running app cannot load these Rust changes until restart. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] **[HUMAN]** After the separate question-state change is integrated, trigger a real Claude AskUserQuestion with a visible title. Confirm the phone push contains that title rather than the hook's empty awaiting signal or an Ink footer, then answer it from the opened session. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## PTY build environment — Rust, needs a `make dev` restart
 
@@ -4300,7 +4300,7 @@ or credential is touched.
 
 ## Mobile ego chat (story 1077-0c08) — real phone after `make dev`
 
-- [ ] [HUMAN] After restarting the test instance with `make dev`, open its HTTPS `/mobile` URL on a real phone. In Chat, choose a disposable repository and send a prompt; confirm the answer and collapsed tool activity remain readable above the keyboard. Disconnect and reconnect the phone, then confirm the answer has no duplicate or missing lines. Start a permission request, tap one option twice, and confirm the desktop conversation records one answer. Start a second conversation, then use the titled picker to return to the first and confirm its history loads. This check requires real touch and mobile keyboard behavior; targeted Vitest covers the module behavior.
+- [ ] [HUMAN] After restarting the test instance with `make dev`, open its HTTPS `/mobile` URL on a real phone. In Chat, choose a disposable repository and send a prompt; confirm the answer and collapsed tool activity remain readable above the keyboard. Disconnect and reconnect the phone, then confirm the answer has no duplicate or missing lines. Start a permission request, tap one option twice, and confirm the desktop conversation records one answer. Start a second conversation, then use the titled picker to return to the first and confirm its history loads. This check requires real touch and mobile keyboard behavior; targeted Vitest covers the module behavior. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Detached Markdown document window
 
@@ -4308,7 +4308,7 @@ or credential is touched.
 
 ## ACP mobile interaction push (story 1078-05cf) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, subscribe a phone to push. With desktop unfocused, have ego ask permission or a form question and confirm one notification opens mobile Chat. Answer the next request on desktop before delivery and confirm no stale notification; ordinary activity must not notify. The running backend cannot load this Rust change until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, subscribe a phone to push. With desktop unfocused, have ego ask permission or a form question and confirm one notification opens mobile Chat. Answer the next request on desktop before delivery and confirm no stale notification; ordinary activity must not notify. The running backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Push-to-talk Italian hallucination filter — Rust restart required
 
@@ -4324,58 +4324,58 @@ or credential is touched.
 - [ ] After restarting an isolated `make dev` build, open removal confirmation for a branch with no own commits and a live agent in its worktree. Confirm the dialog names the agent and uncommitted/untracked counts, then take a screenshot of both the removal and post-merge cleanup dialogs. The current backend cannot hot reload the Rust preview, and this branch has not been rendered in a worktree build.
 # Mobile session search (story 1200-4dd4)
 
-- [ ] [HUMAN] After `make dev`, check the magnifier position at the top right of the session list on a phone. Tap it, enter a filter, and confirm the field and matching cards fit without clipping. The component test covers matching and clearing; phone layout remains to be checked.
+- [ ] [HUMAN] After `make dev`, check the magnifier position at the top right of the session list on a phone. Tap it, enter a filter, and confirm the field and matching cards fit without clipping. The component test covers matching and clearing; phone layout remains to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 # Mobile AI Chat image prompts (story 1219-e2a1) — Rust restart required
 
-- [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the HTTPS mobile PWA on an iPhone and paste a 4 MiB photo from the camera roll into AI Chat. Confirm ego receives it; check an image over 10 MiB is refused in the composer with its size and limit. The HTTP route and composer have targeted automated tests; iPhone Photos behavior requires the device.
+- [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the HTTPS mobile PWA on an iPhone and paste a 4 MiB photo from the camera roll into AI Chat. Confirm ego receives it; check an image over 10 MiB is refused in the composer with its size and limit. The HTTP route and composer have targeted automated tests; iPhone Photos behavior requires the device. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile attachments (story 1227-7838) — Rust restart and real phone
 
-- [ ] [HUMAN] After restarting an isolated `make dev` instance, use an iPhone to pick a HEIC photo and a 4 MiB camera photo from the single paperclip picker. Check conversion/type handling, the displayed size limit, and that the selected file remains a draft until Send. The phone's Photos provider and touch layout require the device.
-- [ ] [HUMAN] On an Android Chrome installed PWA, share a photo from another app into TUICommander. Confirm it appears as an AI Chat draft, then send it. The OS share sheet requires a real device.
+- [ ] [HUMAN] After restarting an isolated `make dev` instance, use an iPhone to pick a HEIC photo and a 4 MiB camera photo from the single paperclip picker. Check conversion/type handling, the displayed size limit, and that the selected file remains a draft until Send. The phone's Photos provider and touch layout require the device. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
+- [ ] [HUMAN] On an Android Chrome installed PWA, share a photo from another app into TUICommander. Confirm it appears as an AI Chat draft, then send it. The OS share sheet requires a real device. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile session output links (story 1202-dd5b)
 
-- [ ] [HUMAN] On a phone, tap a Markdown path in a session's output, confirm Files renders it and Back preserves the session output and draft. Tap an HTTP(S) link and confirm it opens the system browser outside the PWA. A path outside registered repositories must show a toast naming that path. Targeted tests cover link detection, routing, and root refusal; the phone handoff and touch remain to be checked.
+- [ ] [HUMAN] On a phone, tap a Markdown path in a session's output, confirm Files renders it and Back preserves the session output and draft. Tap an HTTP(S) link and confirm it opens the system browser outside the PWA. A path outside registered repositories must show a toast naming that path. Targeted tests cover link detection, routing, and root refusal; the phone handoff and touch remain to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile keybar and composer (story 1221-0380) — real phone
 
-- [ ] **[HUMAN]** On a 360 px wide phone, open a disposable agent session and check that the terminal retains its previous visible row count, the keybar scrolls without a visible scrollbar, and `/`, Ctrl+C, input and Send are comfortable touch targets. Tap `/`: no character should reach the agent until a command is chosen. Close the menu and confirm an unsent draft is restored. End the disposable session and confirm the keybar and composer cannot send. Component tests cover PTY writes and disabled state; a 360×800 browser capture measured keybar 45 px, composer 53 px, and terminal 702 px, but cannot prove real touch behavior.
+- [ ] **[HUMAN]** On a 360 px wide phone, open a disposable agent session and check that the terminal retains its previous visible row count, the keybar scrolls without a visible scrollbar, and `/`, Ctrl+C, input and Send are comfortable touch targets. Tap `/`: no character should reach the agent until a command is chosen. Close the menu and confirm an unsent draft is restored. End the disposable session and confirm the keybar and composer cannot send. Component tests cover PTY writes and disabled state; a 360×800 browser capture measured keybar 45 px, composer 53 px, and terminal 702 px, but cannot prove real touch behavior. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile session list and new-session sheet (story 1223-f3bc) — real phone
 
-- [ ] **[HUMAN]** On a 360 px phone, confirm a waiting session remains above idle agents and shells, exact mixed-case names display unchanged in the list, detail, and question banner, and the busy badge reads "Working". Tap the question counter and confirm it opens the first waiting session. Open `+`, check agent choice, repository search, and the close X, then create a disposable Codex session and confirm it opens. Component tests cover ordering, spawn payload, navigation callback, banner content, and counter click; real touch and visual layout remain to be checked.
+- [ ] **[HUMAN]** On a 360 px phone, confirm a waiting session remains above idle agents and shells, exact mixed-case names display unchanged in the list, detail, and question banner, and the busy badge reads "Working". Tap the question counter and confirm it opens the first waiting session. Open `+`, check agent choice, repository search, and the close X, then create a disposable Codex session and confirm it opens. Component tests cover ordering, spawn payload, navigation callback, banner content, and counter click; real touch and visual layout remain to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile session card actions (story 1217-4b0b) — real phone
 
-- [ ] **[HUMAN]** On a 360 px phone, scroll the session list to its end. Confirm the `+` button never covers the last card's kill button, both `+` and kill are comfortable touch targets, tapping a card opens it, and tapping kill opens the confirmation without opening the session. Component tests cover independent click actions and accessible names; browser geometry at 360×800 measured 44×44 px kill, 52×52 px `+`, and an 87 px gap between the last kill and `+` after scrolling to the end.
+- [ ] **[HUMAN]** On a 360 px phone, scroll the session list to its end. Confirm the `+` button never covers the last card's kill button, both `+` and kill are comfortable touch targets, tapping a card opens it, and tapping kill opens the confirmation without opening the session. Component tests cover independent click actions and accessible names; browser geometry at 360×800 measured 44×44 px kill, 52×52 px `+`, and an 87 px gap between the last kill and `+` after scrolling to the end. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile five-tab navigation (story 1224-d21c) — real phone
 
-- [ ] **[HUMAN]** Launch the mobile PWA on a phone and confirm Sessions opens first, Chat is the second bottom tab, and only five tabs remain. Tap the app-bar overflow, open Settings, then use a bottom tab to return. Check the overflow does not clip and the tap targets remain comfortable at 360 px. Component tests cover order, initial selection and Settings navigation; real touch and phone layout remain to be checked.
+- [ ] **[HUMAN]** Launch the mobile PWA on a phone and confirm Sessions opens first, Chat is the second bottom tab, and only five tabs remain. Tap the app-bar overflow, open Settings, then use a bottom tab to return. Check the overflow does not clip and the tap targets remain comfortable at 360 px. Component tests cover order, initial selection and Settings navigation; real touch and phone layout remain to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile terminal hanging indent (story 1222-912d) — real phone
 
-- [ ] [HUMAN] At 360 px, open a session with a long space-indented list item and a long tab-indented code line. Confirm every visual continuation starts under the first line's text, while an unindented line stays flush left and a box-drawing table still scrolls horizontally. Browser character-rectangle checks cover the same output shapes; this item checks real device rendering and touch scrolling.
+- [ ] [HUMAN] At 360 px, open a session with a long space-indented list item and a long tab-indented code line. Confirm every visual continuation starts under the first line's text, while an unindented line stays flush left and a box-drawing table still scrolls horizontally. Browser character-rectangle checks cover the same output shapes; this item checks real device rendering and touch scrolling. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile session detail task text (story 1216-a482) — real phone
 
-- [ ] On a 360 px phone, open idle, awaiting-input, and ended Claude sessions whose terminal status line has a decorative spinner verb. Confirm no task row repeats that verb and the terminal gains the freed row; a Codex session with a substantive task such as “Reading files” should still show it.
+- [ ] On a 360 px phone, open idle, awaiting-input, and ended Claude sessions whose terminal status line has a decorative spinner verb. Confirm no task row repeats that verb and the terminal gains the freed row; a Codex session with a substantive task such as “Reading files” should still show it. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Claude AskUserQuestion options on mobile (story 1212-3093) — Rust restart and real phone
 
-- [ ] **[HUMAN]** Restart an isolated `make dev` instance so its Rust parser loads, then open a disposable Claude AskUserQuestion on a phone. Confirm the title and every option remain visible, the choice overlay replaces generic Yes/No, and tapping option 2 selects Green exactly once. The captured PTY replay and component tests cover the payload and key sequence; this check covers real touch and phone rendering.
+- [ ] **[HUMAN]** Restart an isolated `make dev` instance so its Rust parser loads, then open a disposable Claude AskUserQuestion on a phone. Confirm the title and every option remain visible, the choice overlay replaces generic Yes/No, and tapping option 2 selects Green exactly once. The captured PTY replay and component tests cover the payload and key sequence; this check covers real touch and phone rendering. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile Markdown images (1215-8e00)
 
-- [ ] After restarting `make dev` to load the Rust HTTP route, open a nested Markdown file with a repository-relative image in the mobile Files tab and confirm the image loads. Check that a path escaping the repository does not load.
+- [ ] After restarting `make dev` to load the Rust HTTP route, open a nested Markdown file with a repository-relative image in the mobile Files tab and confirm the image loads. Check that a path escaping the repository does not load. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Mobile Progress, Activity, and Settings (1226-eb95)
 
-- [ ] On a 360 px phone, confirm a long Progress message shows about four lines, More reveals it all, and Less collapses it again.
+- [ ] On a 360 px phone, confirm a long Progress message shows about four lines, More reveals it all, and Less collapses it again. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 - [ ] Confirm Activity shows local 24-hour times, a completed 2343-second run as 39 min, and a single block as `1 block`.
-- [ ] After restarting `make dev` to load the Rust `mobile_theme` preference, choose Light in mobile Settings, reload the PWA, and confirm the theme stays light. Confirm the desktop theme remains unchanged and app/server versions are visible.
+- [ ] After restarting `make dev` to load the Rust `mobile_theme` preference, choose Light in mobile Settings, reload the PWA, and confirm the theme stays light. Confirm the desktop theme remains unchanged and app/server versions are visible. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat copy, links and parallel tabs (story 1142-f09c)
 
@@ -4387,7 +4387,7 @@ or credential is touched.
 
 ## Codex questions on mobile PWA (story 1201-ae16)
 
-- [ ] [VISUAL] On a real phone after `make dev`, open a Codex session that is waiting on a `request_user_input` question. Confirm the question text and its options are fully visible and each option can be tapped/selected without clipping at 360 px width. Confirm choosing an option submits exactly once and the question clears from both the session list badge and the session detail. Captured-fixture and 360 px DOM geometry tests already pass; the real-device check remains.
+- [ ] [VISUAL] On a real phone after `make dev`, open a Codex session that is waiting on a `request_user_input` question. Confirm the question text and its options are fully visible and each option can be tapped/selected without clipping at 360 px width. Confirm choosing an option submits exactly once and the question clears from both the session list badge and the session detail. Captured-fixture and 360 px DOM geometry tests already pass; the real-device check remains. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## Git panel Log tab layout (story 1263-7d7d)
 
