@@ -338,7 +338,9 @@ The two voice sections:
   Stop, the polled phase, the activation phrase, the hold-back slider, the
   earcons toggle, the "notify model" toggle and, while that is on, the start
   notice textarea. Its placeholder is `getDefaultHandsFreeStartNotice()` — Rust
-  owns the built-in text, the frontend keeps no copy.
+  owns the built-in text, the frontend keeps no copy. The slider edits the
+  saved delay; the polled status gives the effective delay, which is at least
+  five seconds when an activation phrase is configured.
 
 **Nothing here arms on mount.** Opening this panel must never open the
 microphone, and neither must starting the app: `onMount` only starts a 500 ms

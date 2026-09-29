@@ -3,9 +3,10 @@
 // Called by `pnpm build:sidecar` — works on macOS, Linux, and Windows.
 // Skips rebuild if the source crate hasn't changed since last build.
 import { execSync } from "child_process";
-import { copyFileSync, writeFileSync, statSync, existsSync } from "fs";
+import { copyFileSync, writeFileSync, statSync, existsSync, renameSync, rmSync } from "fs";
 import { join, dirname, isAbsolute } from "path";
 import { fileURLToPath } from "url";
+import { randomUUID } from "crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -27,6 +28,16 @@ const sidecars = [
   { pkg: "tuic-cli", bin: "tuic", crate: "crates/tuic-cli" },
 ];
 
+function replaceSidecar(sidecarPath, writeStaged) {
+  const staged = `${sidecarPath}.update.${randomUUID()}`;
+  try {
+    writeStaged(staged);
+    renameSync(staged, sidecarPath);
+  } finally {
+    rmSync(staged, { force: true });
+  }
+}
+
 for (const { pkg, bin, crate: cratePath } of sidecars) {
   const binName = `${bin}${ext}`;
   const sidecarName = `${bin}-${target}${ext}`;
@@ -35,7 +46,7 @@ for (const { pkg, bin, crate: cratePath } of sidecars) {
 
   // Touch placeholder so Tauri's build.rs finds it at compile time
   if (!existsSync(sidecarPath)) {
-    writeFileSync(sidecarPath, "");
+    replaceSidecar(sidecarPath, (staged) => writeFileSync(staged, ""));
   }
 
   // Skip rebuild if the release binary is newer than all source files
@@ -80,7 +91,7 @@ for (const { pkg, bin, crate: cratePath } of sidecars) {
     stdio: "inherit",
   });
 
-  copyFileSync(releaseBin, sidecarPath);
+  replaceSidecar(sidecarPath, (staged) => copyFileSync(releaseBin, staged));
 
   console.log(`Sidecar built: ${sidecarName}`);
 }

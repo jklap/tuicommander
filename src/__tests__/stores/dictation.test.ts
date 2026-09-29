@@ -431,14 +431,22 @@ describe("dictationStore", () => {
 		});
 
 		it("handles save failure gracefully", async () => {
-			mockInvoke.mockRejectedValueOnce(new Error("disk full"));
+			mockInvoke.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("disk full"));
 			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { appLogger } = await import("../../stores/appLogger");
 
 			await testInScopeAsync(async () => {
 				await store.saveConfig({ enabled: true });
-				expect(consoleSpy).toHaveBeenCalledWith(
-					"[dictation]",
-					expect.stringContaining("Failed to save"),
+				expect(store.state.enabled).toBe(false);
+				expect(appLogger.getEntries()).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							level: "error",
+							source: "dictation",
+							message: "Failed to save dictation config",
+							data: expect.objectContaining({ message: "disk full" }),
+						}),
+					]),
 				);
 				consoleSpy.mockRestore();
 			});

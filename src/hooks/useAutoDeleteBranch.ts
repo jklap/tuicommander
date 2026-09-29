@@ -8,6 +8,7 @@ import type { ConfirmOptions } from "./useConfirmDialog";
 
 interface AutoDeleteDeps {
 	confirm: (options: ConfirmOptions) => Promise<boolean>;
+	setStatusInfo: (message: string) => void;
 }
 
 /**
@@ -16,7 +17,7 @@ interface AutoDeleteDeps {
  * Reads the per-repo `autoDeleteOnPrClose` setting (off/ask/auto) and:
  * - off: does nothing
  * - ask: shows a confirm dialog
- * - auto: deletes silently (falls back to ask if worktree is dirty)
+ * - auto: deletes silently only when the worktree has no local changes or live sessions
  *
  * Safety: never deletes the default/main branch.
  */
@@ -62,30 +63,33 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 		// No workspace has it checked out — nothing local to delete.
 		if (repo && !workspaceId) return;
 
-		let effectiveMode = mode;
-
-		// If auto mode, check dirty state first
-		if (effectiveMode === "auto") {
-			try {
-				const dirty = await invoke<boolean>("check_worktree_dirty", {
-					repoPath,
-					workspaceId: workspaceId ?? branch,
-				});
-				if (dirty) {
-					appLogger.info("git", `Branch '${branch}' has uncommitted changes — asking before deleting`);
-					effectiveMode = "ask";
-				}
-			} catch {
-				// If dirty check fails, fall back to ask
-				effectiveMode = "ask";
-			}
+		let preview: {
+			dirty_files: number | null;
+			live_sessions?: Array<{ name: string }>;
+			warnings?: string[];
+		};
+		try {
+			preview = await invoke<typeof preview>("get_workspace_lifecycle", {
+				repoPath,
+				workspaceId: workspaceId ?? branch,
+			});
+		} catch (error) {
+			appLogger.warn("git", `Skipping auto-delete for '${branch}': removal preview failed`, error);
+			deps.setStatusInfo(`Kept '${branch}': removal preview failed`);
+			return;
+		}
+		const warnings = preview.warnings ?? [];
+		if (mode === "auto" && (preview.dirty_files !== 0 || (preview.live_sessions?.length ?? 0) > 0)) {
+			appLogger.info("git", `Skipping auto-delete for '${branch}'`, { warnings });
+			deps.setStatusInfo(`Kept '${branch}': ${warnings.join("; ") || "local changes or live sessions"}`);
+			return;
 		}
 
-		if (effectiveMode === "ask") {
+		if (mode === "ask") {
 			const action = type === "merged" ? "merged" : "closed";
 			const confirmed = await deps.confirm({
 				title: "Delete local branch?",
-				message: `PR #${prNumber} was ${action}.\nDelete local branch '${branch}'?`,
+				message: `PR #${prNumber} was ${action}.\nDelete local branch '${branch}'?${warnings.length ? `\n\n${warnings.join("\n")}` : ""}`,
 				okLabel: "Delete",
 				cancelLabel: "Keep",
 				kind: "warning",
@@ -95,7 +99,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 
 		// Perform deletion
 		try {
-			await invoke("delete_local_branch", { repoPath, branchName: branch, workspaceId: branch });
+			await invoke("delete_local_branch", { repoPath, branchName: branch, workspaceId: workspaceId ?? branch });
 			repositoriesStore.bumpGitRevision(repoPath);
 			appLogger.info("git", `Auto-deleted branch '${branch}' (PR #${prNumber} ${type})`);
 		} catch (err) {

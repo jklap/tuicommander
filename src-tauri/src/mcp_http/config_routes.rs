@@ -625,14 +625,14 @@ pub(super) async fn put_remote_connection(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
     State(state): State<Arc<AppState>>,
-    Json(connection): Json<crate::remote_connection::RemoteConnection>,
+    Json(request): Json<crate::remote_connection::RemoteConnectionSaveRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
     // Validate up front so a malformed request gets a precise 400 (the shared
     // upsert helper re-validates as its canonical gate — that path stays a 500).
-    if let Err(e) = connection.validate() {
+    if let Err(e) = request.connection.validate() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -640,7 +640,11 @@ pub(super) async fn put_remote_connection(
             .into_response();
     }
     let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::upsert_remote_connection(&state.data_dir, connection) {
+    match crate::remote_connection::upsert_remote_connection(
+        &state.data_dir,
+        request.base,
+        request.connection,
+    ) {
         Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -665,34 +669,22 @@ pub(super) async fn delete_remote_connection(
     // takes the poll, the mirror, its rows and the session token with it.
     crate::remote_runtime::teardown_deleted(&state, &id);
     let _guard = state.connections_lock.lock().await;
-    let mut connections =
-        match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
-            Ok(c) => c,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-                    .into_response();
-            }
-        };
-    let before = connections.len();
-    connections.retain(|c| c.id != id);
-    if connections.len() == before {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
-        )
-            .into_response();
-    }
-    if let Err(e) =
-        crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections)
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response();
+    match crate::remote_connection::remove_remote_connection(&state.data_dir, &id) {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
     }
     // Same reason as the IPC command: the vault key is the connection's UUID, so
     // a secret left behind belongs to an id nothing can name again.
