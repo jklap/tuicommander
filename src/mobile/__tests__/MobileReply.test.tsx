@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
 import { HttpRpcError } from "../../transport";
+import codexQuestion from "../../../src-tauri/src/fixtures/choice_prompts/codex-request-user-input.json";
 
 const { rpc } = vi.hoisted(() => ({
 	rpc: vi.fn(async (_command: string, _args: Record<string, unknown>) => ({ status: "acknowledged", submitted: true, acknowledged: true })),
@@ -125,6 +126,7 @@ describe("mobile managed-agent reply", () => {
 		expect(rpc.mock.calls.some(([command, args]) => command === "write_pty" && args.data === "1")).toBe(true);
 	});
 
+	// Catches: a captured Codex option is followed by an extra Enter or sent twice.
 	it("submits a Codex question option once without an extra Enter", async () => {
 		const { container } = render(() => (
 			<CommandInput
@@ -132,15 +134,7 @@ describe("mobile managed-agent reply", () => {
 				agentType="codex"
 				awaitingInput={true}
 				managedSession={true}
-				choicePrompt={{
-					title: "Boss, scegli rosso o blu?",
-					options: [
-						{ key: "1", label: "Rosso", highlighted: true, destructive: false },
-						{ key: "2", label: "Blu", highlighted: false, destructive: false },
-					],
-					dismiss_key: "ctrl+]",
-					amend_key: "alt+down",
-				}}
+				choicePrompt={codexQuestion}
 			/>
 		));
 		const option = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Blu"))!;
@@ -150,6 +144,7 @@ describe("mobile managed-agent reply", () => {
 		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "2" });
 	});
 
+	// Catches: Other writes a choice key into the wrong Codex input panel.
 	it("opens Codex Other notes before typing a free-form answer", async () => {
 		const { container } = render(() => (
 			<CommandInput
@@ -157,15 +152,7 @@ describe("mobile managed-agent reply", () => {
 				agentType="codex"
 				awaitingInput={true}
 				managedSession={true}
-				choicePrompt={{
-					title: "Which color?",
-					options: [
-						{ key: "1", label: "Red", highlighted: true, destructive: false },
-						{ key: "2", label: "Blue", highlighted: false, destructive: false },
-						{ key: "3", label: "Other", highlighted: false, destructive: false },
-					],
-					dismiss_key: "ctrl+]",
-				}}
+				choicePrompt={codexQuestion}
 			/>
 		));
 		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!);
