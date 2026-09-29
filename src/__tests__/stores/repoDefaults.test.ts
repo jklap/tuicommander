@@ -164,6 +164,7 @@ describe("repoDefaultsStore", () => {
 						delete_branch_on_remove: true,
 						auto_archive_merged: false,
 						orphan_cleanup: "ask",
+						orphan_cleanup_countdown_seconds: 10,
 						pr_merge_strategy: "squash",
 						after_merge: "archive",
 						auto_fetch_interval_minutes: 0,
