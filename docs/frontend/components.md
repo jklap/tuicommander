@@ -154,6 +154,9 @@ Waiting sessions sort above idle agents and shells without changing order within
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
 session; each banner shows its session name and repository.
+Each session card uses separate buttons to open or kill the session. Both have
+accessible names, and the kill button has a 44 px hit area. The list reserves
+space below its last card so the floating new-session button cannot cover it.
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
