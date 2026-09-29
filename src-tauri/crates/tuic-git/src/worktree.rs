@@ -1042,6 +1042,7 @@ fn resolve_missing_registered_workspace(
                 path: entry.path,
                 kind: WorkspaceKind::Worktree,
                 warm_artifacts: None,
+                lifecycle_status: None,
             });
         }
     }
@@ -2441,6 +2442,11 @@ pub struct WorkspaceWorktree {
     pub kind: WorkspaceKind,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub warm_artifacts: Option<serde_json::Value>,
+    /// Merge/dirty/removal verdict, attached by callers that already paid for
+    /// `inspect_workspace_lifecycle` per worktree (e.g. the MCP worktree_list
+    /// action). Absent, not merely `None`, for callers that never compute it.
+    #[serde(skip_serializing_if = "Option::is_none", default, skip_deserializing)]
+    pub lifecycle_status: Option<WorkspaceLifecycleStatus>,
 }
 
 /// The workspace id a freshly created **git worktree** gets.
@@ -2484,6 +2490,7 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
                     path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
                     warm_artifacts: None,
+                    lifecycle_status: None,
                 },
             );
         }

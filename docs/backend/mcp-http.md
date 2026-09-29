@@ -1090,6 +1090,37 @@ This works around Claude Code's inability to change its working directory mid-se
 
 Non-Claude Code MCP clients do not receive this field.
 
+### MCP Tool: `repo` — Worktree List
+
+MCP `repo action=worktree_list` returns each worktree's `branch`, `path`,
+`kind`, optional `warm_artifacts`, and `lifecycle_status`. `lifecycle_status`
+comes from `inspect_workspace_lifecycle` — the same backend function the
+sidebar's `lifecycleStatus` and `repo action=worktree_lifecycle` already call
+— fanned out concurrently per worktree on the blocking pool:
+
+```json
+{
+  "feature-branch": {
+    "branch": "feature-branch",
+    "path": "/path/to/repo__wt/feature-branch",
+    "kind": "worktree",
+    "lifecycle_status": {
+      "dirty_files": 0,
+      "missing_checkout": false,
+      "commit_status": "merged",
+      "removal_safety": "safe"
+    }
+  }
+}
+```
+
+`commit_status` is one of `merged`, `unmerged`, `in_sync`, or `unknown`.
+`removal_safety` is one of `safe`, `requires_force`, or `unknown`. Both fall
+back to `unknown` if inspection fails (`lifecycle_status.error` is set in that
+case). This makes the same merged/dirty verdict `worktree_lifecycle` answers
+per-branch available for every worktree in one call, so a caller does not
+need to recompute merge state with its own git script.
+
 ### MCP Tool: `repo` — Worktree Remove
 
 MCP `repo action=worktree_remove` returns `{ "ok": true, "warnings": [...] }` on full success. The warnings come from the same removal preview as desktop and HTTP, including branch history, live sessions, and local file counts. It
