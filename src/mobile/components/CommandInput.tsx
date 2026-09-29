@@ -22,6 +22,8 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
+	/** The Codex question panel has been opened with Alt+Up in this view. */
+	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;
 	awaitingInput?: boolean;
@@ -33,7 +35,13 @@ interface CommandInputProps {
 export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
 	const [submitting, setSubmitting] = createSignal(false);
-	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt;
+	const [choiceSending, setChoiceSending] = createSignal(false);
+	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
+	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt
+		&& !props.codexQuestionOpen && !codexNotesMode();
+	createEffect(() => {
+		if (!props.choicePrompt) setChoiceSending(false);
+	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// What we last sent to PTY — used to compute deltas and to gate which
 	// PTY echoes we accept (only strict extensions — see sync effect below).
@@ -198,6 +206,7 @@ export function CommandInput(props: CommandInputProps) {
 			await lastInputWrite;
 			await waitForAgentEnterGap(props.agentType);
 			await retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data: "\r" }));
+			setCodexNotesMode(false);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("network", `Failed to send command after retries: ${msg}`);
@@ -237,17 +246,32 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const showDropup = () => value().includes("/") && (props.slashItems?.length ?? 0) > 0;
-	const showChoicePrompt = () => !!props.choicePrompt;
+	const showChoicePrompt = () => !!props.choicePrompt && !codexNotesMode();
 
 	async function handleChoiceSelect(key: string) {
+		if (choiceSending() || props.sessionExists === false) return;
+		setChoiceSending(true);
 		try {
 			const write = (data: string) => rpc<void>("write_pty", { sessionId: props.sessionId, data });
+			const options = props.choicePrompt?.options ?? [];
+			const selectedIndex = options.findIndex((option) => option.highlighted);
+			const choiceIndex = options.findIndex((option) => option.key === key);
+			const label = options[choiceIndex]?.label;
+			if (props.agentType === "codex" && (label === "Other" || label === "None of the above")) {
+				const steps = (choiceIndex - Math.max(selectedIndex, 0) + options.length) % options.length;
+				for (let i = 0; i < steps; i++) await sendPtyKey(write, "\x1b[B");
+				await sendPtyKey(write, "\t");
+				setCodexNotesMode(true);
+				textareaEl?.focus();
+				return;
+			}
 			await sendPtyKey(write, key);
 			// Most raw-mode prompts submit on the numeric key.
 			if (!props.choicePrompt?.dismiss_key) {
 				await write("\r");
 			}
 		} catch (err) {
+			setChoiceSending(false);
 			appLogger.warn("terminal", "ChoicePrompt sendPtyKey failed", { error: err });
 			const msg = err instanceof Error ? err.message : String(err);
 			toastsStore.add("Send failed", `Could not send choice: ${msg}`, "error", true);

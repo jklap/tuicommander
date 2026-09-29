@@ -2123,6 +2123,9 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Footer: `Esc to cancel · Tab to amend` style.
         static ref FOOTER_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:Esc|esc|ESC)\s+to\s+(\S+).*?(?:·|\||•)\s*(?:Tab|tab|TAB)\s+to\s+(\S+)").unwrap();
+        // Codex request_user_input opens with Alt+Up and uses a distinct footer.
+        static ref CODEX_FOOTER_RE: regex::Regex =
+            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+ctrl\+\]\s+skip\s+⌥\+↓\s+main prompt\s*$").unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -2138,6 +2141,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut idx = screen_rows.len();
     let mut dismiss_key: Option<String> = None;
     let mut amend_key: Option<String> = None;
+    let mut codex_footer = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -2149,6 +2153,13 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         if let Some(caps) = FOOTER_RE.captures(&screen_rows[idx - 1]) {
             dismiss_key = Some(caps[1].to_string());
             amend_key = Some(caps[2].to_string());
+            idx -= 1;
+            continue;
+        }
+        if CODEX_FOOTER_RE.is_match(&screen_rows[idx - 1]) {
+            dismiss_key = Some("ctrl+]".to_string());
+            amend_key = Some("alt+down".to_string());
+            codex_footer = true;
             idx -= 1;
             continue;
         }
@@ -2208,6 +2219,17 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let title_row = screen_rows[idx - 1].trim();
+    // A quoted numbered list can include the footer text. Codex's actual
+    // request_user_input panel has this heading above the question.
+    if codex_footer
+        && !screen_rows[..idx - 1]
+            .iter()
+            .rev()
+            .take(4)
+            .any(|row| row.trim() == "• Queued follow-up inputs")
+    {
+        return None;
+    }
     let title_qualifies = title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;

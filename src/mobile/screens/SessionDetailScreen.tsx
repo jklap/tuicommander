@@ -1,4 +1,7 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { appLogger } from "../../stores/appLogger";
+import { toastsStore } from "../../stores/toasts";
+import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
@@ -47,6 +50,28 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 
 	// Ideas overlay toggle
 	const [ideasOpen, setIdeasOpen] = createSignal(false);
+	const [openingQuestion, setOpeningQuestion] = createSignal(false);
+	const [codexQuestionOpen, setCodexQuestionOpen] = createSignal(false);
+	createEffect(() => {
+		if (!sessionState()?.awaiting_input) setCodexQuestionOpen(false);
+	});
+	const codexQuestionWaiting = () => sessionState()?.agent_type === "codex"
+		&& sessionState()?.awaiting_input && sessionState()?.question_confident
+		&& !sessionState()?.choice_prompt && props.sessionExists;
+
+	async function openCodexQuestion() {
+		if (openingQuestion()) return;
+		setOpeningQuestion(true);
+		try {
+			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;3A" });
+			setCodexQuestionOpen(true);
+		} catch (err) {
+			appLogger.warn("network", "Could not open Codex question", { error: err });
+			toastsStore.add("Question not opened", "Could not open the Codex question", "error", true);
+		} finally {
+			setOpeningQuestion(false);
+		}
+	}
 
 	// Prefill value for CommandInput (set by slash menu selection).
 	const [inputPrefill] = createSignal<{ text: string; seq: number }>({ text: "", seq: 0 });
@@ -92,6 +117,15 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					<span class={styles.agentName}>{sessionState()?.agent_type ?? "Terminal"}</span>
 					<span class={styles.project}>{projectName(props.session.cwd)}</span>
 				</div>
+				<Show when={codexQuestionWaiting()}>
+					<button class={styles.searchToggle} onClick={openCodexQuestion} disabled={openingQuestion()} aria-label="Open Codex question" title="Open Codex question">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+							<circle cx="12" cy="12" r="9" />
+							<path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" />
+							<circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none" />
+						</svg>
+					</button>
+				</Show>
 				<button class={styles.searchToggle} onClick={props.onOpenFiles} aria-label="Browse session files">
 					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -249,6 +283,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type ?? null}
 				slashItems={sessionState()?.slash_menu_items}
 				choicePrompt={sessionState()?.choice_prompt}
+				codexQuestionOpen={codexQuestionOpen()}
 				onRegisterTrigger={(fn) => {
 					slashTrigger = fn;
 				}}
