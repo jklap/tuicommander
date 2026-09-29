@@ -148,6 +148,9 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+Files, Progress, and Activity; Settings opens from the app-bar overflow.
+
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
 Waiting sessions sort above idle agents and shells without changing order within each
