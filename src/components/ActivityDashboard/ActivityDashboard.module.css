@@ -96,12 +96,21 @@
 }
 
 /* The status column fits the widest badge, "Waiting for input" (109.4px at 12px system UI
- * including padding, measured in Chrome); the name column absorbs the difference. */
+ * including padding, measured in Chrome); the name column absorbs the difference.
+ * The last column holds `.rowActions`: the 16px explain button, a 6px gap and the
+ * ~20px promote button, so neither wraps onto a second line. */
 .rowMain {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 60px 112px 60px 20px;
+  grid-template-columns: minmax(0, 1fr) 60px 112px 60px 42px;
   align-items: center;
   gap: 8px;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* Terminal name + optional project badge — both in the 1fr column */
