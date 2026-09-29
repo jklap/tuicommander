@@ -70,6 +70,9 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 | Amber gradient | Session created via HTTP/MCP (remote session) |
 
 Sidebar branch icons also show purple when they contain unseen terminals.
+The mobile session list and session header use the same status colors: blue for
+working, green for idle, orange for input, and purple for a completion not yet
+opened on that phone. Opening the session clears its purple status.
 
 Agent activity combines native lifecycle hooks, terminal movement (text
 changing above the input area means the agent is active), and the visible
