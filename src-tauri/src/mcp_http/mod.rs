@@ -6158,7 +6158,13 @@ mod tests {
         let repo = create_temp_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
-            .args(["worktree", "add", "--detach", linked.to_str().unwrap(), "HEAD"])
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
             .run()
             .unwrap();
         let state = test_state();
@@ -6193,9 +6199,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(read.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), true);
-        assert!(linked.exists(), "answering only closes the dialog; UI decides removal");
+        let body = axum::body::to_bytes(read.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            true
+        );
+        assert!(
+            linked.exists(),
+            "answering only closes the dialog; UI decides removal"
+        );
     }
 
     #[tokio::test]

@@ -11734,10 +11734,12 @@ fn queued_agent_without_child_response_remains_uncertain() {
                 .injection_delivery_uncertain,
             "a silent {agent_type} child cannot confirm its own queued turn"
         );
-        assert!(std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
-            event,
-            crate::state::AppEvent::McpToast { level, .. } if level == "error"
-        )));
+        assert!(
+            std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
+                event,
+                crate::state::AppEvent::McpToast { level, .. } if level == "error"
+            ))
+        );
     }
 }
 
