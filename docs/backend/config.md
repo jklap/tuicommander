@@ -595,6 +595,7 @@ Default values applied to new repositories when no per-repo override exists.
 | `setup_script` | `String` | `""` | Default setup script |
 | `run_script` | `String` | `""` | Default run command |
 | `archive_script` | `String` | `""` | Default archive script |
+| `orphan_cleanup_countdown_seconds` | `u32` | `10` | Ask-dialog countdown for safe orphan worktrees; Expert Mode offers 5, 10, 20, or 30 seconds |
 
 **Commands:** `load_repo_defaults()`, `save_repo_defaults(base, config)`
 

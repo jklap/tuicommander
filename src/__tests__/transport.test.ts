@@ -67,6 +67,25 @@ describe("COMMAND_TABLE source scan", () => {
 	});
 });
 
+describe("orphan cleanup transport", () => {
+	it("maps the assessment and pending answer to the same repo path", () => {
+		const repoPath = "/repo with space";
+		expect(mapCommandToHttp("assess_orphan_cleanup", { repoPath })).toEqual({
+			method: "GET",
+			path: "/repo/orphan-cleanup-assessment?repoPath=%2Frepo%20with%20space",
+		});
+		expect(mapCommandToHttp("begin_orphan_cleanup", { repoPath, paths: ["/wt/a"] })).toEqual({
+			method: "POST",
+			path: "/repo/orphan-cleanup/begin",
+			body: { repoPath, paths: ["/wt/a"] },
+		});
+		expect(mapCommandToHttp("pending_orphan_cleanup_answer", { repoPath })).toEqual({
+			method: "GET",
+			path: "/repo/orphan-cleanup/pending?repoPath=%2Frepo%20with%20space",
+		});
+	});
+});
+
 function extractRegisteredTauriCommands(): Set<string> {
 	const libSource = readRepoFile("src-tauri/src/lib.rs");
 	const handlerStart = libSource.indexOf("tauri::generate_handler![");
@@ -655,7 +674,13 @@ describe("transport", () => {
 				["speak_reply", { text: "Fatto.", turn: 3 }, "POST", "/dictation/speech/speak", { text: "Fatto.", turn: 3 }],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
-				["set_dictation_config", { base: { enabled: false }, config: { enabled: true } }, "PUT", "/dictation/config", { base: { enabled: false }, config: { enabled: true } }],
+				[
+					"set_dictation_config",
+					{ base: { enabled: false }, config: { enabled: true } },
+					"PUT",
+					"/dictation/config",
+					{ base: { enabled: false }, config: { enabled: true } },
+				],
 				// The body is camelCase on both transports: the Rust request type
 				// renames its fields to match, so one store works unchanged.
 				[

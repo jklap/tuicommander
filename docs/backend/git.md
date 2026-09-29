@@ -196,6 +196,12 @@ operation in progress. Immediately before removal it checks detached HEAD
 reachability against all durable refs with `git for-each-ref --contains`; a
 commit reachable only from the worktree HEAD/reflog is kept for recovery.
 
+The Ask-mode cleanup dialog uses a separate automatic-removal assessment:
+tracked and untracked changes, and commits reachable only from tags, make the
+checkout unsafe for the countdown. Ignored files are allowed. The same check
+runs again for an agent's remove answer and immediately before an automatic
+removal; the dialog lists each unsafe reason.
+
 Non-force removal first requires a clean checkout and submodules, no Git
 operation in progress, and a HEAD matching the captured branch tip. Git needs
 one `--force` to remove a populated submodule even when it is clean; TUICommander

@@ -509,8 +509,12 @@ pub(crate) fn remove_orphan_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     worktree_path: String,
+    safe_only: Option<bool>,
 ) -> Result<(), String> {
     validate_worktree_path(&repo_path, &worktree_path)?;
+    if safe_only.unwrap_or(false) {
+        tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
+    }
 
     let base_repo = PathBuf::from(&repo_path);
     let path = PathBuf::from(&worktree_path);
@@ -1101,6 +1105,102 @@ pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<Str
     })
     .await
     .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn assess_orphan_cleanup(
+    repo_path: String,
+) -> Result<Vec<tuic_git::worktree::OrphanCleanupAssessment>, String> {
+    tokio::task::spawn_blocking(move || tuic_git::worktree::assess_orphan_worktrees(&repo_path))
+        .await
+        .map_err(|error| format!("orphan cleanup assessment task failed: {error}"))?
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingOrphanCleanup {
+    pub(crate) paths: Vec<String>,
+    pub(crate) answer: Option<bool>,
+}
+
+pub(crate) fn begin_orphan_cleanup_internal(
+    state: &AppState,
+    repo_path: &str,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
+    if paths.is_empty()
+        || paths
+            .iter()
+            .any(|path| !current.iter().any(|entry| &entry.path == path))
+    {
+        return Err("Pending cleanup must list current orphan worktrees".into());
+    }
+    state.pending_orphan_cleanup.insert(
+        repo_path.to_string(),
+        PendingOrphanCleanup {
+            paths,
+            answer: None,
+        },
+    );
+    Ok(())
+}
+
+pub(crate) fn answer_orphan_cleanup_internal(
+    state: &AppState,
+    repo_path: &str,
+    remove: bool,
+) -> Result<(), String> {
+    let pending = state
+        .pending_orphan_cleanup
+        .get(repo_path)
+        .ok_or("No pending orphan cleanup for this repository")?
+        .paths
+        .clone();
+    if remove {
+        for path in &pending {
+            tuic_git::worktree::orphan_cleanup_safety(repo_path, path)?;
+        }
+    }
+    let mut current = state
+        .pending_orphan_cleanup
+        .get_mut(repo_path)
+        .ok_or("Orphan cleanup was already dismissed")?;
+    if current.paths != pending || current.answer.is_some() {
+        return Err("Orphan cleanup changed while it was being answered".into());
+    }
+    current.answer = Some(remove);
+    Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn begin_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || begin_orphan_cleanup_internal(&state, &repo_path, paths))
+        .await
+        .map_err(|error| format!("orphan cleanup registration task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn pending_orphan_cleanup_answer(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Option<bool> {
+    state
+        .pending_orphan_cleanup
+        .get(&repo_path)
+        .and_then(|entry| entry.answer)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String) {
+    state.pending_orphan_cleanup.remove(&repo_path);
 }
 
 #[cfg(feature = "desktop")]

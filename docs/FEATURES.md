@@ -949,7 +949,7 @@ re-derived later.
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
-- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
+- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
 - Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.
