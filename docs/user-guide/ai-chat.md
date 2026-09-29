@@ -31,6 +31,8 @@ A repository in a push link is sent with a message as context, not used as the
 chat root. The conversation picker shows the titles of saved sessions;
 choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
+Tap a file link in the transcript to open it in **Files**. A directory link
+opens that directory in **Files**. Links use the AI Chat workspace as their base.
 If the connection drops, the client resumes from its last received event. A
 missing part of the journal is shown as a gap with a **Recover** action.
 

@@ -80,6 +80,7 @@ export default function MobileApp() {
 	});
 
 	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
+	const [chatFileLink, setChatFileLink] = createSignal<{ candidate: string; cwd: string } | null>(null);
 	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
 	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
 	createEffect(() => {
@@ -183,7 +184,12 @@ export default function MobileApp() {
 						<main class={styles.content}>
 							<Switch>
 								<Match when={activeTab() === "chat"}>
-									<MobileChatScreen />
+									<MobileChatScreen
+										onOpenFile={(candidate, cwd) => {
+											setChatFileLink({ candidate, cwd });
+											setActiveTab("files");
+										}}
+									/>
 								</Match>
 								<Match when={activeTab() === "sessions"}>
 									<SessionsScreen
@@ -199,7 +205,18 @@ export default function MobileApp() {
 									<ActivityScreen onNavigateSession={navigateToSession} />
 								</Match>
 								<Match when={activeTab() === "files"}>
-									<FilesScreen />
+									<Show when={chatFileLink()} fallback={<FilesScreen />}>
+										{(link) => (
+											<FilesScreen
+												initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
+												initialLink={{ candidate: link().candidate }}
+												onExit={() => {
+													setChatFileLink(null);
+													setActiveTab("chat");
+												}}
+											/>
+										)}
+									</Show>
 								</Match>
 								<Match when={activeTab() === "progress"}>
 									<ProgressDialog
@@ -213,7 +230,13 @@ export default function MobileApp() {
 								</Match>
 							</Switch>
 						</main>
-						<BottomTabs active={activeTab()} onSelect={setActiveTab} />
+						<BottomTabs
+							active={activeTab()}
+							onSelect={(tab) => {
+								setChatFileLink(null);
+								setActiveTab(tab);
+							}}
+						/>
 					</>
 				}
 			>

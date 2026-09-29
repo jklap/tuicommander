@@ -93,6 +93,41 @@ describe("useConfirmDialog", () => {
 		});
 	});
 
+	describe("confirmOrphanCleanup()", () => {
+		it("counts down only when every backend assessment is safe", async () => {
+			const pending = dialog.confirmOrphanCleanup("/repo", [{ path: "/wt/clean", safe: true }], 10);
+			expect(dialog.dialogState()?.autoConfirmMs).toBe(10_000);
+			expect(dialog.dialogState()?.message).toContain("/wt/clean");
+			dialog.handleClose();
+			expect(await pending).toBe(false);
+		});
+
+		it("names the dirty orphan and runs no countdown", async () => {
+			const pending = dialog.confirmOrphanCleanup(
+				"/repo",
+				[
+					{ path: "/wt/clean", safe: true },
+					{ path: "/wt/dirty", safe: false, reason: "untracked files" },
+				],
+				10,
+			);
+			expect(dialog.dialogState()?.autoConfirmMs).toBeUndefined();
+			expect(dialog.dialogState()?.message).toContain("/wt/dirty: untracked files");
+			dialog.handleClose();
+			expect(await pending).toBe(false);
+		});
+
+		it("an agent answer settles the matching queued orphan prompt", async () => {
+			const unrelated = dialog.confirm({ title: "First", message: "Unrelated" });
+			const orphan = dialog.confirmOrphanCleanup("/repo", [{ path: "/wt/clean", safe: true }], 10);
+			dialog.answerOrphanCleanup("/repo", false);
+			expect(await orphan).toBe(false);
+			expect(dialog.dialogState()?.title).toBe("First");
+			dialog.handleClose();
+			expect(await unrelated).toBe(false);
+		});
+	});
+
 	describe("concurrent confirm() calls", () => {
 		it("queues a second confirm and shows dialogs sequentially (FIFO)", async () => {
 			const first = dialog.confirm({ title: "First", message: "1?" });

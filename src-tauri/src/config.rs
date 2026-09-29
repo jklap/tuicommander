@@ -1498,6 +1498,8 @@ pub(crate) struct RepoDefaultsConfig {
     pub(crate) auto_archive_merged: bool,
     #[serde(default)]
     pub(crate) orphan_cleanup: OrphanCleanup,
+    #[serde(default = "default_orphan_cleanup_countdown_seconds")]
+    pub(crate) orphan_cleanup_countdown_seconds: u32,
     #[serde(default)]
     pub(crate) pr_merge_strategy: MergeStrategy,
     #[serde(default)]
@@ -1524,12 +1526,17 @@ impl Default for RepoDefaultsConfig {
             delete_branch_on_remove: true,
             auto_archive_merged: false,
             orphan_cleanup: OrphanCleanup::default(),
+            orphan_cleanup_countdown_seconds: default_orphan_cleanup_countdown_seconds(),
             pr_merge_strategy: MergeStrategy::default(),
             after_merge: WorktreeAfterMerge::default(),
             auto_fetch_interval_minutes: 0,
             auto_delete_on_pr_close: AutoDeleteOnPrClose::default(),
         }
     }
+}
+
+fn default_orphan_cleanup_countdown_seconds() -> u32 {
+    10
 }
 
 fn default_base_branch() -> String {
@@ -5676,6 +5683,20 @@ mod tests {
         assert_eq!(loaded.pr_merge_strategy, MergeStrategy::Squash);
         assert_eq!(loaded.after_merge, WorktreeAfterMerge::Archive);
         assert_eq!(loaded.auto_delete_on_pr_close, AutoDeleteOnPrClose::Off);
+    }
+
+    #[test]
+    fn orphan_cleanup_countdown_setting_round_trips_and_defaults_to_ten_seconds() {
+        let configured: RepoDefaultsConfig = serde_json::from_value(serde_json::json!({
+            "orphan_cleanup_countdown_seconds": 20
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(configured).unwrap();
+        assert_eq!(serialized["orphan_cleanup_countdown_seconds"], 20);
+
+        let defaults: RepoDefaultsConfig = serde_json::from_str("{}").unwrap();
+        let serialized_defaults = serde_json::to_value(defaults).unwrap();
+        assert_eq!(serialized_defaults["orphan_cleanup_countdown_seconds"], 10);
     }
 
     #[test]

@@ -241,6 +241,10 @@
 /repo/merge-archive-worktree
 /repo/merge-pr
 /repo/merged-prs
+/repo/orphan-cleanup-assessment
+/repo/orphan-cleanup/begin
+/repo/orphan-cleanup/clear
+/repo/orphan-cleanup/pending
 /repo/orphan-worktrees
 /repo/panel-context
 /repo/post-pr-review

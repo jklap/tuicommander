@@ -22,6 +22,8 @@ export interface ConfirmOptions {
 	defaultButton?: ConfirmDefaultButton;
 	/** When set, the dialog auto-clicks cancel after this many ms, with a countdown on the cancel label. */
 	autoCancelMs?: number;
+	/** When set, the dialog auto-clicks confirm after this many ms, with a countdown on the confirm label. */
+	autoConfirmMs?: number;
 }
 
 /** Internal state for the currently visible confirm dialog */
@@ -34,6 +36,7 @@ export interface ConfirmDialogState {
 	kind: "info" | "warning" | "error";
 	defaultButton: ConfirmDefaultButton;
 	autoCancelMs?: number;
+	autoConfirmMs?: number;
 }
 
 /**
@@ -49,7 +52,7 @@ export function useConfirmDialog() {
 	// shown. Concurrent confirm() calls enqueue instead of overwriting a single
 	// resolver — the previous single-slot design orphaned every promise but the
 	// last (its await never settled) and silently dropped earlier dialogs.
-	const queue: Array<{ options: ConfirmOptions; resolve: (value: ConfirmResult) => void }> = [];
+	const queue: Array<{ options: ConfirmOptions; resolve: (value: ConfirmResult) => void; key?: string }> = [];
 
 	/** Render the dialog at the head of the queue, or hide it when empty. */
 	function showHead() {
@@ -67,14 +70,15 @@ export function useConfirmDialog() {
 			kind: head.options.kind || "warning",
 			defaultButton: head.options.defaultButton || "confirm",
 			autoCancelMs: head.options.autoCancelMs,
+			autoConfirmMs: head.options.autoConfirmMs,
 		});
 	}
 
 	/** Show a confirmation dialog — resolves true on confirm, false on cancel.
 	 *  When a dialog is already visible, this one queues and shows after it. */
-	function confirm(options: ConfirmOptions): Promise<boolean> {
+	function confirm(options: ConfirmOptions, key?: string): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
-			queue.push({ options, resolve: (value) => resolve(value === "confirm") });
+			queue.push({ options, resolve: (value) => resolve(value === "confirm"), key });
 			if (queue.length === 1) showHead();
 		});
 	}
@@ -84,6 +88,14 @@ export function useConfirmDialog() {
 		const head = queue.shift();
 		head?.resolve(value);
 		showHead();
+	}
+
+	function answerOrphanCleanup(repoPath: string, remove: boolean) {
+		const index = queue.findIndex((request) => request.key === `orphan:${repoPath}`);
+		if (index < 0) return;
+		const [request] = queue.splice(index, 1);
+		request.resolve(remove ? "confirm" : "cancel");
+		if (index === 0) showHead();
 	}
 
 	/** Called when user confirms */
@@ -223,15 +235,27 @@ export function useConfirmDialog() {
 	}
 
 	/** Confirm removing orphaned worktrees (detached-HEAD, branch deleted) */
-	async function confirmOrphanCleanup(paths: string[]): Promise<boolean> {
-		const list = paths.map((p) => `  • ${p}`).join("\n");
-		return await confirm({
-			title: "Orphaned worktrees found",
-			message: `${paths.length} worktree(s) have no branch and will be removed:\n${list}`,
-			okLabel: "Remove",
-			cancelLabel: "Keep",
-			kind: "warning",
-		});
+	async function confirmOrphanCleanup(
+		repoPath: string,
+		assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+		countdownSeconds: number,
+	): Promise<boolean> {
+		const allSafe = assessments.every((entry) => entry.safe);
+		const list = assessments.map((entry) => `  • ${entry.path}${entry.reason ? `: ${entry.reason}` : ""}`).join("\n");
+		return await confirm(
+			{
+				title: "Orphaned worktrees found",
+				message: allSafe
+					? `${assessments.length} clean worktree(s) have no branch and can be removed:\n${list}`
+					: `Review before removing these orphaned worktrees:\n${list}`,
+				okLabel: "Remove",
+				cancelLabel: "Keep",
+				kind: "warning",
+				defaultButton: "cancel",
+				autoConfirmMs: allSafe ? countdownSeconds * 1000 : undefined,
+			},
+			`orphan:${repoPath}`,
+		);
 	}
 
 	/** Confirm cleanup hazards before retrying with an explicit fingerprint.
@@ -277,6 +301,7 @@ export function useConfirmDialog() {
 		confirmRemoveRepo,
 		confirmStashAndSwitch,
 		confirmOrphanCleanup,
+		answerOrphanCleanup,
 		confirmDirtyWorktreeCleanup,
 		reportGitError,
 		/** Reactive state for rendering the dialog — null when hidden */

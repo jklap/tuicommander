@@ -1226,6 +1226,19 @@ fn link_shared_stores(src: &Path, dest: &Path) -> Vec<String> {
 }
 
 fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
+    initialize_submodules_with_allowed_protocol(src, dest, None)
+}
+
+/// `allowed_protocol`, when set, is granted only to the remote-fallback `git
+/// submodule update` subprocess via [`GitCmd::env`] rather than the process
+/// environment, so a caller (a test, say) can unlock a single transport
+/// (e.g. `ext`) without leaking `GIT_ALLOW_PROTOCOL` into anything else
+/// running concurrently in the same process.
+fn initialize_submodules_with_allowed_protocol(
+    src: &Path,
+    dest: &Path,
+    allowed_protocol: Option<&str>,
+) -> Vec<String> {
     if !src.join(".gitmodules").is_file() {
         return Vec::new();
     }
@@ -1249,7 +1262,11 @@ fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
         if local.is_ok() { return None; }
         let local_error = local.err().expect("failed above");
         let _ = git_cmd(dest).args(["config", "--unset", &url_key]).run();
-        match git_cmd(dest).args(["submodule", "sync", "--", path]).run().and_then(|_| git_cmd(dest).args(["submodule", "update", "--init", "--", path]).timeout(FETCH_TIMEOUT).run()) {
+        let mut update = git_cmd(dest).args(["submodule", "update", "--init", "--", path]).timeout(FETCH_TIMEOUT);
+        if let Some(protocol) = allowed_protocol {
+            update = update.env("GIT_ALLOW_PROTOCOL", protocol);
+        }
+        match git_cmd(dest).args(["submodule", "sync", "--", path]).run().and_then(|_| update.run()) {
             Ok(_) => Some(format!("submodule '{path}' could not use the parent checkout ({local_error}); initialized from its configured remote instead")),
             Err(remote_error) => Some(format!("could not initialize submodule '{path}' from the parent checkout ({local_error}) or its configured remote ({remote_error})")),
         }
@@ -5995,11 +6012,12 @@ branch refs/heads/feat
         let (tx, rx) = std::sync::mpsc::channel();
         let source = repo.clone();
         std::thread::spawn(move || {
-            // Git's submodule child refuses ext even when the repository config
-            // allows it. Restrict the opt-in to this test process/thread window.
-            unsafe { std::env::set_var("GIT_ALLOW_PROTOCOL", "ext") };
-            let warnings = initialize_submodules(&source, &worktree);
-            unsafe { std::env::remove_var("GIT_ALLOW_PROTOCOL") };
+            // Git's submodule child refuses `ext` even when the repository
+            // config allows it, so the opt-in is granted on this call's own
+            // subprocess (see `initialize_submodules_with_allowed_protocol`)
+            // rather than the process environment.
+            let warnings =
+                initialize_submodules_with_allowed_protocol(&source, &worktree, Some("ext"));
             let _ = tx.send(warnings);
         });
         let warnings = rx
@@ -6008,6 +6026,69 @@ branch refs/heads/feat
         assert!(
             warnings.iter().any(|warning| warning.contains("timed out")),
             "{warnings:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn submodule_remote_fallback_does_not_block_concurrent_file_transport() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        fs::write(
+            repo.join(".gitmodules"),
+            "[submodule \"hanging\"]\n\tpath = modules/hanging\n\turl = ext::sleep 12\n",
+        )
+        .unwrap();
+        git_cmd(&repo)
+            .args([
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,modules/hanging",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "hanging submodule"])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "submodule-isolation");
+        let source = repo.clone();
+        let done = Arc::new(AtomicU64::new(0));
+        let done_writer = Arc::clone(&done);
+        let fallback = std::thread::spawn(move || {
+            let warnings =
+                initialize_submodules_with_allowed_protocol(&source, &worktree, Some("ext"));
+            done_writer.store(1, Ordering::SeqCst);
+            warnings
+        });
+
+        // While the fallback subprocess is granted `ext` for its own submodule
+        // update, hammer an unrelated file-protocol git call from this thread.
+        // It must never observe the override: it is scoped to the fallback's
+        // own subprocess, not leaked into the process environment.
+        let mut failures = Vec::new();
+        while done.load(Ordering::SeqCst) == 0 {
+            if let Err(error) = git_cmd(&repo)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "ls-remote",
+                    &repo.to_string_lossy(),
+                ])
+                .run()
+            {
+                failures.push(error.to_string());
+            }
+        }
+
+        fallback
+            .join()
+            .expect("submodule fallback thread must not panic");
+
+        assert!(
+            failures.is_empty(),
+            "an ext-only override for one submodule fallback must not block concurrent file-protocol git calls: {failures:?}"
         );
     }
 
@@ -8240,4 +8321,71 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
     Ok(parse_orphan_worktrees(&out.stdout))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrphanCleanupAssessment {
+    pub path: String,
+    pub safe: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Assess each current detached worktree. Only a clean checkout whose HEAD is
+/// reachable from a local or remote branch may be removed automatically.
+pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAssessment>, String> {
+    detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| match orphan_cleanup_safety(repo_path, &path) {
+                Ok(()) => OrphanCleanupAssessment {
+                    path,
+                    safe: true,
+                    reason: None,
+                },
+                Err(reason) => OrphanCleanupAssessment {
+                    path,
+                    safe: false,
+                    reason: Some(reason),
+                },
+            })
+            .collect()
+    })
+}
+
+pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    validate_worktree_path(repo_path, worktree_path)?;
+    let worktree = Path::new(worktree_path);
+    let status = git_cmd(worktree)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect worktree changes: {error}"))?;
+    if status.stdout.lines().any(|line| line.starts_with("??")) {
+        return Err("untracked files".into());
+    }
+    if !status.stdout.trim().is_empty() {
+        return Err("uncommitted changes".into());
+    }
+
+    let head = rev_at(worktree, "HEAD")?;
+    let containing = git_cmd(Path::new(repo_path))
+        .args([
+            "for-each-ref",
+            &format!("--contains={head}"),
+            "--count=1",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect branch reachability: {error}"))?;
+    if containing.stdout.trim().is_empty() {
+        return Err("HEAD has commits unreachable from any branch".into());
+    }
+    Ok(())
 }

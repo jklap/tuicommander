@@ -31,6 +31,7 @@ export interface RepoDefaults {
 	deleteBranchOnRemove: boolean;
 	autoArchiveMerged: boolean;
 	orphanCleanup: OrphanCleanup;
+	orphanCleanupCountdownSeconds: number;
 	prMergeStrategy: MergeStrategy;
 	afterMerge: WorktreeAfterMerge;
 	autoFetchIntervalMinutes: number;
@@ -49,6 +50,7 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	deleteBranchOnRemove: true,
 	autoArchiveMerged: false,
 	orphanCleanup: "ask",
+	orphanCleanupCountdownSeconds: 10,
 	prMergeStrategy: "squash",
 	afterMerge: "archive",
 	autoFetchIntervalMinutes: 0,
@@ -61,7 +63,8 @@ function createRepoDefaultsStore() {
 	const [state, setState] = createStore<RepoDefaults>({ ...INITIAL_DEFAULTS });
 
 	function save(): void {
-		repoDefaultsWriter.save({
+		repoDefaultsWriter
+			.save({
 				base_branch: state.baseBranch,
 				copy_ignored_files: state.copyIgnoredFiles,
 				copy_untracked_files: state.copyUntrackedFiles,
@@ -73,11 +76,13 @@ function createRepoDefaultsStore() {
 				delete_branch_on_remove: state.deleteBranchOnRemove,
 				auto_archive_merged: state.autoArchiveMerged,
 				orphan_cleanup: state.orphanCleanup,
+				orphan_cleanup_countdown_seconds: state.orphanCleanupCountdownSeconds,
 				pr_merge_strategy: state.prMergeStrategy,
 				after_merge: state.afterMerge,
 				auto_fetch_interval_minutes: state.autoFetchIntervalMinutes,
 				auto_delete_on_pr_close: state.autoDeleteOnPrClose,
-		}).catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
+			})
+			.catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
 	}
 
 	return {
@@ -97,6 +102,7 @@ function createRepoDefaultsStore() {
 					delete_branch_on_remove?: boolean;
 					auto_archive_merged?: boolean;
 					orphan_cleanup?: OrphanCleanup;
+					orphan_cleanup_countdown_seconds?: number;
 					pr_merge_strategy?: MergeStrategy;
 					after_merge?: WorktreeAfterMerge;
 					auto_fetch_interval_minutes?: number;
@@ -116,6 +122,8 @@ function createRepoDefaultsStore() {
 						deleteBranchOnRemove: loaded.delete_branch_on_remove ?? INITIAL_DEFAULTS.deleteBranchOnRemove,
 						autoArchiveMerged: loaded.auto_archive_merged ?? INITIAL_DEFAULTS.autoArchiveMerged,
 						orphanCleanup: loaded.orphan_cleanup ?? INITIAL_DEFAULTS.orphanCleanup,
+						orphanCleanupCountdownSeconds:
+							loaded.orphan_cleanup_countdown_seconds ?? INITIAL_DEFAULTS.orphanCleanupCountdownSeconds,
 						prMergeStrategy: loaded.pr_merge_strategy ?? INITIAL_DEFAULTS.prMergeStrategy,
 						afterMerge: loaded.after_merge ?? INITIAL_DEFAULTS.afterMerge,
 						autoFetchIntervalMinutes: loaded.auto_fetch_interval_minutes ?? INITIAL_DEFAULTS.autoFetchIntervalMinutes,
@@ -179,6 +187,11 @@ function createRepoDefaultsStore() {
 
 		setOrphanCleanup(value: OrphanCleanup): void {
 			setState("orphanCleanup", value);
+			save();
+		},
+
+		setOrphanCleanupCountdownSeconds(value: number): void {
+			setState("orphanCleanupCountdownSeconds", value);
 			save();
 		},
 

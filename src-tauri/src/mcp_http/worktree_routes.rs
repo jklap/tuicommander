@@ -360,6 +360,113 @@ pub(super) async fn detect_orphan_worktrees_http(Query(q): Query<OptionalRepoQue
     json_result(crate::worktree::detect_orphan_worktrees(repo_path).await)
 }
 
+pub(super) async fn assess_orphan_cleanup_http(Query(q): Query<OptionalRepoQuery>) -> Response {
+    let repo_path = match q.repo_path {
+        Some(path) if !path.is_empty() => path,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "repoPath required"})),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = validate_repo_path(&repo_path) {
+        return error.into_response();
+    }
+    json_result(crate::worktree::assess_orphan_cleanup(repo_path).await)
+}
+
+pub(super) async fn begin_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BeginOrphanCleanupRequest>,
+) -> Response {
+    if let Err(error) = validate_repo_path(&body.repo_path) {
+        return error.into_response();
+    }
+    let repo_path = body.repo_path;
+    let paths = body.paths;
+    match tokio::task::spawn_blocking(move || {
+        crate::worktree::begin_orphan_cleanup_internal(&state, &repo_path, paths)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::Value::Null).into_response(),
+        Ok(Err(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        Err(error) => err_500(&format!("orphan cleanup registration task failed: {error}")),
+    }
+}
+
+pub(super) async fn pending_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<OptionalRepoQuery>,
+) -> Response {
+    let Some(repo_path) = q.repo_path else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "repoPath required"})),
+        )
+            .into_response();
+    };
+    if let Err(error) = validate_repo_path(&repo_path) {
+        return error.into_response();
+    }
+    let answer = state
+        .pending_orphan_cleanup
+        .get(&repo_path)
+        .and_then(|entry| entry.answer);
+    Json(answer).into_response()
+}
+
+pub(super) async fn answer_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AnswerOrphanCleanupRequest>,
+) -> Response {
+    if let Err(error) = validate_repo_path(&body.repo_path) {
+        return error.into_response();
+    }
+    let remove = match body.decision.as_str() {
+        "remove" => true,
+        "keep" => false,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "decision must be remove or keep"})),
+            )
+                .into_response();
+        }
+    };
+    let repo_path = body.repo_path;
+    match tokio::task::spawn_blocking(move || {
+        crate::worktree::answer_orphan_cleanup_internal(&state, &repo_path, remove)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(Err(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        Err(error) => err_500(&format!("orphan cleanup answer task failed: {error}")),
+    }
+}
+
+pub(super) async fn clear_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ClearOrphanCleanupRequest>,
+) -> Response {
+    if let Err(error) = validate_repo_path(&body.repo_path) {
+        return error.into_response();
+    }
+    state.pending_orphan_cleanup.remove(&body.repo_path);
+    Json(serde_json::Value::Null).into_response()
+}
+
 pub(super) async fn remove_orphan_worktree_http(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::types::RemoveOrphanRequest>,
@@ -369,8 +476,12 @@ pub(super) async fn remove_orphan_worktree_http(
     }
     let repo_path = body.repo_path.clone();
     let worktree_path = body.worktree_path.clone();
+    let safe_only = body.safe_only;
     let result = tokio::task::spawn_blocking(move || {
         crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
+        if safe_only {
+            tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
+        }
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)
                 .file_name()
@@ -388,6 +499,11 @@ pub(super) async fn remove_orphan_worktree_http(
             state.invalidate_repo_caches(&body.repo_path);
             (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
         }
+        Ok(Err(e)) if safe_only => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
         Ok(Err(e)) => err_500(&e),
         Err(e) => err_500(&format!("task panic: {e}")),
     }

@@ -1566,6 +1566,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				canvasRef.style.cursor = "text";
 			}
 		}
+		// Lines that scrolled into history since the last accepted frame, in the
+		// eviction-stable all-time space. Geometry and screen changes start a new era.
+		const historyGrowth =
+			screenChanged || geomChanged ? 0 : frame.historyBase + frame.historySize - (lastHistoryBase + lastHistorySize);
 		// These describe the merge origin for the next frame even when history and
 		// display offset advanced together and left the visible all-time top stable.
 		lastDisplayOffset = frame.displayOffset;
@@ -1670,6 +1674,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// then would overwrite cache entries the smooth renderer is currently painting
 		// (brief flicker / wrong overscan). Only seed when at rest or when the backend
 		// has caught up to our integer offset.
+		// The gesture offset is relative to the history bottom: move it with the
+		// output first, so the cache render and the seed below stay on the same lines.
+		if (scroll.followHistory(historyGrowth, frame.historySize, frame.displayOffset)) scheduleScrollFlush();
 		if (scroll.position == null || frame.displayOffset === Math.floor(scroll.position)) {
 			const base = frame.historyBase + frame.historySize - frame.displayOffset;
 			scroll.cacheRows(frame.rows.map((row) => ({ abs: base + row.index, row })));

@@ -1135,6 +1135,26 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(worktree_routes::detect_orphan_worktrees_http),
         )
         .route(
+            "/repo/orphan-cleanup-assessment",
+            get(worktree_routes::assess_orphan_cleanup_http),
+        )
+        .route(
+            "/repo/orphan-cleanup/begin",
+            post(worktree_routes::begin_orphan_cleanup_http),
+        )
+        .route(
+            "/repo/orphan-cleanup/pending",
+            get(worktree_routes::pending_orphan_cleanup_http),
+        )
+        .route(
+            "/repo/orphan-cleanup/answer",
+            post(worktree_routes::answer_orphan_cleanup_http),
+        )
+        .route(
+            "/repo/orphan-cleanup/clear",
+            post(worktree_routes::clear_orphan_cleanup_http),
+        )
+        .route(
             "/repo/remove-orphan",
             post(worktree_routes::remove_orphan_worktree_http),
         )
@@ -6000,6 +6020,196 @@ mod tests {
             .output()
             .unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_assessment_rejects_untracked_files() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(linked.join("untracked.txt"), "keep me").unwrap();
+
+        let response = build_router(test_state(), false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        assert_eq!(rows[0]["safe"], false);
+        assert!(rows[0]["reason"].as_str().unwrap().contains("untracked"));
+        assert!(linked.join("untracked.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_assessment_rejects_commit_reachable_only_from_tag() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "only-tag",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(linked.join("change.txt"), "unique commit").unwrap();
+        crate::git_cli::git_cmd(&linked)
+            .args(["add", "change.txt"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&linked)
+            .args(["commit", "-m", "unique"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&linked)
+            .args(["tag", "-a", "durable-tag", "-m", "preserve unique commit"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&linked)
+            .args(["checkout", "--detach", "HEAD"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo.path())
+            .args(["branch", "-D", "only-tag"])
+            .run()
+            .unwrap();
+
+        let response = build_router(test_state(), false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        assert_eq!(rows[0]["safe"], false);
+        assert!(rows[0]["reason"].as_str().unwrap().contains("branch"));
+
+        let state = test_state();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+        let override_result = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert!(
+            override_result["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("branch")),
+            "{override_result}"
+        );
+
+        let removal = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists(), "tag-only orphan must survive safe removal");
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let state = test_state();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+
+        let answer = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        let read = build_router(state, false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup/pending?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(read.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            true
+        );
+        assert!(
+            linked.exists(),
+            "answering only closes the dialog; UI decides removal"
+        );
     }
 
     #[tokio::test]
