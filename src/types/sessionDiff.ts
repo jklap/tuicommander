@@ -22,6 +22,11 @@ export interface SessionSummary {
 	edit_count: number | null;
 	file_count: number | null;
 	has_subagents: boolean;
+	/** The TUIC terminal-tab session id whose `SessionStart` hook reported this
+	 *  Claude session, resolved from `AppState.claude_session_map` — `null`
+	 *  when no live/known mapping exists (session predates this build, was
+	 *  started outside TUIC, or has already closed). */
+	tuic_session_id: string | null;
 }
 
 export type StepKind = "create" | "overwrite" | "edit";
@@ -119,6 +124,8 @@ export interface SessionReview {
 	/** Non-fatal parse problems — render as a dismissible banner, never drop. */
 	warnings: string[];
 	included_subagents: boolean;
+	/** See `SessionSummary.tuic_session_id`'s doc comment. */
+	tuic_session_id: string | null;
 	/** One entry per distinct turn, in turn_index order. */
 	turns: TurnSummary[];
 }
