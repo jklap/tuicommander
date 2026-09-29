@@ -27,6 +27,7 @@
 ## Queued agent submission confirmation (story 1163-5bed) — Rust restart required
 
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a short command for a disposable Codex session while it is busy. When it becomes ready, confirm that the command starts a turn. If the composer retains the text instead, confirm that TUICommander reports uncertain delivery with an error toast and `session status` shows `delivery_uncertain=true`. Repeat with the installed Claude, OpenCode, Goose, Grok, and pi binaries. The running backend does not load this Rust change until restart.
+- [ ] In that disposable session, leave one uncertain queued command in the composer and queue a second. Confirm the second waits. Press Enter once for the retained command, wait for the next ready prompt, and confirm the second is delivered once. Check that its toast says to inspect the transcript and composer before acting. Amp, Cursor, and Droid still use the legacy PTY-write result until live screen captures establish a confirmation signal.
 
 ## Concurrent config saves (story 900-43dd) — Rust restart required
 

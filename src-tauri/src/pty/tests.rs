@@ -10931,6 +10931,68 @@ fn flush_hands_the_enter_gap_to_the_injection_worker_not_the_caller() {
     );
 }
 
+/// A silent first agent must not hold the shared injection worker while a
+/// different agent receives its own queued wake.
+#[cfg(unix)]
+#[test]
+fn queued_confirmation_wait_does_not_block_another_session() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    for sid in ["slow-confirmation", "other-session"] {
+        agent_session(&state, sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+        state
+            .pending_injections
+            .entry(sid.into())
+            .or_default()
+            .push_back(crate::state::PendingInjection::notice("wake"));
+    }
+    let first_bytes = insert_recording_session(&state, "slow-confirmation");
+    let second_bytes = insert_recording_session(&state, "other-session");
+    flush_pending_injections(&state, "slow-confirmation");
+    for _ in 0..200 {
+        if first_bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        first_bytes.lock().unwrap().ends_with(b"\r"),
+        "first write reached Enter"
+    );
+    flush_pending_injections(&state, "other-session");
+    for _ in 0..250 {
+        if second_bytes.lock().unwrap().ends_with(b"\r")
+            || state
+                .session_maps
+                .silence_states
+                .get("slow-confirmation")
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        second_bytes.lock().unwrap().ends_with(b"\r"),
+        "the second session must receive Enter before the first wait expires"
+    );
+}
+
 #[test]
 fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -11257,8 +11319,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
 #[test]
 fn queued_wake_without_agent_response_reports_uncertain_delivery() {
     for agent_type in [
-        "codex", "claude", "gemini", "opencode", "aider", "amp", "cursor", "goose", "grok",
-        "droid", "pi", "unknown",
+        "codex", "claude", "gemini", "opencode", "aider", "goose", "grok", "pi", "unknown",
     ] {
         let state = crate::state::tests_support::make_test_app_state();
         let sid = format!("silent-{agent_type}");
@@ -11291,17 +11352,127 @@ fn queued_wake_without_agent_response_reports_uncertain_delivery() {
         match alert {
             crate::state::AppEvent::McpToast {
                 title,
+                message,
                 level,
                 origin_session_id,
                 ..
             } => {
                 assert_eq!(title, "Agent input was not confirmed");
+                assert!(
+                    message
+                        .as_deref()
+                        .is_some_and(|text| text.contains("Do not retype"))
+                );
                 assert_eq!(level, "error");
                 assert_eq!(origin_session_id.as_deref(), Some(sid.as_str()));
             }
             other => panic!("expected delivery failure notification, got {other:?}"),
         }
     }
+}
+
+/// These three agents have neither a verified screen adapter nor hook support.
+/// Preserve their previous PTY-write result until a live capture can supply a
+/// trustworthy acknowledgement signal.
+#[cfg(unix)]
+#[test]
+fn unverified_agents_keep_legacy_queued_write_result() {
+    for agent_type in ["amp", "cursor", "droid"] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = format!("legacy-{agent_type}");
+        agent_session(&state, &sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(&sid)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let bytes = insert_recording_session(&state, &sid);
+        let mut alerts = state.event_bus.subscribe();
+        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        assert!(bytes.lock().unwrap().ends_with(b"\r"));
+        assert!(
+            !state
+                .session_maps
+                .silence_states
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain
+        );
+        assert!(
+            !std::iter::from_fn(|| alerts.try_recv().ok())
+                .any(|event| matches!(event, crate::state::AppEvent::McpToast { .. }))
+        );
+    }
+}
+
+/// A human can resolve an uncertain composer by pressing Enter once. A later
+/// confirmed ready prompt must let the next queued command through without
+/// replaying the earlier text.
+#[cfg(unix)]
+#[test]
+fn manual_submit_after_uncertain_delivery_reopens_next_queue_slot() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "uncertain-then-manual-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let bytes = insert_recording_session(&state, sid);
+
+    enqueue_user_command(&state, sid, "first wake").unwrap();
+    assert!(
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain
+    );
+    enqueue_user_command(&state, sid, "second wake").unwrap();
+    assert_eq!(queued_command_count(&state, sid), 1);
+    assert!(!String::from_utf8_lossy(&bytes.lock().unwrap()).contains("second wake"));
+
+    // The user submits the retained composer, then the next ready prompt is
+    // independently confirmed. Neither step asks TUIC to resend the first wake.
+    note_submitted_input(&state, sid);
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "a human Enter resolves the uncertain composer before another queued write"
+    );
+    state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .unwrap()
+        .lock()
+        .confirm_idle();
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
+
+    flush_pending_injections_blocking(&state, sid);
+    let written = String::from_utf8_lossy(&bytes.lock().unwrap()).into_owned();
+    assert_eq!(written.matches("first wake").count(), 1);
+    assert_eq!(
+        written.matches("second wake").count(),
+        1,
+        "next queued command must not stay parked"
+    );
 }
 
 /// The OSC idle marker is parsed on the PTY reader. It must finish publishing
@@ -11448,6 +11619,77 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
             .lock()
             .injection_delivery_uncertain,
         "cursor movement beneath a stale Working screen must not acknowledge Enter"
+    );
+}
+
+/// A Codex idle marker can precede its ready repaint. The old Working row is
+/// still visible when Enter is written, then a fresh Ready and Working pair
+/// arrive from the child. This is a real new turn despite that old row.
+#[cfg(unix)]
+#[test]
+fn queued_codex_accepts_ready_then_working_after_enter() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "late-ready-redraw";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[2J\x1b[21;1H\xe2\x80\xa2 Working (1s \xe2\x80\xa2 esc to interrupt)\x1b[22;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "working_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(
+            "\x1b[2J\x1b[22;1H› Ask Codex to do anything",
+            &silence,
+            sid,
+            &state,
+        );
+        reader.process_chunk(
+            "\x1b[21;1H• Working (1s • esc to interrupt)",
+            &silence,
+            sid,
+            &state,
+        );
+    });
+
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "a new Ready-to-Working transition after Enter must confirm delivery"
     );
 }
 
@@ -12472,14 +12714,12 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
                 .confirm_idle();
             try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
             emit_shell_state(&s2, "race", "idle");
-            flush_pending_injections(&s2, "race");
+            flush_pending_injections(&s2, "race")
         });
         sender.join().unwrap();
-        timer.join().unwrap();
-        // The timer's flush is dispatched to the injection worker, so joining the
-        // thread only proves it was enqueued. Drain before counting, or the next
-        // iteration's enqueue lands on top of a flush that never ran.
-        wait_for_injection_queue();
+        if let Some(worker) = timer.join().unwrap() {
+            worker.join().unwrap();
+        }
 
         let queued = state
             .pending_injections
