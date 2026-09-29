@@ -439,8 +439,8 @@
 
 - [ ] After an isolated `TUIC_APP_INSTANCE=<id>` Rust restart, confirm a refused dirty non-force removal leaves the worktree's pending warm state visible. Remove a different worktree while another registered checkout directory is missing; the missing checkout's submodule Git state must remain available for later safe removal.
 - [ ] After a `make dev` restart, verify a missing registered worktree refuses removal without force, and a separately confirmed lock override is needed if that registration is locked. After force removal, its submodule-only refs must remain in the main checkout's module repository.
-- [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins. Remove the worktree and check its warm status is no longer retained. A clean squash-merged branch removes without force and the response names `patch_equivalence`.
-- [ ] After that restart, create a worktree through desktop IPC and confirm its instructions report `pending` until warming completes. Confirm non-force removal preserves a dirty worktree with `delete_branch` both on and off; when an archive script adds a commit, the branch remains and the response includes `branch_delete_warning`.
+- [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins. Remove the worktree and check its warm status is no longer retained. A clean squash-merged branch removes without force and the response names `patch_equivalence`. _(NOT VERIFIED 2026-09-29: partial: MCP create -> warm_artifacts pending then done in /worktrees/paths; squash-merged branch removed without force with removal_rule=patch_equivalence; warm status gone after removal. Setup-script ordering not tested)_
+- [ ] After that restart, create a worktree through desktop IPC and confirm its instructions report `pending` until warming completes. Confirm non-force removal preserves a dirty worktree with `delete_branch` both on and off; when an archive script adds a commit, the branch remains and the response includes `branch_delete_warning`. _(NOT VERIFIED 2026-09-29: partial: non-force removal of a dirty worktree refused with delete_branch on and off ('has uncommitted changes'), branch kept; archive-script/branch_delete_warning not tested)_
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
@@ -1256,7 +1256,7 @@ how it renders and whether it interrupts anything.
   under the key `"undefined"`. After a restart: create a worktree from the "+"
   button and from `repo worktree_create`, and check the row appears under the
   branch, opens a terminal, and removes cleanly.
-- [ ] **Rust change — needs `make dev` restart** (#727-2085). Both worktree
+- [ ] **Rust change — needs `make dev` restart** (#727-2085). Both worktree _(NOT VERIFIED 2026-09-29: partial: worktree_create returns workspace_id and branch (wtA); sidebar row and removal by workspace id not checked)_
   events now carry `workspace_id` *and* `branch`, and creation goes through the
   new `notify_worktree_created`. On an unrestarted backend the frontend reads
   `workspace_id: undefined`, so the sidebar row lands under the key `"undefined"`
@@ -2765,14 +2765,14 @@ seconds and confirm the duplicate receipt produces no second event.
 
 ## Linked worktrees start WARM (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] Create a linked worktree of this repo through the dialog or
+- [ ] Create a linked worktree of this repo through the dialog or _(NOT VERIFIED 2026-09-29: partial: fixture worktree has node_modules/ and target/ right after warm done; warmed_directories value not read (create response showed 0 while pending))_
       `repo action=worktree_create` without `mode` or `dirty` fields.
       It must contain `node_modules/` and `src-tauri/target/` straight away, and
       the MCP/HTTP `instructions` payload must report
       `warm_artifacts.warmed_directories` > 0.
-- [ ] `git -C <worktree> status` must still work after creation, and the
+- [x] `git -C <worktree> status` must still work after creation, and the _(verified 2026-09-29: fixture worktree via MCP repo worktree_create: git -C status OK, .git is a file)_
       worktree's `.git` must still be a FILE, not a directory.
-- [ ] The ignored top-level FILES must NOT have been copied: no `.env`,
+- [x] The ignored top-level FILES must NOT have been copied: no `.env`, _(verified 2026-09-29: fixture repo with ignored .env/.mcp.json/CLAUDE.md: none appear in the new worktree (node_modules/ and target/ do))_
       `.mcp.json`, `CLAUDE.md` newly appearing in the worktree beyond what the
       branch tracks.
 - [ ] `plugins/` (a submodule) and `src-tauri/plugins/claude-wakeup/` must not
