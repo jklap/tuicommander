@@ -7104,6 +7104,56 @@ impl ChunkProcessor {
             });
         }
 
+        // Claude prints this tool result when Esc dismisses AskUserQuestion.
+        // A bare Esc has no line-input event, so its confident notification
+        // otherwise stays latched after the completed turn. Require the newly
+        // painted result and a ready composer; a dialog still on screen must
+        // retain its badge, including while Claude repaints its status line.
+        let declined_claude_question = if agent_type.as_deref() == Some("claude")
+            && screen_activity == AgentScreenActivity::Ready
+            && changed_rows.iter().any(|row| {
+                row.text.contains("User declined") && row.text.contains("answer questions")
+            })
+            && screen_cache
+                .is_some_and(|screen| crate::output_parser::ink_dialog_footer(screen).is_none())
+            && !events.iter().any(|event| {
+                matches!(
+                    event,
+                    ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
+                )
+            }) {
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .and_then(|session| {
+                    if session.awaiting_input
+                        && session.question_confident
+                        && session.choice_prompt.is_none()
+                    {
+                        session
+                            .question_text
+                            .as_ref()
+                            .map(|text| (text.clone(), session.turn_epoch))
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        if let Some((expected_question_text, turn_epoch)) = declined_claude_question {
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: session_id.to_string(),
+                parsed: serde_json::json!({
+                    "type": "protocol-question-cleared",
+                    "expected_question_text": expected_question_text,
+                    "_turn_epoch": turn_epoch,
+                })
+                .into(),
+            });
+        }
+
         // Update silence state for fallback question detection.
         let has_status_line = events
             .iter()
