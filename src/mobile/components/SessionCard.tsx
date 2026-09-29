@@ -113,8 +113,8 @@ export function SessionCard(props: SessionCardProps) {
 					</div>
 				</Show>
 
-				{/* Current task sub-row. `displayTask` drops a bare spinner verb —
-				    "Working" next to an Activity badge is a line that says nothing. */}
+				{/* Current task sub-row. `displayTask` drops a bare spinner verb
+				    rather than repeating the Working badge. */}
 				<Show when={task()}>
 					<div class={styles.subRow} data-testid="task-row">
 						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
