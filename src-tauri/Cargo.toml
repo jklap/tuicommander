@@ -197,24 +197,6 @@ portable-pty = "0.9"
 tokio = { version = "1", features = ["full"] }
 dashmap = "6"
 moka = { version = "0.12", features = ["sync"] }
-gix = { version = "0.85", default-features = false, features = [
-    "sha1",
-    "revision",
-    "status",
-    "blame",
-    "blob-diff",
-    "dirwalk",
-    "parallel",
-] }
-# gix-diff enables gix-imara-diff (renamed here from its crates.io name
-# "gix-imara-diff") for its `blob` feature, but does not itself forward that
-# crate's own `unified_diff` feature — so `gix::diff::blob::{BasicLineDiffPrinter,
-# UnifiedDiffConfig, UnifiedDiffPrinter}` and `Diff::unified_diff` are otherwise
-# unavailable. Declaring the same dependency directly, with that feature on,
-# unifies with gix-diff's own copy (same crate/version, one Cargo.lock entry)
-# and turns the feature on crate-wide. Used by session_review.rs to render a
-# git-apply-able unified diff from two in-memory strings.
-gix-imara-diff = { version = "0.2.3", default-features = false, features = ["unified_diff"] }
 parking_lot = "0.12"
 regex = "1"
 # github.rs sanitize_ci_logs strips terminal escapes from CI logs in production.

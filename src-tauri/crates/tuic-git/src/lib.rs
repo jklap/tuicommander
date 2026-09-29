@@ -5,6 +5,7 @@
 pub mod changelog;
 pub mod circleci;
 pub mod cow;
+pub mod diff_options;
 pub mod git;
 pub mod git_cli;
 pub mod git_graph;

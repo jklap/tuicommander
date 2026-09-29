@@ -36,6 +36,7 @@ pub(crate) mod content_index;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+pub(crate) use tuic_git::diff_options;
 pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
