@@ -2,6 +2,7 @@ import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { displayTask } from "../../utils/activitySnapshot";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
@@ -20,6 +21,7 @@ interface SessionDetailScreenProps {
 	sessionExists: boolean;
 	onBack: () => void;
 	onOpenFiles: () => void;
+	onOpenFileLink?: (candidate: string, line?: number) => void;
 }
 
 function projectName(cwd: string | null): string {
@@ -40,6 +42,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		return { ...poll, ...ws } as typeof poll;
 	};
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
+	const task = () => displayTask(sessionState()?.current_task, sessionState()?.agent_type);
 
 	// Search filter
 	const [searchOpen, setSearchOpen] = createSignal(false);
@@ -164,7 +167,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<line x1="21" y1="21" x2="16.65" y2="16.65" />
 					</svg>
 				</button>
-				<StatusBadge status={status()} />
+				<Show when={props.sessionExists}>
+					<StatusBadge status={status()} />
+				</Show>
 			</header>
 
 			<Show when={searchOpen()}>
@@ -201,13 +206,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</div>
 			</Show>
 
-			<Show when={sessionState()?.current_task}>
+			<Show when={task()}>
 				<div class={styles.taskLine}>
 					<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<circle cx="12" cy="12" r="3" />
 						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
 					</svg>
-					<span class={styles.subText}>{sessionState()!.current_task}</span>
+					<span class={styles.subText}>{task()}</span>
 				</div>
 			</Show>
 
@@ -245,6 +250,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			<div class={styles.outputArea}>
 				<OutputView
 					sessionId={props.session.session_id}
+					onOpenFileLink={props.onOpenFileLink}
 					onStateChange={setWsState}
 					onInputLine={setPtyInputLine}
 					searchQuery={searchQuery()}
@@ -270,6 +276,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
 				questionConfident={sessionState()?.question_confident}
+				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
 				onSlashRequest={() => slashTrigger?.()}
 			/>

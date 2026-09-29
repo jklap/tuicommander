@@ -51,6 +51,7 @@ describe("ServicesTab remote machine presentation", () => {
 			authPassword: "",
 			deploy: "never",
 			surviveMinutes: 30,
+			autoUpdate: false,
 		});
 	});
 });

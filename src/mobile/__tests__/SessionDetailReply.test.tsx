@@ -100,3 +100,48 @@ it("types into an opened Codex free-form question through the PTY", async () => 
 	}));
 	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 });
+
+it.each([
+	["idle", "Concocting", true, false],
+	["awaiting input", "Actioning", true, true],
+	["ended", "Envisioning", false, false],
+])("hides a bare spinner task while %s", (_state, task, sessionExists, awaitingInput) => {
+	const session: SessionInfo = {
+		session_id: "session",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "claude",
+			current_task: task,
+			awaiting_input: awaitingInput,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const view = render(() => (
+		<SessionDetailScreen session={session} sessionExists={sessionExists} onBack={() => {}} onOpenFiles={() => {}} />
+	));
+	expect(view.container.querySelector("header")).not.toBeNull();
+	expect(view.queryByText(task)).toBeNull();
+});
+
+it.each(["Reading files", "Waiting for background terminal"])("shows a real task: %s", (task) => {
+	const session: SessionInfo = {
+		session_id: "session",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "codex",
+			current_task: task,
+			awaiting_input: false,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const view = render(() => (
+		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+	));
+	expect(view.getByText(task)).not.toBeNull();
+});

@@ -1,5 +1,5 @@
-import { cleanup, render } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionCard } from "../components/SessionCard";
 import type { SessionInfo, SessionState } from "../useSessions";
 
@@ -22,6 +22,20 @@ function makeSession(overrides: Partial<SessionState> = {}): SessionInfo {
 }
 
 describe("SessionCard sub-rows", () => {
+	it("provides a named kill button separate from the card action", async () => {
+		const onSelect = vi.fn();
+		const onKill = vi.fn();
+		const session = { ...makeSession(), display_name: "Wiz-Pr" };
+		const view = render(() => <SessionCard session={session} onSelect={onSelect} onKill={onKill} />);
+		const kill = view.getByRole("button", { name: "Kill session Wiz-Pr" });
+		expect(kill.parentElement?.closest("button")).toBeNull();
+		await fireEvent.click(kill);
+		expect(onKill).toHaveBeenCalledWith("s1");
+		expect(onSelect).not.toHaveBeenCalled();
+		await fireEvent.click(view.getByRole("button", { name: "Open session Wiz-Pr" }));
+		expect(onSelect).toHaveBeenCalledWith("s1");
+		expect(onKill).toHaveBeenCalledOnce();
+	});
 	it("shows intent row when agent_intent is present", () => {
 		const session = makeSession({ agent_intent: "Refactoring auth module" });
 		const { container } = render(() => <SessionCard session={session} onSelect={() => {}} />);

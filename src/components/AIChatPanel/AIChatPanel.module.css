@@ -528,6 +528,28 @@
   transition: opacity 0.15s ease;
 }
 
+.parkBtn {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.parkBtn:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+
+.parkBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .sendBtn:hover:not(:disabled) {
   opacity: 0.85;
 }

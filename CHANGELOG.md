@@ -7,8 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **Mobile Codex questions** — Open queued questions from the session header, see their choices, and answer with one tap or typed notes. The question overlay does not reduce terminal space.
+- **AI Chat prompt parking** — `Ctrl+S` parks a draft and its images while you ask something else; the parked draft returns after Send. The composer control also works on phones.
 
 - **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.
+
+- **Mobile session links** — Markdown references in terminal output open the mobile Files editor, while web links open in the phone's browser. A path outside registered repositories shows a refusal with the path.
+
+- **Mobile session search** — A magnifier above the session list filters by session name, repository, worktree, branch, or agent.
 
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
 

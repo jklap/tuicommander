@@ -10,6 +10,17 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat Prompt Parking",
+		description: "Park a half-written AI Chat prompt to ask something else; it returns after your next Send. On phones, tap Park.",
+		shortcut: "Ctrl+S",
+	},
+	{
+		feature: "Mobile Session Search",
+		description:
+			"On the phone, tap the magnifier above Sessions to find an agent by name, repository, branch, or type.",
+		shortcut: null,
+	},
+	{
 		feature: "Parallel AI Chats",
 		description: "With AI Chat focused, open another tab for a separate conversation and draft in the same repository.",
 		shortcut: `${mod}+T`,
