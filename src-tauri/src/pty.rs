@@ -8621,8 +8621,7 @@ pub(crate) fn prefill_agent_input(
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 // A Codex stop hook delayed the accepted turn's Working repaint by four seconds.
-const CODEX_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
-    std::time::Duration::from_secs(6);
+const CODEX_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// The same framed multiline payload works for every supported agent; only the
 /// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
