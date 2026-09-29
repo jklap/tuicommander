@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Mobile Files** — Repository paths keep their end visible and reveal the full path on long press. The tree puts hidden folders after normal ones and searches nested files. File actions share the title row; the editor fills the available height and wraps lines.
+
 - **AI Chat prompt parking** — `Ctrl+S` parks a draft and its images while you ask something else; the parked draft returns after Send. The composer control also works on phones.
 
 - **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.

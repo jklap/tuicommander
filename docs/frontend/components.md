@@ -165,6 +165,10 @@ space below its last card so the floating new-session button cannot cover it.
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;
 the regular Files bottom tab still starts at the repository picker.
+Repository paths preserve their trailing segment and reveal the full path on
+long press. The tree sorts hidden folders after normal entries and uses the
+backend's recursive `search_files` route for nested matches. File actions share
+the title row; the editor fills the remaining height and wraps source lines.
 Markdown references in output use the desktop path resolver and open the Files
 viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
