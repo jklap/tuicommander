@@ -2350,6 +2350,18 @@ mod tests {
             Err(e) if e.status == 0 => {
                 eprintln!("Skipping live API test: network error ({})", e.message);
             }
+            // A 5xx is Anthropic's own API being transiently unavailable
+            // (e.g. `overloaded_error`), not this code doing anything wrong —
+            // confirmed live 2026-09-29 (two `check-gate.sh` runs minutes
+            // apart both hit a real 503). Same reasoning as 429/401/0 above:
+            // this test exists to catch a real deserialization regression,
+            // not to assert Anthropic's own uptime.
+            Err(e) if (500..600).contains(&e.status) => {
+                eprintln!(
+                    "Skipping live API test: upstream server error ({}: {})",
+                    e.status, e.message
+                );
+            }
             Err(e) => {
                 panic!(
                     "Live API call failed: status={} msg={}",
