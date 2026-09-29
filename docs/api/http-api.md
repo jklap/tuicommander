@@ -2428,6 +2428,10 @@ POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}       
 POST   /acp/one-shot                                            {root, prompt}            -> EgoTurn
 ```
 
+The ACP session prompt route accepts a buffered JSON body large enough for the
+shared 10 MiB image draft cap after base64 encoding, plus 64 KiB for JSON and
+text. Other JSON routes retain the 2 MiB default body limit.
+
 `POST /acp/connections`, `.../reconnect` and `POST /acp/one-shot` are the three
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes

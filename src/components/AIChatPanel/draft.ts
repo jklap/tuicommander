@@ -1,7 +1,8 @@
 import { createSignal } from "solid-js";
 import type { AcpContentBlock } from "../../types/acp";
+import maxImageBytes from "../../shared/acp-image-limit.json";
 
-export const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_PASTED_IMAGE_BYTES = maxImageBytes;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export interface StagedImage {
@@ -67,10 +68,10 @@ export const aiChatDraft = {
 		if (!supported) return "This agent does not support images.";
 		if (!IMAGE_TYPES.has(file.type)) return `Unsupported image type: ${file.type || "unknown"}.`;
 		if (file.size > MAX_PASTED_IMAGE_BYTES) {
-			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the limit is 10 MiB.`;
+			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the limit is ${MAX_PASTED_IMAGE_BYTES / (1024 * 1024)} MiB.`;
 		}
 		if (images().reduce((sum, image) => sum + image.size, pendingBytes) + file.size > MAX_PASTED_IMAGE_BYTES) {
-			return "Images exceed the 10 MiB total limit.";
+			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the total limit is ${MAX_PASTED_IMAGE_BYTES / (1024 * 1024)} MiB.`;
 		}
 		pendingBytes += file.size;
 		try {

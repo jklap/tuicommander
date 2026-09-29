@@ -98,7 +98,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
 | `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
-| `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB | `413 Payload Too Large` | Bounds how much any route will buffer |
+| `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
 `ui action=confirm`'s own answer window (`CONFIRM_TIMEOUT`, `mcp_transport.rs`)
