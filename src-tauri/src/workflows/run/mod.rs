@@ -1488,8 +1488,8 @@ mod tests {
 
     #[test]
     fn workflow_dispatch_holds_dependents_after_manual_done_without_integration_receipt() {
-        let (config, project, plan_id, prerequisite_id, definition_id, _guard) = fixture();
-        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let (_config, project, plan_id, prerequisite_id, definition_id, _guard) = fixture();
+        let store = RunStore::open().unwrap();
         let stories = StoryStore::open().unwrap();
         let dependent = stories
             .create_story(NewStory {
@@ -1518,7 +1518,7 @@ mod tests {
         assert_eq!(prerequisite.status, crate::stories::StoryStatus::Done);
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Backlog
+            crate::stories::StoryStatus::Ready
         );
         let project_path = project
             .path()
@@ -1535,6 +1535,10 @@ mod tests {
                 RunLimits::default(),
             )
             .unwrap();
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Backlog
+        );
         let error = store
             .command(
                 &run.id,
@@ -1546,6 +1550,81 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("integration receipt"), "{error}");
+    }
+
+    #[test]
+    fn another_plans_workflow_run_does_not_hold_manual_dependents() {
+        let (_config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let runs = RunStore::open().unwrap();
+        runs.start_plan(
+            project.path().canonicalize().unwrap().to_str().unwrap(),
+            &plan_id,
+            &definition_id,
+            1,
+            RunLimits::default(),
+        )
+        .unwrap();
+
+        let stories = StoryStore::open().unwrap();
+        let manual_plan = stories
+            .create_plan(NewPlan {
+                project: project.path().canonicalize().unwrap().to_str().unwrap().into(),
+                title: "Manual".into(),
+                source: "manual.md".into(),
+            })
+            .unwrap();
+        let make_story = |title: &str| NewStory {
+            plan_id: manual_plan.id.clone(),
+            title: title.into(),
+            criteria: vec!["Done".into()],
+            priority: 1,
+            origin: StoryOrigin::Native,
+            file_scope: vec![],
+        };
+        let prerequisite = stories.create_story(make_story("Prerequisite")).unwrap();
+        let dependent = stories.create_story(make_story("Dependent")).unwrap();
+        stories
+            .add_dependency(&dependent.id, &prerequisite.id, dependent.revision)
+            .unwrap();
+        let mut prerequisite = prerequisite;
+        for command in [
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::SubmitReview,
+            StoryCommand::Approve,
+        ] {
+            prerequisite = stories
+                .transition(&prerequisite.id, prerequisite.revision, command)
+                .unwrap();
+        }
+        assert_eq!(prerequisite.status, crate::stories::StoryStatus::Done);
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Ready
+        );
+    }
+
+    #[test]
+    fn first_workflow_open_reconciles_existing_active_run_once() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("workflow_runs.sqlite3");
+        let stored = RunStore::open_at(&db).unwrap();
+        let run = stored
+            .start_plan(
+                project.path().canonicalize().unwrap().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        assert_eq!(stored.snapshot(&run.id).unwrap().status, RunStatus::Running);
+
+        let opened = RunStore::open().unwrap();
+        let recovered = opened.snapshot(&run.id).unwrap();
+        assert_eq!(recovered.status, RunStatus::Paused);
+        let reopened = RunStore::open().unwrap();
+        assert_eq!(reopened.snapshot(&run.id).unwrap().sequence, recovered.sequence);
     }
 
     #[test]

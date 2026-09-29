@@ -1722,11 +1722,6 @@ pub fn run() {
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
             *app_state.app_handle.write() = Some(app.handle().clone());
-            match workflows::RunStore::open().and_then(|store| store.reconcile_active()) {
-                Ok(count) if count > 0 => tracing::info!(count, "Reconciled active workflow runs after startup"),
-                Err(error) => tracing::warn!(%error, "Could not reconcile workflow runs after startup"),
-                _ => {}
-            }
 
             // Ensure main window exists — if tauri.conf.json windows[] is
             // empty (accidental edit, merge conflict), create it programmatically
@@ -2782,11 +2777,6 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let worktrees_dir = data_dir.join("worktrees");
     std::fs::create_dir_all(&worktrees_dir)?;
     let _pid_file = RemotePidFile::create(&data_dir)?;
-    match workflows::RunStore::open().and_then(|store| store.reconcile_active()) {
-        Ok(count) if count > 0 => tracing::info!(count, "Reconciled active workflow runs after startup"),
-        Err(error) => tracing::warn!(%error, "Could not reconcile workflow runs after startup"),
-        _ => {}
-    }
 
     // Env only, for the same reason the desktop boot does it: the rest of the
     // chain spawns `gh` or reads the credential store, and this runs before the

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Manual story dependencies** — Approving a prerequisite immediately releases eligible dependents in plans without a workflow run. Workflow-owned plans continue to require current integration receipts. Active-run reconciliation now runs on first workflow use after desktop or headless startup.
+
 - **Native story review** — Independent managed reviewers and local API clients can approve stories with recorded actor provenance; the session that claimed a story cannot approve its own work. The browser dialog offers the same approval action as desktop.
 
 - **Workflow worktree assignments** — Runs accept registered branch worktrees for story attempts while rejecting paths outside the repository's registered checkouts.
