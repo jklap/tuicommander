@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -11,7 +11,7 @@ use agent_client_protocol::schema::v1;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo, Responder};
 use parking_lot::Mutex;
 use tokio::{
-    sync::{broadcast, mpsc, oneshot},
+    sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -90,6 +90,7 @@ pub const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 
 pub struct AcpClientManager {
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
+    peer_connect_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
     next_generation: AtomicU64,
     notices: broadcast::Sender<AcpNotice>,
     /// What serves `tuicommander` to ego over MCP-over-ACP, once the
@@ -139,6 +140,7 @@ impl AcpClientManager {
         let (notices, _) = broadcast::channel(NOTICE_CAPACITY);
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            peer_connect_locks: Mutex::new(HashMap::new()),
             next_generation: AtomicU64::new(INITIAL_GENERATION),
             notices,
             mcp_host: Mutex::new(None),
@@ -232,8 +234,28 @@ impl AcpClientManager {
         initialize_timeout: std::time::Duration,
         peer_id: Option<String>,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
-        if let Some(peer_id) = peer_id.as_deref() {
+        let peer_lock = if let Some(peer_id) = peer_id.as_deref() {
             validate_peer_id(peer_id)?;
+            let mut locks = self.peer_connect_locks.lock();
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            Some(
+                locks
+                    .get(peer_id)
+                    .and_then(Weak::upgrade)
+                    .unwrap_or_else(|| {
+                        let lock = Arc::new(AsyncMutex::new(()));
+                        locks.insert(peer_id.to_owned(), Arc::downgrade(&lock));
+                        lock
+                    }),
+            )
+        } else {
+            None
+        };
+        let _peer_guard = match &peer_lock {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
+        if let Some(peer_id) = peer_id.as_deref() {
             // One identity is one process. A reloaded webview or a second
             // client asking again gets the ego this peer already has; `reconnect`
             // is the way to a fresh one.

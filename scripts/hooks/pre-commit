@@ -146,8 +146,9 @@ printf '%s\n' "${offenders[@]}" | sed 's/^/  /' >&2
 cat >&2 <<EOF
 
 AGENTS.md → "Agent state detection — capture before you theorise":
-"A reproduced failure becomes a fixture, always." The output ring holds 8 KB,
-so the bytes that prove this fix are gone minutes after you stop reading them.
+"A reproduced failure becomes a fixture, always." The output ring holds 2 MB;
+the 8192-byte output page limit is not its retention bound. A busy session can
+still roll past the bytes that prove the fix, so record them before they go.
 
   • Reproduced a failure? Record it, then stage the capture:
       curl -X POST localhost:9876/diagnostics/capture \\

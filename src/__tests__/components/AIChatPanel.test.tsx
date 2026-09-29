@@ -1966,6 +1966,35 @@ describe("AIChatPanel: tool activity", () => {
 });
 
 describe("AIChatPanel: permission", () => {
+	it("keeps Allow always visibly enabled and answers with its published id", async () => {
+		const { container } = await renderPanel();
+		feed({
+			kind: "permissionRequested",
+			requestId: "req-persistent",
+			request: {
+				sessionId: SESSION,
+				toolCall: { title: "Edit src/main.rs" },
+				options: [
+					{ optionId: "approve-this-run", name: "Allow once", kind: "allow_once" },
+					{ optionId: "persist-rule", name: "Allow always", kind: "allow_always" },
+				],
+			},
+		});
+		await settle();
+
+		const always = [...container.querySelectorAll("button")].find((button) => button.textContent === "Allow always");
+		expect(always).toBeDefined();
+		expect(always?.disabled).toBe(false);
+		always?.click();
+		await settle();
+		expect(client.answerPermission).toHaveBeenCalledWith(CONNECTION, "req-persistent", "persist-rule");
+
+		const stylesheet = readFileSync(resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"), "utf8");
+		const alwaysStyle = /\.alwaysAllowBtn\s*\{([^}]*)\}/.exec(stylesheet)?.[1];
+		expect(alwaysStyle, "persistent approval must use the enabled success color").toContain("var(--success)");
+		expect(alwaysStyle).not.toContain("var(--fg-muted)");
+	});
+
 	// The option list is the agent's. Answering with anything but one of its own
 	// option ids answers a question nobody asked.
 	it("renders the options ego published and answers with one of their ids", async () => {
