@@ -25,6 +25,10 @@
 
 # To Test
 
+## AI Chat persistent approval (story 1147-33ec)
+
+- [ ] **[HUMAN]** In an isolated AI Chat conversation, trigger a permission request offering both Allow once and Allow always. Confirm Allow always appears enabled and visually distinct from a disabled control, then click it and confirm the persistent option is selected. The component test verifies the click and success-color token; automated screenshot attempts timed out in agent-browser, and macOS denied Screen Recording to both capture tools.
+
 ## AI Chat layout and composer (story 1166-ef2f)
 
 - [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture.
