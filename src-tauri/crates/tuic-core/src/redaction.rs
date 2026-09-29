@@ -210,7 +210,11 @@ pub fn scrub_fragments(text: &str, secrets: &[&str]) -> String {
             .chain(std::iter::once(secret.len()))
             .collect();
         for n in 0..bounds.len().saturating_sub(MIN_FRAGMENT) {
-            mark_occurrences(text, &secret[bounds[n]..bounds[n + MIN_FRAGMENT]], &mut marked);
+            mark_occurrences(
+                text,
+                &secret[bounds[n]..bounds[n + MIN_FRAGMENT]],
+                &mut marked,
+            );
         }
     }
     let mut out = String::with_capacity(text.len());
@@ -581,12 +585,15 @@ mod tests {
     #[test]
     fn redact_wrapped_rows_joins_a_wrapped_token_but_not_separate_lines() {
         let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
-        let out = redact_wrapped_rows("", [
-            ("echo GITHUB_TOKEN=ghp_0123", true),
-            ("456789abcdefghijklmnopqrstu", true),
-            ("vwxyzAB", false),
-            ("next line", false),
-        ]);
+        let out = redact_wrapped_rows(
+            "",
+            [
+                ("echo GITHUB_TOKEN=ghp_0123", true),
+                ("456789abcdefghijklmnopqrstu", true),
+                ("vwxyzAB", false),
+                ("next line", false),
+            ],
+        );
         assert_eq!(out, "echo GITHUB_TOKEN=[REDACTED]\nnext line");
         assert!(!out.contains(&secret[secret.len() - 8..]));
     }
