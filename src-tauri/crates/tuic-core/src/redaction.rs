@@ -143,20 +143,18 @@ fn redact_secrets_cow(text: &str) -> std::borrow::Cow<'_, str> {
 /// rest (#1281-10e6). Rows join with `\n` unless the previous one wrapped, and
 /// the whole text is redacted once so multi-line patterns keep working.
 ///
-/// `head` is the text that wraps into the first row but is not part of the
-/// output (history scrolled out of view). A secret found across head and rows
-/// is scrubbed from the rows even when only a tail of it is visible.
+/// `context` holds text the caller knows whole but cannot show in `rows` (a
+/// window that starts mid-line, history scrolled out of view). A secret found
+/// there is scrubbed from `rows` even when only a fragment of it is visible.
 pub fn redact_wrapped_rows<S: AsRef<str>>(
-    head: &str,
     rows: impl IntoIterator<Item = (S, bool)>,
+    context: &[&str],
 ) -> String {
     let text = join_wrapped_rows(rows);
-    if head.is_empty() {
+    if context.is_empty() {
         return redact_secrets(&text);
     }
-    let with_head = format!("{head}{text}");
-    let secrets = secret_matches(&with_head);
-    redact_secrets(&scrub_fragments(&text, &secrets))
+    redact_secrets(&scrub_fragments(&text, context))
 }
 
 /// Join terminal rows into text: `\n` between rows, nothing after a row that
@@ -195,14 +193,88 @@ pub fn secret_matches(text: &str) -> Vec<&str> {
 /// that no more than 4 characters of a secret may survive.
 const MIN_FRAGMENT: usize = 5;
 
-/// Replace every run of `MIN_FRAGMENT` or more characters that occurs in one of
-/// `secrets` with `[REDACTED]`, wherever it sits in `text`.
+/// Terminal text with its control codes removed, and where each kept char sits
+/// in the original.
+struct Stripped {
+    text: String,
+    /// Byte offset of each kept char in `text`.
+    offsets: Vec<usize>,
+    /// Byte range of each kept char in the original string.
+    spans: Vec<(usize, usize)>,
+}
+
+/// Drop escape sequences and control characters (CR, BS, BEL…), keeping `\n`
+/// and `\t`, so text a line editor redrew with cursor moves reads contiguously.
+fn strip_controls(raw: &str) -> Stripped {
+    let mut out = Stripped {
+        text: String::with_capacity(raw.len()),
+        offsets: Vec::new(),
+        spans: Vec::new(),
+    };
+    let mut chars = raw.char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '\x1b' => {
+                skip_escape(&mut chars);
+                continue;
+            }
+            '\n' | '\t' => {}
+            c if c.is_control() => continue,
+            _ => {}
+        }
+        out.offsets.push(out.text.len());
+        out.spans.push((at, at + c.len_utf8()));
+        out.text.push(c);
+    }
+    out
+}
+
+/// Consume the rest of an escape sequence whose `ESC` was just read.
+fn skip_escape(chars: &mut std::str::CharIndices<'_>) {
+    match chars.next() {
+        Some((_, '[')) => {
+            for (_, n) in chars.by_ref() {
+                if ('@'..='~').contains(&n) {
+                    break;
+                }
+            }
+        }
+        Some((_, ']')) => {
+            while let Some((_, n)) = chars.next() {
+                if n == '\x07' || (n == '\x1b' && chars.next().is_some()) {
+                    break;
+                }
+            }
+        }
+        Some((_, n)) if ('\u{20}'..='\u{2f}').contains(&n) => {
+            for (_, n) in chars.by_ref() {
+                if !('\u{20}'..='\u{2f}').contains(&n) {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replace every run of `MIN_FRAGMENT` or more characters that occurs in a
+/// secret found in `raw` or in any `context` text with `[REDACTED]`, wherever it
+/// sits in `raw`.
 ///
-/// For the raw byte stream, where a line editor redraws a wrapped line with
-/// cursor moves and erases (`ghp_…s \r\x1b[Kt\rtuvw…`) so no pattern can match
-/// the pieces, and only the terminal grid knows the secret whole.
-pub fn scrub_fragments(text: &str, secrets: &[&str]) -> String {
-    let mut marked = vec![false; text.len()];
+/// For text a line editor redrew around a wrap or with a cursor move after
+/// every character (`ghp_…s \r\x1b[Kt\rtuvw…`, `g\x1b[Ch\x1b[Cp…`): no pattern
+/// matches the pieces, so runs are looked up in the control-stripped text and
+/// cut out of the original, escapes between them included.
+pub fn scrub_fragments(raw: &str, context: &[&str]) -> String {
+    let stripped = strip_controls(raw);
+    let stripped_context: Vec<Stripped> = context.iter().map(|text| strip_controls(text)).collect();
+    let mut secrets: Vec<&str> = secret_matches(raw);
+    secrets.extend(secret_matches(&stripped.text));
+    for (text, stripped_text) in context.iter().zip(&stripped_context) {
+        secrets.extend(secret_matches(text));
+        secrets.extend(secret_matches(&stripped_text.text));
+    }
+    let mut marked = vec![false; stripped.spans.len()];
     for secret in secrets {
         let bounds: Vec<usize> = secret
             .char_indices()
@@ -210,33 +282,35 @@ pub fn scrub_fragments(text: &str, secrets: &[&str]) -> String {
             .chain(std::iter::once(secret.len()))
             .collect();
         for n in 0..bounds.len().saturating_sub(MIN_FRAGMENT) {
-            mark_occurrences(
-                text,
-                &secret[bounds[n]..bounds[n + MIN_FRAGMENT]],
-                &mut marked,
-            );
-        }
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut in_run = false;
-    for (i, ch) in text.char_indices() {
-        if marked[i] {
-            if !in_run {
-                out.push_str("[REDACTED]");
+            let gram = &secret[bounds[n]..bounds[n + MIN_FRAGMENT]];
+            for (at, _) in stripped.text.match_indices(gram) {
+                let first = stripped
+                    .offsets
+                    .binary_search(&at)
+                    .expect("a match starts on a char boundary");
+                marked[first..first + MIN_FRAGMENT].fill(true);
             }
-            in_run = true;
-        } else {
-            in_run = false;
-            out.push(ch);
         }
     }
-    out
-}
-
-fn mark_occurrences(text: &str, gram: &str, marked: &mut [bool]) {
-    for (at, _) in text.match_indices(gram) {
-        marked[at..at + gram.len()].fill(true);
+    let mut out = String::with_capacity(raw.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < marked.len() {
+        if !marked[i] {
+            i += 1;
+            continue;
+        }
+        let mut last = i;
+        while last + 1 < marked.len() && marked[last + 1] {
+            last += 1;
+        }
+        out.push_str(&raw[copied..stripped.spans[i].0]);
+        out.push_str("[REDACTED]");
+        copied = stripped.spans[last].1;
+        i = last + 1;
     }
+    out.push_str(&raw[copied..]);
+    out
 }
 
 #[cfg(test)]
@@ -586,13 +660,13 @@ mod tests {
     fn redact_wrapped_rows_joins_a_wrapped_token_but_not_separate_lines() {
         let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
         let out = redact_wrapped_rows(
-            "",
             [
                 ("echo GITHUB_TOKEN=ghp_0123", true),
                 ("456789abcdefghijklmnopqrstu", true),
                 ("vwxyzAB", false),
                 ("next line", false),
             ],
+            &[],
         );
         assert_eq!(out, "echo GITHUB_TOKEN=[REDACTED]\nnext line");
         assert!(!out.contains(&secret[secret.len() - 8..]));
@@ -601,8 +675,8 @@ mod tests {
     #[test]
     fn redact_wrapped_rows_scrubs_a_tail_whose_head_scrolled_out_of_view() {
         let out = redact_wrapped_rows(
-            "echo GITHUB_TOKEN=ghp_01234567",
             [("89abcdefghijklmnopqrstuvwxyzAB", false)],
+            &["echo GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"],
         );
         assert_eq!(out, "[REDACTED]");
     }
@@ -613,6 +687,16 @@ mod tests {
         let raw = "x ghp_abcdefghijklmnopqrs \r\x1b[Kt\rtuvwxyz0123456789\x1b[K 6789 ok";
         let out = scrub_fragments(raw, &[secret]);
         assert_eq!(out, "x [REDACTED] \r\x1b[Kt\r[REDACTED]\x1b[K 6789 ok");
+    }
+
+    #[test]
+    fn scrub_fragments_sees_through_a_cursor_move_after_every_character() {
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let raw: String = secret.chars().map(|c| format!("{c}\x1b[C\x1b[D")).collect();
+        assert_eq!(
+            scrub_fragments(&format!("echo {raw}\r\n"), &[]),
+            "echo [REDACTED]\x1b[C\x1b[D\r\n"
+        );
     }
 
     #[test]

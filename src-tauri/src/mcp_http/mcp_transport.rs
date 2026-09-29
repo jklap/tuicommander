@@ -2751,27 +2751,33 @@ async fn handle_agent_wait(
     serde_json::json!({"met": false, "timed_out": true, "new_messages": 0, "next_since": resume})
 }
 
+/// The terminal's own view of its text, as the context that lets redaction
+/// recognise a secret of which a read shows only a fragment: the retained log,
+/// and the screen with the history rows that wrap into it.
+fn terminal_secret_context(buf: &crate::state::VtLogBuffer) -> Vec<String> {
+    let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+    let log =
+        crate::redaction::join_wrapped_rows(log_lines.iter().map(|ll| (ll.text(), ll.wrapped)));
+    let screen = crate::redaction::join_wrapped_rows(
+        buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
+    );
+    vec![log, format!("{}{screen}", buf.screen_head_context())]
+}
+
 /// Redact the raw byte stream of a session. Patterns alone miss a token that
 /// the line editor redrew across a wrap (the pieces sit between cursor moves),
-/// so every secret found in the stream or on the terminal grid is also scrubbed
-/// wherever a fragment of it survives. (#1281-10e6)
-fn redact_raw_output(state: &Arc<AppState>, session_id: &str, raw: &str) -> String {
-    let grid_text = state.grid.vt_log_buffers.get(session_id).map(|vt| {
-        let buf = vt.lock();
-        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
-        let screen = buf.screen_rows().into_iter().zip(buf.screen_row_wraps());
-        let rows = log_lines
-            .iter()
-            .map(|ll| (ll.text(), ll.wrapped))
-            .chain(screen);
-        // Unredacted on purpose: this text only feeds `secret_matches`.
-        crate::redaction::join_wrapped_rows(rows)
-    });
-    let mut secrets = crate::redaction::secret_matches(raw);
-    if let Some(text) = &grid_text {
-        secrets.extend(crate::redaction::secret_matches(text));
-    }
-    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(raw, &secrets))
+/// so every secret found in the whole stream or on the terminal grid is also
+/// scrubbed wherever a fragment of it survives in `window`. (#1281-10e6)
+fn redact_raw_output(state: &Arc<AppState>, session_id: &str, window: &str, whole: &str) -> String {
+    let grid_context = state
+        .grid
+        .vt_log_buffers
+        .get(session_id)
+        .map(|vt| terminal_secret_context(&vt.lock()))
+        .unwrap_or_default();
+    let mut context: Vec<&str> = grid_context.iter().map(String::as_str).collect();
+    context.push(whole);
+    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &context))
 }
 
 fn handle_session(
@@ -3108,16 +3114,13 @@ fn handle_session(
 
                 // Delta read: if since_cursor provided, return only new scrollback lines.
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
-                    // Start at the head of a logical line the cursor cut in two,
-                    // so its redaction sees the whole token.
-                    let (log_lines, new_cursor) =
-                        buf.lines_since_owned(buf.logical_line_start(since), limit);
+                    let (log_lines, new_cursor) = buf.lines_since_logical(since, limit);
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
                     let data = crate::redaction::redact_wrapped_rows(
-                        "",
                         log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+                        &[],
                     );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                     insert_optional_value(
@@ -3136,7 +3139,7 @@ fn handle_session(
                 } else {
                     total.saturating_sub(limit)
                 };
-                let (log_lines, _) = buf.lines_since_owned(buf.logical_line_start(offset), limit);
+                let (log_lines, _) = buf.lines_since_logical(offset, limit);
                 let mut all_lines: Vec<(String, bool)> =
                     log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
@@ -3155,12 +3158,9 @@ fn handle_session(
                     }
                     all_lines.extend(screen.into_iter().filter(|(row, _)| !row.is_empty()));
                 }
-                let head = if args["from_line"].is_null() {
-                    buf.screen_head_context()
-                } else {
-                    String::new()
-                };
-                let data = crate::redaction::redact_wrapped_rows(&head, all_lines);
+                let context = terminal_secret_context(&buf);
+                let context: Vec<&str> = context.iter().map(String::as_str).collect();
+                let data = crate::redaction::redact_wrapped_rows(all_lines, &context);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                 insert_optional_value(
                     response
@@ -3180,8 +3180,17 @@ fn handle_session(
                     });
                 }
             };
-            let (bytes, total_written) = ring.lock().read_last(limit);
-            let data = redact_raw_output(state, session_id, &String::from_utf8_lossy(&bytes));
+            // Read the whole ring: the `limit` window may cut a secret in two,
+            // and the half left in the window can only be scrubbed if the
+            // redaction has seen the other half.
+            let (all_bytes, total_written) = ring.lock().read_last(usize::MAX);
+            let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
+            let data = redact_raw_output(
+                state,
+                session_id,
+                &String::from_utf8_lossy(window),
+                &String::from_utf8_lossy(&all_bytes),
+            );
             let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
             insert_optional_value(
                 response
@@ -19827,6 +19836,28 @@ mod tests {
             .find(|gram| data.contains(gram.as_str()))
     }
 
+    /// What a consumer that strips terminal control codes sees in a raw read.
+    /// Independent of the redaction code: CSI sequences, CR and BS are dropped.
+    fn visible_text(raw: &str) -> String {
+        let mut out = String::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\x1b' if chars.peek() == Some(&'[') => {
+                    chars.next();
+                    for n in chars.by_ref() {
+                        if ('@'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                '\r' | '\x08' => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
     const WRAP_SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
 
     /// Read `session action=output` in every shape a caller can ask for and
@@ -19895,6 +19926,144 @@ mod tests {
         }
     }
 
+    /// Every response of every small-window read, individually: a caller that
+    /// polls with a tiny `limit` sees one response at a time.
+    fn assert_windows_never_leak(vt: crate::state::VtLogBuffer, label: &str) {
+        let state = test_state();
+        let sid = "window-session".to_string();
+        let total = vt.total_lines();
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for start in 0..=total {
+            for limit in 1..=3 {
+                for key in ["since_cursor", "from_line"] {
+                    let args = serde_json::json!({
+                        "action": "output", "session_id": sid, key: start, "limit": limit
+                    });
+                    let response = handle_session(&state, &args, None);
+                    let data = response["data"].as_str().unwrap_or("");
+                    if let Some(gram) = leaks_fragment(data, WRAP_SECRET) {
+                        panic!("{label}: {args} leaked {gram:?} of the token: {data:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Scroll a wrapped token into the durable log, then `filler` more lines.
+    fn wrapped_token_in_log(
+        rows: u16,
+        cols: u16,
+        capacity: usize,
+        filler: usize,
+    ) -> crate::state::VtLogBuffer {
+        let mut vt = crate::state::VtLogBuffer::new(rows, cols, capacity);
+        vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+        for _ in 0..filler {
+            vt.process(b"filler\r\n");
+        }
+        vt
+    }
+
+    /// RED (review finding 1): `limit` cut the take mid-token and the cursor
+    /// jumped to the end, so the first row went out alone and unredacted.
+    #[test]
+    fn session_output_small_limit_polls_never_leak_a_wrapped_secret() {
+        for cols in [16u16, 20] {
+            for filler in 3..9 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, cols, 100, filler),
+                    &format!("cols={cols} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// RED (review finding 3): once the head of a wrapped line is evicted from
+    /// the bounded log, its remaining rows cannot be matched by any pattern.
+    #[test]
+    fn session_output_never_leaks_the_tail_of_a_wrapped_secret_whose_head_was_evicted() {
+        for filler in 3..10 {
+            for capacity in 2..5 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, 16, capacity, filler),
+                    &format!("capacity={capacity} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// Review finding 4: rows scrolled off while capture was suppressed (a side
+    /// panel halved the terminal) never reach the log.
+    #[test]
+    fn session_output_never_leaks_a_wrapped_secret_across_suppressed_capture() {
+        for filler_before in 0..6 {
+            for filler_after in 0..6 {
+                let build = || {
+                    let mut vt = crate::state::VtLogBuffer::new(4, 40, 100);
+                    for _ in 0..filler_before {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                    vt.resize(4, 12);
+                    for _ in 0..filler_after {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.resize(4, 40);
+                    vt
+                };
+                let label = format!("before={filler_before} after={filler_after}");
+                assert_no_fragment_in_reads(build(), &label);
+                assert_windows_never_leak(build(), &label);
+            }
+        }
+    }
+
+    /// RED (review finding 2): a redraw that moves the cursor after every
+    /// character leaves no 5-char run in the byte stream.
+    #[test]
+    fn session_output_raw_redacts_a_secret_redrawn_one_character_at_a_time() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        for with_grid in [false, true] {
+            let state = test_state();
+            let sid = "per-char-session".to_string();
+            let mut raw = String::from("echo ");
+            for c in WRAP_SECRET.chars() {
+                raw.push_str(&format!("{c}\x1b[C\x1b[D"));
+            }
+            raw.push_str("\r\n");
+            let mut ring = OutputRingBuffer::new(4096);
+            ring.write(raw.as_bytes());
+            state
+                .session_maps
+                .output_buffers
+                .insert(sid.clone(), parking_lot::Mutex::new(ring));
+            if with_grid {
+                let mut vt = VtLogBuffer::new(24, 80, 100);
+                vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                state
+                    .grid
+                    .vt_log_buffers
+                    .insert(sid.clone(), parking_lot::Mutex::new(vt));
+            }
+            let response = handle_session(
+                &state,
+                &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+                None,
+            );
+            let data = response["data"].as_str().expect("raw data");
+            assert_eq!(
+                leaks_fragment(&visible_text(data), WRAP_SECRET),
+                None,
+                "with_grid={with_grid}: {data:?}"
+            );
+        }
+    }
+
     /// Reflow on a column change re-wraps rows the shell never wrapped.
     #[test]
     fn session_output_redacts_a_secret_after_a_resize() {
@@ -19934,7 +20103,11 @@ mod tests {
             None,
         );
         let data = response["data"].as_str().expect("raw data");
-        assert_eq!(leaks_fragment(data, secret), None, "raw leaked: {data:?}");
+        assert_eq!(
+            leaks_fragment(&visible_text(data), secret),
+            None,
+            "raw leaked: {data:?}"
+        );
         assert!(data.contains("[REDACTED]"), "{data:?}");
     }
 
@@ -19973,7 +20146,7 @@ mod tests {
         );
         let data = response["data"].as_str().expect("raw data");
         assert_eq!(
-            leaks_fragment(data, WRAP_SECRET),
+            leaks_fragment(&visible_text(data), WRAP_SECRET),
             None,
             "raw leaked: {data:?}"
         );

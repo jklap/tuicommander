@@ -110,6 +110,12 @@ pub struct LogLine {
     /// across separate `process` calls. Never serialized.
     #[serde(skip)]
     pub wrapped: bool,
+    /// True when part of this line's logical line never reached the log (rows
+    /// evicted, or scrolled off while capture was suspended). Readers cannot
+    /// redact what they cannot see whole, so they hide such a line instead.
+    /// Never serialized.
+    #[serde(skip)]
+    pub partial: bool,
 }
 
 fn is_zero_u16(v: &u16) -> bool {
@@ -191,6 +197,9 @@ pub struct VtLogBuffer {
     /// narrowed the terminal and Ink is flooding scrollback with
     /// narrow re-renders. Cleared when pty_cols widens again.
     suppress_capture: bool,
+    /// The next line to be pushed continues a wrapped row that was scrolled
+    /// off without being logged, so its head is missing.
+    next_head_lost: bool,
 }
 
 /// Internal scrollback capacity for the terminal grid. Must be large enough
@@ -211,6 +220,7 @@ impl VtLogBuffer {
             max_cols: cols,
             pty_cols: cols,
             suppress_capture: false,
+            next_head_lost: false,
         }
     }
 
@@ -276,6 +286,8 @@ impl VtLogBuffer {
                         ll.cols = pty_cols;
                         self.push_log_line(ll);
                     }
+                } else {
+                    self.note_capture_gap();
                 }
                 self.scrollback_read = total_sb;
             }
@@ -312,6 +324,7 @@ impl VtLogBuffer {
         // primary coordinate space; syncing it to alt history suppresses normal
         // shell capture after exit until primary history catches up.
         self.scrollback_read = self.grid.primary_scrollback_count();
+        self.note_capture_gap();
     }
 
     /// All finalized log lines (oldest first).
@@ -372,7 +385,7 @@ impl VtLogBuffer {
 
     /// Offset of the first line of the logical line that contains `offset`:
     /// walks back while the previous retained line soft-wraps into it.
-    pub fn logical_line_start(&self, offset: usize) -> usize {
+    fn logical_line_start(&self, offset: usize) -> usize {
         let oldest = self.oldest_offset();
         if offset >= self.total_pushed {
             return offset; // nothing new to read, so nothing to complete
@@ -382,6 +395,36 @@ impl VtLogBuffer {
             start -= 1;
         }
         start
+    }
+
+    /// Like [`Self::lines_since_owned`], but whole logical lines: the window
+    /// starts at the head of the line holding `offset` and, when its last row
+    /// wraps, runs on to the end of that line. Lines with pieces missing from
+    /// the log are replaced by `[REDACTED]`, together with their continuation.
+    pub fn lines_since_logical(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) {
+        if offset >= self.total_pushed {
+            return (Vec::new(), self.total_pushed);
+        }
+        let start = self.logical_line_start(offset);
+        let oldest = self.oldest_offset();
+        let mut end = (start + limit).min(self.total_pushed);
+        while end < self.total_pushed && self.log[end - 1 - oldest].wrapped {
+            end += 1;
+        }
+        let (mut lines, cursor) = self.lines_since_owned(start, end - start);
+        let mut hiding = false;
+        let mut previous_wrapped = false;
+        for line in &mut lines {
+            hiding = line.partial || (hiding && previous_wrapped);
+            previous_wrapped = line.wrapped;
+            if hiding {
+                line.spans = vec![LogSpan {
+                    text: "[REDACTED]".to_string(),
+                    ..LogSpan::default()
+                }];
+            }
+        }
+        (lines, cursor)
     }
 
     /// Borrowed view of cached screen rows — avoids cloning when caller holds the lock.
@@ -638,12 +681,33 @@ impl VtLogBuffer {
         self.grid.approx_bytes()
     }
 
-    fn push_log_line(&mut self, line: LogLine) {
-        if self.log.len() >= self.capacity {
-            self.log.pop_front();
+    fn push_log_line(&mut self, mut line: LogLine) {
+        line.partial |= std::mem::take(&mut self.next_head_lost);
+        let mut evicted_wrapped = false;
+        if self.log.len() >= self.capacity
+            && let Some(evicted) = self.log.pop_front()
+        {
+            evicted_wrapped = evicted.wrapped;
         }
         self.log.push_back(line);
         self.total_pushed += 1;
+        // The oldest retained line now continues a line whose head is gone.
+        if evicted_wrapped && let Some(front) = self.log.front_mut() {
+            front.partial = true;
+        }
+    }
+
+    /// Rows were scrolled off (or history was rewritten by a resize) without
+    /// being logged: the log tail lost its continuation and the next line will
+    /// have lost its head. Flag both so readers hide them rather than leak.
+    fn note_capture_gap(&mut self) {
+        if let Some(last) = self.log.back_mut()
+            && last.wrapped
+        {
+            last.wrapped = false;
+            last.partial = true;
+        }
+        self.next_head_lost = self.grid.newest_history_row_wraps();
     }
 }
 
