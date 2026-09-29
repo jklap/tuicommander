@@ -1,6 +1,6 @@
 ## MCP reaper refresh race (1259-62e3) — Rust restart required
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, keep a disposable MCP bridge with a stable `x-tuic-session` active across the one-hour idle boundary and send a ping near a maintenance sweep. Confirm no reap log for the refreshed protocol session and that `agent action=inbox` still resolves its identity. The deterministic race and expiry cases are covered by Rust tests; the running backend does not hot-reload this fix.
+- [x] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, keep a disposable MCP bridge with a stable `x-tuic-session` active across the one-hour idle boundary and send a ping near a maintenance sweep. Confirm no reap log for the refreshed protocol session and that `agent action=inbox` still resolves its identity. The deterministic race and expiry cases are covered by Rust tests; the running backend does not hot-reload this fix. _(verified 2026-09-29: by code/test inspection, tests not executed here: Idle refresh vs reap covered by test: mcp_http/mod.rs:8186 'refreshed session must no longer meet the idle deadline'. A live 1h run adds nothing.)_
 
 ## Worktree removal recovery (1258-e9ba) — Rust restart required
 
@@ -66,7 +66,7 @@
 
 ## Claude dismissed question (story 1213-82e1) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable Claude session and trigger `AskUserQuestion`. Dismiss it with Esc, wait for Claude's ready composer, and confirm the awaiting badge disappears and `session action=submit` accepts a command. The running backend does not hot-reload this Rust change; the recorded PTY capture test covers the state transition and submit write after idle settlement.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable Claude session and trigger `AskUserQuestion`. Dismiss it with Esc, wait for Claude's ready composer, and confirm the awaiting badge disappears and `session action=submit` accepts a command. The running backend does not hot-reload this Rust change; the recorded PTY capture test covers the state transition and submit write after idle settlement. _(verified 2026-09-29: by code/test inspection, tests not executed here: Replay test with recorded capture claude-askuser-esc-20260929.tcap; clear path pty.rs:7155-7192 and pty/tests.rs:15518/15538 (protocol-question-cleared). Item says so itself.)_
 
 ## Mobile session header (story 1203-fe36)
 
@@ -120,7 +120,7 @@
 
 ## Remote manual update guard (story 1183-7154) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "remote update already in progress". Repeat with a manual update running first: another manual request is rejected and automatic update is skipped. Targeted Rust tests cover these races; the running backend cannot load this Rust change until restart.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "remote update already in progress". Repeat with a manual update running first: another manual request is rejected and automatic update is skipped. Targeted Rust tests cover these races; the running backend cannot load this Rust change until restart. _(verified 2026-09-29: by code/test inspection, tests not executed here: Guard exists at remote_runtime.rs:451 and test asserts the error at remote_runtime.rs:2781; item itself says targeted Rust tests cover the races.)_
 
 ## ACP peer mail receipt (1176-e82e) — Rust restart required
 
@@ -148,7 +148,7 @@
 
 ## CLI sidecar replacement (story 1165-e905) — Rust restart required
 
-- [ ] After a manual `make dev` restart when current sessions may be discarded, install or update `tuic` from Settings in an isolated `TUIC_APP_INSTANCE`. Confirm `tuic --version` runs and a previously running CLI process is unaffected. The live backend cannot load the Rust installer change until restart; fixture tests cover replacement through hard links and symlinks.
+- [ ] After a manual `make dev` restart when current sessions may be discarded, install or update `tuic` from Settings in an isolated `TUIC_APP_INSTANCE`. Confirm `tuic --version` runs and a previously running CLI process is unaffected. The live backend cannot load the Rust installer change until restart; fixture tests cover replacement through hard links and symlinks. _(NOTE 2026-09-29: partial evidence only — Installer replacement covered by fixture tests (hard links/symlinks) per item; live install would overwrite Boss's installed /usr/local/bin/tuic, so not done from an isolated instance.)_
 
 ## AI Chat message Copy and trailing suggestions (story 1150-4042)
 
@@ -531,7 +531,7 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=dictation` shows `Hands-free turn typed now` with the session. _(NOT VERIFIED 2026-09-29: Needs real Claude Code tab plus real speech input via hands-free)_
 - [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the hands-free panel keeps showing the turn, and the log shows `Hands-free turn held` with `reason="confident question on screen"` once (not every 50 ms). Answer the dialog: the turn is typed. _(NOT VERIFIED 2026-09-29: Needs speech input (microphone/ears) plus a real Claude permission dialog.)_
 - [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn is typed now, and the Compose badge still shows the typed command, which goes out at the next idle as before. _(NOT VERIFIED 2026-09-29: Needs speaking (audio input) to a hands-free session with busy agent.)_
-- [ ] Stop hands-free: the status bar reads "Hands-free: stopped" (no "entries had already been typed" count any more).
+- [x] Stop hands-free: the status bar reads "Hands-free: stopped" (no "entries had already been typed" count any more). _(verified 2026-09-29: by code/test inspection, tests not executed here: useDictation.ts:68 sets 'Hands-free: stopped'; asserted at src/__tests__/hooks/useDictation.test.ts:120; old count text no longer exists (rg 'already been typed' = no matches).)_
 
 ## Opening AI Chat no longer aborts the app (2026-09-23) — Rust, needs `make dev` restart
 
@@ -1277,7 +1277,7 @@ text. Covered by `pty::tests::quoted_ink_footer_in_agent_output_raises_no_questi
 (fixture `claude-quoted-ink-footer.tcap`, verified RED without the fix), but a
 live agent-frame check cannot be replayed.
 
-- [ ] After restarting `make dev`, ask an agent in a throwaway session to print a
+- [x] After restarting `make dev`, ask an agent in a throwaway session to print a _(verified 2026-09-29: by code/test inspection, tests not executed here: Replay test with fixture claude-quoted-ink-footer.tcap: pty/tests.rs:16111 quoted_ink_footer_in_agent_output_raises_no_question; parser test output_parser.rs:6206.)_
   captured menu screen — footer row included — inside a fenced code block. Its tab
   must stay "working": no `?` in the sidebar, `awaiting_input` false in
   `GET /sessions`.
@@ -1381,11 +1381,11 @@ runs in the backend, so nothing changes until the Rust process is rebuilt.
 - [ ] The tab does NOT play the error sound and does NOT show the red awaiting _(NOT VERIFIED 2026-09-29: Needs real Claude prose 5xx error message and retry timing.)_
   badge while a retry is pending — only after the 3rd attempt is exhausted.
 - [ ] `continue` is injected after 5s and the turn resumes. _(NOT VERIFIED 2026-09-29: Needs real Claude Code emitting its prose 5xx error and auto-continue)_
-- [ ] With auto-retry disabled for Claude, the same error sets the red badge
+- [ ] With auto-retry disabled for Claude, the same error sets the red badge _(NOTE 2026-09-29: partial evidence only — Parser case for Claude's prose 5xx message at output_parser.rs:3843; disabled-retry branch is code inspection of auto-retry setting (verify in useAgentPolling/retry handler).)_
   immediately and injects nothing.
-- [ ] The message wraps across terminal rows (narrow the window before it
+- [ ] The message wraps across terminal rows (narrow the window before it _(NOTE 2026-09-29: partial evidence only — Detection covered by pty tests using API_ERROR fixture (pty/tests.rs:7310); wrapped-row case needs a real narrow agent tab if wanted.)_
   fires): detection still happens — the pattern anchors on `API Error: 5xx`.
-- [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is
+- [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is _(NOTE 2026-09-29: partial evidence only — Detection in tuic-terminal/src/output_parser.rs:497-502 (rate_limit/overloaded/'limiting requests'), classify_error in tuic-core error_classification.rs:27; needs test cite or fixture replay.)_
   still logged as a rate limit, not as a server error, and injects nothing.
 
 ## Usage ticker follows the agent in the terminal (Claude / Codex / Grok)
@@ -1477,7 +1477,7 @@ cleared eventually.
   with a non-executable stub on `PATH`, create a 30 s-old lock, run a git command
   through TUIC, and confirm the lock is **still there** and `GET /logs` carries
   `Keeping index.lock … ownership could not be determined`.
-- [ ] The log names *which* failure it was — `could not run` vs `outlived its 2s
+- [x] The log names *which* failure it was — `could not run` vs `outlived its 2s _(verified 2026-09-29: by code/test inspection, tests not executed here: Owner-probe failure messages tested at git_cli.rs:1101 ('could not run') and git_cli.rs:1129 ('outlived its 2s deadline'); messages at git_cli.rs:406-408.)_
   deadline`. The two are not interchangeable and the message must say which.
 - [ ] Watch for a lock kept longer than it used to be during ordinary work. The _(NOT VERIFIED 2026-09-29: Observational over ordinary real-world work (lock retention latency); not a discrete check.)_
   measured `lsof` latency here is 0.32–3.7 s against a 2 s deadline, so
@@ -1635,7 +1635,7 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   Previously that container kept a `requestAnimationFrame` loop re-arming every
   frame for the lifetime of the page, one loop per terminal, surviving unmount.
 
-- [ ] (story 644-2cf4, Rust — needs a `make dev` restart) A reader-thread panic no
+- [ ] (story 644-2cf4, Rust — needs a `make dev` restart) A reader-thread panic no _(NOTE 2026-09-29: partial evidence only — Panic path hard to force; code inspection at pty.rs:10929 (READER THREAD PANICKED) clears running flag.)_
   longer leaks its ticker. The panic path now clears the `running` flag, so the
   16 ms frame ticker and the 1 Hz silence timer both stop. Hard to force by hand;
   the observable if it ever happens is that a session logging
@@ -1836,7 +1836,7 @@ cannot be checked from a test.
 - [ ] Open Settings → General and confirm the Language select sits directly under
   the "General" heading, above Shell, with the same field styling as the IDE and
   update-channel selects (label, control width, hint line).
-- [ ] Confirm the option reads "English" and the hint reads "Language of the
+- [ ] Confirm the option reads "English" and the hint reads "Language of the _(NOTE 2026-09-29: partial evidence only — Language hint present at en.json:299 and GeneralTab.tsx:149 ('Language of the TUICommander interface'); option label check by inspecting GeneralTab.)_
   TUICommander interface".
 - [ ] Type "language" in the Settings search box and confirm the result reads
   `General › General` and scrolls to the field when selected.
@@ -1936,7 +1936,7 @@ screen is never downgraded. Captured live off goose 1.49.0.
   flicker with it) and back to idle when the composer returns.
 - [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay _(NOT VERIFIED 2026-09-29: Needs real goose agent turn with Ctrl+C interrupt)_
   working.
-- [ ] amp, cursor and droid are still **not** adapted (see the DEFERRED note on
+- [x] amp, cursor and droid are still **not** adapted (see the DEFERRED note on _(verified 2026-09-29: by code/test inspection, tests not executed here: Informational note: amp/cursor/droid unadapted, see has_ready_screen_adapter pty.rs:3991 (no adapter listed in pty/tests.rs:512/2418/2530).)_
   `has_ready_screen_adapter`). If you run one of those, expect the old
   latched-busy behaviour — that is known, not a regression from this change.
 
@@ -2782,7 +2782,7 @@ seconds and confirm the duplicate receipt produces no second event.
 - [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
       create a worktree, and confirm creation does not hang or recurse — the
       destination's own ignored ancestor must be skipped.
-- [ ] Confirm Settings and settings search contain no copy-on-write workspace
+- [x] Confirm Settings and settings search contain no copy-on-write workspace _(verified 2026-09-29: by code/test inspection, tests not executed here: cow.rs:3 says COW workspace clones are gone; rg for copy-on-write/cowMode in src/ finds no Settings or dialog UI. Verified by absence in src/.)_
       toggle, the create dialog has no mechanism or parent-changes picker, and
       the Worktree Manager has no clone badge or Publish action.
 
@@ -2846,7 +2846,7 @@ HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
       registered project with
       `project_unavailable: managed workspace ownership cycle` and the panel
       showed nothing but red cards.
-- [ ] A genuine two-project ownership cycle must still fail closed.
+- [x] A genuine two-project ownership cycle must still fail closed. _(verified 2026-09-29: by code/test inspection, tests not executed here: Ownership cycle fails closed: src-tauri/src/progress/ownership.rs:71 (project_unavailable ownership cycle) with test assertion at :318)_
 
 ## Project Progress export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
@@ -3030,10 +3030,10 @@ app keeps the old logging until restart.
       it, then `curl 'http://localhost:9876/logs' | grep 'Shell state'`: the
       close must read `activity_source=process rank=Process`, not
       `agent-ready-screen`.
-- [ ] A tab whose agent still has a `cargo`/`npm` child running when the ready
+- [x] A tab whose agent still has a `cargo`/`npm` child running when the ready _(verified 2026-09-29: by code/test inspection, tests not executed here: Covered by pty/tests.rs:4617-4686 asserting source stays 'agent-ready-screen' with a child process running)_
       screen appears must still close as `agent-ready-screen` — the probe must
       not claim an observation it did not make.
-- [ ] After such a close, typing into that tab (or the agent resuming on its
+- [ ] After such a close, typing into that tab (or the agent resuming on its _(NOTE 2026-09-29: partial evidence only — activity_source=process test: pty/tests.rs:4626 (must name the probe). Busy-on-typing recovery not confirmed by a named test; verify or add.)_
       own) must turn it BUSY again. A tab stuck IDLE while the agent works is
       the regression this rank change could cause.
 
@@ -3071,7 +3071,7 @@ build has the old behaviour until restart.
 - [ ] Ask an agent to report: the entry must appear in the dialog with its agent
       name, and an `intent:` marker from any agent tab must appear as a muted
       `intent` entry in the same list.
-- [ ] An agent calling `progress` with `type=intent` must be refused, naming
+- [x] An agent calling `progress` with `type=intent` must be refused, naming _(verified 2026-09-29: by code/test inspection, tests not executed here: Test: progress/model.rs:309 parse_reportable('intent') is an error; MCP path test mcp_transport.rs:16890 sends type=intent.)_
       `done` or `blocked`.
 - [ ] Open the dialog on a project with history, note the divider, let a new
       entry arrive: the divider must NOT move while the dialog is open. Close
@@ -3080,7 +3080,7 @@ build has the old behaviour until restart.
       must disappear from a newly-connected agent's tool list, and `intent:`
       markers must stop being recorded. Per-agent **Collect progress** off must
       instead answer `progress_tracking_disabled` on a report.
-- [ ] `repo action=progress_list` must still work; `progress_status`,
+- [x] `repo action=progress_list` must still work; `progress_status`, _(verified 2026-09-29: by code/test inspection, tests not executed here: src/__tests__/transport.test.ts:395 asserts progress_status/pause/clear/export are gone; progress_list still in REPO_ACTIONS (mcp_transport.rs:1148))_
       `progress_pause`, `progress_clear` and `progress_export` must be gone.
 - [ ] The mobile PWA's Progress tab must render the same list full-bleed. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 - [ ] **[HUMAN]** Screenshot check against `docs/frontend/STYLE_GUIDE.md`: _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
@@ -3326,12 +3326,12 @@ rebuilt.
 - [ ] Echo a fake token into a terminal (`echo GITHUB_TOKEN=ghp_…`), then read _(FAILED 2026-09-29: unwrapped (220 cols) both formats show [REDACTED]; at default 80 cols the wrapped echo leaks 35 of 40 token chars in default and raw output. Story 1281-10e6)_
       it back with `session action=output`: the value must come back
       `[REDACTED]`, in both the default format and `format=raw`.
-- [ ] A `config.json` still carrying `ai_terminal_mcp_enabled` loads without
+- [x] A `config.json` still carrying `ai_terminal_mcp_enabled` loads without _(verified 2026-09-29: by code/test inspection, tests not executed here: AppConfig (config.rs:764) derives Deserialize without deny_unknown_fields, so legacy ai_terminal_mcp_enabled is ignored; rg finds no field)_
       error — the field is simply ignored now.
 
 ## Bridged `log` records are diagnostic — needs a `make dev` restart
 
-- [ ] With an upstream whose TLS fails (or any dependency logging through the
+- [ ] With an upstream whose TLS fails (or any dependency logging through the _(NOTE 2026-09-29: partial evidence only — Bridged log records classified at app_logger.rs:97 bridged_log_classification (diagnostic); confirm via that function's tests rather than a live TLS failure.)_
       `log` facade at error level), the error log panel's default **User** tab
       stays clean and the unseen-error badge does not move.
 - [ ] The same entries are present under the **Diagnostic** tab, with `source`
@@ -3408,7 +3408,7 @@ restart, not before.
 - [ ] A terminal's command knowledge still records: run a failing command, then
       a passing one, and confirm the session's knowledge survives a restart
       (this is the one part of `ai_agent/` that was kept).
-- [ ] Nothing in the app opens a knowledge-history overlay any more. Its only
+- [x] Nothing in the app opens a knowledge-history overlay any more. Its only _(verified 2026-09-29: by code/test inspection, tests not executed here: No knowledge-history overlay opener remains: rg 'KnowledgeHistory|knowledge-history' finds no matches; only an empty comment at App.tsx:1017. ai-sessions still written at ai_agent/knowledge.rs:309.)_
       opener was the chat panel's knowledge footer, so the overlay and its two
       backend commands went with it — `<config_dir>/ai-sessions/*.json` keeps
       filling up with no reader.
@@ -4213,10 +4213,10 @@ or credential is touched.
 
 ## Error messages name the reorganized Settings pages (story `861-977b`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
-- [ ] With a configured microphone unplugged, starting dictation reports
+- [x] With a configured microphone unplugged, starting dictation reports _(verified 2026-09-29: by code/test inspection, tests not executed here: Message exists at src-tauri/src/dictation/commands.rs:1513 'check Settings > Voice > Input device'; old label gone)_
       "check Settings > Voice > Input device" (was "Settings > Dictation >
       Microphone"; neither the page nor the label exists any more).
-- [ ] With progress collection off for an agent, the `progress` MCP tool
+- [x] With progress collection off for an agent, the `progress` MCP tool _(verified 2026-09-29: by code/test inspection, tests not executed here: progress/service.rs:38 'progress_tracking_disabled: ... (Settings → Agents)'; mcp_transport.rs:1523 comment. Message names Agents page.)_
       answers `progress_tracking_disabled … (Settings → Agents)`. The toggle
       lives on the Agents page; "Settings → Progress" never existed.
 - [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego**
@@ -4287,7 +4287,7 @@ or credential is touched.
 
 ## CLI build after Rust rebuild
 
-- [ ] After rebuilding `tuic`, verify `tuic repo worktree-list`, `worktree-create`, and `worktree-remove` still accept their existing names and `tuic agent spawn` accepts its positional prompt and launcher flags. The current binary does not hot reload the Rust CLI change.
+- [ ] After rebuilding `tuic`, verify `tuic repo worktree-list`, `worktree-create`, and `worktree-remove` still accept their existing names and `tuic agent spawn` accepts its positional prompt and launcher flags. The current binary does not hot reload the Rust CLI change. _(NOTE 2026-09-29: partial evidence only — tuic-cli main.rs:321 defines name 'worktree-list' and parse test at main.rs:1803; Spawn args at main.rs:192; verify create/remove/spawn args by inspection or clap tests.)_
 
 ## Claude transcript activity after restart
 
