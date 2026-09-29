@@ -47,9 +47,14 @@ export const aiChatPanelAdapter: PanelAdapter = {
 	toggle: () => uiStore.toggleAiChatPanel(),
 	onDetach: () => uiStore.setAiChatPanelVisible(false),
 	handleAction: (action, data) => {
-		if (action !== "open-file" || !data || typeof data !== "object") return;
+		if ((action !== "open-file" && action !== "open-directory") || !data || typeof data !== "object") return;
 		const { path, line, col } = data as { path?: unknown; line?: unknown; col?: unknown };
 		if (typeof path !== "string" || !path) return;
+		if (action === "open-directory") {
+			uiStore.setFileBrowserExternalRoot(path);
+			uiStore.setFileBrowserPanelVisible(true);
+			return;
+		}
 		if (line !== undefined && (!Number.isInteger(line) || Number(line) < 1)) return;
 		if (col !== undefined && (!Number.isInteger(col) || Number(col) < 1)) return;
 		if (line !== undefined) openTerminalFilePath(path, undefined, line as number, col as number | undefined);

@@ -3,6 +3,7 @@ import { type Component, createEffect, createMemo, For, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
+import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { openTerminalFilePath } from "../../utils/filePreview";
@@ -72,11 +73,25 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		const cwd = chat.root() ?? viewed();
 		if (!cwd) return;
 		try {
-			const resolved = await invoke<{ absolute_path: string } | null>("resolve_terminal_path", {
+			const resolved = await invoke<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
 				cwd,
 				candidate: href,
 			});
 			if (resolved) {
+				if (resolved.is_directory) {
+					if (isPanelMode() && isTauri()) {
+						await emitTo("main", "panel-action", {
+							panelId: "ai-chat",
+							action: "open-directory",
+							data: { path: resolved.absolute_path },
+						});
+						await invoke("focus_main_window");
+					} else {
+						uiStore.setFileBrowserExternalRoot(resolved.absolute_path);
+						uiStore.setFileBrowserPanelVisible(true);
+					}
+					return;
+				}
 				const position = href.match(/:(\d+)(?::(\d+))?$/);
 				const line = position ? Number(position[1]) : undefined;
 				const col = position?.[2] ? Number(position[2]) : undefined;
