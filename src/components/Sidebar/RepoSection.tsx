@@ -667,7 +667,7 @@ export const BranchItem: Component<{
 								data-tooltip-align="right"
 								tabIndex={0}
 							>
-								<span class={s.branchUnmergedGlyph} aria-hidden="true" />
+								<span aria-hidden="true">↑</span>
 							</span>
 						</Show>
 						<Show when={pr()}>

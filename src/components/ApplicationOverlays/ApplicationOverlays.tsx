@@ -203,6 +203,7 @@ function ConfirmationOverlays(props: { contract: ConfirmationOverlaysContract })
 				kind={confirmations.dialogState()?.kind}
 				defaultButton={confirmations.dialogState()?.defaultButton}
 				autoCancelMs={confirmations.dialogState()?.autoCancelMs}
+				autoConfirmMs={confirmations.dialogState()?.autoConfirmMs}
 				onClose={confirmations.onClose}
 				onConfirm={confirmations.onConfirm}
 				onDiscard={confirmations.onDiscard}

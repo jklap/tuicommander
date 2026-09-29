@@ -37,6 +37,14 @@ export interface CanvasScrollController {
 	cacheRows: (rows: Iterable<{ abs: number; row: DecodedRow }>) => void;
 	isCacheGenerationCurrent: (generation: number) => boolean;
 	applyDelta: (deltaLines: number, currentOffset: number, historySize: number) => number;
+	/**
+	 * Output pushed `grownLines` into history. A scrolled-back grid raises its
+	 * display offset by the same amount so the viewport keeps its lines; the
+	 * gesture offsets must follow, or the next flush scrolls the backend forward
+	 * over the new output and those lines are never shown (#1264-89c8). Returns
+	 * true when the backend at `backendOffset` has to be sent the rebased offset.
+	 */
+	followHistory: (grownLines: number, historySize: number, backendOffset: number) => boolean;
 	snap: () => number | null;
 	acceptSettledFrame: (displayOffset: number) => boolean;
 	cancel: () => void;
@@ -130,6 +138,16 @@ export function createCanvasScrollController(): CanvasScrollController {
 			position = Math.max(0, Math.min(historySize, base - deltaLines));
 			pendingOffset = Math.floor(position);
 			return position;
+		},
+		followHistory(grownLines, historySize, backendOffset) {
+			// At offset 0 the grid follows output instead of holding its lines.
+			if (grownLines <= 0 || position === null || position <= 0) return false;
+			position = Math.min(historySize, position + grownLines);
+			if (settleTarget !== null) settleTarget = position;
+			const target = Math.floor(position);
+			if (pendingOffset === null && backendOffset === target) return false;
+			pendingOffset = target;
+			return true;
 		},
 		snap() {
 			scrolling = false;

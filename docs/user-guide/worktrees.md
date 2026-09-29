@@ -99,10 +99,11 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **Delete branch on remove** | On / Off | On |
 | **Auto-archive merged** | On / Off | Off |
 | **Orphan cleanup** | Ask before removing / Auto-remove / Keep | Ask |
+| **Safe orphan countdown** (Expert Mode) | 5 / 10 / 20 / 30 seconds | 10 seconds |
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
-Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
+In Ask mode, a dialog containing only clean orphaned worktrees removes them after the countdown; **Keep** or Escape cancels it. Dirty or untracked files and commits unreachable from every branch disable the countdown and appear with a reason. Auto-remove also skips these unsafe worktrees. An agent can answer the open dialog through MCP `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; removal is checked again by the backend before it proceeds. Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 

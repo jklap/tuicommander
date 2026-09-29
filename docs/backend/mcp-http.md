@@ -699,7 +699,7 @@ say what was measured, not what the list costs today.
 | `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
-| `repo` | list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list | Enabled |
+| `repo` | list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -710,6 +710,12 @@ say what was measured, not what the list costs today.
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
+
+`repo action=orphan_cleanup_answer path=<repo> decision=remove|keep` answers the
+currently open orphan cleanup dialog. A remove answer rechecks every pending
+worktree for tracked or untracked changes and a HEAD reachable from a branch;
+an unsafe or stale request is refused. The frontend consumes the answer and
+closes the dialog before removal.
 
 Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
 
@@ -1643,9 +1649,13 @@ This requires the client to be launched with `--dangerously-load-development-cha
 The 1h TTL reaper evicts an MCP protocol session nobody has used for an hour. A
 peer identity is a different thing: it is the address other agents `send` to,
 and `refresh_mcp_session` re-asserts it on the owner's next request. The reaper
-also drops that protocol session's routing entry, reverse route, and message
-broadcast sender; if another bridge still serves the identity, it becomes the
-delivery owner. These small per-session allocations must not survive a reap.
+rechecks `last_activity` before deleting each selected session. That check and
+route cleanup share the identity lock with a refresh that must recreate missing
+metadata; a session refreshed after the sweep's snapshot remains intact.
+When a session is reaped, the server also drops its routing entry, reverse
+route, and message broadcast sender; if another bridge still serves the
+identity, it becomes the delivery owner. These small per-session allocations
+must not survive a reap.
 They do not account for the 27.3 GB malloc growth observed during the 2026-09-28
 initialize storm; that allocation source and its triggering ego operation loop
 remain under investigation. The reaper used to delete both session and identity

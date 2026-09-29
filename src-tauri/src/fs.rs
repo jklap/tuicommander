@@ -3411,7 +3411,9 @@ mod tests {
         ] {
             assert!(is_tcc_protected_path(&candidate), "{candidate:?}");
         }
-        assert!(!is_tcc_protected_path(&home.join("Downloads/../Projects/readme.md")));
+        assert!(!is_tcc_protected_path(
+            &home.join("Downloads/../Projects/readme.md")
+        ));
     }
 
     #[test]
@@ -3426,11 +3428,14 @@ mod tests {
             ("Makefile:42:7", "Makefile", 42),
             ("file.rs:42", "file.rs", 42),
         ] {
-            assert!(matches!(
-                resolve_markdown_link_impl(&root, "review.md", href),
-                MarkdownLinkTarget::File { open_path, line: Some(actual), .. }
-                    if open_path == file && actual == line
-            ), "{href}");
+            assert!(
+                matches!(
+                    resolve_markdown_link_impl(&root, "review.md", href),
+                    MarkdownLinkTarget::File { open_path, line: Some(actual), .. }
+                        if open_path == file && actual == line
+                ),
+                "{href}"
+            );
         }
     }
 

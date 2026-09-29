@@ -77,11 +77,6 @@
   min-width: 0;
 }
 
-.commitRowExpanded .commitSubject {
-  white-space: normal;
-  text-overflow: unset;
-}
-
 /* Line 2: hash + author + time */
 .commitLine2 {
   display: flex;
@@ -104,6 +99,10 @@
   border-radius: var(--radius-pill);
   white-space: nowrap;
   line-height: 16px;
+  /* Shrink and clip instead of spilling over the subject */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .refBranch {

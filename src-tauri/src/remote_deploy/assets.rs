@@ -471,10 +471,12 @@ mod tests {
             .expect("download task must finish")
             .expect_err("stalled response must not be cached");
         assert!(error.contains("timed out"), "{error}");
-        assert!(!config
-            .path()
-            .join("remote-bin/1.2.3/tuic-remote-test-target")
-            .exists());
+        assert!(
+            !config
+                .path()
+                .join("remote-bin/1.2.3/tuic-remote-test-target")
+                .exists()
+        );
         server.abort();
     }
 
