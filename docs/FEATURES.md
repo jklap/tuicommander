@@ -1927,10 +1927,10 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Error bar (red tint) when `last_error` is set
 - Rate-limit bar (orange tint) with live countdown timer (`formatRetryCountdown`)
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
-- Slash menu overlay: frosted glass bottom sheet showing detected `/command` entries; tap to send `Ctrl-U` + command + Enter
+- Slash menu overlay: frosted glass bottom sheet showing detected `/command` entries; tap to fill the input, then submit after the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
 - **TerminalKeybar:** context-aware row of special key buttons above the main input. Shows Ctrl+C, Ctrl+D, Tab, Esc, Enter, arrow keys for terminal operations. When the agent is awaiting input, adds Yes/No quick-reply buttons. Consolidated from the former separate QuickActions component
-- **CLI command widget:** agent-specific quick commands (e.g., `/compact`, `/status` for Claude Code) accessible via expandable button
+- **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes
 - Back navigation to session list

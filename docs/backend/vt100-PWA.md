@@ -426,10 +426,8 @@ Displays slash command menu items detected from the terminal.
 
 **Selection flow:**
 1. User taps item → `onSelect(command)` callback
-2. Parent sets `inputPrefill` signal with `{ text, seq }` counter
-3. CommandInput receives prefill, sets textarea value, focuses
-4. Also sends `Ctrl-U + text` to PTY so terminal shows it
-5. User reviews, optionally edits, presses Enter to submit
+2. CommandInput replaces the slash fragment, updates the textarea, and sends its text delta to the PTY
+3. User reviews, optionally edits, and submits; CommandInput waits for the last write and the agent's Enter gap before sending Enter
 
 ### SessionDetailScreen — Orchestration
 
@@ -441,10 +439,8 @@ Wires everything together:
 OutputView ──onStateChange──→ wsState signal
            ──onInputLine───→ ptyInputLine signal
                                     │
-SlashMenuOverlay ──onSelect──→ inputPrefill signal
-                                    │
-CommandInput ←── prefillValue ──────┘
-             ←── ptyInputLine ──────┘
+                                    ▼
+                              CommandInput ←── SlashMenuOverlay selection
 ```
 
 **State merging:** WebSocket state is authoritative when present; 3s poll state fills gaps.

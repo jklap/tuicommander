@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.
+
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
 
 - **MCP current tool-call results** — The stdio bridge now returns `resultType: "complete"` for 2026-07-28 tool calls, including tool-level errors, so current-protocol clients can use TUIC tools. Legacy tool-call responses keep their existing shape.
