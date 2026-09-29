@@ -2899,6 +2899,27 @@ mod tests {
             ),
             (
                 env!("TUIC_TARGET_TRIPLE"),
+                format!("{}g", "a".repeat(63)),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(63),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
+                "a".repeat(65),
+                "0",
+                "1",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                env!("TUIC_TARGET_TRIPLE"),
                 "a".repeat(64),
                 "1",
                 "1",
