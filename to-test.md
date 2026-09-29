@@ -29,6 +29,10 @@
 
 # To Test
 
+## Shared agent mail identity (story 1246-46e3) — Rust restart required
+
+- [ ] After rebuilding `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, use a disposable managed PTY with two MCP bridges asserting its durable tab UUID and PTY UUID. Send distinct messages to each UUID and to the PTY display name, once through `tuic mcp` and once through the MCP client. Confirm both bridges read every message in `agent action=inbox`, `list_peers` shows one recipient for the PTY, and reconnecting one bridge leaves the inbox readable. Boss's live Rust backend does not hot-reload this change.
+
 ## Managed child idle close (story 1209-cc47) — Rust restart required
 
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. Run a disposable `tuic bg` job with an unreachable queue and mail path; its failed wake marker must keep the child open. The current live backend and installed CLI need a rebuild to load this change.
