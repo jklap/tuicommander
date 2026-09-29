@@ -8,7 +8,6 @@ import { MobileToastContainer } from "./components/MobileToastContainer";
 import { QuestionBanner } from "./components/QuestionBanner";
 import { TopBar } from "./components/TopBar";
 import styles from "./MobileApp.module.css";
-import { SessionDetailScreen } from "./screens/SessionDetailScreen";
 import { SessionsScreen } from "./screens/SessionsScreen";
 import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
@@ -24,6 +23,9 @@ const MobileChatScreen = lazy(() =>
 const FilesScreen = lazy(() => import("./screens/FilesScreen").then((m) => ({ default: m.FilesScreen })));
 const ProgressDialog = lazy(() => import("../components/ProgressDialog").then((m) => ({ default: m.ProgressDialog })));
 const SettingsScreen = lazy(() => import("./screens/SettingsScreen").then((m) => ({ default: m.SettingsScreen })));
+const SessionDetailScreen = lazy(() =>
+	import("./screens/SessionDetailScreen").then((m) => ({ default: m.SessionDetailScreen })),
+);
 
 // Register service worker for push notifications (only on HTTPS or localhost)
 if (

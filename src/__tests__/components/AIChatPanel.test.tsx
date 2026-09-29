@@ -20,6 +20,10 @@ const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
 	mockOpenFile: vi.fn(),
 	mockOpenUrl: vi.fn(),
 }));
+const { mockSetFolderRoot, mockShowFileBrowser } = vi.hoisted(() => ({
+	mockSetFolderRoot: vi.fn(),
+	mockShowFileBrowser: vi.fn(),
+}));
 
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
@@ -53,6 +57,8 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
+		setFileBrowserExternalRoot: mockSetFolderRoot,
+		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
 }));
 
@@ -503,6 +509,70 @@ describe("AIChatPanel: transcript actions", () => {
 		aiChatPanelAdapter.handleAction?.("open-file", { path: "/repo/tuicommander/src/main.ts" });
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
+	it("keeps a file link's line and column when opening the resolved file", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path")
+				return { absolute_path: "/repo/tuicommander/src/main.ts", is_directory: false };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[file](src/main.ts:12:3)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts", undefined, 12, 3);
+		expect(mockSetFolderRoot).not.toHaveBeenCalled();
+	});
+	it("reveals a resolved directory link in the file browser", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[source](src/)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(mockSetFolderRoot).toHaveBeenCalledWith("/repo/tuicommander/src");
+		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
+		expect(mockOpenFile).not.toHaveBeenCalled();
+	});
+	it("sends a detached directory link to the main-window file browser", async () => {
+		window.history.replaceState(null, "", "/?mode=panel");
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[source](src/)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+			panelId: "ai-chat",
+			action: "open-directory",
+			data: { path: "/repo/tuicommander/src" },
+		});
+		aiChatPanelAdapter.handleAction?.("open-directory", { path: "/repo/tuicommander/src" });
+		expect(mockSetFolderRoot).toHaveBeenCalledWith("/repo/tuicommander/src");
+		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
+		expect(mockOpenFile).not.toHaveBeenCalled();
+	});
 	it("copies the raw user message, assistant answer, and fenced code", async () => {
 		const { container } = await renderPanel();
 		await settle();
@@ -614,6 +684,7 @@ describe("AIChatPanel: transcript actions", () => {
 		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
 		await settle();
 		expect(mockOpenFile).not.toHaveBeenCalled();
+		expect(mockSetFolderRoot).not.toHaveBeenCalled();
 		expect(container.textContent).toContain("file");
 	});
 });
@@ -820,7 +891,13 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(shortcut.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("");
 		expect(container.textContent).toContain("Parked draft");
-		const repeated = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, repeat: true, bubbles: true, cancelable: true });
+		const repeated = new KeyboardEvent("keydown", {
+			key: "s",
+			ctrlKey: true,
+			repeat: true,
+			bubbles: true,
+			cancelable: true,
+		});
 		textarea.dispatchEvent(repeated);
 		expect(repeated.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("");
@@ -845,7 +922,10 @@ describe("AIChatPanel: parallel tabs", () => {
 		const textarea = first.container.querySelector("textarea") as HTMLTextAreaElement;
 		textarea.value = "Describe this image";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
-		pasteFile(textarea, new File([Uint8Array.from(atob(PNG_1X1), (char) => char.charCodeAt(0))], "pixel.png", { type: "image/png" }));
+		pasteFile(
+			textarea,
+			new File([Uint8Array.from(atob(PNG_1X1), (char) => char.charCodeAt(0))], "pixel.png", { type: "image/png" }),
+		);
 		await vi.waitFor(() => expect(first.container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(1));
 		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
 		expect(first.container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(0);
@@ -859,7 +939,13 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		expect(second.container.textContent).toContain("Parked draft");
 		await typeAndSend(second.container, "Describe this image");
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Describe this image", [{ type: "image", mimeType: "image/png", data: PNG_1X1 }], ROOT);
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"Describe this image",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
 		expect((second.container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Different draft");
 	});
 	it("keeps parked drafts with their chat tabs and expands parked long paste after restoration", async () => {
@@ -881,7 +967,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		await typeAndSend(container, "Short detour");
 		const restored = container.querySelector("textarea") as HTMLTextAreaElement;
 		expect(restored.value).toContain("[Pasted text #");
-		([...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement).click();
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
@@ -1060,9 +1148,41 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		// Recorded AssistantDelta text from ego session 2080b5ad, events 13-47.
 		const chunks = [
-			"T", "UI", "Commander", " v", "1", ".", "7", ".", "7", " is", " connected", ".\n",
-			"intent", ":", " Ver", "ifico", " gli", " agent", "i", " att", "ivi", " e", " ti", " ri",
-			"porto", " lo", " stato", " att", "uale", " (", "Ag", "enti", " att", "ivi", ")",
+			"T",
+			"UI",
+			"Commander",
+			" v",
+			"1",
+			".",
+			"7",
+			".",
+			"7",
+			" is",
+			" connected",
+			".\n",
+			"intent",
+			":",
+			" Ver",
+			"ifico",
+			" gli",
+			" agent",
+			"i",
+			" att",
+			"ivi",
+			" e",
+			" ti",
+			" ri",
+			"porto",
+			" lo",
+			" stato",
+			" att",
+			"uale",
+			" (",
+			"Ag",
+			"enti",
+			" att",
+			"ivi",
+			")",
 		];
 		for (const chunk of chunks) {
 			feed({
@@ -2070,7 +2190,10 @@ describe("AIChatPanel: permission", () => {
 		await settle();
 		expect(client.answerPermission).toHaveBeenCalledWith(CONNECTION, "req-persistent", "persist-rule");
 
-		const stylesheet = readFileSync(resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"), "utf8");
+		const stylesheet = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
 		const alwaysStyle = /\.alwaysAllowBtn\s*\{([^}]*)\}/.exec(stylesheet)?.[1];
 		expect(alwaysStyle, "persistent approval must use the enabled success color").toContain("var(--success)");
 		expect(alwaysStyle).not.toContain("var(--fg-muted)");

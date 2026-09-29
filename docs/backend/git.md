@@ -4,6 +4,8 @@
 
 The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches merged GitHub PR evidence through `gh` and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.
 
+Worktree removal verifies checkout and submodule safety before asking Git to unregister it. Git can return `Directory not empty` after removing the registration and some files. In that state, the removal call finishes deleting the known checkout directory and only then compares and deletes the branch ref. A failed cleanup reports the remaining path; an unregistered directory without TUIC ownership evidence is never recursively deleted.
+
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
 
 ## Async Execution & Caching

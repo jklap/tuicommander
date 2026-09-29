@@ -1649,7 +1649,13 @@ This requires the client to be launched with `--dangerously-load-development-cha
 The 1h TTL reaper evicts an MCP protocol session nobody has used for an hour. A
 peer identity is a different thing: it is the address other agents `send` to,
 and `refresh_mcp_session` re-asserts it on the owner's next request. The reaper
-used to delete both together, which broke agents that were still running:
+also drops that protocol session's routing entry, reverse route, and message
+broadcast sender; if another bridge still serves the identity, it becomes the
+delivery owner. These small per-session allocations must not survive a reap.
+They do not account for the 27.3 GB malloc growth observed during the 2026-09-28
+initialize storm; that allocation source and its triggering ego operation loop
+remain under investigation. The reaper used to delete both session and identity
+together, which broke agents that were still running:
 `last_activity` only moves on an MCP request, so an agent that spends more than
 an hour on one turn without calling a TUIC tool had its address deleted while it
 was mid-turn. Its children's handoffs then failed with `Recipient '<uuid>' is not
