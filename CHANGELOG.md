@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Compact mobile session header** — A 56 px row shows the agent logo, state, session name, and tasks count. Intent, tasks, and session progress open temporary sheets; Files, output search, Ideas, and quick commands remain reachable from overflow without reducing terminal space.
+
 - **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.
 
 - **Mobile session links** — Markdown references in terminal output open the mobile Files editor, while web links open in the phone's browser. A path outside registered repositories shows a refusal with the path.

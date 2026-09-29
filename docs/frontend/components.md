@@ -151,7 +151,13 @@ events, so another window or a phone sees the same order and cancellations.
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
 
-`MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
+`SessionDetailScreen` uses one 56 px header row with the agent logo and state dot,
+display name, repository/branch and elapsed state, tasks count, and overflow.
+The name, tasks, and session-scoped Progress open temporary sheets over the
+terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
+remain reachable in overflow. No fixed intent/task rows reduce terminal space.
+
+`MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;
 the regular Files bottom tab still starts at the repository picker.

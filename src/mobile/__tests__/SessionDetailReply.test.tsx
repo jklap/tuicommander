@@ -37,7 +37,7 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 	));
 	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Approve the change" } });
 	expect(rpc).not.toHaveBeenCalled();
-	await fireEvent.click(container.querySelector("button[type=button]")!);
+	await fireEvent.click(container.querySelector("textarea")!.parentElement!.querySelector("button[type=button]")!);
 	await waitFor(() =>
 		expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
 			sessionId: "coordinator-session",
