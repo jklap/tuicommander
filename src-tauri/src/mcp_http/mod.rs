@@ -903,6 +903,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/write-parts",
             post(session::write_parts_to_session),
         )
+        .route("/attachments/upload", post(crate::attachments::upload_http))
         .route(
             "/sessions/{id}/queue",
             get(session::list_queued_commands)
@@ -1381,7 +1382,16 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// The one buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// The client image cap is shared with the browser draft. Base64 expands each
+/// three bytes to four; allow JSON framing and text alongside the image.
+fn acp_prompt_body_limit() -> usize {
+    let image_bytes: usize =
+        serde_json::from_str(include_str!("../../../src/shared/acp-image-limit.json"))
+            .expect("valid shared ACP image limit");
+    image_bytes.div_ceil(3) * 4 + 64 * 1024
+}
+
+/// Another buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
 /// voice file, which travels whole as base64 in JSON so the payload is the same
 /// over IPC and HTTP. The cap is what the largest accepted voice
 /// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
@@ -7902,6 +7912,221 @@ mod tests {
             StatusCode::PAYLOAD_TOO_LARGE,
             "the import route is still capped"
         );
+    }
+
+    #[tokio::test]
+    async fn acp_prompt_accepts_a_three_mib_image_without_raising_other_routes_cap() {
+        let image_data = "A".repeat(4 * 1024 * 1024); // 3 MiB encoded as base64.
+        let payload = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{image_data}"}}]}}"#
+        );
+        async fn status(path: &str, payload: String) -> StatusCode {
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        assert_ne!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                payload.clone()
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the mobile image prompt must reach its handler"
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions",
+                payload
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the larger prompt cap must not apply to another ACP route"
+        );
+        let oversized_image = "A".repeat(11 * 1024 * 1024 / 3 * 4);
+        let oversized_prompt = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{oversized_image}"}}]}}"#
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                oversized_prompt
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "an image above the 10 MiB draft cap must not be buffered"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_streams_into_session_cwd_and_stays_out_of_git() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "upload-session");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "upload-session",
+            repo.path().to_str().unwrap(),
+        );
+        let route = build_router(state.clone(), false, true);
+        let response = route
+            .clone()
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=upload-session&name=notes.txt")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from("attachment bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json",
+            "the upload endpoint must answer with attachment metadata, not the SPA fallback"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
+        let ignored = std::process::Command::new("git")
+            .args(["check-ignore", "-q"])
+            .arg(path)
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        assert!(
+            ignored.success(),
+            "an uploaded file must stay out of commits"
+        );
+
+        let oversized = route
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=upload-session&name=too-big.bin")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(vec![0u8; 26 * 1024 * 1024]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            std::fs::read_dir(repo.path().join(".tuic/attachments"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let fresh = repo.path().join(".tuic/attachments/2-fresh.txt");
+        std::fs::write(&fresh, b"keep me").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        std::fs::File::open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        crate::pty::cleanup_session("upload-session", &state);
+        assert!(
+            !path.exists(),
+            "closing the session removes attachments older than seven days"
+        );
+        assert_eq!(
+            std::fs::read(&fresh).unwrap(),
+            b"keep me",
+            "recent attachments survive cleanup"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_honors_a_configured_one_mib_cap() {
+        let cwd = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "limited-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "limited-upload",
+            cwd.path().to_str().unwrap(),
+        );
+        let mut config = serde_json::to_value(state.config.read().clone()).unwrap();
+        config["attachment_max_bytes"] = serde_json::json!(1024 * 1024);
+        *state.config.write() = serde_json::from_value(config).unwrap();
+
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=limited-upload&name=photo.jpg")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(vec![0u8; 2 * 1024 * 1024]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_excludes_nested_session_directory_from_git() {
+        let repo = create_temp_git_repo();
+        let nested = repo.path().join("project/subdir");
+        std::fs::create_dir_all(&nested).unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "nested-upload",
+            nested.to_str().unwrap(),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=nested-upload&name=notes.txt")
+                    .body(Body::from("nested bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
+        assert!(
+            std::process::Command::new("git")
+                .args(["check-ignore", "-q"])
+                .arg(path)
+                .current_dir(repo.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_upload_recognizes_acp_targets_without_accepting_unknown_ids() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(
+                Request::post(format!(
+                    "/attachments/upload?kind=acp&id={}&name=notes.txt",
+                    crate::acp::AcpConnectionId::new()
+                ))
+                .body(Body::from("bytes"))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     /// The failure this guards against is a timeout that looks correct on every

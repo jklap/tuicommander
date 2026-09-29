@@ -1438,7 +1438,7 @@ describe("AIChatPanel: a turn", () => {
 		pasteFile(textarea, new File([new Uint8Array(6 * 1024 * 1024)], "first.png", { type: "image/png" }));
 		pasteFile(textarea, new File([new Uint8Array(6 * 1024 * 1024)], "second.png", { type: "image/png" }));
 
-		await vi.waitFor(() => expect(container.textContent).toContain("total limit"));
+		await vi.waitFor(() => expect(container.textContent).toContain("6.0 MiB; the total limit is 10 MiB"));
 		expect(container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(1);
 	});
 

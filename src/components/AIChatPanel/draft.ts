@@ -1,13 +1,19 @@
 import { createSignal } from "solid-js";
 import type { AcpContentBlock } from "../../types/acp";
+import maxImageBytes from "../../shared/acp-image-limit.json";
 
-export const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_PASTED_IMAGE_BYTES = maxImageBytes;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export interface StagedImage {
 	src: string;
 	size: number;
 	block: Extract<AcpContentBlock, { type: "image" }>;
+}
+
+export interface StagedFile {
+	name: string;
+	path: string;
 }
 
 /**
@@ -19,7 +25,8 @@ export interface StagedImage {
  */
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
-interface DraftContent { text: string; images: StagedImage[] }
+const [files, setFiles] = createSignal<StagedFile[]>([]);
+interface DraftContent { text: string; images: StagedImage[]; files: StagedFile[] }
 interface StoredDraft extends DraftContent { pastes: [string, string][] }
 const drafts = new Map<string, DraftContent>();
 const [parked, setParked] = createSignal<DraftContent | null>(null);
@@ -86,8 +93,8 @@ function hydrateParked(session: string, atRevision: number): void {
 				pastedText.set(marker, value);
 				pasteNumber = Math.max(pasteNumber, Number(marker.match(/#(\d+)/)?.[1] ?? 0));
 			}
-			setParked({ text: saved.text, images: saved.images });
-			parkedDrafts.set(session, { text: saved.text, images: saved.images });
+			setParked({ text: saved.text, images: saved.images, files: saved.files ?? [] });
+			parkedDrafts.set(session, { text: saved.text, images: saved.images, files: saved.files ?? [] });
 		};
 	});
 }
@@ -116,6 +123,7 @@ export const aiChatDraft = {
 		return start + marker.length;
 	},
 	images,
+	files,
 	parked,
 	storageError,
 	activate(session: string): void {
@@ -124,13 +132,14 @@ export const aiChatDraft = {
 			return;
 		}
 		const previousSession = activeSession;
-		const previous = { text: text(), images: images() };
+		const previous = { text: text(), images: images(), files: files() };
 		if (activeSession) drafts.set(activeSession, previous);
 		const next = drafts.get(session) ?? (activeSession === "" && session ? previous : undefined);
 		const nextParked = parkedDrafts.get(session) ?? (activeSession === "" && session ? parked() : null);
 		activeSession = session;
 		setText(next?.text ?? "");
 		setImages(next?.images ?? []);
+		setFiles(next?.files ?? []);
 		setParked(nextParked);
 		revision += 1;
 		if (!nextParked) hydrateParked(session, revision);
@@ -140,12 +149,13 @@ export const aiChatDraft = {
 		}
 	},
 	parkOrSwap(): void {
-		const current = { text: text(), images: images() };
+		const current = { text: text(), images: images(), files: files() };
 		const previous = parked();
-		if (!previous && !current.text.trim() && current.images.length === 0) return;
+		if (!previous && !current.text.trim() && current.images.length === 0 && current.files.length === 0) return;
 		setText(previous?.text ?? "");
 		setImages(previous?.images ?? []);
-		setParked(previous && (current.text.trim() || current.images.length) ? current : previous ? null : current);
+		setFiles(previous?.files ?? []);
+		setParked(previous && (current.text.trim() || current.images.length || current.files.length) ? current : previous ? null : current);
 		revision += 1;
 		if (activeSession) {
 			const saved = parked();
@@ -160,6 +170,7 @@ export const aiChatDraft = {
 		if (!saved) return;
 		setText(saved.text);
 		setImages(saved.images);
+		setFiles(saved.files);
 		setParked(null);
 		setStorageError(false);
 		parkedDrafts.delete(activeSession);
@@ -172,10 +183,10 @@ export const aiChatDraft = {
 		if (!supported) return "This agent does not support images.";
 		if (!IMAGE_TYPES.has(file.type)) return `Unsupported image type: ${file.type || "unknown"}.`;
 		if (file.size > MAX_PASTED_IMAGE_BYTES) {
-			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the limit is 10 MiB.`;
+			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the limit is ${MAX_PASTED_IMAGE_BYTES / (1024 * 1024)} MiB.`;
 		}
 		if (images().reduce((sum, image) => sum + image.size, pendingBytes) + file.size > MAX_PASTED_IMAGE_BYTES) {
-			return "Images exceed the 10 MiB total limit.";
+			return `Image is ${(file.size / (1024 * 1024)).toFixed(1)} MiB; the total limit is ${MAX_PASTED_IMAGE_BYTES / (1024 * 1024)} MiB.`;
 		}
 		pendingBytes += file.size;
 		try {
@@ -198,6 +209,14 @@ export const aiChatDraft = {
 		setImages((current) => current.filter((item) => item !== image));
 	},
 
+	stageFile(file: StagedFile): void {
+		setFiles((current) => [...current, file]);
+	},
+
+	removeFile(file: StagedFile): void {
+		setFiles((current) => current.filter((item) => item !== file));
+	},
+
 	/** Add text to the draft and leave the cursor after it. */
 	append(addition: string): void {
 		const current = text();
@@ -209,6 +228,7 @@ export const aiChatDraft = {
 		for (const marker of text().match(/\[Pasted text #\d+ \+\d+ words\]/g) ?? []) pastedText.delete(marker);
 		setText("");
 		setImages([]);
+		setFiles([]);
 		drafts.delete(activeSession);
 	},
 
@@ -223,6 +243,7 @@ export const aiChatDraft = {
 		revision += 1;
 		setText("");
 		setImages([]);
+		setFiles([]);
 		void openDatabase().then((db) => {
 			if (db) db.transaction(PARKED_STORE, "readwrite").objectStore(PARKED_STORE).clear();
 		});

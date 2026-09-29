@@ -4,6 +4,7 @@ import { CommandInput } from "../components/CommandInput";
 
 const writes: { data: string; at: number }[] = [];
 vi.mock("../../transport", () => ({
+	buildHttpUrl: (path: string) => `http://localhost${path}`,
 	rpc: vi.fn((_command: string, args: { data?: string }) => {
 		if (args.data !== undefined) writes.push({ data: args.data, at: Date.now() });
 		return Promise.resolve(undefined);
@@ -16,6 +17,20 @@ import { rpc } from "../../transport";
 afterEach(() => {
 	cleanup();
 	writes.length = 0;
+	vi.unstubAllGlobals();
+});
+
+it("stages an uploaded file path in the PTY draft without pressing Enter", async () => {
+	vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-notes.txt", size: 5 }), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	})));
+	const { container } = render(() => <CommandInput sessionId="disposable" />);
+	const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+	expect(picker).toBeTruthy();
+	fireEvent.change(picker, { target: { files: [new File(["hello"], "notes.txt", { type: "text/plain" })] } });
+	await waitFor(() => expect(container.querySelector("textarea")?.value).toContain("@/repo/.tuic/attachments/1-notes.txt"));
+	expect(writes.map((write) => write.data)).toEqual(["@/repo/.tuic/attachments/1-notes.txt"]);
 });
 
 describe("mobile slash submission", () => {
