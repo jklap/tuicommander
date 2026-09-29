@@ -4388,3 +4388,7 @@ or credential is touched.
 ## Codex questions on mobile PWA (story 1201-ae16)
 
 - [ ] [VISUAL] On a real phone after `make dev`, open a Codex session that is waiting on a `request_user_input` question. Confirm the question text and its options are fully visible and each option can be tapped/selected without clipping at 360 px width. Confirm choosing an option submits exactly once and the question clears from both the session list badge and the session detail. Captured-fixture and 360 px DOM geometry tests already pass; the real-device check remains.
+
+## Git panel Log tab layout (story 1263-7d7d)
+
+- [ ] [VISUAL] After `make dev`, open the Git panel Log tab on tuicommander main and compare with `~/Gits/.tmp/boss/log-tab/`: rows next to a narrow graph section have no wide empty gap before the subject; expanding a commit shows the full message without a hover tooltip, ref badges clip with an ellipsis instead of covering the subject, and rows below the expanded one move down at once with their graph dots.
