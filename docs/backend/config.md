@@ -295,6 +295,12 @@ cleartext copy does not survive on disk.
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `custom_pty_env` | `Vec<CustomEnvVarEntry>` (`{key, value}`) | `[]` | User-authored `KEY=value` pairs injected into every spawned PTY, applied last in `pty.rs::apply_custom_pty_env` (highest precedence short of the internal `TUIC_PTY_TTY` stamp, which always wins). Global only — no `.tuic.json`/per-repo tier, same structural opt-out as `copy_paths`, since a committed repo file must never be able to inject shell environment. See [`pty.md`](pty.md#custom-pty-environment-variables) |
+| `diff_ignore_leading_whitespace` | `bool` | `false` | Diff comparison: ignore leading whitespace on each line (Session Diff Review and Branch Diff Scroll, via the shared `diff_options` engine) |
+| `diff_ignore_trailing_whitespace` | `bool` | `false` | Diff comparison: ignore trailing whitespace on each line |
+| `diff_ignore_whitespace_amount` | `bool` | `false` | Diff comparison: collapse runs of whitespace to a single space before comparing |
+| `diff_ignore_case` | `bool` | `false` | Diff comparison: case-insensitive line comparison |
+| `session_diff_auto_open` | `String` | `"ask"` | When an agent edit is detected: `off` (never auto-open Session Diff Review), `ask` (toast with an "Open" action), or `auto` (open the tab in the background) |
+| `session_diff_truncate_lines` | `u32` | `300` | Truncate a single change's displayed diff above this many lines, with a "Show all N lines" expander. `0` disables truncation |
 | `terminal_link_activation` | `String` | `"click"` | How terminal links activate: `"click"` (opens on plain click), `"modifier"` (Cmd/Ctrl+click opens; underline only while held), or `"never"` (right-click Open/Copy-link menu only) |
 | `double_click_action` | `String` | `"smart"` | What a plain double-click selects: `"word"` (character-class expansion) or `"smart"` (try the rule engine first, fall back to word). There is no master on/off switch for the rule engine — quad-click and the right-click smart-selection menu always run it, regardless of this setting |
 | `word_selection_mode` | `String` | `"characters"` | How double-click word boundaries are defined: `"characters"` (a literal separator character class) or `"regex"` (`\|`-joined alternates, longest match wins — mirrors iTerm2's word-selection regex mode) |
@@ -543,6 +549,7 @@ Each `ScheduledJob`:
 | `git_panel_width` | `u32` | `380` | Git panel width in pixels |
 | `settings_nav_width` | `u32` | `180` | Settings nav column width in pixels |
 | `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
+| `diff_soft_wrap` | `bool` | `false` | Soft-wrap long lines in the diff viewer instead of horizontal scroll |
 | `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
 | `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
 
