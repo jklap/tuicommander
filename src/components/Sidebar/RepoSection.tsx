@@ -626,7 +626,9 @@ export const BranchItem: Component<{
 									? "HEAD is merged"
 									: status().commitStatus === "in_sync"
 										? "HEAD is the default branch tip — no commits of its own"
-										: "Branch has commits not merged into the default branch";
+										: status().commitStatus === "pushed_unmerged"
+											? "Not merged, but all commits are pushed to the remote branch"
+											: "Branch has commits not merged into the default branch";
 							const removal =
 								status().commitStatus === "unmerged"
 									? "merge before deleting the branch"
