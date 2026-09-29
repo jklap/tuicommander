@@ -77,6 +77,29 @@ afterEach(() => {
 });
 
 describe("mobile ego chat", () => {
+	it("passes a tapped transcript file link with the chat workspace to mobile navigation", async () => {
+		const onOpenFile = vi.fn();
+		createAcpChat.mockReturnValue({
+			...chat(),
+			entries: () => [{ id: "report", kind: "agent", text: "Read docs/guide.md" }],
+		});
+		render(() => <MobileChatScreen onOpenFile={onOpenFile} />);
+		fireEvent.click(await screen.findByRole("link", { name: "docs/guide.md" }));
+		expect(onOpenFile).toHaveBeenCalledWith("docs/guide.md", "/home/boss/Gits");
+	});
+	it("shows a message instead of guessing a path when the chat workspace is unavailable", async () => {
+		const onOpenFile = vi.fn();
+		createAcpChat.mockReturnValue({
+			...chat(),
+			root: () => null,
+			entries: () => [{ id: "report", kind: "agent", text: "Read docs/guide.md" }],
+		});
+		render(() => <MobileChatScreen onOpenFile={onOpenFile} />);
+		fireEvent.click(await screen.findByRole("link", { name: "docs/guide.md" }));
+		expect(screen.getByRole("alert").textContent).toContain("workspace");
+		expect(onOpenFile).not.toHaveBeenCalled();
+	});
+
 	it("opens global chat without a repository selection or repository fetch", async () => {
 		render(() => <MobileChatScreen />);
 		expect(screen.queryByRole("combobox", { name: "Repository" })).toBeNull();

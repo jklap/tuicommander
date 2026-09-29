@@ -16,6 +16,9 @@ const files = new Map([
 	],
 ]);
 const calls: string[] = [];
+const linkedTarget = vi.hoisted(() => ({
+	value: { absolute_path: "/repo-one/src/deep/guide.md", is_directory: false },
+}));
 let failSave = false;
 let delayedSearch: Promise<Array<{ name: string; path: string; is_dir: boolean; size: number }>> | null = null;
 
@@ -46,8 +49,7 @@ vi.mock("../../transport", () => ({
 				: [];
 		}
 		if (command === "stat_path") return { exists: true, is_dir: false, size: 110 };
-		if (command === "resolve_terminal_path")
-			return { absolute_path: "/repo-one/src/deep/guide.md", is_directory: false };
+		if (command === "resolve_terminal_path") return linkedTarget.value;
 		if (command === "fs_read_file") {
 			if (args?.file === "src/image.bin") throw new Error("Failed to read file: stream did not contain valid UTF-8");
 			return files.get(args?.file ?? "") ?? "";
@@ -73,9 +75,35 @@ afterEach(() => {
 	calls.length = 0;
 	failSave = false;
 	delayedSearch = null;
+	linkedTarget.value = { absolute_path: "/repo-one/src/deep/guide.md", is_directory: false };
 });
 
 describe("FilesScreen", () => {
+	it("opens a backend-resolved chat directory without treating it as a file", async () => {
+		linkedTarget.value = { absolute_path: "/home/boss/Gits/project/docs", is_directory: true };
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/home/boss/Gits", worktreePath: "/home/boss/Gits" }}
+				initialLink={{ candidate: "project/docs/" }}
+			/>
+		));
+		await waitFor(() => expect(view.getByRole("searchbox", { name: "Search files" })).toBeTruthy());
+		expect(calls).toContain("resolve_terminal_path");
+		expect(calls).toContain("list_directory");
+		expect(calls).not.toContain("stat_path");
+	});
+	it("refuses a resolved directory outside the allowed workspace", async () => {
+		linkedTarget.value = { absolute_path: "/secret/private", is_directory: true };
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "/secret/private" }}
+			/>
+		));
+		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/outside.*registered repository/i));
+		expect(calls).not.toContain("list_directory");
+	});
+
 	it("shows the complete repository path on a long press", async () => {
 		const view = render(() => <FilesScreen />);
 		const repository = await waitFor(() => view.getByRole("button", { name: /repo-one/ }));

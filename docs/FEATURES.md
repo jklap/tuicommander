@@ -879,6 +879,8 @@ one configured ego binary and speaks ACP to it, per
 - `Ctrl+S` in the composer parks text and image previews with a visible chip;
   pressing it again restores or swaps drafts. Sending an intervening prompt
   restores the parked draft. The same control is tappable in mobile AI Chat.
+- Mobile AI Chat transcript links open resolved files or directories in the
+  **Files** screen, using the chat workspace as the path base.
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client

@@ -98,7 +98,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			cwd,
 			candidate: link.candidate,
 		});
-		if (!resolved || resolved.is_directory) {
+		if (!resolved) {
 			setError("Markdown file is unavailable.");
 			return;
 		}
@@ -110,9 +110,9 @@ export function FilesScreen(props: FilesScreenProps) {
 			.filter((path) => withinRoot(resolved.absolute_path, path))
 			.sort((a, b) => b.length - a.length)[0];
 		if (!root) {
-			setError("File is outside an allowed registered repository.");
+			setError(`${resolved.is_directory ? "Directory" : "File"} is outside an allowed registered repository.`);
 			toastsStore.add(
-				"Cannot open Markdown file",
+				resolved.is_directory ? "Cannot open directory" : "Cannot open Markdown file",
 				resolved.absolute_path,
 				"error",
 				false,
@@ -122,6 +122,10 @@ export function FilesScreen(props: FilesScreenProps) {
 				undefined,
 				false,
 			);
+			return;
+		}
+		if (resolved.is_directory) {
+			await openDirectory(resolved.absolute_path, "");
 			return;
 		}
 		const stat = await rpc<{ exists: boolean; is_dir: boolean; size: number }>("stat_path", {

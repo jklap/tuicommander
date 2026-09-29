@@ -8,10 +8,11 @@ import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
 import styles from "./MobileChatScreen.module.css";
 
-export function MobileChatScreen() {
+export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: string) => void }) {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
+	const [linkError, setLinkError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
 	const chat = createAcpChat(
 		() => linkedRepository,
@@ -62,6 +63,15 @@ export function MobileChatScreen() {
 		await action();
 		if (chat.error()) answering.delete(requestId);
 	}
+	const openFile = (candidate: string) => {
+		const cwd = chat.root();
+		if (!cwd || !props.onOpenFile) {
+			setLinkError("AI Chat workspace is unavailable right now.");
+			return;
+		}
+		setLinkError(null);
+		props.onOpenFile(candidate, cwd);
+	};
 
 	return (
 		<section class={styles.screen} aria-label="AI Chat">
@@ -69,6 +79,13 @@ export function MobileChatScreen() {
 				<strong>AI Chat</strong>
 			</header>
 			<Show when={sharedFileError()}>
+				{(message) => (
+					<div class={styles.banner} role="alert">
+						{message()}
+					</div>
+				)}
+			</Show>
+			<Show when={linkError()}>
 				{(message) => (
 					<div class={styles.banner} role="alert">
 						{message()}
@@ -124,6 +141,7 @@ export function MobileChatScreen() {
 			<Transcript
 				entries={chat.entries}
 				busy={chat.busy}
+				onOpenFile={openFile}
 				onSuggestion={(text) => void chat.send(text)}
 				emptyMessage={
 					chat.phase() === "unconfigured"
