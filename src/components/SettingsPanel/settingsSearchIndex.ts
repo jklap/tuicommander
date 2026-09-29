@@ -602,6 +602,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Headless Agent",
 	},
 	// tabs/AgentsTab.tsx
+	// The idle-close control is inside collapsed per-agent cards. A search result
+	// cannot choose and expand a card, so it has no stable scroll target here.
 	{ tab: "agents", section: "Agents" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
