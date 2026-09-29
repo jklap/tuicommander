@@ -97,7 +97,7 @@ export default function MobileApp() {
 	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
-	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
+	const { sessions, loading, refreshing, error, refresh, questionCount, markSeen } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
@@ -115,7 +115,10 @@ export default function MobileApp() {
 	// Update last known session whenever live data arrives; keep stale value when gone
 	createEffect(() => {
 		const live = liveSession();
-		if (live) setLastKnownSession(live);
+		if (live) {
+			if (live.unseen) markSeen(live.session_id);
+			setLastKnownSession(live);
+		}
 	});
 
 	const sessionExists = createMemo(() => {
@@ -125,6 +128,7 @@ export default function MobileApp() {
 	});
 
 	function navigateToSession(id: string) {
+		markSeen(id);
 		setSelectedSessionId(id);
 	}
 

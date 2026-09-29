@@ -17,18 +17,23 @@
 
 .busy {
   background: rgba(89, 168, 221, 0.15);
-  color: var(--accent);
+  color: var(--activity);
 }
 
 .question {
-  background: color-mix(in srgb, var(--urgent) 15%, transparent);
-  color: var(--urgent);
+  background: color-mix(in srgb, var(--attention) 15%, transparent);
+  color: var(--attention);
   animation: pulse-badge 1.5s ease infinite;
 }
 
 .error {
   background: rgba(244, 135, 113, 0.15);
   color: var(--error);
+}
+
+.unseen {
+  background: color-mix(in srgb, var(--unseen) 15%, transparent);
+  color: var(--unseen);
 }
 
 @keyframes pulse-badge {

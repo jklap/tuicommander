@@ -44,6 +44,28 @@ function makeSession(id: string, overrides: Partial<SessionInfo> = {}): SessionI
 	};
 }
 
+describe("mobile completion visibility", () => {
+	it("opening a working session does not hide its later completion", async () => {
+		const working = makeSession("agent", { state: { awaiting_input: false, rate_limited: false, last_activity_ms: 1, agent_state: "working" } });
+		const completed = makeSession("agent", { state: { awaiting_input: false, rate_limited: false, last_activity_ms: 2, agent_state: "completed" } });
+		mockRpc.mockReset().mockResolvedValueOnce([working] as never).mockResolvedValueOnce([completed] as never);
+		let hook!: ReturnType<typeof useSessions>;
+		const dispose = createRoot((dispose) => {
+			hook = useSessions();
+			return dispose;
+		});
+		try {
+			await vi.waitFor(() => expect(hook.sessions()).toHaveLength(1));
+			hook.markSeen("agent");
+			hook.refresh();
+			await vi.waitFor(() => expect(hook.sessions()[0].state?.agent_state).toBe("completed"));
+			expect(hook.sessions()[0].unseen).toBe(true);
+		} finally {
+			dispose();
+		}
+	});
+});
+
 /**
  * Create a deferred promise we can resolve/reject manually.
  * This lets us control exactly when the RPC completes so we can
