@@ -3442,7 +3442,7 @@ mod tests {
             None,
             Query(types::PathQuery {
                 path: project.into(),
-                scope: None,
+                ..Default::default()
             }),
             Json(crate::workflows::WorkflowAction::Publish {
                 id: draft.id.clone(),

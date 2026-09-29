@@ -9826,6 +9826,7 @@ version = "2.0.0-beta.1"
 dependencies = [
  "dashmap",
  "gix",
+ "gix-imara-diff",
  "hex",
  "moka",
  "schemars 1.2.1",
@@ -9947,8 +9948,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "gio",
- "gix",
- "gix-imara-diff",
  "glob",
  "grep-matcher",
  "grep-regex",

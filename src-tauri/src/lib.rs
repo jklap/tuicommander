@@ -61,6 +61,7 @@ pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+pub(crate) use tuic_git::diff_options;
 #[cfg(feature = "desktop")]
 mod default_app;
 pub(crate) mod design_mode;
