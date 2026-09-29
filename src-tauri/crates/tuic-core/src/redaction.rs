@@ -143,18 +143,19 @@ fn redact_secrets_cow(text: &str) -> std::borrow::Cow<'_, str> {
 /// rest (#1281-10e6). Rows join with `\n` unless the previous one wrapped, and
 /// the whole text is redacted once so multi-line patterns keep working.
 ///
-/// `context` holds text the caller knows whole but cannot show in `rows` (a
-/// window that starts mid-line, history scrolled out of view). A secret found
-/// there is scrubbed from `rows` even when only a fragment of it is visible.
+/// `known` are secrets the caller found in text it cannot show in `rows` (a
+/// window that starts mid-line, history scrolled out of view), see
+/// [`secrets_in`]. They are scrubbed from `rows` even when only a fragment of
+/// one is visible.
 pub fn redact_wrapped_rows<S: AsRef<str>>(
     rows: impl IntoIterator<Item = (S, bool)>,
-    context: &[&str],
+    known: &[String],
 ) -> String {
     let text = join_wrapped_rows(rows);
-    if context.is_empty() {
+    if known.is_empty() {
         return redact_secrets(&text);
     }
-    redact_secrets(&scrub_fragments(&text, context))
+    redact_secrets(&scrub_fragments(&text, known))
 }
 
 /// Join terminal rows into text: `\n` between rows, nothing after a row that
@@ -257,23 +258,36 @@ fn skip_escape(chars: &mut std::str::CharIndices<'_>) {
     }
 }
 
-/// Replace every run of `MIN_FRAGMENT` or more characters that occurs in a
-/// secret found in `raw` or in any `context` text with `[REDACTED]`, wherever it
-/// sits in `raw`.
+/// Every secret in `text`, including one a line editor redrew with cursor moves
+/// so that only the control-stripped text reads contiguously.
+pub fn secrets_in(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = secret_matches(text)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    found.extend(
+        secret_matches(&strip_controls(text).text)
+            .into_iter()
+            .map(str::to_owned),
+    );
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Replace every run of `MIN_FRAGMENT` or more characters that occurs in one of
+/// the `known` secrets with `[REDACTED]`, wherever it sits in `raw`.
+///
+/// `known` must cover `raw` (see [`secrets_in`] on a text that contains it):
+/// finding the secrets is the expensive part and callers cache it.
 ///
 /// For text a line editor redrew around a wrap or with a cursor move after
 /// every character (`ghp_…s \r\x1b[Kt\rtuvw…`, `g\x1b[Ch\x1b[Cp…`): no pattern
 /// matches the pieces, so runs are looked up in the control-stripped text and
 /// cut out of the original, escapes between them included.
-pub fn scrub_fragments(raw: &str, context: &[&str]) -> String {
+pub fn scrub_fragments(raw: &str, known: &[String]) -> String {
     let stripped = strip_controls(raw);
-    let stripped_context: Vec<Stripped> = context.iter().map(|text| strip_controls(text)).collect();
-    let mut secrets: Vec<&str> = secret_matches(raw);
-    secrets.extend(secret_matches(&stripped.text));
-    for (text, stripped_text) in context.iter().zip(&stripped_context) {
-        secrets.extend(secret_matches(text));
-        secrets.extend(secret_matches(&stripped_text.text));
-    }
+    let secrets = known.iter().map(String::as_str);
     let mut marked = vec![false; stripped.spans.len()];
     for secret in secrets {
         let bounds: Vec<usize> = secret
@@ -676,7 +690,7 @@ mod tests {
     fn redact_wrapped_rows_scrubs_a_tail_whose_head_scrolled_out_of_view() {
         let out = redact_wrapped_rows(
             [("89abcdefghijklmnopqrstuvwxyzAB", false)],
-            &["echo GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"],
+            &secrets_in("echo GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"),
         );
         assert_eq!(out, "[REDACTED]");
     }
@@ -685,7 +699,7 @@ mod tests {
     fn scrub_fragments_leaves_at_most_four_chars_of_a_secret() {
         let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
         let raw = "x ghp_abcdefghijklmnopqrs \r\x1b[Kt\rtuvwxyz0123456789\x1b[K 6789 ok";
-        let out = scrub_fragments(raw, &[secret]);
+        let out = scrub_fragments(raw, &[secret.to_string()]);
         assert_eq!(out, "x [REDACTED] \r\x1b[Kt\r[REDACTED]\x1b[K 6789 ok");
     }
 
@@ -694,7 +708,7 @@ mod tests {
         let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
         let raw: String = secret.chars().map(|c| format!("{c}\x1b[C\x1b[D")).collect();
         assert_eq!(
-            scrub_fragments(&format!("echo {raw}\r\n"), &[]),
+            scrub_fragments(&format!("echo {raw}\r\n"), &secrets_in(&raw)),
             "echo [REDACTED]\x1b[C\x1b[D\r\n"
         );
     }

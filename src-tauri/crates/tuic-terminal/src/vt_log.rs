@@ -200,6 +200,9 @@ pub struct VtLogBuffer {
     /// The next line to be pushed continues a wrapped row that was scrolled
     /// off without being logged, so its head is missing.
     next_head_lost: bool,
+    /// Caller-computed secrets of the retained log, valid while `total_pushed`
+    /// and the wrap flags are unchanged.
+    secret_cache: Option<(usize, Vec<String>)>,
 }
 
 /// Internal scrollback capacity for the terminal grid. Must be large enough
@@ -221,6 +224,7 @@ impl VtLogBuffer {
             pty_cols: cols,
             suppress_capture: false,
             next_head_lost: false,
+            secret_cache: None,
         }
     }
 
@@ -376,6 +380,22 @@ impl VtLogBuffer {
     /// Per screen row: true when the row soft-wraps into the next one.
     pub fn screen_row_wraps(&self) -> Vec<bool> {
         self.grid.screen_row_wraps()
+    }
+
+    /// `compute(self)` for the retained log, recomputed only after a push or a
+    /// capture gap: polling agents read far more often than the log changes.
+    pub fn cached_log_secrets(
+        &mut self,
+        compute: impl FnOnce(&Self) -> Vec<String>,
+    ) -> Vec<String> {
+        if let Some((generation, secrets)) = &self.secret_cache
+            && *generation == self.total_pushed
+        {
+            return secrets.clone();
+        }
+        let secrets = compute(self);
+        self.secret_cache = Some((self.total_pushed, secrets.clone()));
+        secrets
     }
 
     /// Text of the history rows that soft-wrap into the first screen row.
@@ -701,6 +721,7 @@ impl VtLogBuffer {
     /// being logged: the log tail lost its continuation and the next line will
     /// have lost its head. Flag both so readers hide them rather than leak.
     fn note_capture_gap(&mut self) {
+        self.secret_cache = None;
         if let Some(last) = self.log.back_mut()
             && last.wrapped
         {

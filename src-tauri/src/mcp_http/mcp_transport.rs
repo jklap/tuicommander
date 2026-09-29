@@ -2751,33 +2751,40 @@ async fn handle_agent_wait(
     serde_json::json!({"met": false, "timed_out": true, "new_messages": 0, "next_since": resume})
 }
 
-/// The terminal's own view of its text, as the context that lets redaction
-/// recognise a secret of which a read shows only a fragment: the retained log,
-/// and the screen with the history rows that wrap into it.
-fn terminal_secret_context(buf: &crate::state::VtLogBuffer) -> Vec<String> {
-    let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
-    let log =
-        crate::redaction::join_wrapped_rows(log_lines.iter().map(|ll| (ll.text(), ll.wrapped)));
+/// Secrets the terminal knows whole, so that a read showing only a fragment of
+/// one can still scrub it: the retained log (cached until it changes), and the
+/// screen with the history rows that wrap into it.
+fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
+    let mut secrets = buf.cached_log_secrets(|buf| {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        crate::redaction::secrets_in(&crate::redaction::join_wrapped_rows(
+            log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+        ))
+    });
     let screen = crate::redaction::join_wrapped_rows(
         buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
     );
-    vec![log, format!("{}{screen}", buf.screen_head_context())]
+    secrets.extend(crate::redaction::secrets_in(&format!(
+        "{}{screen}",
+        buf.screen_head_context()
+    )));
+    secrets
 }
 
 /// Redact the raw byte stream of a session. Patterns alone miss a token that
 /// the line editor redrew across a wrap (the pieces sit between cursor moves),
-/// so every secret found in the whole stream or on the terminal grid is also
+/// so every secret found in the whole ring or on the terminal grid is also
 /// scrubbed wherever a fragment of it survives in `window`. (#1281-10e6)
-fn redact_raw_output(state: &Arc<AppState>, session_id: &str, window: &str, whole: &str) -> String {
-    let grid_context = state
-        .grid
-        .vt_log_buffers
-        .get(session_id)
-        .map(|vt| terminal_secret_context(&vt.lock()))
-        .unwrap_or_default();
-    let mut context: Vec<&str> = grid_context.iter().map(String::as_str).collect();
-    context.push(whole);
-    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &context))
+fn redact_raw_output(
+    state: &Arc<AppState>,
+    session_id: &str,
+    window: &str,
+    mut known: Vec<String>,
+) -> String {
+    if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
+        known.extend(terminal_secrets(&mut vt.lock()));
+    }
+    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &known))
 }
 
 fn handle_session(
@@ -3107,7 +3114,7 @@ fn handle_session(
                         });
                     }
                 };
-                let buf = vt_log.lock();
+                let mut buf = vt_log.lock();
                 let total = buf.total_lines();
                 let oldest = buf.oldest_offset();
                 let scrollback_lines = total - oldest;
@@ -3158,9 +3165,8 @@ fn handle_session(
                     }
                     all_lines.extend(screen.into_iter().filter(|(row, _)| !row.is_empty()));
                 }
-                let context = terminal_secret_context(&buf);
-                let context: Vec<&str> = context.iter().map(String::as_str).collect();
-                let data = crate::redaction::redact_wrapped_rows(all_lines, &context);
+                let known = terminal_secrets(&mut buf);
+                let data = crate::redaction::redact_wrapped_rows(all_lines, &known);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                 insert_optional_value(
                     response
@@ -3183,13 +3189,20 @@ fn handle_session(
             // Read the whole ring: the `limit` window may cut a secret in two,
             // and the half left in the window can only be scrubbed if the
             // redaction has seen the other half.
-            let (all_bytes, total_written) = ring.lock().read_last(usize::MAX);
+            let (all_bytes, total_written, ring_secrets) = {
+                let mut ring = ring.lock();
+                let (all_bytes, total_written) = ring.read_last(usize::MAX);
+                let secrets = ring.cached_secrets(|| {
+                    crate::redaction::secrets_in(&String::from_utf8_lossy(&all_bytes))
+                });
+                (all_bytes, total_written, secrets)
+            };
             let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
             let data = redact_raw_output(
                 state,
                 session_id,
                 &String::from_utf8_lossy(window),
-                &String::from_utf8_lossy(&all_bytes),
+                ring_secrets,
             );
             let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
             insert_optional_value(
@@ -20061,6 +20074,68 @@ mod tests {
                 None,
                 "with_grid={with_grid}: {data:?}"
             );
+        }
+    }
+
+    /// Cost of the reads agents poll: a full 10k-line log and a full 2 MB ring
+    /// with a secret every 50 lines. Run with `--run-ignored only --no-capture`.
+    #[test]
+    #[ignore = "timing measurement, not an assertion"]
+    fn session_output_read_cost_on_a_full_log() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "cost-session".to_string();
+        let mut ring = OutputRingBuffer::new(crate::state::OUTPUT_RING_BUFFER_CAPACITY);
+        let mut vt = VtLogBuffer::new(24, 80, 10_000);
+        let mut n = 0;
+        while ring.total_written() < 2 * crate::state::OUTPUT_RING_BUFFER_CAPACITY as u64 {
+            let line = if n % 50 == 0 {
+                format!("export GITHUB_TOKEN={WRAP_SECRET} # {n}")
+            } else {
+                format!(
+                    "\x1b[32m   Compiling\x1b[0m crate-{n} v1.{n}.0 (/Users/dev/project/crates/crate-{n}) done in 0.{n}s"
+                )
+            };
+            ring.write(format!("{line}\r\n").as_bytes());
+            if n < 12_000 {
+                vt.process(format!("{line}\r\n").as_bytes());
+            }
+            n += 1;
+        }
+        eprintln!("log lines={} ring lines={n}", vt.total_lines());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for (name, args) in [
+            (
+                "tail",
+                serde_json::json!({ "action": "output", "session_id": sid }),
+            ),
+            (
+                "raw",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            ),
+            (
+                "raw limit=100000",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw", "limit": 100000 }),
+            ),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..15 {
+                let start = std::time::Instant::now();
+                let response = handle_session(&state, &args, None);
+                times.push(start.elapsed());
+                assert!(response["data"].is_string());
+            }
+            times.sort();
+            eprintln!("COST {name}: median={:?} max={:?}", times[7], times[14]);
         }
     }
 
