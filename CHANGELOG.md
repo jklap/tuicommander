@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Mobile session links** — Markdown references in terminal output open the mobile Files editor, while web links open in the phone's browser. A path outside registered repositories shows a refusal with the path.
+
 - **Mobile session search** — A magnifier above the session list filters by session name, repository, worktree, branch, or agent.
 
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
