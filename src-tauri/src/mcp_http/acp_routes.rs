@@ -78,7 +78,9 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/connections/{connection_id}/sessions/{session_id}/prompt",
-            post(session_prompt),
+            post(session_prompt).layer(axum::extract::DefaultBodyLimit::max(
+                super::acp_prompt_body_limit(),
+            )),
         )
         .route(
             "/connections/{connection_id}/sessions/{session_id}/cancel",

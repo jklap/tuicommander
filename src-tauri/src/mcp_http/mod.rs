@@ -1380,7 +1380,16 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// The one buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// The client image cap is shared with the browser draft. Base64 expands each
+/// three bytes to four; allow JSON framing and text alongside the image.
+fn acp_prompt_body_limit() -> usize {
+    let image_bytes: usize =
+        serde_json::from_str(include_str!("../../../src/shared/acp-image-limit.json"))
+            .expect("valid shared ACP image limit");
+    image_bytes.div_ceil(3) * 4 + 64 * 1024
+}
+
+/// Another buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
 /// voice file, which travels whole as base64 in JSON so the payload is the same
 /// over IPC and HTTP. The cap is what the largest accepted voice
 /// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
@@ -7811,6 +7820,58 @@ mod tests {
             .await,
             StatusCode::PAYLOAD_TOO_LARGE,
             "the import route is still capped"
+        );
+    }
+
+    #[tokio::test]
+    async fn acp_prompt_accepts_a_three_mib_image_without_raising_other_routes_cap() {
+        let image_data = "A".repeat(4 * 1024 * 1024); // 3 MiB encoded as base64.
+        let payload = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{image_data}"}}]}}"#
+        );
+        async fn status(path: &str, payload: String) -> StatusCode {
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        assert_ne!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                payload.clone()
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the mobile image prompt must reach its handler"
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions",
+                payload
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the larger prompt cap must not apply to another ACP route"
+        );
+        let oversized_image = "A".repeat(11 * 1024 * 1024 / 3 * 4);
+        let oversized_prompt = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{oversized_image}"}}]}}"#
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                oversized_prompt
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "an image above the 10 MiB draft cap must not be buffered"
         );
     }
 
