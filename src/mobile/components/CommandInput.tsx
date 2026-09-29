@@ -5,6 +5,7 @@ import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
+import { uploadAttachment } from "../../services/uploadAttachment";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
 import { SlashMenuOverlay } from "./SlashMenuOverlay";
@@ -33,8 +34,10 @@ interface CommandInputProps {
 export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
 	const [submitting, setSubmitting] = createSignal(false);
+	const [uploading, setUploading] = createSignal<string | null>(null);
 	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt;
 	let textareaEl: HTMLTextAreaElement | undefined;
+	let fileInput: HTMLInputElement | undefined;
 	// What we last sent to PTY — used to compute deltas and to gate which
 	// PTY echoes we accept (only strict extensions — see sync effect below).
 	let syncedText = "";
@@ -106,6 +109,28 @@ export function CommandInput(props: CommandInputProps) {
 		setValue(text);
 		autoResize();
 		syncDelta(text);
+	}
+
+	async function attachFile(file: File): Promise<void> {
+		setUploading(file.name);
+		try {
+			const receipt = await uploadAttachment(file, { kind: "pty", id: props.sessionId });
+			const current = textareaEl?.value ?? value();
+			const next = `${current}${current && !/\s$/.test(current) ? " " : ""}@${receipt.path}`;
+			setValue(next);
+			syncDelta(next);
+			if (textareaEl) {
+				textareaEl.value = next;
+				textareaEl.focus();
+				autoResize();
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			toastsStore.add("Attachment failed", message, "error", true);
+		} finally {
+			setUploading(null);
+			if (fileInput) fileInput.value = "";
+		}
 	}
 
 	function handleSlashSelect(command: string) {
@@ -256,6 +281,7 @@ export function CommandInput(props: CommandInputProps) {
 
 	return (
 		<div class={styles.form} style={{ position: "relative" }}>
+			<Show when={uploading()}>{(name) => <div class={styles.uploading} role="status">Uploading {name()}…</div>}</Show>
 			<Show when={showChoicePrompt()}>
 				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
 			</Show>
@@ -275,6 +301,13 @@ export function CommandInput(props: CommandInputProps) {
 				inputmode="text"
 				rows={1}
 			/>
+			<input ref={fileInput} type="file" accept="image/*,application/pdf,text/*" aria-label="Choose attachment" hidden onChange={(event) => {
+				const file = event.currentTarget.files?.[0];
+				if (file) void attachFile(file);
+			}} />
+			<button class={styles.attach} type="button" aria-label="Attach file" disabled={!!uploading() || props.sessionExists === false || atomicReply()} onClick={() => fileInput?.click()}>
+				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" /></svg>
+			</button>
 			<button class={styles.send} type="button" onClick={send}>
 				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />

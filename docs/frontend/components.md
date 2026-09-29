@@ -150,6 +150,11 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+The session composer has a 44 px paperclip in its existing row. It uploads a
+selected file and stages `@path` without Enter; the upload chip floats above
+the row. Mobile AI Chat uses the shared composer to stage images as ACP image
+blocks and other files as ACP resource links with a readable path in text.
+
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
 

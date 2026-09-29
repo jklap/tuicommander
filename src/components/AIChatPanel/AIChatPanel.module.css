@@ -448,6 +448,42 @@
   min-width: 0;
 }
 
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.filePreviews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filePreview {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-size: var(--font-xs);
+}
+
+.filePreview button {
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .imagePreviews {
   display: flex;
   flex-wrap: wrap;

@@ -1438,6 +1438,14 @@ Returns dynamic server instructions for the MCP bridge binary as `{"instructions
 
 ## Filesystem Endpoints
 
+`POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
+streams a binary request body into the target's working directory at
+`.tuic/attachments/<timestamp>-<safe-name>`. It returns `{ "path": "/absolute/path", "size": N }`.
+The default per-file cap is 25 MiB (`attachment_max_bytes`), including uploads
+without `Content-Length`; partial and empty files are removed on failure. Git
+repositories receive a local `.git/info/exclude` entry for that directory.
+Authentication matches the other shared HTTP routes.
+
 ```
 GET  /fs/list?repoPath=/path/to/repo&subdir=src
 GET  /fs/search?repoPath=/path/to/repo&query=main&limit=50

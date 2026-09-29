@@ -16,6 +16,7 @@ export function MobileChatScreen() {
 	const [repositories, setRepositories] = createSignal<string[]>([]);
 	const [root, setRoot] = createSignal<string | null>(null);
 	const [repositoryError, setRepositoryError] = createSignal<string | null>(null);
+	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
 	const chat = createAcpChat(root, () => true);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
@@ -30,6 +31,23 @@ export function MobileChatScreen() {
 	});
 
 	onMount(() => {
+		const sharedKey = new URLSearchParams(location.search).get("shared");
+		if (sharedKey && /^[a-zA-Z0-9-]+$/.test(sharedKey)) {
+			void (async () => {
+				try {
+					const cache = await caches.open("tuic-shell-v1");
+					const key = `/_shared/${sharedKey}`;
+					const response = await cache.match(key);
+					if (!response) throw new Error("Shared file is no longer available.");
+					const name = response.headers.get("x-file-name") || "shared-file";
+					setSharedFile(new File([await response.blob()], name, { type: response.headers.get("content-type") || "application/octet-stream" }));
+					await cache.delete(key);
+					history.replaceState(null, "", "/mobile");
+				} catch (error) {
+					setRepositoryError(error instanceof Error ? error.message : "Could not read shared file.");
+				}
+			})();
+		}
 		void settingsStore.hydrate();
 		void invoke<{ repos?: Record<string, unknown> }>("load_repositories")
 			.then((config) => {
@@ -140,7 +158,7 @@ export function MobileChatScreen() {
 				/>
 			</Transcript>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
-				<Composer chat={chat} />
+				<Composer chat={chat} mobileAttachments sharedFile={sharedFile()} onSharedFileConsumed={() => setSharedFile(null)} />
 			</Show>
 		</section>
 	);
