@@ -1176,6 +1176,7 @@ fn cmd_install_cli(target: Option<&str>) -> Result<(), String> {
         }
 
         // Needs elevation — use osascript on macOS, sudo on Linux
+        #[cfg(target_os = "macos")]
         let parent = std::path::Path::new(target_path)
             .parent()
             .unwrap_or(std::path::Path::new("/usr/local/bin"));

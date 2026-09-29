@@ -396,6 +396,15 @@ revision is re-read per request (`MCP-Protocol-Version` header, else the
 session to remember it in, and the fields are **withheld** from a legacy client,
 which has neither the fields nor a reader for them.
 
+Completed `tools/call` responses, including tool-level errors, carry
+`resultType: "complete"` on 2026-07-28 requests. They do not carry `ttlMs` or
+`cacheScope`: tool calls are not cache entries. The legacy result shape remains
+`content` plus `isError`; a proxied upstream result keeps its other fields.
+When the stdio bridge is temporarily disconnected, its local `tools/call`
+error carries the same discriminator. Its offline `tools/list` result carries
+the complete, private, zero-TTL cache envelope for current requests. Legacy
+offline responses keep their previous shape.
+
 Not schema tidiness: ego enforces all three before it admits a server. Measured
 2026-09-19 against real ego 0.1.0 (#783-3c1b) — `server/discover` answered,
 `tools/list` answered with the whole catalogue, and `session/new` still failed

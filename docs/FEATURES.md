@@ -268,6 +268,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Click: switch to branch (shows its terminals, creates worktree if needed)
 - Double-click branch name: rename branch
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
+- Worktree removal makes read-only build artifacts removable inside the checkout before Git deletes it; an unregistered directory left behind is reported with its path.
 - `+` button: click opens a terminal in that branch; long press (500 ms) lists the enabled agents and opens a tab running the chosen one (a shell row has no agents, so there a long press acts as it did before: a click, or the row menu on touch); right-click opens the row menu
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
@@ -2348,7 +2349,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - **Auto-update remote daemons** — An opt-in per-connection setting. On connect,
   update an out-of-date daemon only when it reports zero live PTY sessions.
   With live sessions, show the count and offer the manual update without a queue.
-  Progress, success and errors appear in Remote Machines.
+  Progress, success and errors appear in Remote Machines. One update owns each
+  connection at a time: manual and automatic updates both show in-progress,
+  and overlapping requests over IPC, HTTP, or MCP receive an error.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
