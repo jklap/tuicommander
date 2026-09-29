@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import type { AcpContentBlock } from "../../types/acp";
 import maxImageBytes from "../../shared/acp-image-limit.json";
+import type { AcpContentBlock } from "../../types/acp";
 
 export const MAX_PASTED_IMAGE_BYTES = maxImageBytes;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -26,8 +26,14 @@ export interface StagedFile {
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
 const [files, setFiles] = createSignal<StagedFile[]>([]);
-interface DraftContent { text: string; images: StagedImage[]; files: StagedFile[] }
-interface StoredDraft extends DraftContent { pastes: [string, string][] }
+interface DraftContent {
+	text: string;
+	images: StagedImage[];
+	files: StagedFile[];
+}
+interface StoredDraft extends DraftContent {
+	pastes: [string, string][];
+}
 const drafts = new Map<string, DraftContent>();
 const [parked, setParked] = createSignal<DraftContent | null>(null);
 const [storageError, setStorageError] = createSignal(false);
@@ -155,7 +161,13 @@ export const aiChatDraft = {
 		setText(previous?.text ?? "");
 		setImages(previous?.images ?? []);
 		setFiles(previous?.files ?? []);
-		setParked(previous && (current.text.trim() || current.images.length || current.files.length) ? current : previous ? null : current);
+		setParked(
+			previous && (current.text.trim() || current.images.length || current.files.length)
+				? current
+				: previous
+					? null
+					: current,
+		);
 		revision += 1;
 		if (activeSession) {
 			const saved = parked();
