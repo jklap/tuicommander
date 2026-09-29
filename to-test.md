@@ -33,6 +33,10 @@
 
 - [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, leave TUICommander unfocused and trigger an agent question and a Progress `done` entry. Confirm each appears once in macOS Notification Center, with the terminal or project name; clicking each brings TUICommander to the named terminal or Progress project. Confirm a focused window produces none. This requires real cross-app focus and Notification Center; the running Rust backend cannot load the Tauri plugin without restart.
 
+## Background wake retry (story 1233-4738) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg` command against an isolated instance. If the instance temporarily stops answering, check that `<log>.wake` shows `retrying` with `tuic_session` and `attempts`, then `queued` or `mailed` after recovery. The installed CLI cannot load the Rust change until rebuilt.
+
 ## CLI MCP worktree timeout (story 1240-8438) — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to create and remove a throwaway worktree through `tuic mcp repo`. Confirm both commands report the server result after a request longer than three seconds. A CLI socket read timeout must warn that the server may still complete the action. The installed CLI cannot load this Rust change until rebuilt; restart a live `make dev` process only when ready to end its current sessions.
@@ -75,6 +79,7 @@
 
 ## Queued agent submission confirmation (story 1163-5bed) — Rust restart required
 
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a message for a disposable Codex session while a stop hook delays the next Working screen by about four seconds. Confirm the message reaches the transcript without an uncertain-delivery toast. A silent composer must still report uncertainty after the bounded wait. The running backend does not load story 1239-dca9 until restart.
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, queue a short command for a disposable Codex session while it is busy. When it becomes ready, confirm that the command starts a turn. If the composer retains the text instead, confirm that TUICommander reports uncertain delivery with an error toast and `session status` shows `delivery_uncertain=true`. Repeat with the installed Claude, OpenCode, Goose, Grok, and pi binaries. The running backend does not load this Rust change until restart.
 - [ ] In that disposable session, leave one uncertain queued command in the composer and queue a second. Confirm the second waits. Press Enter once for the retained command, wait for the next ready prompt, and confirm the second is delivered once. Check that its toast says to inspect the transcript and composer before acting. Amp, Cursor, and Droid still use the legacy PTY-write result until live screen captures establish a confirmation signal.
 
