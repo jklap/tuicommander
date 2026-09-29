@@ -79,7 +79,8 @@ afterEach(() => {
 });
 
 async function openSessionFiles(view: ReturnType<typeof render>) {
-	await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	const actions = await waitFor(() => view.getByRole("button", { name: "More session actions" }));
+	await fireEvent.click(actions);
 	await fireEvent.click(view.getByRole("button", { name: "Files" }));
 }
 
