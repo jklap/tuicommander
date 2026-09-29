@@ -23,6 +23,8 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
 	font-size: var(--font-lg);
 }
 
