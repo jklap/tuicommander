@@ -74,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	cleanup();
+	vi.unstubAllGlobals();
 	history.replaceState(null, "", "/mobile");
 });
 
@@ -89,11 +90,19 @@ describe("session Files navigation", () => {
 		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
 	});
 	it("opens Settings from the app bar and returns to Sessions", async () => {
+		const unmockedFetch = globalThis.fetch;
+		const versionFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+			if (String(input) !== "/api/version") return unmockedFetch(input, init);
+			return Promise.resolve({ ok: true, json: async () => ({ version: "2.4.1" }) } as Response);
+		});
+		vi.stubGlobal("fetch", versionFetch);
 		mockSessions.current = [];
 		const view = render(() => <MobileApp />);
 		await fireEvent.click(view.getByRole("button", { name: "More options" }));
 		await fireEvent.click(view.getByRole("menuitem", { name: "Settings" }));
 		await waitFor(() => expect(view.getByRole("heading", { name: "CONNECTION" })).toBeTruthy());
+		await waitFor(() => expect(view.getByText("2.4.1")).toBeTruthy());
+		expect(versionFetch).toHaveBeenCalledWith("/api/version");
 		await fireEvent.click(view.getByRole("button", { name: "Sessions" }));
 		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
 	});
