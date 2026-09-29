@@ -215,11 +215,15 @@ function seedStores(): void {
 	repositoriesStore.setActive(REPO);
 
 	const agents: [string, string, Partial<Parameters<typeof terminalsStore.update>[1]>][] = [
-		["main", "Clean theme: clone the Orca dark look", { agentType: "claude", shellState: "busy", activity: true }],
+		[
+			"main",
+			"Clean theme: clone the Orca dark look",
+			{ agentType: "claude", shellState: "busy", activity: true, sessionId: "gallery-parent" },
+		],
 		[
 			"835-314c Give the progress toast a button",
 			"Give the progress toast a button",
-			{ agentType: "claude", shellState: "idle" },
+			{ agentType: "claude", shellState: "idle", parentSession: "gallery-parent" },
 		],
 		[
 			"Handoff sessione",

@@ -229,6 +229,7 @@ Repository tree with branch management.
 - Branch list with active branch highlight
 - CI ring indicator per branch (from githubStore)
 - PR status badge
+- Nested sub-agent rows use a muted parent robot tag, while the actionable GitHub badge keeps the accent color
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
