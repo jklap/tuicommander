@@ -1585,6 +1585,10 @@ pub(crate) struct SilenceState {
     /// `detect_agent_screen_activity` runs at most once per session per
     /// `SILENCE_CHECK_INTERVAL` — see `cached_screen_activity()`).
     cached_screen_activity: AgentScreenActivity,
+    /// Output offsets of semantic screen transitions, retained even when the
+    /// reader paints Ready and Working before the confirmation worker wakes.
+    last_ready_screen_offset: u64,
+    last_working_screen_offset: u64,
     /// Recent user request to interrupt (Ctrl-C or bare Escape). This never
     /// changes shell state by itself; it only strengthens a matching interrupted
     /// screen emitted by the agent.
@@ -1665,6 +1669,8 @@ impl SilenceState {
             hook_state_seen: false,
             last_hook_state: None,
             cached_screen_activity: AgentScreenActivity::Unknown,
+            last_ready_screen_offset: 0,
+            last_working_screen_offset: 0,
             interrupt_requested_at: None,
             screen_ready_pending_since: None,
             active_injection_claim: None,
@@ -2008,6 +2014,10 @@ impl SilenceState {
     }
 
     pub(crate) fn note_user_submission(&mut self, protocol_instrumented: bool) {
+        // An observed human Enter resolves a previous uncertain composer.
+        // Queued writes call this before their confirmation wait, so a failed
+        // write still marks itself uncertain afterward.
+        self.invalidate_injection_claim();
         self.interrupt_requested_at = None;
         self.completion_declared = false;
         self.note_busy_evidence();
@@ -4185,7 +4195,15 @@ fn transition_explicit_shell_state(
     label: &str,
     hook_state: bool,
 ) {
-    transition_explicit_shell_state_with_hook(state, session_id, target, label, hook_state, || {});
+    transition_explicit_shell_state_impl(
+        state,
+        session_id,
+        target,
+        label,
+        hook_state,
+        || {},
+        false,
+    );
 }
 
 fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
@@ -4195,6 +4213,26 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     label: &str,
     hook_state: bool,
     before_transaction: F,
+) {
+    transition_explicit_shell_state_impl(
+        state,
+        session_id,
+        target,
+        label,
+        hook_state,
+        before_transaction,
+        true,
+    );
+}
+
+fn transition_explicit_shell_state_impl<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    target: u8,
+    label: &str,
+    hook_state: bool,
+    before_transaction: F,
+    flush_on_idle: bool,
 ) {
     // A hook busy/idle transition proves the agent is no longer blocked on a
     // question, so it retracts the awaiting badge. Emit ONLY when a badge is
@@ -4283,11 +4321,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         // the stale IDLE emitted by this caller.
         if target == SHELL_IDLE {
             reevaluate_orchestrator_mail_wake(state, session_id);
-            // The session's own reader thread, not a tokio worker: it must not
-            // race ahead of the bytes it is about to publish. Accepted cost: a
-            // queued message stops this thread reading PTY output for two
-            // `INJECT_ENTER_GAP`s (~100ms) on the idle transition that types it.
-            flush_pending_injections_blocking(state, session_id);
+            if flush_on_idle {
+                flush_pending_injections_blocking(state, session_id);
+            }
         }
     }
 }
@@ -5498,6 +5534,8 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
+    /// An explicit idle marker asks the reader to flush after publishing this chunk.
+    queued_idle_flush: bool,
     parser: OutputParser,
     intent_break_parser: vte::Parser,
     /// Dedup: only emit StatusLine when task_name actually changes *within a
@@ -5597,6 +5635,7 @@ impl ChunkProcessor {
 
     fn new(session_cwd: Option<String>, tuic_session: Option<String>) -> Self {
         Self {
+            queued_idle_flush: false,
             parser: OutputParser::new(),
             intent_break_parser: vte::Parser::new(),
             last_status_task: None,
@@ -6474,9 +6513,11 @@ impl ChunkProcessor {
         // is in the ring but also still queued for live delivery, which
         // would cause the catch-up and the live stream to replay the same
         // bytes to the client.
+        let mut output_offset_after_chunk = 0;
         if let Some(ring) = state.session_maps.output_buffers.get(session_id) {
             let mut ring_guard = ring.lock();
             ring_guard.write(data.as_bytes());
+            output_offset_after_chunk = ring_guard.total_written;
             crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, data);
             drop(ring_guard);
         }
@@ -7131,6 +7172,17 @@ impl ChunkProcessor {
             // changed since this classification unless a later chunk arrives
             // to overwrite it, so the timer reuses this instead of calling
             // `detect_agent_screen_activity` itself — see `cached_screen_activity`.
+            if sl.cached_screen_activity != screen_activity {
+                match screen_activity {
+                    AgentScreenActivity::Ready => {
+                        sl.last_ready_screen_offset = output_offset_after_chunk;
+                    }
+                    AgentScreenActivity::Working => {
+                        sl.last_working_screen_offset = output_offset_after_chunk;
+                    }
+                    _ => {}
+                }
+            }
             sl.cached_screen_activity = screen_activity;
             sl.on_chunk(
                 regex_found_question,
@@ -7382,6 +7434,7 @@ impl ChunkProcessor {
         }
 
         self.screen_buf = screen_buf;
+        self.queued_idle_flush |= explicit_idle_in_chunk;
         true
     }
 }
@@ -8048,7 +8101,12 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    idle && idle_is_confirmed(state, session_id)
+    idle && !state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
+        && idle_is_confirmed(state, session_id)
         && (human_reply || !blocked_on_question)
         && !has_partial_user_input(state, session_id)
 }
@@ -8473,14 +8531,42 @@ pub(crate) fn prefill_agent_input(
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 
-fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
-    match agent_type {
-        Some(
-            "claude" | "gemini" | "opencode" | "aider" | "amp" | "cursor" | "goose" | "grok"
-            | "droid" | "pi",
-        ) => INJECT_ENTER_GAP,
-        _ => CODEX_ENTER_GAP,
+/// The same framed multiline payload works for every supported agent; only the
+/// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
+/// keeps the Enter-delay mapping in step for user-originated PTY writes.
+#[derive(Clone, Copy)]
+struct AgentSubmitProfile {
+    payload: fn(&str) -> String,
+    enter_gap: std::time::Duration,
+    confirmation: SubmitConfirmation,
+}
+
+#[derive(Clone, Copy)]
+enum SubmitConfirmation {
+    WorkingScreen,
+    PromptGone,
+    HookOnly,
+    LegacyWrite,
+}
+
+fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfile {
+    use SubmitConfirmation::{HookOnly, LegacyWrite, PromptGone, WorkingScreen};
+    let (enter_gap, confirmation) = match agent_type {
+        Some("codex") => (CODEX_ENTER_GAP, WorkingScreen),
+        Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
+        Some("gemini" | "aider") => (INJECT_ENTER_GAP, PromptGone),
+        Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),
+        _ => (CODEX_ENTER_GAP, HookOnly),
+    };
+    AgentSubmitProfile {
+        payload: injection_payload,
+        enter_gap,
+        confirmation,
     }
+}
+
+fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
+    agent_submit_profile(agent_type).enter_gap
 }
 
 pub(crate) fn sleep_agent_enter_gap(agent_type: Option<&str>) {
@@ -8598,7 +8684,13 @@ fn write_agent_command_with_boundary(
     session_id: &str,
     text: &str,
 ) -> (InjectionOutcome, u64) {
-    let payload = injection_payload(text);
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let profile = agent_submit_profile(agent_type.as_deref());
+    let payload = (profile.payload)(text);
     let writer = match state.pty_writer(session_id) {
         Some(writer) => writer,
         None => {
@@ -8650,12 +8742,7 @@ fn write_agent_command_with_boundary(
     // sequence this guard protects. A caller that must not block therefore does
     // not shorten the gap — it stops being the thread that waits, by handing the
     // whole sequence to `INJECTION_QUEUE`.
-    let agent_type = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|session| session.agent_type.clone());
-    sleep_agent_enter_gap(agent_type.as_deref());
+    std::thread::sleep(profile.enter_gap);
 
     // Exclude payload echo already observable before Enter. The async handler
     // checks this boundary only after the complete Enter write returns; movement
@@ -9220,16 +9307,106 @@ pub(crate) fn deliver_notice_to_managed_pty(
 ///
 /// This is the entry point for every caller that runs on a tokio worker — the
 /// session-state accumulator, the silence timer, desktop input bookkeeping.
-/// The flush itself sleeps `INJECT_ENTER_GAP` twice under the session writer
-/// mutex, so waiting for it here would park a worker for ~100ms per queued message.
+/// The flush waits for agent acknowledgement as well as the Enter gaps. Give
+/// each pending session its own worker so one silent agent cannot delay a
+/// different session or ordered lifecycle notices on `INJECTION_QUEUE`.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
-/// reads the queue to tell `Typed` from `Queued`, and the OSC handler already
-/// runs on the session's own reader thread — call the blocking form directly.
-pub(crate) fn flush_pending_injections(state: &Arc<AppState>, session_id: &str) {
+/// reads the queue to tell `Typed` from `Queued` — call the blocking form directly.
+/// The OSC reader schedules this only after it publishes the current chunk;
+/// confirmation needs that reader to remain free for the child's next chunk.
+pub(crate) fn flush_pending_injections(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> Option<std::thread::JoinHandle<()>> {
+    if state
+        .pending_injections
+        .get(session_id)
+        .is_none_or(|pending| pending.is_empty())
+    {
+        return None;
+    }
     let state = Arc::clone(state);
     let session_id = session_id.to_string();
-    spawn_injection_job(move || flush_pending_injections_blocking(&state, &session_id));
+    match std::thread::Builder::new()
+        .name("tuic-queued-submit".into())
+        .spawn(move || flush_pending_injections_blocking(&state, &session_id))
+    {
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            tracing::error!(%error, "queued injection worker could not start");
+            None
+        }
+    }
+}
+
+/// A PTY write only proves that Enter reached the master. Wait for output from
+/// the child and a working-screen or agent-hook signal before settling a queued
+/// command. A silent or unrecognised composer remains uncertain, so its text
+/// cannot be automatically replayed into a possibly active turn.
+fn wait_for_queued_submission(
+    state: &AppState,
+    session_id: &str,
+    offset: u64,
+    initial_screen: &'static str,
+) -> bool {
+    if !state.grid.vt_log_buffers.contains_key(session_id)
+        || !state.session_maps.output_buffers.contains_key(session_id)
+    {
+        return false;
+    }
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let profile = agent_submit_profile(agent_type.as_deref());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let output_advanced = state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .is_some_and(|buffer| buffer.lock().total_written > offset);
+        if output_advanced {
+            let hook_busy = state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| silence.lock().busy_source_is("hook-busy"));
+            let screen_state = agent_submission_ack_kind(state, session_id);
+            let fresh_working_transition = state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| {
+                    let silence = silence.lock();
+                    silence.last_ready_screen_offset > offset
+                        && silence.last_working_screen_offset > silence.last_ready_screen_offset
+                });
+            let screen_confirms = match profile.confirmation {
+                SubmitConfirmation::WorkingScreen => {
+                    screen_state == "working_screen"
+                        && (initial_screen != "working_screen" || fresh_working_transition)
+                }
+                SubmitConfirmation::PromptGone => {
+                    initial_screen == "ready_screen" && screen_state == "terminal_output"
+                }
+                SubmitConfirmation::HookOnly | SubmitConfirmation::LegacyWrite => false,
+            };
+            if hook_busy || screen_confirms {
+                return true;
+            }
+        }
+        if !state.session_maps.sessions.contains_key(session_id) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep((deadline - now).min(std::time::Duration::from_millis(25)));
+    }
 }
 
 /// Drain and inject any messages queued for a session that can receive them now.
@@ -9305,11 +9482,35 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         );
         return;
     };
-    let outcome = run_claimed_injection(
+    let initial_screen = agent_submission_ack_kind(state, session_id);
+    let legacy_write = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            matches!(
+                agent_submit_profile(session.agent_type.as_deref()).confirmation,
+                SubmitConfirmation::LegacyWrite
+            )
+        });
+    let (write_outcome, acknowledgement_offset) =
+        write_agent_command_with_boundary(state, session_id, injection.text());
+    let outcome = if write_outcome == InjectionOutcome::Submitted
+        && !legacy_write
+        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
+    {
+        InjectionOutcome::Uncertain(
+            "Enter was written, but agent submission was not confirmed".into(),
+        )
+    } else {
+        write_outcome
+    };
+    let outcome = apply_claimed_injection_outcome(
         state,
         session_id,
         injection.text(),
         claim,
+        outcome,
         ClaimedInjectionKind::Message,
     );
     let (typed, submitted, enter_separate) = match outcome {
@@ -9319,6 +9520,33 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     };
     if matches!(outcome, InjectionOutcome::NotStarted(_)) {
         requeue_injection_front(state, session_id, injection);
+    }
+    if let InjectionOutcome::Uncertain(ref reason) = outcome {
+        let title = "Agent input was not confirmed";
+        let message = format!(
+            "Do not retype this message. Check the agent transcript and composer; if the text remains in the composer, press Enter once. {reason}"
+        );
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *state.app_handle.read() {
+            let _ = app.emit(
+                "mcp-toast",
+                serde_json::json!({
+                    "title": title,
+                    "message": message,
+                    "level": "error",
+                    "sound": null,
+                    "origin_session_id": session_id,
+                }),
+            );
+        }
+        let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
+            title: title.into(),
+            message: Some(message),
+            level: "error".into(),
+            sound: None,
+            origin_repo_path: None,
+            origin_session_id: Some(session_id.into()),
+        });
     }
     tracing::info!(
         session_id,
@@ -10464,6 +10692,15 @@ pub(crate) fn spawn_reader_thread(
                             // exactly the chunks that one did — a chunk the
                             // processor swallowed whole was never activity.
                             activity_pulse.pulse(&state, &session_id);
+                        }
+
+                        if std::mem::take(&mut processor.queued_idle_flush)
+                            && state
+                                .pending_injections
+                                .get(&session_id)
+                                .is_some_and(|queue| !queue.is_empty())
+                        {
+                            flush_pending_injections(&state, &session_id);
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);

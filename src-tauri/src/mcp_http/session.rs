@@ -184,15 +184,23 @@ pub(super) async fn enqueue_command(
     Path(session_id): Path<String>,
     Json(body): Json<EnqueueCommandRequest>,
 ) -> impl IntoResponse {
-    match crate::pty::enqueue_user_command(&state, &session_id, &body.text) {
-        Ok(outcome) => (
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::pty::enqueue_user_command(&state, &session_id, &body.text)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(outcome)) => (
             StatusCode::OK,
             Json(serde_json::json!({"typed": outcome.typed, "queued": outcome.queued})),
         ),
-        Err(e) if e == "Session not found" => session_not_found(),
-        Err(e) => (
+        Ok(Err(e)) if e == "Session not found" => session_not_found(),
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Queue worker failed: {e}")})),
         ),
     }
 }
@@ -2324,6 +2332,49 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A silent agent may use the full confirmation window, but the async
+    /// request handler must yield its runtime worker during that window.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn enqueue_command_yields_while_confirmation_waits() {
+        let state = super::super::tests::test_state();
+        let sid = "http-queued-confirmation";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        crate::test_support::insert_recording_session(&state, sid);
+        state.grid.vt_log_buffers.insert(
+            sid.into(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+
+        let other_task_ran = Arc::new(AtomicBool::new(false));
+        let marker = Arc::clone(&other_task_ran);
+        tokio::spawn(async move {
+            marker.store(true, Ordering::SeqCst);
+        });
+        let _ = enqueue_command(
+            State(state),
+            Path(sid.into()),
+            Json(EnqueueCommandRequest {
+                text: "wake".into(),
+            }),
+        )
+        .await;
+        assert!(
+            other_task_ran.load(Ordering::SeqCst),
+            "the request must yield before its confirmation wait ends"
+        );
+    }
 
     /// Catches: a remote PTY spawn error is swallowed before the HTTP response.
     #[tokio::test]
