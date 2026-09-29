@@ -159,6 +159,12 @@ Markdown references in output use the desktop path resolver and open the Files
 viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
 
+The detail keybar and composer each keep their previous total height while their
+controls use 44 px touch targets. The keybar slash button opens a local
+agent-specific command menu without writing to the PTY; picking a command
+updates the input, while the close button restores the prior draft. A vanished
+session keeps its output visible but disables both input controls.
+
 ## Core Components
 
 ### PluginPanel (`PluginPanel/`)

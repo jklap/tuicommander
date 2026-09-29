@@ -8,10 +8,33 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  background: rgba(37, 37, 38, 0.95);
+  background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   border-radius: 12px 12px 0 0;
   z-index: 50;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding-left: 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+.close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
 }
 
 .item {
