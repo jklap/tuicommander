@@ -1452,6 +1452,7 @@ GET  /fs/search?repoPath=/path/to/repo&query=main&limit=50
 GET  /fs/search-content?repoPath=/path/to/repo&query=foo&caseSensitive=false&useRegex=false&wholeWord=false&limit=200
 GET  /fs/search-content-all?query=foo&caseSensitive=false&limit=200   -> cross-repo BM25 over every ready index
 GET  /fs/read?repoPath=/path/to/repo&file=src/main.rs
+GET  /fs/markdown-image?repoPath=/path/to/repo&file=docs/images/chart.png -> image bytes
 GET  /fs/read-external?path=/absolute/path/to/file
 POST /fs/write         { "repoPath": "...", "file": "...", "content": "..." }
 POST /fs/mkdir         { "repoPath": "...", "dir": "..." }
@@ -1471,6 +1472,8 @@ POST /fs/transfer      { "destDir": "/abs", "paths": [...], "mode": "move"|"copy
 ```
 
 `/fs/warm-index` returns `{ "ok": true }` whether or not it scheduled anything.
+
+`/fs/markdown-image` serves image MIME types up to 10 MiB for mobile Markdown previews. The requested file and repository root are canonicalized before containment is checked, so traversal and symlinks outside that root are refused. It uses the same HTTP authentication as the other filesystem routes.
 Under the `disabled` or `active_only` index strategies it deliberately builds
 nothing, so a repo switch cannot index behind a setting that asked it not to.
 The `warm_content_index` IPC command applies the identical gate — the two

@@ -42,6 +42,7 @@ describe("agent hook instrumentation toggle", () => {
 		expect(save).not.toHaveBeenCalled();
 	});
 
+	// Catches: a later save persists default hook flags as explicit overrides.
 	it("a later save writes no explicit default for either flag", async () => {
 		// The backend stores the default as absent. A whole-file save from the
 		// store must not write it back, or Settings reads it as a user override.
@@ -58,7 +59,7 @@ describe("agent hook instrumentation toggle", () => {
 		expect(store.getNativeStatusSignals("claude")).toBe(true);
 
 		await store.setAutoRetry("claude", true);
-		const saved = save.mock.calls[0][0].agents.claude;
+		const saved = save.mock.calls[0][1].agents.claude;
 		expect(saved).not.toHaveProperty("hook_instrumentation");
 		expect(saved).not.toHaveProperty("native_status_signals");
 		expect(saved.auto_retry_on_error).toBe(true);
@@ -72,6 +73,7 @@ describe("agent hook instrumentation toggle", () => {
 		expect(store.state.agents.claude.native_status_signals).toBe(false);
 	});
 
+	// Catches: a saved scrollback opt-out is dropped or the default is persisted as an override.
 	it("defaults native scrollback prevention on for every agent and persists opt-out", async () => {
 		const save = vi.fn();
 		const store = createAgentConfigsStore({ load: async () => ({ agents: {} }), save });
@@ -81,8 +83,8 @@ describe("agent hook instrumentation toggle", () => {
 		}
 		await store.setPreventAltScreen("codex", false);
 		expect(store.getPreventAltScreen("codex")).toBe(false);
-		expect(save.mock.lastCall?.[0].agents.codex.prevent_alt_screen).toBe(false);
+		expect(save.mock.lastCall?.[1].agents.codex.prevent_alt_screen).toBe(false);
 		await store.setPreventAltScreen("codex", true);
-		expect(save.mock.lastCall?.[0].agents.codex).not.toHaveProperty("prevent_alt_screen");
+		expect(save.mock.lastCall?.[1].agents.codex).not.toHaveProperty("prevent_alt_screen");
 	});
 });

@@ -3,9 +3,7 @@ import { Composer } from "../../components/AIChatPanel/Composer";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { createAcpChat } from "../../components/AIChatPanel/useAcpChat";
-import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
-import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
 import styles from "./MobileChatScreen.module.css";
@@ -13,18 +11,16 @@ import styles from "./MobileChatScreen.module.css";
 export function MobileChatScreen() {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
-	const [repositories, setRepositories] = createSignal<string[]>([]);
-	const [root, setRoot] = createSignal<string | null>(null);
-	const [repositoryError, setRepositoryError] = createSignal<string | null>(null);
+	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
-	const chat = createAcpChat(root, () => true);
+	const chat = createAcpChat(() => linkedRepository, () => true);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
 
 	// The chat is global and ego starts on the first message, so a push link
 	// selects its conversation at once; sending is what loads it.
 	createEffect(() => {
-		if (linkHandled || !linkedRepository || !linkedSession || root() !== linkedRepository) return;
+		if (linkHandled || !linkedSession) return;
 		if (chat.phase() === "unconfigured" || chat.phase() === "starting") return;
 		linkHandled = true;
 		if (chat.sessionId() !== linkedSession) void chat.selectSession(linkedSession);
@@ -42,26 +38,15 @@ export function MobileChatScreen() {
 					const name = response.headers.get("x-file-name") || "shared-file";
 					setSharedFile(new File([await response.blob()], name, { type: response.headers.get("content-type") || "application/octet-stream" }));
 					await cache.delete(key);
-					history.replaceState(null, "", "/mobile");
+					const nextUrl = new URL(location.href);
+					nextUrl.searchParams.delete("shared");
+					history.replaceState(null, "", nextUrl);
 				} catch (error) {
-					setRepositoryError(error instanceof Error ? error.message : "Could not read shared file.");
+					setSharedFileError(error instanceof Error ? error.message : "Could not read shared file.");
 				}
 			})();
 		}
 		void settingsStore.hydrate();
-		void invoke<{ repos?: Record<string, unknown> }>("load_repositories")
-			.then((config) => {
-				const paths = Object.keys(config.repos ?? {});
-				setRepositories(paths);
-				setRoot(
-					(current) =>
-						current ?? (linkedRepository && paths.includes(linkedRepository) ? linkedRepository : paths[0]) ?? null,
-				);
-			})
-			.catch((error: unknown) => {
-				setRepositoryError("Could not load repositories.");
-				appLogger.warn("ai-chat", "Could not load mobile chat repositories", error);
-			});
 	});
 
 	async function answerOnce(requestId: AcpHostRequestId, action: () => Promise<void>): Promise<void> {
@@ -75,15 +60,10 @@ export function MobileChatScreen() {
 		<section class={styles.screen} aria-label="AI Chat">
 			<header class={styles.header}>
 				<strong>AI Chat</strong>
-				<Show when={repositories().length > 0}>
-					<select aria-label="Repository" value={root() ?? ""} onChange={(event) => setRoot(event.currentTarget.value)}>
-						<For each={repositories()}>
-							{(path) => <option value={path}>{path.split(/[/\\]/).filter(Boolean).at(-1) ?? path}</option>}
-						</For>
-					</select>
-				</Show>
 			</header>
-			<Show when={repositoryError()}>{(message) => <div class={styles.banner}>{message()}</div>}</Show>
+			<Show when={sharedFileError()}>
+				{(message) => <div class={styles.banner} role="alert">{message()}</div>}
+			</Show>
 			<Show when={chat.gap()}>
 				{(gap) => (
 					<div class={styles.banner}>
@@ -137,7 +117,7 @@ export function MobileChatScreen() {
 				emptyMessage={
 					chat.phase() === "unconfigured"
 						? "Configure ego in desktop Settings to start a conversation."
-						: "Ask ego about any repository. The one selected above is sent as context."
+						: "Ask ego about any repository."
 				}
 			>
 				<Interactions

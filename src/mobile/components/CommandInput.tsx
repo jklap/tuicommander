@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
+import { getAgentCommands } from "../config/agentCommands";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
 import { uploadAttachment } from "../../services/uploadAttachment";
@@ -23,6 +24,8 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
+	/** The Codex question panel has been opened with Alt+Up in this view. */
+	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;
 	awaitingInput?: boolean;
@@ -35,7 +38,15 @@ export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
 	const [submitting, setSubmitting] = createSignal(false);
 	const [uploading, setUploading] = createSignal<string | null>(null);
-	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt;
+	const [choiceSending, setChoiceSending] = createSignal(false);
+	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
+	const [localSlashMenuOpen, setLocalSlashMenuOpen] = createSignal(false);
+	let slashDraft = "";
+	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt
+		&& !props.codexQuestionOpen && !codexNotesMode();
+	createEffect(() => {
+		if (!props.choicePrompt) setChoiceSending(false);
+	});
 	let textareaEl: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
 	// What we last sent to PTY — used to compute deltas and to gate which
@@ -70,6 +81,7 @@ export function CommandInput(props: CommandInputProps) {
 	// history-nav replacements) is ignored so the textarea can't be clobbered.
 	createEffect(() => {
 		if (atomicReply()) return;
+		if (localSlashMenuOpen()) return;
 		const text = props.ptyInputLine ?? "";
 		if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
 		if (!isSupersetEcho(text, syncedText)) return;
@@ -108,6 +120,7 @@ export function CommandInput(props: CommandInputProps) {
 		const text = e.currentTarget.value;
 		setValue(text);
 		autoResize();
+		if (localSlashMenuOpen()) return;
 		syncDelta(text);
 	}
 
@@ -142,6 +155,7 @@ export function CommandInput(props: CommandInputProps) {
 		const prefix = slashIdx >= 0 ? current.slice(0, slashIdx) : "";
 		const text = prefix + command + " ";
 		setValue(text);
+		setLocalSlashMenuOpen(false);
 		syncDelta(text);
 		if (textareaEl) {
 			textareaEl.value = text;
@@ -152,14 +166,27 @@ export function CommandInput(props: CommandInputProps) {
 
 	/** Externally trigger slash mode (e.g. from TerminalKeybar "/" button). */
 	function triggerSlash() {
-		syncedText = "";
+		if (props.sessionExists === false || localSlashMenuOpen()) return;
+		slashDraft = textareaEl?.value ?? value();
+		setLocalSlashMenuOpen(true);
 		setValue("/");
 		if (textareaEl) {
 			textareaEl.value = "/";
 			textareaEl.focus();
 			autoResize();
 		}
-		syncDelta("/");
+	}
+
+	function closeSlashMenu() {
+		if (localSlashMenuOpen()) {
+			setLocalSlashMenuOpen(false);
+			setValue(slashDraft);
+			if (textareaEl) textareaEl.value = slashDraft;
+			return;
+		}
+		setValue("");
+		if (textareaEl) textareaEl.value = "";
+		syncDelta("");
 	}
 
 	// Register triggerSlash with parent via callback prop
@@ -171,7 +198,7 @@ export function CommandInput(props: CommandInputProps) {
 
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
-		if (!text || props.sessionExists === false || submitting()) return;
+		if (!text || props.sessionExists === false || localSlashMenuOpen() || submitting()) return;
 
 		if (atomicReply()) {
 			setSubmitting(true);
@@ -187,7 +214,12 @@ export function CommandInput(props: CommandInputProps) {
 					return;
 				}
 				if (!receipt.acknowledged) {
-					toastsStore.add("Reply sent", "The agent did not acknowledge it yet. Check the session before retrying.", "warn", true);
+					toastsStore.add(
+						"Reply sent",
+						"The agent did not acknowledge it yet. Check the session before retrying.",
+						"warn",
+						true,
+					);
 				}
 				setValue("");
 				if (textareaEl) textareaEl.value = "";
@@ -196,12 +228,16 @@ export function CommandInput(props: CommandInputProps) {
 				if (err instanceof HttpRpcError) {
 					try {
 						const result: unknown = JSON.parse(err.body);
-						const reason = typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
+						const reason =
+							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
 						if (reason === "session_not_found") msg = "This session has ended";
 						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
-						else if (reason === "partial_composer") msg = "The agent already has a draft. Check the session before retrying.";
+						else if (reason === "partial_composer")
+							msg = "The agent already has a draft. Check the session before retrying.";
 						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
-					} catch { /* Keep the server error for a malformed response. */ }
+					} catch {
+						/* Keep the server error for a malformed response. */
+					}
 				}
 				toastsStore.add("Reply not sent", msg, "error", true);
 			} finally {
@@ -223,6 +259,7 @@ export function CommandInput(props: CommandInputProps) {
 			await lastInputWrite;
 			await waitForAgentEnterGap(props.agentType);
 			await retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data: "\r" }));
+			setCodexNotesMode(false);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("network", `Failed to send command after retries: ${msg}`);
@@ -234,6 +271,17 @@ export function CommandInput(props: CommandInputProps) {
 		if (props.sessionExists === false) {
 			e.preventDefault();
 			return;
+		}
+		if (localSlashMenuOpen()) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				closeSlashMenu();
+				return;
+			}
+			if (e.key === "Tab" || e.key === "Enter") {
+				e.preventDefault();
+				return;
+			}
 		}
 		if (atomicReply() && e.key === "Tab") return;
 		if (atomicReply() && e.key === "Escape") {
@@ -261,18 +309,46 @@ export function CommandInput(props: CommandInputProps) {
 		}
 	}
 
-	const showDropup = () => value().includes("/") && (props.slashItems?.length ?? 0) > 0;
-	const showChoicePrompt = () => !!props.choicePrompt;
+	const localSlashItems = () =>
+		getAgentCommands(props.agentType)
+			.commands.filter(({ command }) => command.startsWith(value().trim()))
+			.map(({ command, label }) => ({ command, description: label === command ? "" : label, highlighted: false }));
+	const slashItems = () => (localSlashMenuOpen() ? localSlashItems() : (props.slashItems ?? []));
+	const showDropup = () =>
+		props.sessionExists !== false && (localSlashMenuOpen() || (value().includes("/") && slashItems().length > 0));
+	const showChoicePrompt = () => !!props.choicePrompt && !codexNotesMode();
 
 	async function handleChoiceSelect(key: string) {
+		if (choiceSending() || props.sessionExists === false) return;
+		setChoiceSending(true);
 		try {
 			const write = (data: string) => rpc<void>("write_pty", { sessionId: props.sessionId, data });
+			const options = props.choicePrompt?.options ?? [];
+			const selectedIndex = options.findIndex((option) => option.highlighted);
+			const choiceIndex = options.findIndex((option) => option.key === key);
+			const label = options[choiceIndex]?.label;
+			if (props.choicePrompt?.selection_mode === "navigate-enter") {
+				const steps = choiceIndex - Math.max(selectedIndex, 0);
+				const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
+				for (let i = 0; i < Math.abs(steps); i++) await sendPtyKey(write, arrow);
+				await sendPtyKey(write, "\r");
+				return;
+			}
+			if (props.agentType === "codex" && (label === "Other" || label === "None of the above")) {
+				const steps = (choiceIndex - Math.max(selectedIndex, 0) + options.length) % options.length;
+				for (let i = 0; i < steps; i++) await sendPtyKey(write, "\x1b[B");
+				await sendPtyKey(write, "\t");
+				setCodexNotesMode(true);
+				textareaEl?.focus();
+				return;
+			}
 			await sendPtyKey(write, key);
 			// Most raw-mode prompts submit on the numeric key.
 			if (!props.choicePrompt?.dismiss_key) {
 				await write("\r");
 			}
 		} catch (err) {
+			setChoiceSending(false);
 			appLogger.warn("terminal", "ChoicePrompt sendPtyKey failed", { error: err });
 			const msg = err instanceof Error ? err.message : String(err);
 			toastsStore.add("Send failed", `Could not send choice: ${msg}`, "error", true);
@@ -286,7 +362,13 @@ export function CommandInput(props: CommandInputProps) {
 				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
 			</Show>
 			<Show when={showDropup() && !showChoicePrompt()}>
-				<SlashMenuOverlay items={props.slashItems ?? []} sessionId={props.sessionId} onSelect={handleSlashSelect} />
+				<SlashMenuOverlay
+					items={slashItems()}
+					sessionId={props.sessionId}
+					local={localSlashMenuOpen()}
+					onSelect={handleSlashSelect}
+					onClose={closeSlashMenu}
+				/>
 			</Show>
 			<textarea
 				ref={textareaEl}
@@ -300,6 +382,7 @@ export function CommandInput(props: CommandInputProps) {
 				autocapitalize="off"
 				inputmode="text"
 				rows={1}
+				disabled={props.sessionExists === false}
 			/>
 			<input ref={fileInput} type="file" accept="image/*,application/pdf,text/*" aria-label="Choose attachment" hidden onChange={(event) => {
 				const file = event.currentTarget.files?.[0];
@@ -308,7 +391,13 @@ export function CommandInput(props: CommandInputProps) {
 			<button class={styles.attach} type="button" aria-label="Attach file" disabled={!!uploading() || props.sessionExists === false || atomicReply()} onClick={() => fileInput?.click()}>
 				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" /></svg>
 			</button>
-			<button class={styles.send} type="button" onClick={send}>
+			<button
+				class={styles.send}
+				type="button"
+				aria-label="Send"
+				disabled={props.sessionExists === false || localSlashMenuOpen()}
+				onClick={send}
+			>
 				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>

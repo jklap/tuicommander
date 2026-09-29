@@ -7,9 +7,8 @@ interface ChoicePromptOverlayProps {
 	onSelect: (key: string) => void;
 }
 
-/** Overlay that surfaces an agent's numbered choice dialog (edit-confirm,
- *  bash-confirm, apply-patch) as tappable buttons. Dropup above the input
- *  area. On tap, caller sends the option key as PTY input via sendCommand. */
+/** Overlay that surfaces an agent's choice dialog as tappable buttons. The
+ *  caller follows the backend's selection mode when sending PTY keys. */
 export function ChoicePromptOverlay(props: ChoicePromptOverlayProps) {
 	return (
 		<div class={styles.dropup}>

@@ -874,6 +874,9 @@ one configured ego binary and speaks ACP to it, per
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
 - The composer grows up to a bounded height. Pastes over 200 words are shown as
   numbered markers until Send restores the full text
+- `Ctrl+S` in the composer parks text and image previews with a visible chip;
+  pressing it again restores or swaps drafts. Sending an intervening prompt
+  restores the parked draft. The same control is tappable in mobile AI Chat.
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client
@@ -920,6 +923,7 @@ re-derived later.
 - Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
 
 ### 6.16 ChoicePrompt Detection
+- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions. Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling
@@ -1641,6 +1645,7 @@ All data persisted to platform config directory via Rust:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Alt+A` | Toggle AI Chat panel (`toggle-ai-chat`) |
+| `Ctrl+S` (AI Chat composer) | Park, restore, or swap the current prompt draft |
 | `Cmd+Enter` (panel focused) | Send message |
 | `Esc` (panel focused) | Cancel in-flight stream |
 
@@ -1892,9 +1897,11 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
 - Shares transport layer, stores, and notification manager with desktop
-- Chat is the primary mobile tab: choose a repository, read ego's streamed ACP
+- Sessions opens by default; the five bottom tabs are Sessions, Chat, Files,
+  Progress, and Activity. Settings opens from the app-bar overflow.
+- Chat opens the cross-repository chat directly. Read ego's streamed ACP
   conversation with shared transcript cards and collapsed activity, answer
-  pending interactions, and switch among titled saved conversations
+  pending interactions, and switch among titled saved conversations.
 - Server-side routing: `/mobile/*` → `mobile.html`, everything else → `index.html`
 - Session state accumulator enriches `GET /sessions` with question/rate-limit/busy state
 - SSE endpoint (`/events`) and WebSocket JSON framing for real-time updates
@@ -1902,6 +1909,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.2 Sessions Screen
 - Hero metrics header: active session count + awaiting input count with large tabular-nums display
 - Search button at the top right filters the live session list by name, repository path, worktree path, branch, or agent type; closing search restores the full list
+- Waiting sessions appear first; the list preserves order within waiting, idle-agent, and shell groups. Session names keep their original casing, and busy state reads "Working".
+- The new-session sheet selects Claude Code, Codex, or Gemini, searches repositories, and opens the created agent session. Its close button and backdrop dismiss the sheet.
+- Question banners identify the session and repository; the header counter opens the first waiting session.
 - Elevated session cards with agent icon, status badge, project/branch, relative time
 - Rich sub-rows per card: agent intent (crosshair icon) or last prompt (speech bubble), current task (gear icon) with inline progress bar, usage limit percentage
 - Question state highlighted via inset gold box-shadow
@@ -1912,7 +1922,11 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
-- From a session header, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
+- Repository paths truncate from the left and reveal the complete path on long press; normal folders precede hidden folders
+- Search recursively for files by name or repository-relative path from the tree
+- File view and editor keep Back, file name, and Edit or Cancel/Save on one row with 44 px buttons; the editor fills the remaining height and soft-wraps lines
+- From a session header's overflow menu, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
+- Markdown paths in session output open here through the desktop terminal-path resolver. Absolute, relative, `file://`, and `tuic://open//` references are supported, including line numbers. Files outside registered repositories are refused with a toast naming the path.
 - Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
 - Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
 - Switch from View to Edit for source changes, then save through the existing file commands and return to View
@@ -1921,16 +1935,18 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
+- When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
 - Search/filter in output: text search bar filters visible log lines in real time
-- Rich header: agent intent line (italic), current task line, progress bar, usage percentage (red above 80%)
+- Compact 56 px header: desktop agent logo with a state dot, session display name, repository/branch, state, elapsed activity time, tasks count, and an overflow menu. Tapping the name reveals intent and current task in a transient sheet. Tasks opens current work and intent history; overflow Progress opens this session's filtered journal in a bottom sheet. Files, output search, Ideas, quick commands, usage, copy ID, and terminate remain in overflow. The terminal keeps its height because these panels overlay it.
 - Error bar (red tint) when `last_error` is set
 - Rate-limit bar (orange tint) with live countdown timer (`formatRetryCountdown`)
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
-- Slash menu overlay: frosted glass bottom sheet showing detected `/command` entries; tap to fill the input, then submit after the agent's Enter gap
+- Slash menu overlay: the keybar `/` opens local agent-specific choices without writing to the PTY; typed slash menus still show detected entries. Removed commands are hidden, and the close button dismisses the menu. Picking a command fills the input; submitting waits for the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
-- **TerminalKeybar:** context-aware row of special key buttons above the main input. Shows Ctrl+C, Ctrl+D, Tab, Esc, Enter, arrow keys for terminal operations. When the agent is awaiting input, adds Yes/No quick-reply buttons. Consolidated from the former separate QuickActions component
+- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl+C, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. When the agent is awaiting input, it adds Yes/No quick-reply buttons. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
 - **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes
@@ -1945,6 +1961,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.5 Activity Feed
 - Chronological event feed grouped by time (NOW, EARLIER, TODAY, OLDER)
+- Local 24-hour timestamps, minute-scale run durations, and singular block counts
 - Hydrates persisted activity from the server when the mobile tab opens; dismissed items stay hidden and current live items remain visible
 - Throttled grouping: items snapshot every 10s to prevent constant reordering with multiple active sessions; new items/removals trigger immediate refresh
 - Sticky section headers, tap to navigate to session
@@ -1953,10 +1970,12 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - **Session kill:** swipe or long-press a session card to kill/close the PTY session
 - **New session:** create a new PTY session from the sessions screen (optional shell/cwd selection)
 - **Progress:** lists projects with journal entries by recent activity, then shows and switches their saved entries without a desktop repository selection
+- Long Progress messages collapse to four lines with a More/Less control on mobile
 
 ### 18.7 Settings
 - Connection status: connectivity indicator with real-time Connected/Disconnected state
 - Server URL display
+- App and server versions, plus a persistent Dark/Light choice using desktop theme colors and a separate server-side mobile preference
 - Notification sound toggle (localStorage-persisted)
 - Open Desktop UI link
 
@@ -1985,7 +2004,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Delivery gate: push is sent when the desktop window is unfocused or macOS HID input has been idle for at least two minutes. An active desktop suppresses duplicate alerts; platforms without HID idle information retain the focus gate
 - Question and completion pushes share one 30-second limit per session
 - ACP interaction pushes use the same 30-second limit for each conversation
-- A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path
+- A managed session's free-text mobile reply uses the atomic `session submit` path and retains the draft if the session rejects it. It can answer a confident question while queued automated messages stay parked. Numbered choices keep their key-input path. For Codex `request_user_input`, the session header opens the queued question; its title and options appear in the transient choice overlay, and numbered answers use one PTY key. The `Other` choice opens Codex notes for a typed answer. The control uses the existing header, preserving all terminal rows
+- Claude AskUserQuestion publishes its actual choices in the same mobile overlay; a tap follows the backend's arrow-and-Enter selection contract instead of using generic Yes/No keys
 - Stale subscriptions cleaned on HTTP 410 Gone
 - iOS standalone detection: shows "Add to Home Screen" guidance when not installed
 - HTTP detection: shows "Push requires HTTPS (enable Tailscale)" when not on HTTPS

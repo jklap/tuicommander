@@ -388,7 +388,9 @@ export function createAcpChat(
 			}
 			if (!current) return;
 			const { id, session } = current;
-			await guard("sending the turn", () => client.prompt(id, session, text, images, viewedRepo(), files));
+			await guard("sending the turn", () => files.length
+				? client.prompt(id, session, text, images, viewedRepo(), files)
+				: client.prompt(id, session, text, images, viewedRepo()));
 		},
 
 		async cancel(): Promise<void> {

@@ -17,6 +17,9 @@ export const Composer: Component<{ chat: AcpChat; mobileAttachments?: boolean; s
 	const [uploading, setUploading] = createSignal(false);
 	let textarea: HTMLTextAreaElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
+	const hasContent = () => !!aiChatDraft.text().trim() || aiChatDraft.images().length > 0 || aiChatDraft.files().length > 0;
+	const parkLabel = () => !aiChatDraft.parked() ? "Park draft" : hasContent() ? "Swap parked draft" : "Restore parked draft";
+	createEffect(() => aiChatDraft.activate(props.chat.sessionId() ?? ""));
 	const resize = () => {
 		if (!textarea) return;
 		textarea.style.height = "auto";
@@ -31,7 +34,7 @@ export const Composer: Component<{ chat: AcpChat; mobileAttachments?: boolean; s
 		const images = aiChatDraft.images().map((image) => image.block);
 		const files = aiChatDraft.files();
 		if (!text.trim() && images.length === 0 && files.length === 0) return;
-		aiChatDraft.clear();
+		aiChatDraft.restoreAfterSend();
 		queueMicrotask(resize);
 		setPasteError(null);
 		void props.chat.send(text, images, files);
@@ -96,6 +99,13 @@ export const Composer: Component<{ chat: AcpChat; mobileAttachments?: boolean; s
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.key.toLowerCase() === "s" && event.ctrlKey && !event.metaKey && !event.altKey) {
+			event.preventDefault();
+			if (event.repeat) return;
+			aiChatDraft.parkOrSwap();
+			queueMicrotask(resize);
+			return;
+		}
 		if (event.key !== "Enter" || event.shiftKey) return;
 		event.preventDefault();
 		send();
@@ -156,6 +166,9 @@ export const Composer: Component<{ chat: AcpChat; mobileAttachments?: boolean; s
 						{pasteError()}
 					</span>
 				</Show>
+				<Show when={aiChatDraft.storageError()}>
+					<span class={s.pasteError} role="alert">Browser storage is unavailable; reload may lose it.</span>
+				</Show>
 				<textarea
 					ref={textarea}
 					class={s.textarea}
@@ -175,6 +188,15 @@ export const Composer: Component<{ chat: AcpChat; mobileAttachments?: boolean; s
 					Stop
 				</button>
 			</Show>
+			<button
+				type="button"
+				class={s.parkBtn}
+				aria-label={parkLabel()}
+				disabled={!aiChatDraft.parked() && !hasContent()}
+				onClick={() => aiChatDraft.parkOrSwap()}
+			>
+				{aiChatDraft.parked() ? "Parked draft" : "Park"}
+			</button>
 			<button
 				type="button"
 				class={s.sendBtn}
