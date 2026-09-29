@@ -12,8 +12,8 @@ vi.mock("../../invoke", () => ({ invoke }));
 vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
-import { MobileChatScreen } from "../screens/MobileChatScreen";
 import { aiChatDraft } from "../../components/AIChatPanel/draft";
+import { MobileChatScreen } from "../screens/MobileChatScreen";
 
 function chat() {
 	return {
@@ -77,6 +77,29 @@ afterEach(() => {
 });
 
 describe("mobile ego chat", () => {
+	it("passes a tapped transcript file link with the chat workspace to mobile navigation", async () => {
+		const onOpenFile = vi.fn();
+		createAcpChat.mockReturnValue({
+			...chat(),
+			entries: () => [{ id: "report", kind: "agent", text: "Read docs/guide.md" }],
+		});
+		render(() => <MobileChatScreen onOpenFile={onOpenFile} />);
+		fireEvent.click(await screen.findByRole("link", { name: "docs/guide.md" }));
+		expect(onOpenFile).toHaveBeenCalledWith("docs/guide.md", "/home/boss/Gits");
+	});
+	it("shows a message instead of guessing a path when the chat workspace is unavailable", async () => {
+		const onOpenFile = vi.fn();
+		createAcpChat.mockReturnValue({
+			...chat(),
+			root: () => null,
+			entries: () => [{ id: "report", kind: "agent", text: "Read docs/guide.md" }],
+		});
+		render(() => <MobileChatScreen onOpenFile={onOpenFile} />);
+		fireEvent.click(await screen.findByRole("link", { name: "docs/guide.md" }));
+		expect(screen.getByRole("alert").textContent).toContain("workspace");
+		expect(onOpenFile).not.toHaveBeenCalled();
+	});
+
 	it("opens global chat without a repository selection or repository fetch", async () => {
 		render(() => <MobileChatScreen />);
 		expect(screen.queryByRole("combobox", { name: "Repository" })).toBeNull();
@@ -144,24 +167,43 @@ describe("mobile ego chat", () => {
 	it("keeps a shared document in the draft until Send", async () => {
 		const current = chat();
 		createAcpChat.mockReturnValue(current);
-		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 5 }), { status: 200 })));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 5 }), { status: 200 }),
+			),
+		);
 		const { container } = render(() => <MobileChatScreen />);
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
 		expect(current.send).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
-		expect(current.send).toHaveBeenCalledWith("", [], [{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }]);
+		expect(current.send).toHaveBeenCalledWith(
+			"",
+			[],
+			[{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }],
+		);
 	});
 
 	it("recovers an Android share into the chat draft and removes its cached copy", async () => {
 		history.replaceState(null, "", "/mobile?shared=shared-1");
 		const remove = vi.fn(async () => true);
-		vi.stubGlobal("caches", { open: async () => ({
-			match: async () => new Response("report", { headers: { "x-file-name": "report.pdf", "content-type": "application/pdf" } }),
-			delete: remove,
-		}) });
-		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/2-report.pdf", size: 6 }), { status: 200 })));
+		vi.stubGlobal("caches", {
+			open: async () => ({
+				match: async () =>
+					new Response("report", { headers: { "x-file-name": "report.pdf", "content-type": "application/pdf" } }),
+				delete: remove,
+			}),
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ path: "/repo/.tuic/attachments/2-report.pdf", size: 6 }), { status: 200 }),
+			),
+		);
 		render(() => <MobileChatScreen />);
 		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
 		expect(remove).toHaveBeenCalledWith("/_shared/shared-1");
@@ -212,7 +254,13 @@ describe("mobile ego chat", () => {
 	it("parks an uploaded document and restores it as an unsent attachment", async () => {
 		const current = chat();
 		createAcpChat.mockReturnValue(current);
-		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 6 }), { status: 200 })));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 6 }), { status: 200 }),
+			),
+		);
 		const { container } = render(() => <MobileChatScreen />);
 		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
 		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
@@ -223,6 +271,10 @@ describe("mobile ego chat", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
 		expect(screen.getByText("report.pdf")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
-		expect(current.send).toHaveBeenCalledWith("", [], [{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }]);
+		expect(current.send).toHaveBeenCalledWith(
+			"",
+			[],
+			[{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }],
+		);
 	});
 });

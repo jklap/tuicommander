@@ -8,12 +8,16 @@ import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
 import styles from "./MobileChatScreen.module.css";
 
-export function MobileChatScreen() {
+export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: string) => void }) {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
 	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
+	const [linkError, setLinkError] = createSignal<string | null>(null);
 	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
-	const chat = createAcpChat(() => linkedRepository, () => true);
+	const chat = createAcpChat(
+		() => linkedRepository,
+		() => true,
+	);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
 
@@ -36,7 +40,11 @@ export function MobileChatScreen() {
 					const response = await cache.match(key);
 					if (!response) throw new Error("Shared file is no longer available.");
 					const name = response.headers.get("x-file-name") || "shared-file";
-					setSharedFile(new File([await response.blob()], name, { type: response.headers.get("content-type") || "application/octet-stream" }));
+					setSharedFile(
+						new File([await response.blob()], name, {
+							type: response.headers.get("content-type") || "application/octet-stream",
+						}),
+					);
 					await cache.delete(key);
 					const nextUrl = new URL(location.href);
 					nextUrl.searchParams.delete("shared");
@@ -55,6 +63,15 @@ export function MobileChatScreen() {
 		await action();
 		if (chat.error()) answering.delete(requestId);
 	}
+	const openFile = (candidate: string) => {
+		const cwd = chat.root();
+		if (!cwd || !props.onOpenFile) {
+			setLinkError("AI Chat workspace is unavailable right now.");
+			return;
+		}
+		setLinkError(null);
+		props.onOpenFile(candidate, cwd);
+	};
 
 	return (
 		<section class={styles.screen} aria-label="AI Chat">
@@ -62,7 +79,18 @@ export function MobileChatScreen() {
 				<strong>AI Chat</strong>
 			</header>
 			<Show when={sharedFileError()}>
-				{(message) => <div class={styles.banner} role="alert">{message()}</div>}
+				{(message) => (
+					<div class={styles.banner} role="alert">
+						{message()}
+					</div>
+				)}
+			</Show>
+			<Show when={linkError()}>
+				{(message) => (
+					<div class={styles.banner} role="alert">
+						{message()}
+					</div>
+				)}
 			</Show>
 			<Show when={chat.gap()}>
 				{(gap) => (
@@ -113,6 +141,7 @@ export function MobileChatScreen() {
 			<Transcript
 				entries={chat.entries}
 				busy={chat.busy}
+				onOpenFile={openFile}
 				onSuggestion={(text) => void chat.send(text)}
 				emptyMessage={
 					chat.phase() === "unconfigured"
@@ -138,7 +167,12 @@ export function MobileChatScreen() {
 				/>
 			</Transcript>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
-				<Composer chat={chat} mobileAttachments sharedFile={sharedFile()} onSharedFileConsumed={() => setSharedFile(null)} />
+				<Composer
+					chat={chat}
+					mobileAttachments
+					sharedFile={sharedFile()}
+					onSharedFileConsumed={() => setSharedFile(null)}
+				/>
 			</Show>
 		</section>
 	);
