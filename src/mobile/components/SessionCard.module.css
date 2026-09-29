@@ -1,7 +1,7 @@
 .card {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 8px;
   padding: 12px 16px;
   margin: 6px 12px;
   border: 1px solid var(--border);
@@ -10,14 +10,28 @@
   color: var(--fg-primary);
   text-align: left;
   width: calc(100% - 24px);
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.1s ease;
   font-family: inherit;
   font-size: inherit;
 }
 
-.card:active {
+.cardMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.cardMain:active {
   background: var(--bg-highlight);
 }
 
@@ -159,8 +173,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   border: none;
   border-radius: var(--radius-md);
   background: none;
