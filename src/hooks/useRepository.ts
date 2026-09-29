@@ -48,6 +48,7 @@ export interface RemoveWorktreeResult {
 	branch_delete_warning?: string | null;
 	/** Branch the removed workspace was on, read off the record before removal. */
 	branch: string;
+	removal_rule: string;
 }
 
 /** One workspace's checkout. Keyed by workspace id; the branch is a field on the
@@ -143,6 +144,9 @@ export function useRepository() {
 	async function getWorkspaceLifecycle(repoPath: string, workspaceId: string): Promise<WorkspaceLifecycleStatus> {
 		const status = await invoke<{
 			dirty_files: number | null;
+			untracked_files?: number | null;
+			live_sessions?: Array<{ session_id: string; name: string }>;
+			warnings?: string[];
 			missing_checkout: boolean;
 			dirty_fingerprint?: string;
 			submodule_unpushed_commits?: Array<{ path: string; count: number }>;
@@ -152,6 +156,9 @@ export function useRepository() {
 		}>("get_workspace_lifecycle", { repoPath, workspaceId });
 		return {
 			dirtyFiles: status.dirty_files,
+			untrackedFiles: status.untracked_files,
+			liveSessions: status.live_sessions?.map((session) => ({ sessionId: session.session_id, name: session.name })),
+			warnings: status.warnings,
 			missingCheckout: status.missing_checkout,
 			dirtyFingerprint: status.dirty_fingerprint,
 			submoduleUnpushedCommits: status.submodule_unpushed_commits,

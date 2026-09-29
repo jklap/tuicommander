@@ -227,10 +227,10 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` both advertise "config fields to save"
-and both accept a partial body: it is deep-merged onto the live config by
-`merge_partial_app_config`, so an omitted field keeps its current value instead of
-falling back to its serde default. Both also share `server_settings_changed` with
+`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`base` is the caller's loaded snapshot and `config` is its edited document.
+The backend applies only the base-to-config changes to the latest locked file;
+unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
 the IPC `save_config` and rebind the listener through
 `restart_after_server_settings_change`, so no transport can leave the process
 serving a configuration the disk disagrees with. See
@@ -1071,7 +1071,7 @@ Non-Claude Code MCP clients do not receive this field.
 
 ### MCP Tool: `repo` — Worktree Remove
 
-MCP `repo action=worktree_remove` returns `{ "ok": true }` on full success. It
+MCP `repo action=worktree_remove` returns `{ "ok": true, "warnings": [...] }` on full success. The warnings come from the same removal preview as desktop and HTTP, including branch history, live sessions, and local file counts. It
 runs on the blocking pool and the local MCP bridge allows up to 305 seconds for
 the response, covering linked worktrees with large ignored build artifacts.
 Non-forced removal refuses staged, unstaged, or untracked work. The optional
@@ -1474,7 +1474,8 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    `to` takes any of the three address forms — the peer's `tuic_session`, the id of the
    PTY it runs in, or that terminal's alias. `delivered` is the verdict and
    `delivery_path` is the single source of truth for the route and distinguishes SSE,
-   terminal-or-queued, waiter, generic/coalesced orchestrator wake, and inbox-only
+   terminal-or-queued, waiter, subscribed ACP inbox resource, generic/coalesced
+   orchestrator wake, and inbox-only
    delivery. It replaced `delivered_via_channel` on this response, which reported only
    the SSE sub-route yet read as a delivery verdict — `false` next to a `delivered:true`
    and a confirming `delivery_path` was pure ambiguity. The field remains on the stored
@@ -1501,6 +1502,7 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
      The recorded CLI contract, including unused immediate-send gesture
      findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
+   - **ACP inbox resource**: a terminal-less peer with a live MCP-over-ACP connection subscribed to `tuic://inbox` receives `notifications/resources/updated` and can read its mail. Normal and urgent `agent send` report `delivered=true` and `delivery_path=acp_inbox_resource` when no waiter or other route owns the message; urgent send also reports `urgent_delivered=true`. This includes peers registered as orchestrators. After disconnect or without the subscription, the response reports `inbox_only` unless another route owns the message. An idle ego may also be woken by the ACP host.
    - **Normal PTY notice**: an ordinary managed agent receives a payload-free `agent action=inbox` notice when its composer is safe, or on its next safe idle transition. A busy turn, question, or partial draft is left untouched. Managed Claude peers use this path even with an active SSE stream, because a channel push during one turn cannot start a later turn for unread mail. An idle/completed orchestrator receives the coalesced inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered by normal mail.
    - **Inbox poll**: `agent action=inbox` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait` blocks until new mail;

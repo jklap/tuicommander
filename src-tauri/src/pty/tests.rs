@@ -83,7 +83,7 @@ fn claude_screen_setting_off_preserves_explicit_environment() {
             ..Default::default()
         },
     );
-    crate::config::save_agents_config(config).unwrap();
+    crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
     let state = crate::state::tests_support::make_test_app_state();
     let mut cmd = CommandBuilder::new("claude");
     cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "custom");

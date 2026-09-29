@@ -234,33 +234,17 @@ fn a_session_authority_without_servers_is_accepted_and_reaches_nothing_yet() {
 
 /// The TUICommander entry a session gets, on the wire ego reads it from.
 ///
-/// A stdio entry serializes to a different set of keys than the HTTP one it
-/// replaced, and this file exists because the Rust enum is the one reader that
-/// never sees them. The behaviour behind the entry — which binary, which
-/// socket, and what a missing bridge does — is story 796's.
+/// The ACP transport serializes to a tagged object with no command and no
+/// address, and this file exists because the Rust enum is the one reader that
+/// never sees the keys. What serves it is story 1156's.
 #[test]
-fn the_synthesised_entry_names_our_bridge_as_a_command() {
-    let server = tuicommander_lib::acp::tuicommander_mcp_server(
-        Some(std::path::PathBuf::from("/opt/tuic/tuic-bridge")),
-        None,
-        None,
-    )
-    .expect("a located bridge must yield an entry");
-
-    let value = serde_json::to_value(&server).expect("the entry must serialize");
+fn the_synthesised_entry_names_our_server_on_the_acp_transport() {
+    let value = serde_json::to_value(tuicommander_lib::acp::tuicommander_acp_mcp_server())
+        .expect("the entry must serialize");
     assert_eq!(
-        value.get("name").and_then(Value::as_str),
-        Some("tuicommander")
-    );
-    assert_eq!(
-        value.get("command").and_then(Value::as_str),
-        Some("/opt/tuic/tuic-bridge")
-    );
-    assert_eq!(
-        value.get("args"),
-        Some(&json!([])),
-        "the socket travels in the environment, so the command takes no \
-         arguments: {value}"
+        value,
+        json!({ "type": "acp", "name": "tuicommander", "serverId": "tuicommander" }),
+        "no command, url or env: the connection is the server's address"
     );
 }
 

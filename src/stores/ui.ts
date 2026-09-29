@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 const LEGACY_SIDEBAR_VISIBLE_KEY = "tui-commander-sidebar-visible";
@@ -115,6 +116,7 @@ function clampWidth(v: number): number {
 
 /** Create the UI store */
 function createUIStore() {
+	const uiPrefsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_ui_prefs");
 	const editorWrapPrefs = loadEditorWrapPrefs();
 	const [state, setState] = createStore<UIStoreState>({
 		sidebarVisible: true,
@@ -183,8 +185,7 @@ function createUIStore() {
 		for (const { stateKey, backendKey } of exclusivePanelPrefs) {
 			panelVisibility[backendKey] = state[stateKey];
 		}
-		invoke("save_ui_prefs", {
-			config: {
+		uiPrefsWriter.save({
 				sidebar_visible: state.sidebarVisible,
 				sidebar_width: state.sidebarWidth,
 				...panelVisibility,
@@ -194,7 +195,6 @@ function createUIStore() {
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
 				github_section_collapsed: state.githubSectionCollapsed,
-			},
 		}).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
 
@@ -219,12 +219,12 @@ function createUIStore() {
 				const legacyVisible = localStorage.getItem(LEGACY_SIDEBAR_VISIBLE_KEY);
 				const legacyWidth = localStorage.getItem(LEGACY_SIDEBAR_WIDTH_KEY);
 				if (legacyVisible !== null || legacyWidth !== null) {
+					const migrationBase = (await invoke<Record<string, unknown>>("load_ui_prefs")) ?? {};
+					uiPrefsWriter.loaded(migrationBase);
 					const visible = legacyVisible !== "false";
 					const width = parseInt(legacyWidth || "", 10);
 					const sidebarWidth = clampWidth(Number.isNaN(width) ? SIDEBAR_DEFAULT_WIDTH : width);
-					await invoke("save_ui_prefs", {
-						config: { sidebar_visible: visible, sidebar_width: sidebarWidth },
-					});
+					await uiPrefsWriter.save({ ...migrationBase, sidebar_visible: visible, sidebar_width: sidebarWidth });
 					localStorage.removeItem(LEGACY_SIDEBAR_VISIBLE_KEY);
 					localStorage.removeItem(LEGACY_SIDEBAR_WIDTH_KEY);
 				}
@@ -241,6 +241,7 @@ function createUIStore() {
 						github_section_collapsed?: Record<string, boolean>;
 					} & Partial<Record<(typeof exclusivePanelPrefs)[number]["backendKey"], boolean>>
 				>("load_ui_prefs");
+				uiPrefsWriter.loaded(loaded ?? {});
 				if (loaded) {
 					if (loaded.sidebar_visible !== undefined) {
 						setState("sidebarVisible", loaded.sidebar_visible);

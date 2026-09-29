@@ -133,7 +133,7 @@ impl Default for SegmenterConfig {
     fn default() -> Self {
         Self {
             pre_roll_ms: 300,
-            trailing_silence_ms: 800,
+            trailing_silence_ms: 1_500,
             min_speech_ms: 200,
             max_utterance_ms: 30_000,
             activity_rms: 0.01,
@@ -284,6 +284,19 @@ impl Segmenter {
             speech_ms: open.speech_ms,
         })
     }
+}
+
+/// Apply the hands-free utterance gate to a finished push-to-talk recording.
+/// Feed bounded chunks so a long recording does not copy its whole buffer into
+/// the segmenter at once. An open utterance at key release also counts.
+pub fn has_sustained_speech(samples: &[f32], config: SegmenterConfig) -> bool {
+    let mut segmenter = Segmenter::new(config);
+    for chunk in samples.chunks(SAMPLE_RATE as usize) {
+        if !segmenter.push(chunk).is_empty() || segmenter.has_speech() {
+            return true;
+        }
+    }
+    false
 }
 
 fn ms_to_samples(ms: u32) -> usize {
@@ -448,6 +461,10 @@ struct PendingSend {
 /// know when an answer ended; revisit the anchor there rather than teaching
 /// this module to watch agent state.
 pub const ACTIVATION_WINDOW_MS: u64 = 15_000;
+
+/// Keep a keyword-addressed turn open long enough for a short follow-up to
+/// belong to the same terminal message, even after the segmenter closed it.
+pub const KEYWORD_CONTINUATION_MS: u64 = 5_000;
 
 /// The local gate between a recognised transcript and the send slot.
 ///
@@ -715,7 +732,11 @@ impl HandsFree {
 
     /// The hold-back this mode will apply to the next transcript.
     pub fn hold_back_ms(&self) -> u64 {
-        self.hold_back_ms
+        if self.activation.phrase.is_empty() {
+            self.hold_back_ms
+        } else {
+            self.hold_back_ms.max(KEYWORD_CONTINUATION_MS)
+        }
     }
 
     /// Take the configured hold-back. Refused while armed: changing it under a
@@ -864,7 +885,7 @@ impl HandsFree {
         };
         let language = language.map(str::to_string);
         self.turn_language = language.clone();
-        let send_at_ms = now_ms + self.hold_back_ms;
+        let send_at_ms = now_ms + self.hold_back_ms();
         // A transcript that arrives while another is held back is the same
         // turn: the user paused mid-sentence long enough for the segmenter to
         // close the first half. Join it and restart the hold-back, because
@@ -888,6 +909,12 @@ impl HandsFree {
     /// Returns `None` while the hold-back is still running, which is what makes
     /// the hold-back visible *and* cancellable: nothing has been written yet.
     pub fn poll_send(&mut self, now_ms: u64) -> Option<VoiceSend> {
+        // The continuation began before the deadline but its recogniser has
+        // not returned yet. Keep the first phrase in the composer until the
+        // speech closes, then accept_transcript joins both before rescheduling.
+        if self.phase == Phase::Capturing {
+            return None;
+        }
         let ready = self
             .pending
             .as_ref()
@@ -1819,6 +1846,26 @@ mod tests {
         assert!(closed[0].audio.len() >= ms_to_samples(800));
     }
 
+    /// A normal breath can exceed the old 800 ms threshold. The recogniser
+    /// must receive both phrases together, before either can be submitted.
+    #[test]
+    fn a_one_second_breath_keeps_both_phrases_in_one_utterance() {
+        let mut segmenter = Segmenter::new(SegmenterConfig::default());
+        let mut first = speech(500);
+        first.extend(silence(1_000));
+        assert!(
+            segmenter.push(&first).is_empty(),
+            "a breath is not the end of the turn"
+        );
+
+        let mut rest = speech(500);
+        rest.extend(silence(1_600));
+        let closed = segmenter.push(&rest);
+        assert_eq!(closed.len(), 1, "both phrases must reach one transcription");
+        assert_eq!(closed[0].speech_ms, 1_000);
+        assert!(closed[0].audio.len() >= ms_to_samples(2_000));
+    }
+
     /// Someone who never stops talking must not grow an unbounded buffer, and
     /// must not stall delivery forever either.
     #[test]
@@ -1967,6 +2014,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keyword_turn_keeps_a_five_second_follow_up_in_the_same_terminal_message() {
+        let mut mode = armed_with_phrase("computer");
+        let generation = mode.generation();
+        let queue = FakeSink::default();
+        mode.accept_transcript(generation, "computer appena faccio una pausa", None, 0);
+
+        assert!(deliver_due(&mut mode, &queue, 1_500).is_none());
+        assert!(
+            queue.written.borrow().is_empty(),
+            "the first phrase was sent alone"
+        );
+        mode.accept_transcript(generation, "la frase continua", None, 4_900);
+        assert_eq!(
+            mode.pending_text(),
+            Some("appena faccio una pausa la frase continua")
+        );
+        assert!(deliver_due(&mut mode, &queue, 9_899).is_none());
+        assert_eq!(
+            deliver_due(&mut mode, &queue, 9_900),
+            Some(Ok(Delivery::Turn))
+        );
+        assert_eq!(
+            queue.written.borrow().as_slice(),
+            [written("appena faccio una pausa la frase continua")]
+        );
+    }
+
     /// Boss's rule: the abort kills the mode, not just the utterance.
     #[test]
     fn a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send() {
@@ -2051,7 +2126,7 @@ mod tests {
 
         assert_eq!(
             mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0),
-            TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
+            TranscriptOutcome::HeldBack { send_at_ms: 5_000 }
         );
         assert_eq!(mode.pending_text(), Some("apri il file"));
     }
@@ -2072,7 +2147,7 @@ mod tests {
 
             assert_eq!(
                 mode.accept_transcript(generation, spoken, None, 0),
-                TranscriptOutcome::HeldBack { send_at_ms: 1_500 },
+                TranscriptOutcome::HeldBack { send_at_ms: 5_000 },
                 "{spoken:?} must activate"
             );
             assert_eq!(
@@ -2133,7 +2208,7 @@ mod tests {
 
             assert_eq!(
                 mode.accept_transcript(generation, spoken, None, 0),
-                TranscriptOutcome::HeldBack { send_at_ms: 1_500 },
+                TranscriptOutcome::HeldBack { send_at_ms: 5_000 },
                 "{spoken:?} must activate"
             );
             assert_eq!(
@@ -2184,7 +2259,7 @@ mod tests {
 
         assert_eq!(
             mode.accept_transcript(generation, "senti mac apri il file", None, 0),
-            TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
+            TranscriptOutcome::HeldBack { send_at_ms: 5_000 }
         );
         assert_eq!(mode.pending_text(), Some("apri il file"));
     }
@@ -2219,7 +2294,7 @@ mod tests {
 
         assert_eq!(
             mode.accept_transcript(generation, "apri il file", None, 1_000),
-            TranscriptOutcome::HeldBack { send_at_ms: 2_500 },
+            TranscriptOutcome::HeldBack { send_at_ms: 6_000 },
             "the phrase must have opened the window for what follows"
         );
         assert_eq!(mode.pending_text(), Some("apri il file"));
@@ -2232,11 +2307,11 @@ mod tests {
         let mut mode = armed_with_phrase("ciao tuic");
         let generation = mode.generation();
         mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0);
-        mode.poll_send(1_500).expect("first turn");
+        mode.poll_send(5_000).expect("first turn");
 
         assert_eq!(
             mode.accept_transcript(generation, "e adesso committa", None, 9_999),
-            TranscriptOutcome::HeldBack { send_at_ms: 11_499 }
+            TranscriptOutcome::HeldBack { send_at_ms: 14_999 }
         );
         assert_eq!(mode.pending_text(), Some("e adesso committa"));
     }
@@ -2248,7 +2323,7 @@ mod tests {
         let mut mode = armed_with_phrase("ciao tuic");
         let generation = mode.generation();
         mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0);
-        mode.poll_send(1_500).expect("first turn");
+        mode.poll_send(5_000).expect("first turn");
 
         assert_eq!(
             mode.accept_transcript(generation, "passami il sale", None, 10_000),
@@ -2259,7 +2334,7 @@ mod tests {
 
         assert_eq!(
             mode.accept_transcript(generation, "Ciao Tuic, committa", None, 10_000),
-            TranscriptOutcome::HeldBack { send_at_ms: 11_500 },
+            TranscriptOutcome::HeldBack { send_at_ms: 15_000 },
             "the phrase must still reopen it"
         );
         assert_eq!(mode.pending_text(), Some("committa"));
@@ -3577,6 +3652,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn speech_started_before_the_five_second_deadline_is_not_submitted_mid_phrase() {
+        let mut armed = HandsFree::new(1_500);
+        armed.set_activation("computer", ACTIVATION_WINDOW_MS);
+        armed.arm("target", "desktop", true).expect("arm");
+        armed.accept_transcript(
+            armed.generation(),
+            "computer appena faccio una pausa",
+            None,
+            0,
+        );
+        let mode = parking_lot::Mutex::new(armed);
+        let mut capture = Capture::new(SegmenterConfig::default(), 5_000, 0, echo_guard(), None);
+        let mut endpoint = FakeEndpoint::new("la frase continua");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        endpoint.feed(speech(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 4_900);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 5_000);
+        assert!(
+            queue.written.borrow().is_empty(),
+            "the first phrase was sent while speech was open"
+        );
+
+        endpoint.feed(silence(1_600));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 6_600);
+        assert_eq!(
+            mode.lock().pending_text(),
+            Some("appena faccio una pausa la frase continua")
+        );
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 11_600);
+        assert_eq!(
+            queue.written.borrow().as_slice(),
+            [written("appena faccio una pausa la frase continua")]
+        );
+    }
+
     /// An armed microphone in an empty room must cost nothing: no inference at
     /// all, and a retained-audio figure that does not move with time.
     #[test]
@@ -3998,7 +4111,9 @@ mod tests {
     const REPLY_MS: u32 = 1_800;
     const USER_ONSET_MS: u32 = 1_200;
     const USER_MS: u32 = 600;
-    const TIMELINE_MS: u32 = 3_000;
+    // User speech ends at 1800 ms; retain enough quiet for the shipping
+    // 1500 ms trailing-silence rule to close the utterance.
+    const TIMELINE_MS: u32 = 3_500;
     /// One device chunk per tick, at the cadence the runtime actually polls.
     const TICK_SAMPLES: usize = (SAMPLE_RATE as usize * POLL_INTERVAL_MS as usize) / 1_000;
 

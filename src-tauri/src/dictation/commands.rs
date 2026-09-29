@@ -129,6 +129,45 @@ pub struct TranscribeResponse {
     pub truncated_s: f64,
 }
 
+/// The response at the stop command boundary when the final pass has no text.
+fn empty_final_response(
+    final_text: &str,
+    final_skip_reason: Option<String>,
+    duration_s: f64,
+    truncated_s: f64,
+) -> Option<TranscribeResponse> {
+    final_text.is_empty().then(|| TranscribeResponse {
+        text: String::new(),
+        skip_reason: Some(final_skip_reason.unwrap_or_else(|| "no speech detected".to_string())),
+        duration_s,
+        truncated_s,
+    })
+}
+
+/// Run the final push-to-talk pass after capture has assembled the recording.
+fn transcribe_final_ptt_audio(
+    transcriber: &dyn transcribe::Transcriber,
+    audio: &[f32],
+    language: Option<&str>,
+    gates: transcribe::VoiceGates,
+) -> Result<transcribe::TranscribeResult, String> {
+    let activity = continuous::SegmenterConfig {
+        activity_rms: gates.rms_threshold,
+        ..continuous::SegmenterConfig::default()
+    };
+    if !continuous::has_sustained_speech(audio, activity) {
+        return Ok(transcribe::TranscribeResult {
+            text: String::new(),
+            skip_reason: Some(format!(
+                "no sustained speech (need {}ms of active audio)",
+                activity.min_speech_ms
+            )),
+            language: None,
+        });
+    }
+    transcriber.transcribe(audio, language, gates)
+}
+
 /// Resolve a model name from config, falling back to the default.
 fn resolve_model(name: &str) -> model::WhisperModel {
     model::WhisperModel::from_name(name).unwrap_or(model::WhisperModel::LargeV3Turbo)
@@ -1708,10 +1747,11 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         }
 
         let mut final_text = String::new();
+        let mut final_skip_reason = None;
 
         if let Some(ref transcriber) = transcriber {
             let lang_ref = lang_owned.as_deref();
-            match transcriber.transcribe(&all_audio, lang_ref, gates) {
+            match transcribe_final_ptt_audio(transcriber.as_ref(), &all_audio, lang_ref, gates) {
                 Ok(result) if result.skip_reason.is_none() => {
                     final_text = result.text;
                 }
@@ -1724,6 +1764,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                             &format!("Final transcription skipped: {reason}"),
                         );
                     }
+                    final_skip_reason = result.skip_reason;
                 }
                 Err(e) => {
                     app_logger::log_via_handle(
@@ -1750,15 +1791,18 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             };
         }
 
-        if final_text.is_empty() {
+        let no_speech_fallback = final_skip_reason.is_none();
+        if let Some(response) = empty_final_response(
+            &final_text,
+            final_skip_reason,
+            total_duration_s,
+            truncated_s,
+        ) {
             trace_empty_final();
-            app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
-            return TranscribeResponse {
-                text: String::new(),
-                skip_reason: Some("no speech detected".to_string()),
-                duration_s: total_duration_s,
-                truncated_s,
-            };
+            if no_speech_fallback {
+                app_logger::log_via_handle(&app_clone, "info", "dictation", "No speech detected");
+            }
+            return response;
         }
 
         // Log accuracy comparison (lengths only — no verbatim text to avoid PII in logs)
@@ -2489,10 +2533,11 @@ pub fn get_dictation_config() -> DictationConfig {
 
 #[tauri::command]
 pub fn set_dictation_config(
+    base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
 ) -> Result<(), String> {
-    save_dictation_config(config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.
@@ -2502,6 +2547,7 @@ pub fn set_dictation_config(
 /// passes it so a language change takes effect on the voice that is speaking
 /// right now, rather than on the one after it.
 pub(crate) fn save_dictation_config(
+    base: DictationConfig,
     mut config: DictationConfig,
     dictation: Option<&DictationState>,
 ) -> Result<(), String> {
@@ -2513,7 +2559,15 @@ pub(crate) fn save_dictation_config(
     // Until then the mode keeps capturing from the device it armed with.
     let previous = get_dictation_config();
     config.recovered_from_corruption = false;
-    crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
+    let file = crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE);
+    if base.recovered_from_corruption {
+        // A concurrent writer may already have repaired the file. Recheck
+        // under the file lock before deciding whether to repair or merge.
+        file.save_delta_recovering(&base, &config)?;
+    } else {
+        file.save_delta_strict(&base, &config)?;
+    }
+    let config = get_dictation_config();
     // The configured model is part of the cached status snapshot.
     invalidate_model_snapshot();
     // A voice belongs to a language and to an engine. Change either and every
@@ -2558,6 +2612,175 @@ pub fn open_microphone_settings() {
 mod tests {
     use super::*;
     use crate::dictation::continuous::Phase;
+
+    struct PhraseTranscriber;
+
+    impl transcribe::Transcriber for PhraseTranscriber {
+        fn transcribe(
+            &self,
+            _audio: &[f32],
+            _language: Option<&str>,
+            _gates: transcribe::VoiceGates,
+        ) -> Result<transcribe::TranscribeResult, String> {
+            Ok(transcribe::TranscribeResult {
+                text: "run the tests".to_string(),
+                skip_reason: None,
+                language: Some("en".to_string()),
+            })
+        }
+    }
+
+    #[test]
+    fn push_to_talk_rejects_a_short_noise_burst_before_transcription() {
+        let mut audio = vec![0.03; 16_000 * 180 / 1_000];
+        audio.resize(16_000, 0.0);
+
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+
+        assert!(
+            result.text.is_empty(),
+            "a noise burst must not reach the prompt"
+        );
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_rejects_audio_below_the_transcriber_rms_floor() {
+        let audio = vec![0.0005; 16_000];
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_keeps_sustained_speech_at_normal_level() {
+        let mut audio = vec![0.03; 16_000 * 300 / 1_000];
+        audio.resize(16_000, 0.0);
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "run the tests");
+        assert!(result.skip_reason.is_none());
+    }
+
+    #[test]
+    fn push_to_talk_keeps_400ms_speech_with_unvoiced_frames() {
+        for level in [0.003, 0.015] {
+            let mut audio = Vec::new();
+            for frame in 0..20 {
+                let sample = if frame % 4 == 3 { 0.0 } else { level };
+                audio.extend(vec![sample; 320]);
+            }
+
+            let result = transcribe_final_ptt_audio(
+                &PhraseTranscriber,
+                &audio,
+                Some("en"),
+                transcribe::VoiceGates::default(),
+            )
+            .unwrap();
+            assert_eq!(result.text, "run the tests", "400ms speech at RMS {level}");
+            assert!(result.skip_reason.is_none());
+        }
+    }
+
+    #[test]
+    fn push_to_talk_activity_uses_the_configured_transcription_floor() {
+        let audio = vec![0.003; 16_000 * 400 / 1_000];
+        let gates = transcribe::VoiceGates {
+            rms_threshold: 0.004,
+            ..transcribe::VoiceGates::default()
+        };
+        let result =
+            transcribe_final_ptt_audio(&PhraseTranscriber, &audio, Some("en"), gates).unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_does_not_join_separate_noise_bursts_into_speech() {
+        let mut audio = vec![0.03; 16_000 * 100 / 1_000];
+        audio.extend(vec![0.0; 16_000 * 1_600 / 1_000]);
+        audio.extend(vec![0.03; 16_000 * 100 / 1_000]);
+
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert!(result.text.is_empty());
+        assert_eq!(
+            result.skip_reason.as_deref(),
+            Some("no sustained speech (need 200ms of active audio)")
+        );
+    }
+
+    #[test]
+    fn push_to_talk_accepts_speech_ending_at_key_release() {
+        let audio = vec![0.03; 16_000 * 200 / 1_000];
+        let result = transcribe_final_ptt_audio(
+            &PhraseTranscriber,
+            &audio,
+            Some("en"),
+            transcribe::VoiceGates::default(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "run the tests");
+        assert!(result.skip_reason.is_none());
+    }
+
+    #[test]
+    fn stopped_dictation_preserves_final_transcriber_skip_reason() {
+        let response = empty_final_response(
+            "",
+            Some("audio too quiet (RMS 0.0005 < 0.0010)".to_string()),
+            1.25,
+            0.0,
+        )
+        .expect("empty final transcription returns a response");
+
+        assert_eq!(response.text, "");
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["skip_reason"],
+            "audio too quiet (RMS 0.0005 < 0.0010)"
+        );
+        assert_eq!(response.duration_s, 1.25);
+    }
+
+    #[test]
+    fn stopped_dictation_uses_no_speech_for_empty_success() {
+        let response = empty_final_response("", None, 0.75, 0.0)
+            .expect("empty final transcription returns a response");
+        assert_eq!(response.skip_reason.as_deref(), Some("no speech detected"));
+        assert!(empty_final_response("hello", None, 0.75, 0.0).is_none());
+    }
 
     /// A microphone and a recogniser the test writes the script for.
     ///
@@ -2804,6 +3027,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 hands_free_hold_back_ms: 4_000,
                 ..Default::default()
@@ -3161,6 +3385,7 @@ mod tests {
     /// next read observes it.
     fn write_model_config(model: &str) {
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 model: model.to_string(),
                 ..Default::default()
@@ -3168,6 +3393,96 @@ mod tests {
             None,
         )
         .expect("config save");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_dictation_saves_preserve_distinct_fields() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let base = get_dictation_config();
+        let mut first = base.clone();
+        first.model = "small".to_string();
+        let mut second = base.clone();
+        second.speech_volume_db = -24.0;
+
+        save_dictation_config(base.clone(), first, None).unwrap();
+        save_dictation_config(base, second, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert_eq!(saved.model, "small");
+        assert_eq!(saved.speech_volume_db, -24.0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dictation_save_keeps_valid_fields_salvaged_from_malformed_config() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        std::fs::write(
+            dir.path().join(DICTATION_CONFIG_FILE),
+            r#"{"enabled":false,"hotkey":"F8","language":"it","speech_volume_db":"loud"}"#,
+        )
+        .unwrap();
+        let base = get_dictation_config();
+        assert!(base.recovered_from_corruption);
+        let mut desired = base.clone();
+        desired.model = "small".to_string();
+
+        save_dictation_config(base, desired, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert!(!saved.recovered_from_corruption);
+        assert_eq!(saved.hotkey, "F8");
+        assert_eq!(saved.language, "it");
+        assert_eq!(saved.model, "small");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn recovered_dictation_save_preserves_valid_concurrent_write() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join(DICTATION_CONFIG_FILE);
+        std::fs::write(&path, r#"{"language":"it","speech_volume_db":"loud"}"#).unwrap();
+        let base = get_dictation_config();
+        assert!(base.recovered_from_corruption);
+        let mut desired = base.clone();
+        desired.model = "small".to_string();
+
+        let mut concurrent = DictationConfig::default();
+        concurrent.language = "fr".to_string();
+        std::fs::write(&path, serde_json::to_string(&concurrent).unwrap()).unwrap();
+        save_dictation_config(base, desired, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert_eq!(saved.model, "small");
+        assert_eq!(
+            saved.language, "fr",
+            "the recovery save must not restore stale language"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dictation_save_accepts_older_document_without_required_fields() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        std::fs::write(
+            dir.path().join(DICTATION_CONFIG_FILE),
+            r#"{"model":"small"}"#,
+        )
+        .unwrap();
+        let base = get_dictation_config();
+        let mut desired = base.clone();
+        desired.speech_volume_db = -24.0;
+
+        save_dictation_config(base, desired, None).unwrap();
+
+        let saved = get_dictation_config();
+        assert_eq!(saved.model, "small");
+        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.hotkey, "F5");
     }
 
     /// The old metric compared a common-prefix character count against a byte
@@ -3476,7 +3791,7 @@ mod tests {
     fn config_of_this_test(config: DictationConfig) -> (tempfile::TempDir, impl Drop) {
         let dir = tempfile::tempdir().expect("tempdir");
         let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        save_dictation_config(config, None).expect("config save");
+        save_dictation_config(get_dictation_config(), config, None).expect("config save");
         (dir, guard)
     }
 
@@ -3959,6 +4274,7 @@ mod tests {
         assert!(speech_status(&dictation, None).queued > 0 || dictation.speaker.lock().is_some());
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "en".to_string(),
                 ..Default::default()
@@ -4193,6 +4509,7 @@ mod tests {
         assert!(dictation.speaker.lock().is_some());
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
                 speech_voice: "giovanni".to_string(),
@@ -4217,6 +4534,7 @@ mod tests {
         let accepted = speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
 
         save_dictation_config(
+            get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
                 rms_threshold: 0.05,
@@ -4297,7 +4615,8 @@ mod tests {
             speech_levelling: 0.2,
             ..Default::default()
         };
-        save_dictation_config(config.clone(), Some(&dictation)).expect("config save");
+        save_dictation_config(get_dictation_config(), config.clone(), Some(&dictation))
+            .expect("config save");
 
         let after = Arc::clone(
             &dictation

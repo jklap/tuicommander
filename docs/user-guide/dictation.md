@@ -59,7 +59,7 @@ them. Turn them off with the **Earcons** setting.
 | Control | What it does |
 |---------|--------------|
 | Activation phrase | When set, only speech that opens with this phrase is sent, and the phrase is removed first. Case, punctuation and accents do not matter, and the usual transcription variants (a joined `Sentimac`, an extra letter as in `Mack`) still count. Leave it empty to send every utterance. The match runs on your machine. The field suggests `computer`: it is distinctive, Whisper transcribes it reliably, and ordinary speech rarely contains it. |
-| Hold-back before sending | How long a finished utterance stays visible before it goes to the terminal, so you can stop one you did not mean. It applies to the next conversation, not to the one already running. |
+| Hold-back before sending | How long a finished utterance stays visible before it goes to the terminal, so you can stop one you did not mean. With an activation phrase, the effective delay is at least five seconds to include a continuation. It applies to the next conversation, not to the one already running. |
 | Earcons | Plays the short sounds described below when a turn is sent or dropped. On by default. |
 | Notify model when hands-free changes | Tells the agent that it can answer out loud when the conversation starts, and to go back to text when it ends. |
 | Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in <language>." to the notice itself. |
@@ -76,6 +76,10 @@ itself when the bound terminal closes or the audio device goes away.
 
 Say the activation phrase on its own to open a short window in which the
 following turns need no phrase.
+After a phrase addressed with the activation phrase, you can pause and
+continue speaking within five seconds without repeating it. The pending text
+is sent as one message; the hold-back is at least five seconds while the
+phrase is configured, even if you saved a shorter delay.
 
 ## Spoken Replies
 

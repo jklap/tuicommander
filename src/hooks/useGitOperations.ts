@@ -212,6 +212,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		hasDirtyFiles: boolean;
 		/** The branch's own worktree has uncommitted changes — archive/delete destroys them. */
 		worktreeDirty: boolean;
+		removalWarnings?: string[];
 		worktreeFingerprint?: string;
 		submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	} | null>(null);

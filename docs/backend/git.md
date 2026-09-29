@@ -158,6 +158,7 @@ those directories from the parent. It excludes every `.tmp` or `.mdkb` path comp
 tracked paths, ignored files, nested repositories, and any directory containing
 the destination. Tauri `bundle.externalBin` entries additionally select their
 target-triple sidecar files by configuration, rather than by hard-coded names.
+Each sidecar copy lands only in a new worktree path; clonefile creates a separate inode, and warming skips an existing destination. The source executable is never opened for writing by this path.
 Submodules initialise from the parent checkout first (with the configured remote
 as fallback), so unpublished pinned objects remain usable; failures are returned
 as workspace warnings.
@@ -172,6 +173,10 @@ the setup script starts. If creation is cancelled during setup, the status
 becomes `failed` instead of remaining `pending`. Removing or archiving a
 worktree waits for an active copy, clears its warm state, and prevents a queued
 copy from recreating the old path.
+
+If Git has already unregistered a checkout but its directory remains, removal
+still clears a pending warm token before attempting directory cleanup. A path
+without a Git registration or a TUIC warm token is left untouched.
 
 Archiving refuses a locked or missing checkout before moving it. It renames the
 checkout into `__archived`, runs `git worktree repair`, and repairs initialized

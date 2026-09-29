@@ -16,6 +16,7 @@ The binary is installed to:
 - **Windows:** `%LOCALAPPDATA%\Microsoft\WindowsApps\tuic.exe` (no admin needed)
 
 The CLI auto-updates silently when TUICommander starts — no manual update needed.
+Install and update stage the new executable beside the installed path, then rename it into place. A running `tuic` process keeps its original executable; installing over a symlink replaces the link without changing its target.
 
 ## Opening Files and Repos
 
