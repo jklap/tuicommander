@@ -46,7 +46,7 @@
 - [ ] After a manual `make dev` restart in an isolated instance, queue a notice to a disposable Claude session with the UserPromptSubmit hooks enabled. When Claude accepts it after more than one second, confirm the notice appears without an "Agent input was not confirmed" toast. A notice left in the composer must still show the uncertainty toast after the six-second bound. The running backend does not hot-reload this Rust change. _(NOT VERIFIED 2026-09-29: Needs real Claude session with UserPromptSubmit hooks and timing of Claude accepting a queued notice.)_
 ## Shared agent mail identity (story 1246-46e3) — Rust restart required
 
-- [ ] After rebuilding `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, use a disposable managed PTY with two MCP bridges asserting its durable tab UUID and PTY UUID. Send distinct messages to each UUID and to the PTY display name, once through `tuic mcp` and once through the MCP client. Confirm both bridges read every message in `agent action=inbox`, `list_peers` shows one recipient for the PTY, and reconnecting one bridge leaves the inbox readable. Boss's live Rust backend does not hot-reload this change.
+- [ ] After rebuilding `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, use a disposable managed PTY with two MCP bridges asserting its durable tab UUID and PTY UUID. Send distinct messages to each UUID and to the PTY display name, once through `tuic mcp` and once through the MCP client. Confirm both bridges read every message in `agent action=inbox`, `list_peers` shows one recipient for the PTY, and reconnecting one bridge leaves the inbox readable. Boss's live Rust backend does not hot-reload this change. _(NOT VERIFIED 2026-09-29: partial — Headless PTY S: 2 MCP bridges (x-tuic-session=S) + tuic mcp (/usr/local/bin, TUIC_SOCKET); sends to UUID, alias, id-prefix all landed; every bridge reads all msgs with since=0 (default cursor is per-identity so 2nd read is empty); list_peers 1 entry for S; reconnect keeps inbox. NOT tested: distinct tab UUID vs PTY UUID and display-name (no tab hea)_
 
 ## Managed child idle close (story 1209-cc47) — Rust restart required
 
@@ -54,11 +54,11 @@
 
 ## Background wake retry (story 1233-4738) — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg` command against an isolated instance. If the instance temporarily stops answering, check that `<log>.wake` shows `retrying` with `tuic_session` and `attempts`, then `queued` or `mailed` after recovery. The installed CLI cannot load the Rust change until rebuilt.
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg` command against an isolated instance. If the instance temporarily stops answering, check that `<log>.wake` shows `retrying` with `tuic_session` and `attempts`, then `queued` or `mailed` after recovery. The installed CLI cannot load the Rust change until rebuilt. _(NOT VERIFIED 2026-09-29: blocked — Needs a rebuilt tuic-cli 'tuic bg' + <log>.wake. Only tuic Mach-O in mbx targets is the older app-side 'tuic' (subcommands ls/new/run/send/capture/agent..., no bg/session/wait); tuic-cli crate not built and cargo is off-limits.)_
 
 ## CLI MCP worktree timeout (story 1240-8438) — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to create and remove a throwaway worktree through `tuic mcp repo`. Confirm both commands report the server result after a request longer than three seconds. A CLI socket read timeout must warn that the server may still complete the action. The installed CLI cannot load this Rust change until rebuilt; restart a live `make dev` process only when ready to end its current sessions.
+- [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to create and remove a throwaway worktree through `tuic mcp repo`. Confirm both commands report the server result after a request longer than three seconds. A CLI socket read timeout must warn that the server may still complete the action. The installed CLI cannot load this Rust change until rebuilt; restart a live `make dev` process only when ready to end its current sessions. _(NOT VERIFIED 2026-09-29: partial — Server side: worktree_create/worktree_remove on disposable repo returned results (1.3s, ok:true, worktree gone). Not verified: >3s request and CLI timeout warning; built tuic in mbx target lacks 'mcp' subcommand and 'may still complete' string (stale), no rebuild allowed.)_
 
 ## Mobile Files and editor (story 1225-60e7)
 
@@ -94,7 +94,7 @@
 
 ## PTY close reason logging (story 1194-31e8) — Rust restart required
 
-- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, close a disposable shell session and confirm the app log records `reason=close_requested` with its session ID. Kill a second disposable shell session through MCP and confirm `reason=kill_requested`. The running backend does not load this Rust change until restart.
+- [x] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, close a disposable shell session and confirm the app log records `reason=close_requested` with its session ID. Kill a second disposable shell session through MCP and confirm `reason=kill_requested`. The running backend does not load this Rust change until restart. _(verified 2026-09-29: MCP session action=close on disposable shell -> /logs source=session shows reason=close_requested with session id; MCP action=kill -> reason=kill_requested with id. (HTTP DELETE /sessions uses a different path, logs only 'explicit close'.))_
 
 ## Queued agent submission confirmation (story 1163-5bed) — Rust restart required
 
@@ -213,7 +213,7 @@
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, let a throwaway managed child ask a confident question, answer it, then have it ask another. Confirm the parent inbox contains both question notices while ordinary state updates still coalesce. The current live backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: Needs a real managed child agent asking confident questions (Claude/Codex).)_
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart.
+- [x] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send a peer RESULT to a throwaway parent, then leave its inbox unread while three throwaway children each send repeated state notices. Confirm the latest notice for each child and the complete RESULT remain available in `agent action=inbox`, with no missed count from the replacements. The running backend cannot load this Rust change until restart. _(verified 2026-09-29: Peers ag2-parent/ag2-kid via MCP; kid sent 'RESULT: ...' to parent; parent spawned 3 fake amp children cycling busy/idle for 40s (~6 cycles each) without reading. agent inbox: count 4 = RESULT + one state_change idle notice per child, no missed_count field, has_more false.)_
 
 ## Agent inbox FIFO and paging — Rust restart required
 
@@ -233,11 +233,11 @@
 
 ## Headless MCP voice binding (story 1006-2729) — remote daemon rebuild required
 
-- [ ] After replacing a disposable `tuic-remote` daemon with this build, call MCP `voice action=status` from a connection without a live terminal and from one bound to a live terminal. The first must be refused as unbound; the second must report that this build has no audio support. The running daemon cannot load the Rust change until it restarts. Targeted headless and desktop tests cover both binding paths.
+- [x] After replacing a disposable `tuic-remote` daemon with this build, call MCP `voice action=status` from a connection without a live terminal and from one bound to a live terminal. The first must be refused as unbound; the second must report that this build has no audio support. The running daemon cannot load the Rust change until it restarts. Targeted headless and desktop tests cover both binding paths. _(verified 2026-09-29: Disposable tuic-remote (--instance ag3d, unix socket): MCP voice action=status from unbound connection -> isError {error:'This connection is not bound to a terminal...'}; from peer named by live PTY id -> {available:false, unavailable_reason:'This TUICommander build has no audio support'}.)_
 
 ## MCP agent spawn environment and model — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set an Agents run config model and environment value, then spawn a throwaway MCP child with overriding `model` and `env` values. Confirm the child sees the caller environment, the override model reaches its argv, and `TUIC_SESSION` and `TUIC_PARENT` still identify the peer. The running backend cannot load this Rust change without a restart.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, set an Agents run config model and environment value, then spawn a throwaway MCP child with overriding `model` and `env` values. Confirm the child sees the caller environment, the override model reaches its argv, and `TUIC_SESSION` and `TUIC_PARENT` still identify the peer. The running backend cannot load this Rust change without a restart. _(verified 2026-09-29: PUT /config/agents run config (model sonnet, env LAYER/ONLY_RUN/TUIC_* spoofs) + MCP spawn with model=opus env{LAYER=caller,TUIC_*=spoof}: child printed --model|opus|<own sid>|<parent P>|caller|present; without overrides --model|sonnet|..|run|present. TUIC_SESSION/PARENT protected. Config restored.)_
 
 ## Push-to-talk native release — Rust restart required
 
@@ -257,7 +257,7 @@
 
 ## Queued agent command diagnostics — Rust restart required
 
-- [ ] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it.
+- [x] After a `make dev` restart, enqueue a throwaway command for a test Codex session and inspect app logs for one `queue delivery attempt` record with session id, agent and shell states, queue counts, typed/submitted result, and separate Enter status. This Rust instrumentation is absent from Boss's current backend until restart; do not interrupt live sessions for it. _(verified 2026-09-29: Fake amp-type agent (adapter-less so idle is confirmed) via spawn binary_path; POST /sessions/{id}/queue {text} -> typed:true. /logs shows exactly one 'queue delivery attempt' with session_id, agent_state/shell_state=idle, queued_before 1/queued_after 0, typed yes, submitted true, enter_separate sent. Not a real Codex session.)_
 - [ ] After loading the story 1106 Rust build in an isolated `TUIC_APP_INSTANCE`, _(NOT VERIFIED 2026-09-29: Needs real Codex session reaching Ready while busy (idle_unconfirmed path).)_
       queue a command for a throwaway Codex session while it is busy. Confirm it
       runs once when Codex reaches Ready and the queue reaches zero. If the shell
@@ -303,11 +303,11 @@
 - [x] Cmd/Ctrl+click opens editor web links in the system browser, local paths in the matching TUICommander view, and missing paths with a toast. MCP `tuic://open` opens external Markdown in a Markdown tab. _(verified: targeted editor and MCP tab Vitest cases exercise these routes; browser and native window appearance require a visual check after integration.)_
 ## Native MCP action cleanup (story 1091-1d5d) — rebuild Rust server and CLI
 
-- [ ] After rebuilding, use an isolated test instance to confirm `agent register/list_peers` accepts `path`, `repo worktree_lifecycle/worktree_remove` accepts `branch`, and removed actions return errors naming their HTTP routes. Reinstall the CLI before checking `tuic agent list-peers --path` and `tuic agent stats --json`. Restart a live `make dev` session only when ready to end its current PTYs.
+- [ ] After rebuilding, use an isolated test instance to confirm `agent register/list_peers` accepts `path`, `repo worktree_lifecycle/worktree_remove` accepts `branch`, and removed actions return errors naming their HTTP routes. Reinstall the CLI before checking `tuic agent list-peers --path` and `tuic agent stats --json`. Restart a live `make dev` session only when ready to end its current PTYs. _(NOT VERIFIED 2026-09-29: partial — Verified via MCP: register/list_peers accept path (peer listed with path, filter works); repo worktree_remove and worktree_lifecycle accept branch; all 9 removed actions return 'X action=Y was removed; use GET/POST <route>'. NOT verified: tuic CLI list-peers --path/stats --json (built tuic binary lacks mcp cmd; needs rebuild).)_
 
 ## Detached CLI commands (story 1100-96bd) — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg <log> -- <cmd>` from an isolated managed session. Confirm the launcher returns before the command, `<log>.exit` records its code, and a busy caller receives the completion wake only after becoming idle. The installed CLI cannot load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. Windows behavior is covered by CI-only tests and remains unverified on this Mac.
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg <log> -- <cmd>` from an isolated managed session. Confirm the launcher returns before the command, `<log>.exit` records its code, and a busy caller receives the completion wake only after becoming idle. The installed CLI cannot load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. Windows behavior is covered by CI-only tests and remains unverified on this Mac. _(NOT VERIFIED 2026-09-29: partial — /usr/local/bin/tuic bg (has bg) from managed shell PTY w/ TUIC_SOCKET: launcher returned same second (pid printed), log had 'hi', bg.log.exit=3. Wake NOT verifiable: queue route 400 'Session is not running an agent' for a shell; busy->idle wake ordering needs real agent. Windows n/a.)_
 
 ## Generic MCP CLI (story 1099-79b8) — rebuild the Rust CLI
 
@@ -315,7 +315,7 @@
 
 ## CLI blocking waits (story 1060-df82) — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, run `tuic agent wait --timeout-ms 8000 --json` and `tuic session wait <busy-session> --until exited --timeout-ms 8000 --json` against an isolated test instance. Confirm each returns after the server's response rather than failing after three seconds. The running app and installed CLI do not load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic agent wait --timeout-ms 8000 --json` and `tuic session wait <busy-session> --until exited --timeout-ms 8000 --json` against an isolated test instance. Confirm each returns after the server's response rather than failing after three seconds. The running app and installed CLI do not load this Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. _(NOT VERIFIED 2026-09-29: partial — Server side only: MCP session wait until=exited timeout_ms=8000 on a live session returned {met:false,timed_out:true} after 8.04s (time), not 3s. NOT verified: the tuic CLI (agent wait / session wait --json) client timeout - no rebuilt tuic-cli binary available.)_
 
 ## Mobile notification tags (story 1042-f5ca) — updated service worker
 
@@ -335,7 +335,7 @@
 
 ## MCP config ownership (story 988-d1a1) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, confirm startup leaves a sandboxed agent MCP config unchanged. The current live backend cannot load the ownership guard without a restart. Do not restart Boss's running instance or use his real agent configs for this check.
+- [x] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, confirm startup leaves a sandboxed agent MCP config unchanged. The current live backend cannot load the ownership guard without a restart. Do not restart Boss's running instance or use his real agent configs for this check. _(verified 2026-09-29: Sandbox HOME with ~/.claude.json holding stale tuicommander bridge entry; tuic-remote --instance ag3d: log 'Skipping agent MCP config updates from a secondary instance', file byte-identical (diff). Control with TUIC_MCP_CONFIG_OWNER=1 rewrote entry. Desktop validate instance log shows same skip line. Headless daemon used; same fn.)_
 
 ## Plan picker (2026-09-26) — Rust, needs `make dev` restart
 
@@ -409,7 +409,7 @@
 ## Native WontFix dependency recovery (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a plan with a WontFix prerequisite and a Backlog dependent through the test instance. Confirm the dialog marks the prerequisite abandoned, offers Remove only on that direct cancelled edge, and reports the plan Active until its remaining stories are Done or WontFix. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only, t_story2.py via POST /stories/action on tuic-remote --instance validate): WontFix prerequisite with dependents leaves plan_state=active and plan_view marks dependents abandoned; dialog UI not checked)_
-- [ ] After the native-stories backend rebuild, add a dependency to a story, reload Plans and Stories, and confirm the story list and derived plan state agree. This checks the reused SQLite connection and status aggregation in the rebuilt app.
+- [x] After the native-stories backend rebuild, add a dependency to a story, reload Plans and Stories, and confirm the story list and derived plan state agree. This checks the reused SQLite connection and status aggregation in the rebuilt app. _(verified 2026-09-29: POST /stories/action: created plan+A,B in fx/repo, add_dependency B<-A; list_stories: A ready, B backlog deps=[A]; plan_view state=active with same story statuses/deps; plan_state=active; list_plans lists plan. Consistent.)_
 - [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction. _(NOT VERIFIED 2026-09-29: PARTIAL: GET /stories/capabilities returns true; UI error-message part not checked)_
 - [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only): cancelling prerequisite A of chain A<-B<-C gives plan_view abandoned A,B,C true, wontFixCount=1, state active; dialog UI not checked)_
 - [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only): WontFix on an already cancelled story returns 'story is already cancelled' and revision unchanged; remove_dependency on a non-cancelled edge refused ('only cancelled dependencies in the same plan can be removed'); Backlog-only limitation not exercised)_
@@ -418,33 +418,33 @@
 - [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout.
 - [ ] After a `make dev` restart, open a **new** TUIC shell and type `codex`, `grok`, and `opencode` in separate throwaway tabs. Confirm each supported installed CLI stays in native scrollback; repeat with its per-agent **Prevent alternate screen** setting off, then restore the setting. Existing shells retain the previous PTY environment and cannot verify this change. _(NOT VERIFIED 2026-09-29: Needs real installed codex/grok/opencode CLIs.)_
 - [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch. _(NOT VERIFIED 2026-09-29: Needs real Claude, Codex, Grok, OpenCode CLIs launched and resumed.)_
-- [ ] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled.
+- [x] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled. _(verified 2026-09-29: tuic-remote (own instance ag2a) with absolute TUIC_CAPTURE_DIR: POST /diagnostics/capture -> dir echoed, .tcap (114B) appeared there, GET reports dir+bytes. Relative 'relcap' -> {enabled:false,error:'TUIC_CAPTURE_DIR must be absolute'}, GET enabled:false, no dir created.)_
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
 - [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_ _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
 ## Streaming Progress intents (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `make dev` instance, stream an `intent:` line in a narrow Codex or Ink terminal. The Progress journal gets the complete text and title once, including an indented hard-wrap row; closing a tab with a title-less open intent preserves one final entry. Check that a token in a done/blocked report is redacted in the journal.
+- [x] After restarting an isolated `make dev` instance, stream an `intent:` line in a narrow Codex or Ink terminal. The Progress journal gets the complete text and title once, including an indented hard-wrap row; closing a tab with a title-less open intent preserves one final entry. Check that a token in a done/blocked report is redacted in the journal. _(verified 2026-09-29: 40-col agent-typed PTY: word-hard-wrapped 4-row intent -> one journal entry full text, tab title set (Narrow Zed). Close with open titleless intent: exactly one entry (id 48) kept. progress done with ghp_ token+Bearer -> text '[REDACTED]'. Shell fake agent, not real Codex.)_
 ## MCP bridge config guard (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical.
+- [x] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical. _(verified 2026-09-29: Ran a tuic-remote copy (same ensure_mcp_configs as desktop, not the desktop app itself) with TUIC_MCP_CONFIG_OWNER=1, disposable HOME, tuic-bridge beside it: entry installed with adjacent bridge path; existing working abs command (other dir) left unchanged; nonexistent abs command repaired to adjacent bridge. Real HOME untouched.)_
 ## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `make dev` instance, deinitialize a disposable worktree submodule with a local-only commit and a Git module name different from its checkout path; repeat with a nested named submodule. Removal must refuse and leave each module Git store and commit recoverable. _(NOT VERIFIED 2026-09-29: PARTIAL: fixture submodule with module name 'modname' != path 'libs/sub', local-only commit, deinit in the worktree: worktree_remove refused ('uninitialized submodule libs/sub still has Git state'), worktree kept, commit still in .git/worktrees/feat5/modules/modname (t_sub2.py). Nested named submodule not tried)_
 - [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository. _(NOT VERIFIED 2026-09-29: NOT VERIFIED: fixture became dirty and the refusal reason was 'uncommitted changes' rather than the main-copy-uninitialized rule (t_sub4.py); needs a cleaner fixture)_
 - [ ] After restarting an isolated `make dev` instance, remove a disposable worktree whose submodule has two stash entries and a reflog-only commit. Confirm all three OIDs remain reachable in the main checkout module after removal, including when a separate missing checkout is force-pruned.
-- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep.
-- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly.
+- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep. _(NOT VERIFIED 2026-09-29: partial — Own repo+submodule: worktree wt1 (sub initialized, merged) archived via POST /worktrees/finalize -> __archived/wt1; git status clean, submodule status/HEAD/refs OK, core.worktree repaired, hidden from /worktrees/paths. Locked wt2: finalize -> worktree_locked, stays in place. Config-driven auto sweep itself not triggered.)_
+- [x] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly. _(verified 2026-09-29: POST /repo/remove-orphan (what Prune calls) on disposable repo: real conflicting rebase in progress -> 'Cannot remove orphan worktree: a Git operation is in progress'; detached HEAD with commit only there -> 'detached HEAD commit has no durable ref' (both kept); detached at main-reachable commit -> ok; detached at tag-only commit -> ok. Manager UI )_
 
-- [ ] After an isolated `TUIC_APP_INSTANCE=<id>` Rust restart, confirm a refused dirty non-force removal leaves the worktree's pending warm state visible. Remove a different worktree while another registered checkout directory is missing; the missing checkout's submodule Git state must remain available for later safe removal.
+- [x] After an isolated `TUIC_APP_INSTANCE=<id>` Rust restart, confirm a refused dirty non-force removal leaves the worktree's pending warm state visible. Remove a different worktree while another registered checkout directory is missing; the missing checkout's submodule Git state must remain available for later safe removal. _(verified 2026-09-29: Own repo r440: create worktree w/ 60k-file ignored dir -> warm_artifacts pending; dirty non-force remove refused ('has uncommitted changes'), status still pending, later done. Submodule repo: w2,w3 with modules; rm w3 dir; removed w2 ok; .git/worktrees/w3/modules/sub intact + w3 prunable; w3 later removed via confirmMissingCheckout.)_
 - [ ] After a `make dev` restart, verify a missing registered worktree refuses removal without force, and a separately confirmed lock override is needed if that registration is locked. After force removal, its submodule-only refs must remain in the main checkout's module repository.
 - [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins. Remove the worktree and check its warm status is no longer retained. A clean squash-merged branch removes without force and the response names `patch_equivalence`. _(NOT VERIFIED 2026-09-29: partial: MCP create -> warm_artifacts pending then done in /worktrees/paths; squash-merged branch removed without force with removal_rule=patch_equivalence; warm status gone after removal. Setup-script ordering not tested)_
 - [ ] After that restart, create a worktree through desktop IPC and confirm its instructions report `pending` until warming completes. Confirm non-force removal preserves a dirty worktree with `delete_branch` both on and off; when an archive script adds a commit, the branch remains and the response includes `branch_delete_warning`. _(NOT VERIFIED 2026-09-29: partial: non-force removal of a dirty worktree refused with delete_branch on and off ('has uncommitted changes'), branch kept; archive-script/branch_delete_warning not tested)_
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error.
+- [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error. _(NOT VERIFIED 2026-09-29: partial — Server side only: MCP session status resolves unique name (ag2-uniq) and 8-char short id to the session; ambiguous name -> error 'Session reference 'ag2-dup' is ambiguous; matches <id1>, <id2>'; unknown -> 'not found'. NOT verified: 'tuic agent spawn' stderr notice / CLI behaviour (no rebuilt tuic-cli).)_
 - [x] Orchestrator inbox under load: while children finish, a parent that does not read its inbox retains the newest 100 messages in FIFO order. The 101st send succeeds and the next inbox read reports the unread eviction in `missed_count`. _(verified 2026-09-29: same instance: unread inbox kept newest 100 in FIFO order, 101st send succeeded, missed_count=1 (tested peer-to-peer, not with finishing children))_
 - [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
 
@@ -454,7 +454,7 @@
 
 ## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] With a connected remote repository after restart, report a new Progress entry on the remote agent. The local desktop Progress bell and dialog update, and `progress_list` reads that repository's journal from its owning machine.
+- [ ] With a connected remote repository after restart, report a new Progress entry on the remote agent. The local desktop Progress bell and dialog update, and `progress_list` reads that repository's journal from its owning machine. _(NOT VERIFIED 2026-09-29: blocked — Needs a connected remote repository (desktop remote connection to a second daemon) and the desktop Progress bell/dialog UI; not set up and UI unobservable without browser/desktop automation. Local progress journal write+list verified separately (428).)_
 
 ## Voice auto-send is on by default (2026-09-24) — Rust, needs `make dev` restart
 
@@ -497,7 +497,7 @@ Settings > Voice > Spoken replies, with the Italian bundle and the runtime downl
 HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] `POST /dictation/speech/voices/import` with `{"language":"it","name":"nonna","dataBase64":"<base64 of an Italian .safetensors>"}` succeeds. Voice choice then accepts `speech_voice` `"nonna"`, and a reply speaks in it. _(NOT VERIFIED 2026-09-29: HTTP import (POST /dictation/speech/voices/import) is scriptable but needs a real Italian .safetensors and human ears for the spoken reply.)_
-- [ ] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`.
+- [x] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`. _(verified 2026-09-29: Installed French bundle via POST /dictation/speech/assets/download {asset:french} (removed afterward), POST /dictation/speech/voices/import {language:fr, 8843db76 french_24l/estelle.safetensors} -> error 'not a voice for French: ... transformer.layers.0.self_attn/pad ... made for a different model'; no user-voices dir created.)_
 - [ ] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing.
 - [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak. _(NOT VERIFIED 2026-09-29: 'still speak' requires hearing audio output; listing part is browser-checkable)_
 - [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language". _(NOT VERIFIED 2026-09-29: partial: ?language=xx -> error naming xx; ?language=it with no bundle -> []; picker UI and bundle-present listing not checked)_
@@ -516,10 +516,10 @@ HTTP import and delete (use the test instance on `:9877`):
 ## MCP `session action=rename` and leaner output/spawn responses (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately. _(NOT VERIFIED 2026-09-29: backend verified (MCP rename -> GET /sessions display_name=Foo, display_name_is_custom=true); sidebar/tab-bar rendering not observed)_
-- [ ] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename.
+- [x] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename. _(verified 2026-09-29: session rename is_custom=false -> display_name_is_custom False; then shell printed OSC 2 'OSCTITLE' -> GET /sessions display_name became OSCTITLE. Rename default (sticky, is_custom True) then same OSC -> stayed 'Sticky' True.)_
 - [x] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched. _(verified 2026-09-29: session rename with missing/blank name -> {'error':'name (non-empty string) is required for action=rename'}, GET /sessions display_name stays 'Foo')_
 - [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there. _(NOT VERIFIED 2026-09-29: Needs real Claude tab (idle prompt chrome and permission dialog) for session action=output.)_
-- [ ] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`.
+- [x] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`. _(verified 2026-09-29: agent spawn (fake claude binary_path, agent_type=claude) returned only session_id,task_id,poll_interval_ms,name,server_ts,(communication_warning); no *_with keys. After agent register (ag3-orch), spawn also returned parent_session_id=<orch tuic_session>.)_
 
 ## No duplicated agent rows after a WebView reload (2026-09-24) — frontend via HMR
 
@@ -599,7 +599,7 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
 - [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows.
 - [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable.
-- [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip.
+- [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip. _(NOT VERIFIED 2026-09-29: blocked — GUI + real agent tab needed (child row with spawn parent icon in Activity Dashboard, then pop-out); two identical 'tuicommander - TUICommander' windows exist and maccontrol cannot tell the validate instance window from Boss's live one, so not driven to avoid touching live TUIC.)_
 - [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload. _(NOT VERIFIED 2026-09-29: Needs real Claude setting an OSC title in a browser-mode agent tab; subagent tag part alone is testable but item is combined.)_
 
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
@@ -994,8 +994,8 @@ reads `dirty_files` off an old backend that does not send it, so every count is
 
 ## Progress dialog and journal (2026-09-19)
 
-- [ ] **Rust, needs a `make dev` restart.** In an isolated agent session, print an `intent:` that soft-wraps over at least 12 rows in a 40-column terminal. Confirm the complete title appears once and Progress records a capped entry. Scroll a title-less intent under capped history and confirm it stays open until the next prose line. Composer chrome must not extend the intent, and an unfinished `(` title fragment must be removed when the intent closes.
-- [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, print a title-less `intent:` followed by indented prose in a wide agent terminal. Progress must keep only the intent text; the prose must not become a tab title. In a narrow terminal, print a title after three hard-wrap rows, then another intent: both entries and both titles must appear. A long intent must keep its full tab-title event while its journal text ends at 500 characters.
+- [ ] **Rust, needs a `make dev` restart.** In an isolated agent session, print an `intent:` that soft-wraps over at least 12 rows in a 40-column terminal. Confirm the complete title appears once and Progress records a capped entry. Scroll a title-less intent under capped history and confirm it stays open until the next prose line. Composer chrome must not extend the intent, and an unfinished `(` title fragment must be removed when the intent closes. _(NOT VERIFIED 2026-09-29: partial — Fake agent, 40-col grid via POST /resize: 560-char soft-wrapped intent (14 rows) -> title 'Soft Wrapped Title' set once, ONE journal entry capped at 500 chars ending '…'. Unfinished '(' fragment removed on close. Title-less intent closes at next prose line. NOT tested: capped-history scroll, composer chrome not extending intent.)_
+- [x] **Rust, needs a `make dev` restart.** In an isolated dev instance, print a title-less `intent:` followed by indented prose in a wide agent terminal. Progress must keep only the intent text; the prose must not become a tab title. In a narrow terminal, print a title after three hard-wrap rows, then another intent: both entries and both titles must appear. A long intent must keep its full tab-title event while its journal text ends at 500 characters. _(verified 2026-09-29: Wide 200col: titleless intent + indented prose -> journal only intent text, display_name unchanged. 40col: title after 4 hard-wrap rows then 2nd intent: both entries + titles (Narrow Zed, Second Zed). 750-char intent: journal 500 chars with ellipsis, full Long Title event.)_
 
 - [ ] **Rust, needs a `make dev` restart.** In an isolated dev instance, have Codex stream a long `intent:` in a narrow terminal while it redraws and moves the cursor to its composer. Progress should receive one full entry with its title; a later identical repaint must add none. Restart when current PTY sessions may be lost. _(NOT VERIFIED 2026-09-29: Needs real Codex streaming a long intent in a narrow terminal.)_
 
@@ -1471,7 +1471,7 @@ lock is **kept**, not reclaimed. The escape hatch is age at
 `UNADJUDICATED_LOCK_STALE_SECS` (1 h), so a lock nothing can adjudicate is still
 cleared eventually.
 
-- [ ] Normal case unchanged: a genuinely orphaned `index.lock` (kill a `git add`
+- [x] Normal case unchanged: a genuinely orphaned `index.lock` (kill a `git add` _(verified 2026-09-29: Disposable repo: killed a real 'git add many' (60k files) with SIGKILL when .git/index.lock appeared -> 0-byte orphan lock; after 31s GET /repo/files?path= answered normally, lock gone, plain git add then works.)_
   mid-write, wait 30 s) is still reclaimed and git works again.
 - [ ] With the probe unavailable, the lock survives: temporarily shadow `lsof`
   with a non-executable stub on `PATH`, create a 30 s-old lock, run a git command
@@ -1547,7 +1547,7 @@ What is left genuinely needs eyes on a real agent:
   `11;rgb:2525/2525/2626` — so the probe concludes and stops re-arming. The DA
   query also gets exactly one reply, not a repeat. This is the loop half of the
   fix and it works.)_
-- [ ] **`^[[?6c` no longer appears at startup — NEEDS A `make dev` RESTART.**
+- [ ] **`^[[?6c` no longer appears at startup — NEEDS A `make dev` RESTART.** _(NOT VERIFIED 2026-09-29: partial — Own shell session on validate instance: fresh startup output and a script emitting DA1 query (ESC[c) -> no '?6c' or '^[[' in /output (1388 bytes), DONE echoed clean. Original capture ordering/frontend xterm DA1 reply path not reproduced (no webview attached).)_
   Diagnosed from capture `f2bddfb0` on 2026-09-07, which settled it. The
   ordering, verbatim from the frames:
 
@@ -1626,7 +1626,7 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
   shows its content immediately with no blank flash. Previously every switch ran
   `resubscribe()` + `refresh()`, which cleared the grid and repainted it
   (paint → wipe → paint).
-- [ ] Detach a tab into a floating window, then close that window to reattach.
+- [ ] Detach a tab into a floating window, then close that window to reattach. _(NOT VERIFIED 2026-09-29: blocked — Desktop-only: detach tab to floating window and reattach needs native window interaction on the validate instance (maccontrol targets orchestrator, not this instance).)_
   The reattached tab still paints live output and scrolls — the grid channel is
   resubscribed on this path, which is the only path that still resubscribes.
 - [ ] Open a terminal in a split pane, collapse the pane to zero width, leave it
@@ -1697,7 +1697,7 @@ other config file already did. Covered by
 `config::tests::two_corrupt_app_config_loads_keep_two_distinct_backups`; the items
 below are the live confirmations only.
 
-- [ ] With the app stopped, truncate `config.json` mid-document, then start it. The
+- [ ] With the app stopped, truncate `config.json` mid-document, then start it. The _(NOT VERIFIED 2026-09-29: partial — Isolated tuic-remote daemon (same config.rs load path, not the desktop app; desktop restart forbidden): truncated config.json -> daemon up (/health 200) on defaults, config.corrupt-<uuid> byte-identical (cmp) to original; 2nd corruption run added a SECOND corrupt file, first kept untouched. Desktop app itself not restarted.)_
   app must come up on defaults, and the config dir must hold a
   `config.corrupt-<uuid>` file with the original bytes. Repeat once more: the second
   run must add a SECOND backup, not overwrite the first.
@@ -1741,7 +1741,7 @@ and the `repo` tool never dispatched its GitHub issue actions.
   is NOT the bug this item was written about.)_
 - [ ] `repo action=issues`, `action=close_issue` and `action=reopen_issue` all
   reach GitHub instead of answering `Unknown action 'issues' for tool 'repo'`.
-- [ ] Register the same UI tab id repeatedly from one session: it dedupes, and the
+- [x] Register the same UI tab id repeatedly from one session: it dedupes, and the _(verified 2026-09-29: MCP ui action=tab from a peer named as a live PTY id: 5x id 'same' then session DELETE -> close-html-tabs tab_ids as one entry (see next); 75 distinct opens -> close list 64 entries (cap SESSION_HTML_TAB_LIMIT), oldest (same,t1-t6) evicted, t70 kept.)_
   per-session count stops at the cap instead of growing.
 
 ## GitHub poller survives a dropped connection (story 648-051b, Rust — needs `make dev` restart)
@@ -1763,7 +1763,7 @@ The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
 - [ ] The sidebar repo badge still shows clean / dirty / conflict correctly:
   edit a file, stage it, create a merge conflict, then clean up. Each state must
   match what `git status` reports.
-- [ ] Start a long `git add` or `git stash` in a large repo from a TUIC terminal
+- [ ] Start a long `git add` or `git stash` in a large repo from a TUIC terminal _(NOT VERIFIED 2026-09-29: partial — Live lock: TUIC-terminal process held 500B .git/index.lock (python, not git add/stash) ~50s; /repo/info,files,branches,diff-stats and POST /repo/stage ran (stage failed 'File exists') and lock stayed. After holder exited, next stage removed the stale lock (ok). Real long git add/stash not run.)_
   and leave it running past 30 s. TUIC must NOT delete that repo's
   `.git/index.lock` while the command still holds it.
 
@@ -1821,7 +1821,7 @@ remaining behavioural checks.
   still report failures the way they did before. No visible change expected.
 - [ ] Browser mode (`http://localhost:9876/`): do a fetch on a repo whose
   remote is reachable. It should behave exactly as on desktop.
-- [ ] Slow/dead remote: point a throwaway repo at an unroutable remote and
+- [x] Slow/dead remote: point a throwaway repo at an unroutable remote and _(verified 2026-09-29: POST /repo/run-git {fetch origin} on throwaway repo: remote http://127.0.0.1:9899 (mute TCP listener) -> after 180s 'Failed to execute git: git timed out after 180.0s and was killed', success=false. Unroutable 10.255.255.1 failed earlier at 75s by OS connect timeout ('Couldn't connect'), so it does not reach the deadline on this net.)_
   fetch. It must give up after ~180s with a `git timed out` message, not hang
   forever. This is the whole point of the story — do it on a throwaway repo,
   never on a real one.
@@ -2065,7 +2065,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   still be watching after a stop. Then kill the relay server (or pull the network) while
   connected: every reconnect log must read `reconnecting in 1s` for the first attempt
   after each *successful* connection, growing 1→2→4… only across consecutive failures.
-- [ ] Rust change, needs a `make dev` restart (story #656-2b63). Spawn an agent via MCP
+- [x] Rust change, needs a `make dev` restart (story #656-2b63). Spawn an agent via MCP _(verified 2026-09-29: MCP agent spawn rows=50 cols=140 (fake agent via binary_path): scroll-info screen_lines=50, ROW45 at row 45, child stty 50 140. After exit session wait until=exited -> {met:true,exit_code:7}; unknown ids -> 'Unknown session'. POST /sessions/agent and POST /sessions rows/cols 50x140 -> screen_lines 50.)_
   `agent action=spawn` with explicit `rows`/`cols` (e.g. 50x140), then confirm the tab
   renders the full screen: before this, the VT screen was built at a hardcoded 24x220
   while the child was handed the caller's geometry, so anything below row 24 (an agent's
@@ -2075,7 +2075,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   an id that never existed must still fail fast with `Unknown session`. The same
   registration path now also backs `POST /agents` and browser/remote `POST /sessions`,
   so a browser-created terminal and an HTTP-spawned agent both need a smoke check.
-- [ ] Rust change, needs a `make dev` restart (story #654-bfc1). Put a stub earlier on
+- [ ] Rust change, needs a `make dev` restart (story #654-bfc1). Put a stub earlier on _(NOT VERIFIED 2026-09-29: partial — Stub cannot take priority: resolve_cli probes /usr/local/bin then /opt/homebrew/bin (real gh there; code comment says a PATH stub is never picked up) and I may not touch system dirs. Observed on headless tuic-remote (PATH stub first, sandbox HOME): HTTP bound 0.28s after start, deferred probe logged off boot path. Not checked: 10s 'did not answer' )_
   the resolved `gh` path (`/opt/homebrew/bin/gh` or `/usr/local/bin/gh`, whichever
   `resolve_cli` finds first) containing `#!/bin/sh` + `sleep 600`, unset `GH_TOKEN` and
   `GITHUB_TOKEN`, then launch the app: the window must appear at the usual speed instead
@@ -2111,7 +2111,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   repaint the whole screen in one go, with no rows left stale from the frames it missed.
   Tests cover the Rust side of all three; what they cannot reach is the frame actually
   crossing `tauri::ipc::Channel` into the WebView.
-- [ ] Rust change, needs a `make dev` restart (story #672-c1a3). Three always-on
+- [ ] Rust change, needs a `make dev` restart (story #672-c1a3). Three always-on _(NOT VERIFIED 2026-09-29: partial — AI cron scheduler obsolete (no ai/scheduler in src). Knowledge persists: ai-sessions/*.json written. tuic.log.2026-09-29 grows. Own daemon SIGINT: 'Received shutdown signal' line flushed to log, process exited. UTC-midnight rotation not observed (23:19 UTC).)_
   background costs from the boot audit: (1) the AI cron scheduler's 30s tick loop
   (`ai_agent::scheduler`) now only spawns when `ai-cron.json` has at least one enabled
   job, and stops when the last one is disabled/removed via `save_scheduler_config` —
@@ -2775,9 +2775,9 @@ seconds and confirm the duplicate receipt produces no second event.
 - [x] The ignored top-level FILES must NOT have been copied: no `.env`, _(verified 2026-09-29: fixture repo with ignored .env/.mcp.json/CLAUDE.md: none appear in the new worktree (node_modules/ and target/ do))_
       `.mcp.json`, `CLAUDE.md` newly appearing in the worktree beyond what the
       branch tracks.
-- [ ] `plugins/` (a submodule) and `src-tauri/plugins/claude-wakeup/` must not
+- [ ] `plugins/` (a submodule) and `src-tauri/plugins/claude-wakeup/` must not _(NOT VERIFIED 2026-09-29: partial — Fixture analog (not the real repo): repo with submodule 'plugins' + tracked src-tauri/plugins/claude-wakeup with ignored node_modules. Linked worktree via MCP: warm status done; plugins/ complete (tracked p.js, .git file, submodule status clean), ignored plugins/node_modules not copied, claude-wakeup/node_modules cloned once, git status clean. Real)_
       have been double-copied or left half-populated.
-- [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build,
+- [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build, _(NOT VERIFIED 2026-09-29: blocked — Item times worktree warm on the tuicommander repo itself (~38s expectation); would create a worktree in Boss's real repo, which is forbidden here. Analog only: 60k-file ignored dir on disposable repo warmed in ~13s.)_
       say so rather than living with it.
 - [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
       create a worktree, and confirm creation does not hang or recurse — the
@@ -2928,7 +2928,7 @@ Still owed, and only these — all of them are about what is drawn:
 
 ## Vendored fxhash in the bm25 fork (story `758-ff0d`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] Before restarting, note a repo you have searched recently — its content-index
+- [ ] Before restarting, note a repo you have searched recently — its content-index _(NOT VERIFIED 2026-09-29: blocked — Needs an app restart with a pre-vendoring snapshot on disk; instance must not be restarted and the old snapshot cannot be recreated. Logs only show 'content index warm on repo switch'; no snapshot-restore line observed.)_
       snapshot on disk was written by the pre-vendoring binary. After the restart,
       run a content search in that repo (`?` in the command palette) for a word you
       know is in it. Results must appear immediately, with `GET :9876/logs` showing
@@ -3053,7 +3053,7 @@ behaviour until restart.
       `agent action=inbox` line. Before the fix nothing ever arrived.
 - [ ] The payload must never appear on the orchestrator's screen — only the _(NOT VERIFIED 2026-09-29: Needs real orchestrator agent screen and wake behaviour.)_
       pointer to the inbox.
-- [ ] A notice already being typed must not be duplicated by a concurrent idle
+- [ ] A notice already being typed must not be duplicated by a concurrent idle _(NOT VERIFIED 2026-09-29: blocked — Needs a real orchestrator agent composer (draft typed, idle edge, BUSY->IDLE wake dedupe per group) plus tuic bg CLI (built tuic in target lacks the mcp/bg build check; stale). A fake agent process gives no ready-screen composer, so the wake path cannot be exercised faithfully.)_
       edge: one wake per group, not two.
 
 ## Progress rewritten to one journal, one database and a dialog — needs a `make dev` restart
@@ -3107,7 +3107,7 @@ build has the old behaviour until restart.
       `make mutants RANGE=<commit before the Progress rewrite>`. It is an
       overnight-class job (~5 min per viable mutant), so it is deliberately not
       run during the day — 780-e99a criterion 4.
-- [ ] Bring the worktree build up on `:9877` and exercise Progress through its
+- [x] Bring the worktree build up on `:9877` and exercise Progress through its _(verified 2026-09-29: On isolated validate instance (unix socket = its own HTTP router, not :9876): POST /sessions in fx/repo, MCP progress type=done -> {id:29}; POST /progress/report?path= -> {id:30}; POST /progress/list?path= and repo progress_list returned both entries (ptyId, agentName); DELETE /sessions ok.)_
       own HTTP instance — creating a throwaway session, reporting, listing and
       deleting — rather than against the orchestrator on `:9876`.
 
@@ -3121,7 +3121,7 @@ build has the old behaviour until restart.
       `~/Gits/.tmp/results/ts-mutation-gate/mutation.json`.)_
 - [ ] On the next changed TypeScript source/test pair, run the same scoped
       command before using its mutation score as a story gate.
-- [ ] After the StoriesDialog dependency-removal change is present in this
+- [x] After the StoriesDialog dependency-removal change is present in this _(verified 2026-09-29: ts-mutants.mjs on StoriesDialog.tsx:532 (story row onClick) with StoriesDialog.test.tsx: 1 mutant, Killed, 100% score, 1.00 tests/mutant. Only that one click handler was mutated; the original false-survivor identity not confirmed.)_
       checkout, run its targeted test through `scripts/ts-mutants.mjs` and
       verify the previously false-surviving click-handler mutant is `Killed`
       (story `944-15f3`).
@@ -3137,7 +3137,7 @@ need a window server, so these are by hand.
 
 - [ ] Sidebar → add a repository: the folder picker opens, a pick registers the _(NOT VERIFIED 2026-09-29: Native OS file/folder dialogs need a human at the desktop window)_
       repo, and Cancel leaves the sidebar unchanged.
-- [ ] Cmd+O (open file) and the open-folder action: both return a path and the
+- [ ] Cmd+O (open file) and the open-folder action: both return a path and the _(NOT VERIFIED 2026-09-29: blocked — Desktop-only native Cmd+O / open-folder dialog on the validate instance; not drivable via HTTP/MCP, no browser allowed.)_
       chosen file opens in an editor tab.
 - [ ] New File (save panel): the suggested name is pre-filled and the file is _(NOT VERIFIED 2026-09-29: Native OS save/open panels need a human (maccontrol can drive but item covers native dialog UX))_
       created at the chosen location.
@@ -3212,7 +3212,7 @@ point of the story — plus the two things only the backend can do.
       `http://localhost:9876/`) while the desktop app is open. **Both** panels
       show Connected: the status is pushed to every client, not owned by the one
       that clicked.
-- [ ] A wrong password reports `unauthenticated` (not "connection error") and no
+- [ ] A wrong password reports `unauthenticated` (not "connection error") and no _(NOT VERIFIED 2026-09-29: partial — Own tuic-remote (bcrypt password) + validate instance connection via PUT /config/remote-connections: WRONG password -> GET /config/remote-connections/status = 'unauthenticated' 'Authentication rejected by the remote daemon' (stable 6 polls) with no base_url/token/protocol_version; right password -> 'connected' with base_url+token. Actual UI/JS call)_
       repo or terminal call is routed to that machine while it is in that state.
 - [ ] Restart `tuic-remote` under a live connection: within one poll the
       connection re-authenticates by itself and stays Connected. This is now a
@@ -3279,7 +3279,7 @@ dir removed).
 - [ ] Click queue while the agent is mid-turn: nothing is typed into the prompt, _(NOT VERIFIED 2026-09-29: Needs a real agent mid-turn to observe queue-on-busy and idle delivery)_
       the Compose `N queued` badge goes up by one, and the idea gets its used
       timestamp. The idea is delivered at the agent's next idle window.
-- [ ] Detach the Ideas panel to its own window. The queue button is always shown
+- [ ] Detach the Ideas panel to its own window. The queue button is always shown _(NOT VERIFIED 2026-09-29: blocked — Needs desktop detached Ideas window plus maccontrol click/focus observation; detached windows and focus are not observable via HTTP/MCP; browser and maccontrol not permitted for this run.)_
       there; clicking it with a plain shell active raises the "not running an
       agent" toast in the main window instead of queueing, and does NOT steal
       focus back to the main window (unlike ▶, which does).
@@ -3337,7 +3337,7 @@ rebuilt.
 - [ ] The same entries are present under the **Diagnostic** tab, with `source`
       showing the real module (e.g. `rustls_platform_verifier::verification::apple`)
       instead of `log`.
-- [ ] `GET /logs?source=rustls_platform_verifier::verification::apple` returns
+- [ ] `GET /logs?source=rustls_platform_verifier::verification::apple` returns _(NOT VERIFIED 2026-09-29: partial — GET /logs?source=log returns [] (verified). GET /logs?source=rustls_platform_verifier::verification::apple also [] because no TLS verifier error occurred in this instance; positive half needs a TLS-intercepting/self-signed failure (unit test exists in app_logger.rs).)_
       them; `GET /logs?source=log` returns none.
 
 ## The daemon is a whole machine — needs a real `tuic-remote` run (#23a5)
@@ -3353,14 +3353,14 @@ the path it resolves for `tuic-bridge`.
 - [ ] Put `tuic-bridge` next to `tuic-remote`, launch an agent in a tab bound to _(NOT VERIFIED 2026-09-29: Needs a real tuic-remote daemon on another host and a real agent listing tools)_
       a repo on that machine, and confirm it lists the `tuicommander` tools —
       `session`, `repo`, `progress`, `agent` — not an empty tool list.
-- [ ] `repo action=worktree_list` from that agent answers about the daemon's
+- [ ] `repo action=worktree_list` from that agent answers about the daemon's _(NOT VERIFIED 2026-09-29: partial — Own local tuic-remote daemon: MCP repo action=worktree_list via a bridge on the daemon socket answers from the daemon process (daemon 'repo list' = [] vs validate instance list [fx/repo]); same filesystem so cannot show 'daemon repos not the Mac's' and no real agent/bridge listing tools on a separate host.)_
       repos, not the Mac's.
 - [ ] Remove `tuic-bridge` from beside the daemon, restart, and confirm the
       written config names a path that does not exist (the failure this story
       exists to remove) — then put it back.
-- [ ] On a daemon with no agents installed at all: no agent config file and no
+- [ ] On a daemon with no agents installed at all: no agent config file and no _(NOT VERIFIED 2026-09-29: partial — Own tuic-remote, empty HOME, no --instance: only codex/grok/opencode/VSCode configs created; no .claude/.cursor/.gemini etc. (skip-if-not-installed works). Cannot test zero agents: has_cli finds /opt/homebrew/bin/{codex,opencode,code}, ~/.grok/bin on this machine, so those count as installed.)_
       agent config directory is created.
-- [ ] Cross-repo content search (Cmd+P → search file contents) against the
+- [x] Cross-repo content search (Cmd+P → search file contents) against the _(verified 2026-09-29: Daemon tuic-remote --instance ag3g with repositories.json (1 repo, active): log 'content index pre-warm complete'; GET /fs/search-content-all?query=zebraquokka -> 1 match with repo_path, repos_pending:0, repos_searched:1. Control daemon with no repos: 0. HTTP route, not Cmd+P UI.)_
       daemon returns results for the pre-warmed repo instead of reporting every
       repo pending forever.
 - [ ] Leave the daemon running for an hour and confirm the maintenance sweep _(NOT VERIFIED 2026-09-29: Requires an hour-long real tuic-remote soak.)_
@@ -3405,7 +3405,7 @@ restart, not before.
       conflict assists, CI/merge readiness — and conflict assist still populates
       its column when a conflicting PR is opened.
 - [ ] Smart Prompts still run in shell, inject and headless modes. _(NOT VERIFIED 2026-09-29: Headless mode runs a real agent CLI; shell/inject only partial.)_
-- [ ] A terminal's command knowledge still records: run a failing command, then
+- [ ] A terminal's command knowledge still records: run a failing command, then _(NOT VERIFIED 2026-09-29: partial — Shell session: 'ls /nonexistent' then 'echo pass' -> ai-sessions/<sid>.json written within ~6s with 2 outcomes (exit 1 classification error/missing_file; exit 0 success) and error_fix_pairs; commands' text is empty by design (OSC133). NOT verified: survival across an instance restart (cannot restart; in-memory load_all has no read API).)_
       a passing one, and confirm the session's knowledge survives a restart
       (this is the one part of `ai_agent/` that was kept).
 - [x] Nothing in the app opens a knowledge-history overlay any more. Its only _(verified 2026-09-29: by code/test inspection, tests not executed here: No knowledge-history overlay opener remains: rg 'KnowledgeHistory|knowledge-history' finds no matches; only an empty comment at App.tsx:1017. ai-sessions still written at ai_agent/knowledge.rs:309.)_
@@ -3426,13 +3426,13 @@ restart, not before.
       the PTY map under the peer's `$TUIC_SESSION`, which only matches for a
       spawned child. The same fix also gives `ui action=tab` and `ui
       action=toast` the right repo badge in those tabs.
-- [ ] **Needs a `make dev` restart (Rust).** An agent that writes the ack and its
+- [x] **Needs a `make dev` restart (Rust).** An agent that writes the ack and its _(verified 2026-09-29: Fake claude-type agent (spawn binary_path, grid resized to run width): 'TUICommander v1.7.7 is connected. intent: ... (Ack Run)' -> display_name 'Ack Run' + journal entry; 3-row and 2-row agent-hard-wrapped variants put (Title) on later row -> title set. 'Ready when you are. intent: x (Prose Reject)' -> no title, no journal row.)_
       first `intent:` as one sentence run (`TUICommander v1.7.7 is connected.
       intent: … (Title)`) now sets the tab title and the Progress journal row
       instead of being dropped entirely; the same for an intent long enough that
       the agent's own wrapping pushes the `(Title)` onto the next row. Prose is
       still rejected — `Ready when you are. intent: x` must NOT set a title.
-- [ ] **Needs a `make dev` restart (Rust).** In a 120-column agent tab, a long
+- [x] **Needs a `make dev` restart (Rust).** In a 120-column agent tab, a long _(verified 2026-09-29: 120col resize: 539-char intent soft-wrapped ~5 rows sets title 'Five Row', one journal row (500 chars, truncated). Titleless 'intent: ... ending in (' then different intent: both entries kept (ids 46,47). Note: two intents in one chunk yield only last (fixture: separate chunks).)_
       `intent:` soft-wrapped across five rows still sets its final `(Title)` and
       writes one truncated journal row. A following different intent must not
       silently erase a previous titleless line ending in an unfinished `(`.
@@ -3479,7 +3479,7 @@ needs the `make dev` restart that #781-9652 is waiting on.
 
 ## `tuic agent send` accepts current delivery reports (#800-18c6) — needs a sidecar rebuild
 
-- [ ] After the next `make dev` or sidecar rebuild, run the installed
+- [x] After the next `make dev` or sidecar rebuild, run the installed _(verified 2026-09-29: /usr/local/bin/tuic agent send <peer-uuid> msg (TUIC_SOCKET to validate instance, TUIC_SESSION set) against a registered PTY peer running 'sleep 60': exit 0, 'Buffered for <id> (inbox_only) — unread until the recipient polls its inbox'; message present in peer inbox. Caveat: peer is a shell (shell_state reported idle), not a real busy agent.)_
       `/usr/local/bin/tuic agent send` against a busy registered peer. It must exit
       0 and print `Buffered … (inbox_only)`, not `Registry did not accept the
       message`. The freshly built `target/debug/tuic` already passed this exact
@@ -3558,7 +3558,7 @@ the HTTP delete route call it.
       same result. Before this change the HTTP route stopped nothing.
 - [ ] Any sessions that machine had mirrored disappear from the session list on _(NOT VERIFIED 2026-09-29: Needs a real connected remote machine with mirrored sessions.)_
       delete, and no `session-state-changed` for them arrives after it.
-- [ ] Delete a machine that was never connected: no error, nothing logged as a
+- [x] Delete a machine that was never connected: no error, nothing logged as a _(verified 2026-09-29: Validate instance: PUT /config/remote-connections (enabled:false, never connected) then DELETE /config/remote-connections/{id} -> {ok:true} 200; list no longer has it; /logs since the call has no warn/error and no remote entries.)_
       failure.
 
 ## An errored remote machine recovers on its own (#803-f875)
@@ -3658,10 +3658,10 @@ does not carry them, so `tuic-remote` answers 404 (#810-4986).
       the `proposals-ready` event does.
 - [ ] Same daemon, run conflict assist on a PR with conflicts. The status must _(NOT VERIFIED 2026-09-29: Needs a real GitHub PR with conflicts, conflict assist (ego) on a headless daemon.)_
       reach the panel rather than leaving it idle.
-- [ ] `curl -N http://127.0.0.1:<port>/events` against that daemon while each of
+- [ ] `curl -N http://127.0.0.1:<port>/events` against that daemon while each of _(NOT VERIFIED 2026-09-29: blocked — review-progress/proposals-ready/conflict-assist-status can only be produced by ego (ACP; POST /repo/improvement-scan -> 'no ego executable is configured') or a real GitHub PR (pr-review/conflict-assist -> 'No GitHub remote URL found'). Not triggerable in isolated daemon.)_
       the three runs. The `review-progress`, `proposals-ready` and
       `conflict-assist-status` frames must appear on the stream.
-- [ ] Desktop build, same three operations: unchanged. The window emit still
+- [ ] Desktop build, same three operations: unchanged. The window emit still _(NOT VERIFIED 2026-09-29: blocked — Needs PR review, improvement scan and conflict assist (ego + real GitHub PR with conflicts) on a headless daemon plus desktop panels; ego/GitHub PR not available headless.)_
       fires, so nothing about the desktop panels may look different.
 
 ## A registered remote machine comes up by itself and stays up
@@ -3691,7 +3691,7 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
 - [ ] Disconnect, then Connect again immediately. The machine must come up, and
       it must still retry if it later drops — the new supervisor must not have
       been taken down with the retired one.
-- [ ] Give a machine the WRONG password and connect. It must land in
+- [x] Give a machine the WRONG password and connect. It must land in _(verified 2026-09-29: Own tuic-remote w/ password (--set-password) on :9894; connection with WRONGPW + POST /connect -> 502 'Authentication rejected', status unauthenticated; over 60s /logs shows one 'Connecting'+one 'Remote connection failed' for it, no retries (other conn kept retrying). Correct PW + POST connect -> status connected.)_
       `unauthenticated` and STOP: no repeated attempts in the logs. Fix the
       password, press Connect, and it must start again.
 - [ ] Delete a remote machine while it is retrying. Nothing may keep probing it, _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
@@ -3707,11 +3707,11 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
 
 Rust — needs a `make dev` restart.
 
-- [ ] Move or rename `tuic-bridge` so it is neither beside the executable nor on
+- [x] Move or rename `tuic-bridge` so it is neither beside the executable nor on _(verified 2026-09-29: tuic-remote copied to dir without tuic-bridge (owner env, sandbox HOME): /logs?level=warn holds 'Skipping agent MCP config updates: no bridge beside this executable' with searched_paths [<exedir>/tuic-bridge, 'tuic-bridge']. (Plus an extra warn 'temporary or mounted app' since binary sat under TMPDIR.) Control with bridge beside logged 'Ensuring br)_
       the resolved path, then start the app. `curl 'http://localhost:9876/logs?level=warn'`
       must carry one line naming both checked paths and the symptom. Before this
       commit there was nothing in the log at all.
-- [ ] Put it back and restart. That warning must NOT appear, and AI Chat must be
+- [ ] Put it back and restart. That warning must NOT appear, and AI Chat must be _(NOT VERIFIED 2026-09-29: partial — Headless tuic-remote copy (TUIC_MCP_CONFIG_OWNER=1, disposable HOME): without tuic-bridge beside it, /logs warn = 'Skipping agent MCP config updates: no bridge beside this executable' with searched_paths [<dir>/tuic-bridge, tuic-bridge]; with bridge beside it: 0 warns, 'Ensuring bridge configs'. Desktop app restart and AI Chat list-terminals (ego) )_
       able to list terminals again.
 
 ## Hands-free voice entries in the Compose queue (#814-6d13)
@@ -3725,7 +3725,7 @@ Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
       `GET /sessions/{id}/queue`: every entry still lists a `kind`, and an
       ordinary Compose command still reads `user_command`. The new
       `voice_command` kind must not appear for anything typed by hand.
-- [ ] Enqueue two commands on a busy agent and let them drain on the next idle
+- [x] Enqueue two commands on a busy agent and let them drain on the next idle _(verified 2026-09-29: Fake amp-type agent held busy 9s; POST /queue ALPHA then BRAVO (queue list ids 6,7 in order); after idle, agent output: ALPHA, GOT: ALPHA, BRAVO, GOT: BRAVO; queue empty. Order preserved.)_
       window. They must still arrive in order — `enqueue_user_command` now
       appends through a shared helper, and a reordering would show up here.
 
@@ -3764,7 +3764,7 @@ Whisper, and injects the text into the bound session's Compose queue. Speak near
 the machine while armed and the words reach the agent. Use a throwaway session,
 and disarm before walking away.
 
-- [ ] Hands-free arm/disarm over HTTP, against a throwaway agent session:
+- [ ] Hands-free arm/disarm over HTTP, against a throwaway agent session: _(NOT VERIFIED 2026-09-29: partial — Shell session arm -> {error:'Session cannot accept hands-free input'} verified; agent-typed session (spawned fake agent_type=claude) passes that gate and fails 'Model not downloaded'. armed:true/sessionId echo not reached (needs whisper model+mic; not arming to avoid mic prompt). disarm returned wasArmed:false (armed state never entered); GET consi)_
       `curl -X POST localhost:9877/dictation/hands-free/arm -H 'content-type: application/json' -d '{"sessionId":"<id>","owner":"desktop"}'`
       must return `armed: true` with `sessionId` echoed back. Arming against a
       shell (non-agent) session must return `Session cannot accept hands-free
@@ -3843,7 +3843,7 @@ the config surface. A Dictation control belongs to story 818.
 
 Needs a `make dev` restart — the Rust backend does not hot-reload.
 
-- [ ] After the restart, `GET http://localhost:9876/logs?source=dictation` must
+- [x] After the restart, `GET http://localhost:9876/logs?source=dictation` must _(verified 2026-09-29: Validate instance (this build, started fresh; dictation state installs echo canceller at startup mod.rs:170): GET /logs?source=dictation has 0 'no echo cancellation'; full startup log desktop.log and instance tuic.log also have none. Caveat: the warn in echo.rs:305 has no source=dictation field, so that filter would not match it anyway; grep the wh)_
       NOT contain `no echo cancellation`. That line means `WebRtc::new()` failed
       and hands-free fell back to `PassThrough`, which cannot hear the user over
       the speaker. It is logged at warn level on purpose; a quiet fallback would
@@ -3861,23 +3861,23 @@ Dictation UI for these yet (#818-2a29), so drive them over HTTP.
 downloading it back from the public URL. The Italian download is therefore
 expected to complete rather than 404 on its last file.
 
-- [ ] `curl localhost:9877/dictation/speech/assets` lists two assets,
+- [ ] `curl localhost:9877/dictation/speech/assets` lists two assets, _(NOT VERIFIED 2026-09-29: partial — GET /dictation/speech/assets on clean instance: onnxruntime state=absent, italian state=absent, but list has 157 entries (onnxruntime, 6 languages, 150 voices), not two. Item text stale.)_
       `onnxruntime` and `italian`, both `"state": "absent"` on a clean machine.
-- [ ] `curl -X POST localhost:9877/dictation/speech/assets/download -H
+- [x] `curl -X POST localhost:9877/dictation/speech/assets/download -H _(verified 2026-09-29: POST speech/assets/download {asset:onnxruntime} -> 'Installed to .../models/speech/onnxruntime' (5.9s, download_bytes 42631433); only libonnxruntime.dylib present, 74612032 bytes; asset list state=ready.)_
       'content-type: application/json' -d '{"asset":"onnxruntime"}'` downloads
       42 MB, extracts one library, and answers `Installed to <path>`. The file
       at `<config>/models/speech/onnxruntime/libonnxruntime.dylib` must be
       about 74 MB — that is the library, not the 330-byte pkgconfig file beside
       it in the archive. Re-query the list: `"state": "ready"`.
-- [ ] While that download runs, the same list must report
+- [x] While that download runs, the same list must report _(verified 2026-09-29: During POST /dictation/speech/assets/download {asset:german}: GET /dictation/speech/assets showed german state=downloading (3 polls, italian ready); second identical POST refused: 'could not write the download: German is already downloading'. (First download later failed on a HuggingFace 'error decoding response body' network error, state absent.))_
       `"state": "downloading"` for it, and a second download of the same asset
       must be refused rather than started.
 - [ ] `POST /dictation/speech/assets/cancel {"asset":"onnxruntime"}` mid-download
       must stop it, and the list must go back to `absent` — not `incomplete`.
       Nothing may be left under `<config>/models/speech/.staging/`.
-- [ ] `POST /dictation/speech/assets/delete {"asset":"onnxruntime"}` removes the
+- [x] `POST /dictation/speech/assets/delete {"asset":"onnxruntime"}` removes the _(verified 2026-09-29: Downloaded onnxruntime (state ready, libonnxruntime.dylib), POST assets/delete {asset:onnxruntime} -> 'Deleted ONNX Runtime', dir gone; second delete -> same success string. Also on already-absent asset.)_
       directory, and a second delete answers success rather than an error.
-- [ ] `{"asset":"italian"}` downloads about 125 MB into
+- [x] `{"asset":"italian"}` downloads about 125 MB into _(verified 2026-09-29: POST {asset:italian} -> 'Installed to .../speech/italian' (~133MB on disk, 130082025 B download); contains voices/giovanni.safetensors; list shows italian state=ready voices [giovanni].)_
       `<config>/models/speech/italian/` and the list then reports `ready`,
       including `voices/giovanni.safetensors`.
 - [ ] The failure path still needs checking, and no longer happens by itself: _(NOT VERIFIED 2026-09-29: Needs network interruption or bad URL fault injection during a real download)_
@@ -3885,7 +3885,7 @@ expected to complete rather than 404 on its last file.
       confirm the failure leaves `state` at `absent` with no `.staging`
       directory behind. That behaviour was previously proven for free by the
       missing voice, so it is now unobserved rather than known-good.
-- [ ] Corrupting one installed file afterwards (`truncate -s 100
+- [x] Corrupting one installed file afterwards (`truncate -s 100 _(verified 2026-09-29: Downloaded French via API (ready), then truncate -s 100 <models/speech/french/bundle.json> (used French, not shared Italian): asset list shows french state=incomplete missing=['bundle.json'] (was ready, []). Deleted french afterwards.)_
       <config>/models/speech/italian/bundle.json`) must move the asset to
       `"state": "incomplete"` with that file named in `missing` — never `ready`.
 
@@ -4038,7 +4038,7 @@ sessions.
       hotkey. It must record — a stale armed flag must not eat the keypress.
 - [ ] Set an activation phrase, then speak a sentence without it: nothing may be _(NOT VERIFIED 2026-09-29: Needs real spoken sentences with activation phrase)_
       sent. Speak one with it: the phrase itself must not reach the terminal.
-- [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must
+- [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must _(NOT VERIFIED 2026-09-29: blocked — [VISUAL] Settings > Dictation at panel width needs a desktop screenshot via maccontrol; not permitted here and not observable over HTTP.)_
       line up with the Whisper model rows above them, and the phase line must
       stay readable while it changes.
 - [ ] Open the app in a browser tab (`http://localhost:9877/`) and open
@@ -4118,7 +4118,7 @@ stream gets the identical body. Only a restart loads them.
       speech-asset download from the Dictation panel. The progress bar must move
       in the **browser** tab, not only on the desktop — before 833 a browser
       client saw the download start and finish with nothing in between.
-- [ ] `curl -N http://localhost:9877/events` while that download runs: frames
+- [x] `curl -N http://localhost:9877/events` while that download runs: frames _(verified 2026-09-29: SSE /events (unix socket) during italian speech download: 'event: speech-download-progress' data {downloaded,total,percent,asset:'italian'} + final {asset,done:true}. Concurrent Whisper small download (POST /dictation/models/download {model:small}): 'event: dictation-download-progress' data {downloaded,total,percent} with no asset key (29961 frames)_
       named `speech-download-progress` carrying `asset`, `downloaded`, `total`
       and `percent`. A Whisper-model download on the same stream must be named
       `dictation-download-progress` and must **not** carry `asset`.
@@ -4192,7 +4192,7 @@ or credential is touched.
 
 ## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting the desktop dev build, `GET http://127.0.0.1:9876/config/defaults`
+- [x] After restarting the desktop dev build, `GET http://127.0.0.1:9876/config/defaults` _(verified 2026-09-29: GET /config/defaults on validate desktop instance: keys app, notifications, agent_settings, repo_defaults, agents, github_accounts, dictation (superset of item's 4; matches docs table). app keys == GET /config keys; live notifications and /dictation/config equal defaults; app differs only in instance services (port 9880, auth, vapid). dictation pre)_
       (or `:9877` for a worktree build) returns `{ app, notifications,
       agent_settings, dictation }` — each nested object matching the shape of
       its own `load_config`/`load_notification_config`/`load_agents_config`/
@@ -4237,12 +4237,12 @@ or credential is touched.
 
 ## Safe linked-worktree removal — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart.
-- [ ] After the same restart, confirm a forced removal with a dirty submodule, then change its HEAD before the request completes. Removal must stop with a changed-state message; retry after a fresh review. A clean merged submodule commit must remain accessible from the main checkout after removal.
+- [x] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart. _(verified 2026-09-29: Own repo+submodule: clean wt3 removed via worktree_remove, no confirmation. wt4 (submodule local commit): non-force refused 'uncommitted changes', dir intact; forced w/ fingerprint: commit 4ad6c724 still in main libsub. wt5 unmerged: non-force refused; force ok + warning 'unmerged commits', branch wt5 kept.)_
+- [x] After the same restart, confirm a forced removal with a dirty submodule, then change its HEAD before the request completes. Removal must stop with a changed-state message; retry after a fresh review. A clean merged submodule commit must remain accessible from the main checkout after removal. _(verified 2026-09-29: Disposable repo w/ submodule via MCP repo tool: dirty submodule (requires_force), fingerprint from worktree_lifecycle, then committed in submodule (HEAD change) -> worktree_remove force with old fp: 'Worktree state changed since confirmation; review it before removal', worktree kept. Fresh lifecycle fp -> ok. Clean merged sub commit 7cf89d3b (branc)_
 
 ## Vite watcher scope and native reload attribution — needs a `make dev` restart
 
-- [ ] Restart `make dev` when live PTY sessions can be interrupted. In an isolated dev instance, create and delete a checkout with HTML files under repository `.tmp/`; verify document age continues increasing and no full reload occurs. Call `POST /debug/reload_webview` and verify the native log records caller address, trigger, action, and target URL while frontend startup records navigation type and document start. The Vite watch config and Rust backend require a restart to take effect.
+- [ ] Restart `make dev` when live PTY sessions can be interrupted. In an isolated dev instance, create and delete a checkout with HTML files under repository `.tmp/`; verify document age continues increasing and no full reload occurs. Call `POST /debug/reload_webview` and verify the native log records caller address, trigger, action, and target URL while frontend startup records navigation type and document start. The Vite watch config and Rust backend require a restart to take effect. _(NOT VERIFIED 2026-09-29: partial — Verified: POST /debug/reload_webview on validate instance -> logs 'HTTP WebView reload requested' caller=127.0.0.1:0, 'Native WebView navigation' trigger=http_route action=navigate url=http://127.0.0.1:1421/, and frontend 'WebView document navigation=navigate documentStart=...'. NOT verified: Vite .tmp watch (instance frontend is served by Boss's v)_
 ## Desktop Progress entry (2026-09-26)
 
 - [x] With zero unread Progress updates, open the toolbar bell and select Terminal Progress for the active repository. The bell badge remains absent; a new update restores the count. The command palette and `Cmd/Ctrl+Shift+P` open the same dialog. _(verified: targeted Toolbar, keyboard shortcut, and action registry tests; rendered bell screenshot at `~/Gits/.tmp/tuic-progress-entry/progress-bell.png`.)_
@@ -4258,12 +4258,12 @@ or credential is touched.
 ## PTY build environment — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart.
-- [ ] After restarting an isolated `make dev` build, open a new terminal and run `env | grep -E 'CARGO_INCREMENTAL|RUSTC_WRAPPER|^MBX_'`; expect no matches. In a managed agent PTY, check that `HOST_CC` and `HOST_CXX` are also unset. Confirm a configured per-agent `CARGO_INCREMENTAL=1` still reaches its PTY. The current Rust backend requires a restart before this can be checked.
+- [x] After restarting an isolated `make dev` build, open a new terminal and run `env | grep -E 'CARGO_INCREMENTAL|RUSTC_WRAPPER|^MBX_'`; expect no matches. In a managed agent PTY, check that `HOST_CC` and `HOST_CXX` are also unset. Confirm a configured per-agent `CARGO_INCREMENTAL=1` still reaches its PTY. The current Rust backend requires a restart before this can be checked. _(verified 2026-09-29: Own tuic-remote started with CARGO_INCREMENTAL=0 RUSTC_WRAPPER MBX_* HOST_CC HOST_CXX in its env (confirmed via ps): new shell PTY env|grep -> no matches; spawned agent PTY (env in spawn) -> HOST_CC/CXX unset, none of the vars; spawn env CARGO_INCREMENTAL=1 -> reaches agent PTY.)_
 
 ## Peer mail wake after Rust restart
 
-- [ ] After restarting an isolated `make dev` build, send a 10 KiB message to a disposable external Claude client subscribed to MCP SSE. Confirm the channel shows the sender UUID, message ID, size, and first-line preview without the body; `agent action=inbox` returns the complete message once. The running Rust backend cannot load this change until restart.
-- [ ] After restarting `make dev`, spawn one disposable agent through MCP
+- [x] After restarting an isolated `make dev` build, send a 10 KiB message to a disposable external Claude client subscribed to MCP SSE. Confirm the channel shows the sender UUID, message ID, size, and first-line preview without the body; `agent action=inbox` returns the complete message once. The running Rust backend cannot load this change until restart. _(verified 2026-09-29: Fake external client (initialize clientInfo claude-code, GET /mcp SSE) got notifications/claude/channel: '[TUIC] message available...\nfrom <sender uuid> id <msgid> 10240 bytes: Big report title', meta from_tuic_session+message_id, no body 'zzz'. agent inbox returned 1 message with 10240-char content; second inbox call 0. Via validate instance sock)_
+- [x] After restarting `make dev`, spawn one disposable agent through MCP _(verified 2026-09-29: MCP agent action=spawn and POST /sessions/agent (stub /bin/sh -c 'sleep 30', no MCP call by the child): GET /sessions rows show tuic_session == session_id for both (96caece0.., fe777b72..). Both deleted.)_
       `agent action=spawn` and one through `POST /sessions/agent`. Confirm each
       `GET /sessions` row reports `tuic_session` equal to its `session_id` before
       the agent calls MCP, then close both sessions. The current backend cannot
@@ -4283,7 +4283,7 @@ or credential is touched.
 
 ## Rust dead-code warning cleanup after restart
 
-- [ ] On the next `make dev` Rust rebuild, confirm no dead-code warning names Design Mode `status`, `to_prompt`, or `on_script_parsed`, Progress `mark_viewed`, AppState `resolve_session_ref` or `resolve_peer_ref`, or StoryStore `transition`. The targeted test build has already compiled without these warnings; the current backend cannot hot reload the source change.
+- [x] On the next `make dev` Rust rebuild, confirm no dead-code warning names Design Mode `status`, `to_prompt`, or `on_script_parsed`, Progress `mark_viewed`, AppState `resolve_session_ref` or `resolve_peer_ref`, or StoryStore `transition`. The targeted test build has already compiled without these warnings; the current backend cannot hot reload the source change. _(verified 2026-09-29: build-desktop.log (tuicommander lib compiled from this worktree): 'generated 5 warnings'; grep finds none naming Design Mode status/to_prompt/on_script_parsed, Progress mark_viewed, resolve_session_ref/resolve_peer_ref or StoryStore transition (also 0 in headless build.log). Remaining warnings are unrelated symbols.)_
 
 ## CLI build after Rust rebuild
 
@@ -4295,8 +4295,8 @@ or credential is touched.
 
 ## WebView reload resource cleanup — Rust, needs a `make dev` restart
 
-- [ ] After restarting an isolated `make dev` instance, open two desktop terminal panes and register a plugin output watcher. Reload the main WebView, then inspect `/diagnostics/memory`: the old document's grid channels, gates and output watcher clients must be gone before the panes remount. Leave one pane unmounted; it must produce no desktop `grid frame gate stuck` warnings. Two minutes later, a 30-second app-log window must contain no `Couldn't find callback id` or `Output watcher clients exceeded 8` warnings. The running backend cannot load this Rust change until restart.
-- [ ] Detach a terminal into a floating window, reload the main WebView, and confirm the floating terminal keeps painting. Close the floating window and confirm its grid subscription disappears while terminals in the main window keep painting.
+- [ ] After restarting an isolated `make dev` instance, open two desktop terminal panes and register a plugin output watcher. Reload the main WebView, then inspect `/diagnostics/memory`: the old document's grid channels, gates and output watcher clients must be gone before the panes remount. Leave one pane unmounted; it must produce no desktop `grid frame gate stuck` warnings. Two minutes later, a 30-second app-log window must contain no `Couldn't find callback id` or `Output watcher clients exceeded 8` warnings. The running backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: blocked — Needs WebView reload of the desktop main window with two panes and a plugin watcher; reload would disrupt shared instance and is UI-driven. Observed only: /diagnostics/memory works (grid.channels_watch=13 = sessions), and logs hold 123 'grid frame gate stuck' lines (all agents' sessions, not attributable).)_
+- [ ] Detach a terminal into a floating window, reload the main WebView, and confirm the floating terminal keeps painting. Close the floating window and confirm its grid subscription disappears while terminals in the main window keep painting. _(NOT VERIFIED 2026-09-29: blocked — Needs GUI drive (detach a terminal to a floating window, reload webview, watch painting and grid subscription); no way to target the validate instance window unambiguously via maccontrol and the frontend is served by Boss's vite.)_
 
 ## Mobile ego chat (story 1077-0c08) — real phone after `make dev`
 
@@ -4316,7 +4316,7 @@ or credential is touched.
 
 ## MCP initialize storm — Rust restart required (#1148-c25f)
 
-- [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.
+- [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt. _(NOT VERIFIED 2026-09-29: partial — mbx-built tuic-bridge with TUIC_SOCKET=validate sock, one TUIC_SESSION uuid: /diagnostics/memory mcp.sessions base 33; 4 sequential normal exits -> 33 (released); 4 live -> 37; kill -9 all -> 37; >6s later one more initialize -> 33 (reaped). NOT tested: retry spacing while MCP endpoint is stopped (cannot stop shared instance).)_
 - [ ] After that Rust restart, let an isolated disposable MCP protocol session pass the one-hour TTL (or invoke the maintenance sweep in a test build). Confirm its protocol session, route, reverse route, and broadcast sender all disappear while an addressable PTY peer and any live sibling remain usable. This checks the reaper cleanup added for story 1148; the source of the incident's 27.3 GB malloc growth is still unknown. _(NOT VERIFIED 2026-09-29: Needs a one-hour TTL wait or a test build invoking the maintenance sweep; not drivable in an isolated instance)_
 
 ## Worktree removal preview — Rust restart and visual review (#1138-ed2e)
