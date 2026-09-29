@@ -1961,6 +1961,7 @@ pub struct AppState {
     /// guard — surfaced in diagnostic snapshots to quantify watcher storm
     /// volume in production (issue #82).
     pub(crate) repo_head_emits_suppressed: AtomicU64,
+    pub(crate) pending_orphan_cleanup: DashMap<String, crate::worktree::PendingOrphanCleanup>,
     /// File watchers for directory contents (keyed by absolute dir path)
     pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
@@ -3260,6 +3261,7 @@ impl AppState {
             repo_git_fingerprints: DashMap::new(),
             repo_head_targets: DashMap::new(),
             repo_head_emits_suppressed: AtomicU64::new(0),
+            pending_orphan_cleanup: DashMap::new(),
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             subagent_map_cache: parking_lot::Mutex::new(Default::default()),

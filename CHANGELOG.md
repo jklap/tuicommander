@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Safe orphan cleanup countdown** — Clean detached worktrees are removed after a configurable countdown in the Ask dialog. Dirty or untracked worktrees and commits not reachable from a branch require explicit review. Agents can answer the pending dialog through MCP, with a fresh backend safety check before removal.
+
 - **Managed child idle close** — Idle managed agent children close after a configurable delay, while unread mail, background work, keep-open, or a failed background wake keeps them available.
 - **Orphan worktree cleanup** — The status message counts only successful removals and does not claim success when cleanup fails.
 

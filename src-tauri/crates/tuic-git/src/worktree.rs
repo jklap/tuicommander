@@ -8138,3 +8138,70 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .map_err(|e| format!("git worktree list failed: {e}"))?;
     Ok(parse_orphan_worktrees(&out.stdout))
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrphanCleanupAssessment {
+    pub path: String,
+    pub safe: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Assess each current detached worktree. Only a clean checkout whose HEAD is
+/// reachable from a local or remote branch may be removed automatically.
+pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAssessment>, String> {
+    detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| match orphan_cleanup_safety(repo_path, &path) {
+                Ok(()) => OrphanCleanupAssessment {
+                    path,
+                    safe: true,
+                    reason: None,
+                },
+                Err(reason) => OrphanCleanupAssessment {
+                    path,
+                    safe: false,
+                    reason: Some(reason),
+                },
+            })
+            .collect()
+    })
+}
+
+pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    validate_worktree_path(repo_path, worktree_path)?;
+    let worktree = Path::new(worktree_path);
+    let status = git_cmd(worktree)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect worktree changes: {error}"))?;
+    if status.stdout.lines().any(|line| line.starts_with("??")) {
+        return Err("untracked files".into());
+    }
+    if !status.stdout.trim().is_empty() {
+        return Err("uncommitted changes".into());
+    }
+
+    let head = rev_at(worktree, "HEAD")?;
+    let containing = git_cmd(Path::new(repo_path))
+        .args([
+            "for-each-ref",
+            &format!("--contains={head}"),
+            "--count=1",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .run()
+        .map_err(|error| format!("Cannot inspect branch reachability: {error}"))?;
+    if containing.stdout.trim().is_empty() {
+        return Err("HEAD has commits unreachable from any branch".into());
+    }
+    Ok(())
+}
