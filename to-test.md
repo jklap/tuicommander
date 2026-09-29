@@ -24,6 +24,10 @@
 
 # To Test
 
+## Worktree removal with sealed build output (story 1179-50a8) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove a disposable worktree whose ignored target contains a read-only nested directory. Confirm the checkout and Git registration both disappear, while a symlink target outside the worktree keeps its contents and permissions. Targeted Rust tests cover this behavior; the running backend cannot load the Rust change until restart.
+
 ## CLI install lint (story 1185-790d) — rebuild required
 
 - [x] After rebuilding `tuic`, the macOS elevated install path still uses the target's parent directory; the Linux path compiles without an unused binding. _(verified: `src-tauri/crates/tuic-cli/src/main.rs:1179` gates only the parent binding with `target_os = "macos"`; macOS and Linux-target Clippy both pass with `-D warnings`.)_

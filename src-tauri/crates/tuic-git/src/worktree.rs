@@ -1484,8 +1484,15 @@ fn remove_worktree_internal_with_lock(
         clear_warm(&worktree.path);
         return Ok(());
     }
-    if admin.is_none() && worktree.path.join(".git").exists() {
-        return Err("Cannot remove worktree: its Git registration is missing".into());
+    if admin.is_none() {
+        if worktree.path.join(".git").exists() {
+            return Err("Cannot remove worktree: its Git registration is missing".into());
+        }
+        clear_warm(&worktree.path);
+        return Err(format!(
+            "Worktree directory remains without Git registration: {}",
+            worktree.path.display()
+        ));
     }
     if has_operation_in_progress(&wt_path_str) {
         return Err("Cannot remove worktree: a Git operation is in progress".into());
@@ -1563,6 +1570,15 @@ fn remove_worktree_internal_with_lock(
     } else {
         &["worktree", "remove", "--force"]
     };
+
+    // Git may delete tracked files before a sealed ignored directory stops it.
+    // Make only this checkout removable while its registration is still intact.
+    crate::cow::restore_owner_write(&worktree.path).map_err(|error| {
+        format!(
+            "Cannot prepare worktree {} for removal: {error}",
+            worktree.path.display()
+        )
+    })?;
 
     match git_cmd(&worktree.base_repo)
         .args(
@@ -3429,6 +3445,47 @@ mod tests {
         assert!(
             !worktree.path.exists(),
             "Worktree path should not exist after removal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_worktree_with_a_sealed_ignored_tree_never_leaves_a_partial_checkout() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "sealed-build-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        let sealed = path.join("target/build/evidence");
+        fs::create_dir_all(&sealed).unwrap();
+        fs::write(sealed.join("result.txt"), "sealed evidence\n").unwrap();
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o555)).unwrap();
+        let outside = temp.path().join("outside-sealed.txt");
+        fs::write(&outside, "outside evidence\n").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o444)).unwrap();
+        symlink(&outside, path.join("target/build/outside-link")).unwrap();
+        let worktree = WorktreeInfo {
+            name: "sealed-build-removal".into(),
+            path: path.clone(),
+            branch: Some("sealed-build-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        let registered = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .is_some();
+        if sealed.exists() {
+            fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        assert!(result.is_ok(), "sealed worktree removal failed: {result:?}");
+        assert!(!path.exists(), "successful removal left a worktree remnant");
+        assert!(!registered, "successful removal left Git registration");
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside evidence\n");
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o444
         );
     }
 
@@ -7713,6 +7770,10 @@ branch refs/heads/feat
         };
         let error = remove_worktree_internal(&worktree, true).unwrap_err();
         assert!(!warm_token_is_current(&path, token), "{error}");
+        assert!(
+            error.contains(&path.to_string_lossy().to_string()),
+            "{error}"
+        );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir_all(&path).unwrap();
     }
