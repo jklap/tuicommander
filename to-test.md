@@ -8,6 +8,27 @@
 
 # To Test
 
+## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of
+  output/events in one of them (e.g. `yes | head -c 5000000` or spawn several nested test agents
+  the way the original incident did). Watch `GET /logs?source=diagnostics` (or the app log) for a
+  `SESSION OVERLOAD` warning naming the hot session specifically, even if total process CPU never
+  crosses 80% — this is the new independent trigger and can't be exercised by a unit test since it
+  needs a real busy session under real load.
+- [ ] [HUMAN] While that burst is running, `curl http://localhost:9876/diagnostics/sessions` and
+  confirm the hot session shows a nonzero `events_since_last_tick`/`output_bytes_since_last_tick`,
+  and that a second immediate call shows the SAME numbers (the read must not reset what the
+  watchdog's own next tick needs).
+- [ ] [HUMAN] Open a session's grid WebSocket in a browser tab (`?format=grid`), then artificially
+  starve it (e.g. background the browser tab or pause its JS) while generating a large burst of
+  output on that same session — confirm the tab's connection actually drops/reconnects rather than
+  the grid silently going stale forever. This is the real-world shape the `0b421c3a` incident had;
+  the automated tests prove the mechanism in isolation but not against a real browser client.
+- [ ] Delete this section once verified — the underlying mechanism has full unit + real-network
+  test coverage (`cpu_watchdog.rs`, `mcp_http/session.rs`, `mcp_http/sse_routes.rs`); these three
+  items are for live confirmation only.
+
 ## Consent prompt for wrapping your own claude/codex/goose function (2026-09-25) — **Rust + frontend, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, open a new terminal tab in a repo whose `.zshrc.d` defines a `claude()` (or `codex()`/`goose()`) function, with that agent's "wrap-user-function" setting still undecided. Confirm the dialog appears exactly once (not once per tab if you open several), explains the `--settings`/flag purpose and the last-wins-silent-override caveat, and that all three buttons ("Wrap my function" / "Leave it alone" / "Not now") do what they say: Wrap makes the next new tab's `claude` invocation append the flag; Leave alone persists and never re-prompts; Not now dismisses but re-prompts on the next app restart if still undecided (not on the next tab, within the same run).

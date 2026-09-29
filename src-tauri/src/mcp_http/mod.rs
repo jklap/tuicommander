@@ -1031,6 +1031,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(log_routes::marker_compliance_get),
         )
         .route(
+            "/diagnostics/sessions",
+            get(log_routes::session_overload_get),
+        )
+        .route(
             "/diagnostics/capture",
             get(log_routes::capture_get).post(log_routes::capture_set),
         )

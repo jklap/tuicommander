@@ -193,9 +193,18 @@ pub(super) async fn sse_events(
         // Send retry directive as first event
         yield Ok(Event::default().retry(Duration::from_secs(5)));
 
+        // See `cpu_watchdog::should_disconnect_for_lag` — `consecutive` resets on
+        // every clean recv, `cumulative` never resets for this connection's life.
+        // This is the global bus, not a per-session channel, so there is no single
+        // session to attribute the lag to — only the connection itself decides
+        // whether to keep going.
+        let mut consecutive_lag: u32 = 0;
+        let mut cumulative_lag: u64 = 0;
+
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    consecutive_lag = 0;
                     let event_name = event_type_name(&event);
                     let allowed = match filter_rx {
                         Some(ref live) => allows(&live.borrow(), event_name),
@@ -217,12 +226,28 @@ pub(super) async fn sse_events(
                     );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // Client fell behind — send a warning event and continue
+                    // Client fell behind — tell it, and only keep going while the
+                    // gap stays within recoverable bounds. Left unbounded, this used
+                    // to loop forever re-lagging with no server-side signal at all
+                    // (the sibling per-session WS handlers had the identical gap —
+                    // see `mcp_http/session.rs` — which is what the `0b421c3a`
+                    // incident's climbing 419ms->12.4s lag traced back to).
                     yield Ok(
                         Event::default()
                             .event("lagged")
                             .data(format!("{{\"missed\":{n}}}")),
                     );
+                    consecutive_lag += 1;
+                    cumulative_lag = cumulative_lag.saturating_add(n);
+                    if crate::cpu_watchdog::should_disconnect_for_lag(consecutive_lag, cumulative_lag) {
+                        tracing::warn!(
+                            source = "diagnostics",
+                            consecutive_lag,
+                            cumulative_lag,
+                            "SSE broadcast lag exceeded the recovery threshold — closing so the client reconnects with a fresh snapshot"
+                        );
+                        break;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     break;
@@ -378,6 +403,60 @@ mod tests {
 
         let _ = state.event_bus.send(dir_changed());
         assert!(next_chunk(&mut body).await.is_none());
+    }
+
+    /// Before this fix, a lagging SSE stream sent a `"lagged"` event and kept
+    /// looping forever — the exact shape behind the `0b421c3a` incident's
+    /// climbing 419ms->12.4s lag on the sibling per-session WS handlers (this
+    /// route rides the *global* bus, so no single session owns the lag, but
+    /// the same unbounded-retry gap existed here too). Publishing far more
+    /// than the channel's capacity before ever polling forces the very first
+    /// `recv()` to report a `missed` count comfortably past
+    /// `cpu_watchdog::MAX_CUMULATIVE_LAG` in one shot, so this doesn't need to
+    /// orchestrate several consecutive `Lagged`s to prove the point.
+    #[tokio::test]
+    async fn a_stream_that_lags_past_the_cumulative_bound_closes_instead_of_looping_forever() {
+        let state = crate::mcp_http::tests::test_state();
+        let response = sse_events(
+            State(state.clone()),
+            Query(SseQuery {
+                types: None,
+                stream_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        let mut body = response.into_body().into_data_stream();
+        assert!(
+            next_chunk(&mut body)
+                .await
+                .is_some_and(|c| c.contains("retry")),
+            "the stream opens with the retry directive"
+        );
+
+        // Far more than the bus's capacity (256), all before the stream is
+        // ever polled again, so the first recv() sees one big Lagged report.
+        for _ in 0..2000 {
+            let _ = state.event_bus.send(repo_changed());
+        }
+
+        let lagged_chunk = next_chunk(&mut body)
+            .await
+            .expect("a lag this large must be reported, not silently dropped");
+        assert!(
+            lagged_chunk.contains("lagged"),
+            "expected a lagged event, got: {lagged_chunk}"
+        );
+
+        // If the loop had kept going (the pre-fix behavior), this next event —
+        // published with no filter active to hide it — would show up as the
+        // very next chunk. It must not: the stream already closed.
+        let _ = state.event_bus.send(dir_changed());
+        assert!(
+            next_chunk(&mut body).await.is_none(),
+            "the stream must have closed after crossing the cumulative lag bound, \
+             not kept accepting further events"
+        );
     }
 
     /// The registry must not outlive the streams it describes: every entry is
