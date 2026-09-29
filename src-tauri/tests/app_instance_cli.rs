@@ -134,6 +134,22 @@ fn tuic_remote_invalid_env_instance_refuses_to_start() {
     assert!(!env.default_config().exists());
 }
 
+/// A blank `TUIC_APP_INSTANCE` is treated as unset (`select_app_instance_from_env`
+/// ignores blank values), so the default instance is used and nothing is refused.
+#[test]
+fn tuic_remote_blank_env_instance_behaves_as_unset() {
+    let env = IsolatedEnv::new();
+    let output = run_cli_with_vars(
+        &env,
+        &["--set-password"],
+        Some("test-user\n".to_owned() + PASSWORD + "\n"),
+        &[("TUIC_APP_INSTANCE", "  ")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(env.default_config().is_file());
+    assert!(!env.named_config_dir("").exists(), "no instances/ dir may be created");
+}
+
 #[test]
 fn named_config_ignores_seeded_legacy_directories() {
     let env = IsolatedEnv::new();
