@@ -261,10 +261,17 @@ export function OutputView(props: OutputViewProps) {
 
 	function renderLine(line: LogLine) {
 		const text = line.spans.map((span) => span.text).join("");
+		let indent = 0;
+		for (const char of text) {
+			if (char === " ") indent++;
+			else if (char === "\t") indent += 8 - (indent % 8);
+			else break;
+		}
+		const wrapStyle = indent ? { "--wrap-indent": `${indent}ch` } : undefined;
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
 		if (links.length === 0) {
 			return (
-				<div class={styles.line}>
+				<div class={styles.line} style={wrapStyle}>
 					<Index each={line.spans}>
 						{(span) => {
 							const style = spanStyle(span());
@@ -297,7 +304,7 @@ export function OutputView(props: OutputViewProps) {
 			offset = link.end;
 		}
 		parts.push(...styledRange(line, offset, text.length));
-		return <div class={styles.line}>{parts}</div>;
+		return <div class={styles.line} style={wrapStyle}>{parts}</div>;
 	}
 
 	return (
