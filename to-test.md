@@ -1,3 +1,7 @@
+## MCP reaper refresh race (1259-62e3) — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, keep a disposable MCP bridge with a stable `x-tuic-session` active across the one-hour idle boundary and send a ping near a maintenance sweep. Confirm no reap log for the refreshed protocol session and that `agent action=inbox` still resolves its identity. The deterministic race and expiry cases are covered by Rust tests; the running backend does not hot-reload this fix.
+
 ## Worktree removal recovery (1258-e9ba) — Rust restart required
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, remove a disposable clean landed worktree with ignored build artifacts through `repo worktree_remove`. Confirm the directory is gone before the branch disappears. The running backend does not hot-reload this Rust change.
