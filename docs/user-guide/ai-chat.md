@@ -88,8 +88,9 @@ Select text in user messages, answers, code blocks, and tool output and use
 `Cmd/Ctrl+C` to copy it. **Copy** appears when a message is hovered or has
 keyboard focus. It copies the raw message text. Code blocks have their own
 Copy action. Both use the same clipboard adapter as the terminal. Web links open in the
-system browser; file links and plain source paths are resolved by the backend
-and opened in TUICommander's file viewer or editor, as they are from a terminal.
+system browser; file links and plain source paths are resolved by the backend.
+Files open in TUICommander's viewer or editor, while directories open in the
+file browser, including when AI Chat is detached.
 With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
 `Cmd/Ctrl+F` opens its search, and `Cmd/Ctrl+K` clears the visible history of
 the current tab. Clearing the view does not delete ego's saved conversation.

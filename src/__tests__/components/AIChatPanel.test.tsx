@@ -20,6 +20,10 @@ const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
 	mockOpenFile: vi.fn(),
 	mockOpenUrl: vi.fn(),
 }));
+const { mockSetFolderRoot, mockShowFileBrowser } = vi.hoisted(() => ({
+	mockSetFolderRoot: vi.fn(),
+	mockShowFileBrowser: vi.fn(),
+}));
 
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
@@ -53,6 +57,8 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
+		setFileBrowserExternalRoot: mockSetFolderRoot,
+		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
 }));
 
@@ -503,6 +509,70 @@ describe("AIChatPanel: transcript actions", () => {
 		aiChatPanelAdapter.handleAction?.("open-file", { path: "/repo/tuicommander/src/main.ts" });
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
+	it("keeps a file link's line and column when opening the resolved file", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path")
+				return { absolute_path: "/repo/tuicommander/src/main.ts", is_directory: false };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[file](src/main.ts:12:3)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts", undefined, 12, 3);
+		expect(mockSetFolderRoot).not.toHaveBeenCalled();
+	});
+	it("reveals a resolved directory link in the file browser", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[source](src/)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(mockSetFolderRoot).toHaveBeenCalledWith("/repo/tuicommander/src");
+		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
+		expect(mockOpenFile).not.toHaveBeenCalled();
+	});
+	it("sends a detached directory link to the main-window file browser", async () => {
+		window.history.replaceState(null, "", "/?mode=panel");
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "get_home_directory") return HOME;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "[source](src/)" } },
+		});
+		await settle();
+		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
+		await settle();
+		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+			panelId: "ai-chat",
+			action: "open-directory",
+			data: { path: "/repo/tuicommander/src" },
+		});
+		aiChatPanelAdapter.handleAction?.("open-directory", { path: "/repo/tuicommander/src" });
+		expect(mockSetFolderRoot).toHaveBeenCalledWith("/repo/tuicommander/src");
+		expect(mockShowFileBrowser).toHaveBeenCalledWith(true);
+		expect(mockOpenFile).not.toHaveBeenCalled();
+	});
 	it("copies the raw user message, assistant answer, and fenced code", async () => {
 		const { container } = await renderPanel();
 		await settle();
@@ -614,6 +684,7 @@ describe("AIChatPanel: transcript actions", () => {
 		(container.querySelector(".assistantMsg a") as HTMLAnchorElement).click();
 		await settle();
 		expect(mockOpenFile).not.toHaveBeenCalled();
+		expect(mockSetFolderRoot).not.toHaveBeenCalled();
 		expect(container.textContent).toContain("file");
 	});
 });
