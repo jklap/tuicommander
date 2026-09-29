@@ -723,25 +723,253 @@ fn diff_base_args(scope: &Option<String>) -> Result<Vec<String>, String> {
     }
 }
 
-/// Get git diff for a repository
+/// Get git diff for a repository. `options` is `None`/default for the
+/// ordinary byte-exact diff (plain `git diff`, unchanged); any non-default
+/// whitespace/case option routes through [`get_git_diff_with_options_sync`]
+/// instead, which re-diffs each changed file's content through the shared
+/// [`crate::diff_options`] engine — `git diff` itself has no flag for
+/// leading-only whitespace or case-insensitive comparison.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn get_git_diff(path: String, scope: Option<String>) -> Result<String, String> {
+pub(crate) async fn get_git_diff(
+    path: String,
+    scope: Option<String>,
+    options: Option<crate::diff_options::DiffOptions>,
+) -> Result<String, String> {
+    let opts = options.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
-        let repo_path = PathBuf::from(&path);
-
-        let mut args = diff_base_args(&scope)?;
-        args.push("--color=never".into());
-
-        let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = git_cmd(&repo_path)
-            .args(&args_str)
-            .run()
-            .map_err(|e| format!("git diff failed: {e}"))?;
-
-        Ok(out.stdout)
+        if opts.is_noop() {
+            get_git_diff_plain_sync(&path, &scope)
+        } else {
+            get_git_diff_with_options_sync(&path, &scope, opts)
+        }
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
+}
+
+/// The plain, byte-exact `git diff` path — identical to `get_git_diff`'s
+/// entire body before `options` was added.
+fn get_git_diff_plain_sync(path: &str, scope: &Option<String>) -> Result<String, String> {
+    let repo_path = PathBuf::from(path);
+
+    let mut args = diff_base_args(scope)?;
+    args.push("--color=never".into());
+
+    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let out = git_cmd(&repo_path)
+        .args(&args_str)
+        .run()
+        .map_err(|e| format!("git diff failed: {e}"))?;
+
+    Ok(out.stdout)
+}
+
+/// Above this many changed files, re-diffing every one's content through
+/// `diff_options` (which needs to read both sides' full content, unlike
+/// plain `git diff`) isn't worth it — fall back to the plain diff and drop
+/// the requested options, rather than risk a huge, slow response.
+const MAX_OPTIONS_DIFF_FILES: usize = 500;
+
+/// Which git "side" a diff endpoint compares, so a whitespace/case-option
+/// diff can read each side's real content the same way `git diff` itself
+/// would resolve it for a given `scope`.
+enum DiffSide {
+    Worktree,
+    Index,
+    Head,
+    Commit(String),
+}
+
+/// Map a `scope` string (see [`diff_base_args`]) to the (old, new) sides a
+/// content-level diff needs to read.
+fn diff_sides_for_scope(scope: &Option<String>) -> Result<(DiffSide, DiffSide), String> {
+    match scope.as_deref() {
+        Some("staged") => Ok((DiffSide::Head, DiffSide::Index)),
+        Some("head") => Ok((DiffSide::Head, DiffSide::Worktree)),
+        Some(hash) if !hash.is_empty() => {
+            validate_git_hash(hash)?;
+            Ok((
+                DiffSide::Commit(format!("{hash}^")),
+                DiffSide::Commit(hash.to_string()),
+            ))
+        }
+        _ => Ok((DiffSide::Index, DiffSide::Worktree)),
+    }
+}
+
+/// Read one side's content for `rel_path`. `None` means the file doesn't
+/// exist on that side (a new or deleted file) — including when `git show`
+/// fails for any other reason, which is treated the same as "not present"
+/// rather than propagating an error for one file out of a whole-repo diff.
+fn read_diff_side(repo_path: &Path, side: &DiffSide, rel_path: &str) -> Option<Vec<u8>> {
+    match side {
+        DiffSide::Worktree => std::fs::read(repo_path.join(rel_path)).ok(),
+        DiffSide::Index => show_blob(repo_path, &format!(":{rel_path}")),
+        DiffSide::Head => show_blob(repo_path, &format!("HEAD:{rel_path}")),
+        DiffSide::Commit(rev) => show_blob(repo_path, &format!("{rev}:{rel_path}")),
+    }
+}
+
+fn show_blob(repo_path: &Path, spec: &str) -> Option<Vec<u8>> {
+    let raw = git_cmd(repo_path).args(["show", spec]).run_raw().ok()?;
+    raw.status.success().then_some(raw.stdout)
+}
+
+/// Build one file's `diff --git ...` block (headers + hunks) by reading
+/// `display_path`'s real content on both `old_side`/`new_side` and diffing
+/// it through [`crate::diff_options::unified_diff`]. Returns an empty string
+/// when the file has no difference under `opts`.
+fn diff_content_with_options(
+    repo_path: &Path,
+    old_side: &DiffSide,
+    new_side: &DiffSide,
+    display_path: &str,
+    opts: crate::diff_options::DiffOptions,
+) -> String {
+    let old_bytes = read_diff_side(repo_path, old_side, display_path);
+    let new_bytes = read_diff_side(repo_path, new_side, display_path);
+    let old_exists = old_bytes.is_some();
+    let new_exists = new_bytes.is_some();
+    let old_data = old_bytes.unwrap_or_default();
+    let new_data = new_bytes.unwrap_or_default();
+
+    if old_data == new_data {
+        return String::new();
+    }
+
+    let mut header = format!("diff --git a/{display_path} b/{display_path}\n");
+    if !old_exists {
+        header.push_str("new file mode 100644\n");
+    } else if !new_exists {
+        header.push_str("deleted file mode 100644\n");
+    }
+
+    if crate::diff_options::is_binary(&old_data) || crate::diff_options::is_binary(&new_data) {
+        header.push_str(&format!(
+            "Binary files a/{display_path} and b/{display_path} differ\n"
+        ));
+        return header;
+    }
+
+    let old_text = String::from_utf8_lossy(&old_data);
+    let new_text = String::from_utf8_lossy(&new_data);
+    let (body, additions, deletions) =
+        crate::diff_options::unified_diff(&old_text, &new_text, 3, opts);
+    if additions == 0 && deletions == 0 {
+        return String::new();
+    }
+
+    let a_label = if old_exists {
+        format!("a/{display_path}")
+    } else {
+        "/dev/null".to_string()
+    };
+    let b_label = if new_exists {
+        format!("b/{display_path}")
+    } else {
+        "/dev/null".to_string()
+    };
+    header.push_str(&format!("--- {a_label}\n"));
+    header.push_str(&format!("+++ {b_label}\n"));
+    header.push_str(&body);
+    header
+}
+
+/// One `git diff --name-status -z` record.
+struct ChangedEntry {
+    status: char,
+    path: String,
+    old_path: Option<String>,
+}
+
+/// Parse `git diff --name-status -z` output. A rename/copy record
+/// (`R###`/`C###`) carries both the old and new path; every other status
+/// carries just one.
+fn parse_name_status_z(raw: &str) -> Vec<ChangedEntry> {
+    let mut parts = raw.split('\0').filter(|s| !s.is_empty());
+    let mut entries = Vec::new();
+    while let Some(status_field) = parts.next() {
+        let status = status_field.chars().next().unwrap_or('M');
+        if status == 'R' || status == 'C' {
+            let Some(old_path) = parts.next() else { break };
+            let Some(new_path) = parts.next() else { break };
+            entries.push(ChangedEntry {
+                status,
+                path: new_path.to_string(),
+                old_path: Some(old_path.to_string()),
+            });
+        } else {
+            let Some(path) = parts.next() else { break };
+            entries.push(ChangedEntry {
+                status,
+                path: path.to_string(),
+                old_path: None,
+            });
+        }
+    }
+    entries
+}
+
+/// The whitespace/case-option diff path for the whole-repo `get_git_diff`.
+/// Lists changed files with `git diff --name-status -z`, then rebuilds each
+/// file's diff from real content instead of trusting plain `git diff`'s
+/// output, since none of the four options has a `git diff` flag equivalent
+/// for every case (leading-only whitespace, case-insensitivity). Renames and
+/// copies get a stub header — diffing across a rename correctly needs the
+/// old path's old content vs the new path's new content, which is out of
+/// scope for this pass, matching how binary files are already handled.
+fn get_git_diff_with_options_sync(
+    path: &str,
+    scope: &Option<String>,
+    opts: crate::diff_options::DiffOptions,
+) -> Result<String, String> {
+    let repo_path = PathBuf::from(path);
+
+    let mut list_args = diff_base_args(scope)?;
+    list_args.push("--name-status".into());
+    list_args.push("-z".into());
+    let list_args_str: Vec<&str> = list_args.iter().map(|s| s.as_str()).collect();
+    let out = git_cmd(&repo_path)
+        .args(&list_args_str)
+        .run()
+        .map_err(|e| format!("git diff --name-status failed: {e}"))?;
+    let entries = parse_name_status_z(&out.stdout);
+
+    if entries.len() > MAX_OPTIONS_DIFF_FILES {
+        tracing::warn!(
+            source = "git",
+            "diff-options requested for {} changed files (> {MAX_OPTIONS_DIFF_FILES}); \
+             falling back to the plain diff without whitespace/case options",
+            entries.len()
+        );
+        return get_git_diff_plain_sync(path, scope);
+    }
+
+    let (old_side, new_side) = diff_sides_for_scope(scope)?;
+    let mut patch = String::new();
+    for entry in &entries {
+        if entry.status == 'R' || entry.status == 'C' {
+            let old_path = entry.old_path.as_deref().unwrap_or_default();
+            let new_path = &entry.path;
+            let verb = if entry.status == 'R' {
+                "rename"
+            } else {
+                "copy"
+            };
+            patch.push_str(&format!(
+                "diff --git a/{old_path} b/{new_path}\n{verb} from {old_path}\n{verb} to {new_path}\n"
+            ));
+            continue;
+        }
+        patch.push_str(&diff_content_with_options(
+            &repo_path,
+            &old_side,
+            &new_side,
+            &entry.path,
+            opts,
+        ));
+    }
+    Ok(patch)
 }
 
 /// Get diffs for multiple files in a single git call.
@@ -1001,13 +1229,20 @@ const NULL_DEVICE: &str = "NUL";
 /// Get diff for a single file.
 /// When `untracked` is `Some(true)`, skip the `ls-files` probe and go directly
 /// to `--no-index` diff (the frontend already knows the file status).
+///
+/// `options` only takes effect for a *tracked* file: an untracked/new file's
+/// old side is always empty, so every line shows as added regardless of
+/// whitespace/case normalization — the untracked fast path above is
+/// unaffected and stays byte-identical.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_file_diff(
     path: String,
     file: String,
     scope: Option<String>,
     untracked: Option<bool>,
+    options: Option<crate::diff_options::DiffOptions>,
 ) -> Result<String, String> {
+    let opts = options.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
 
@@ -1060,6 +1295,13 @@ pub(crate) async fn get_file_diff(
                 }
                 return Ok(String::from_utf8_lossy(&raw.stdout).to_string());
             }
+        }
+
+        if !opts.is_noop() {
+            let (old_side, new_side) = diff_sides_for_scope(&scope)?;
+            return Ok(diff_content_with_options(
+                &repo_path, &old_side, &new_side, &file, opts,
+            ));
         }
 
         let mut args = diff_base_args(&scope)?;
@@ -1262,7 +1504,7 @@ pub(crate) async fn get_gutter_changes(
     if !tracked {
         return Ok(Vec::new());
     }
-    let diff = get_file_diff(path, file, scope, Some(false)).await?;
+    let diff = get_file_diff(path, file, scope, Some(false), None).await?;
     Ok(parse_diff_to_changes(&diff))
 }
 
@@ -4304,6 +4546,7 @@ mod tests {
             "../outside.txt".to_string(),
             None,
             None,
+            None,
         )
         .await;
 
@@ -4920,6 +5163,7 @@ mod tests {
             path.to_string_lossy().to_string(),
             "new.json".to_string(),
             Some("head".to_string()),
+            None,
             None,
         )
         .await
@@ -6780,5 +7024,192 @@ index 111..222 100644
         split_diff_output(output, &mut result);
         assert_eq!(result.len(), 1);
         assert!(result.contains_key("only.txt"));
+    }
+
+    // ─────────────────────── diff-options threading (git.rs) ────────────────
+
+    #[tokio::test]
+    async fn get_git_diff_with_default_options_is_byte_identical_to_omitting_them() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("initial.txt"), "hello\nworld\n").expect("write");
+        let repo_path = path.to_string_lossy().to_string();
+
+        let without = get_git_diff(repo_path.clone(), None, None).await.unwrap();
+        let with_default = get_git_diff(
+            repo_path,
+            None,
+            Some(crate::diff_options::DiffOptions::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(without, with_default);
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_ignore_leading_ws_hides_an_indentation_only_change() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        // Normalize the committed content to end in a newline first, so the
+        // worktree-only change below differs ONLY in leading whitespace, not
+        // also in line-ending style (the original commit's "hello" has none).
+        std::fs::write(path.join("initial.txt"), "hello\n").expect("write");
+        git_in(&path, &["add", "initial.txt"]);
+        git_in(&path, &["commit", "-m", "normalize newline"]);
+        std::fs::write(path.join("initial.txt"), "  hello\n").expect("write");
+        let repo_path = path.to_string_lossy().to_string();
+
+        let plain = get_git_diff(repo_path.clone(), None, None).await.unwrap();
+        assert!(
+            !plain.is_empty(),
+            "an indentation-only change should show up in the plain diff"
+        );
+
+        let with_option = get_git_diff(
+            repo_path,
+            None,
+            Some(crate::diff_options::DiffOptions {
+                ignore_leading_ws: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            with_option.is_empty(),
+            "ignore_leading_ws should hide a pure-indentation change: {with_option}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_ignore_case_hides_a_case_only_change_but_not_a_real_one() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("initial.txt"), "HELLO\n").expect("write");
+        git_in(&path, &["add", "initial.txt"]);
+        git_in(&path, &["commit", "-m", "case change"]);
+        std::fs::write(path.join("initial.txt"), "hello\n").expect("write");
+        let repo_path = path.to_string_lossy().to_string();
+
+        let opts = crate::diff_options::DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+        let with_option = get_git_diff(repo_path.clone(), None, Some(opts))
+            .await
+            .unwrap();
+        assert!(
+            with_option.is_empty(),
+            "ignore_case should hide a pure-case change: {with_option}"
+        );
+
+        std::fs::write(path.join("initial.txt"), "goodbye\n").expect("write");
+        let real_change = get_git_diff(repo_path, None, Some(opts)).await.unwrap();
+        assert!(
+            real_change.contains("-HELLO") && real_change.contains("+goodbye"),
+            "a real content change must still show up under ignore_case: {real_change}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_file_diff_with_options_honors_the_staged_scope() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("initial.txt"), "foo\n").expect("write");
+        git_in(&path, &["add", "initial.txt"]);
+        let repo_path = path.to_string_lossy().to_string();
+
+        let opts = crate::diff_options::DiffOptions {
+            ignore_trailing_ws: true,
+            ..Default::default()
+        };
+        let staged = get_file_diff(
+            repo_path,
+            "initial.txt".to_string(),
+            Some("staged".to_string()),
+            None,
+            Some(opts),
+        )
+        .await
+        .unwrap();
+        assert!(
+            staged.contains("-hello") && staged.contains("+foo"),
+            "{staged}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_with_options_detects_a_binary_change_without_diffing_content() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("bin.dat"), [0u8, 1, 2, 3]).expect("write");
+        git_in(&path, &["add", "bin.dat"]);
+        git_in(&path, &["commit", "-m", "add binary"]);
+        std::fs::write(path.join("bin.dat"), [4u8, 5, 6, 7, 8]).expect("write");
+        let repo_path = path.to_string_lossy().to_string();
+
+        let opts = crate::diff_options::DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+        let diff = get_git_diff(repo_path, None, Some(opts)).await.unwrap();
+        assert!(diff.contains("Binary files"), "{diff}");
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_with_options_stubs_a_rename_instead_of_diffing_it() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        git_in(&path, &["mv", "initial.txt", "renamed.txt"]);
+        let repo_path = path.to_string_lossy().to_string();
+
+        let opts = crate::diff_options::DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+        let diff = get_git_diff(repo_path, Some("staged".to_string()), Some(opts))
+            .await
+            .unwrap();
+        assert!(
+            diff.contains("rename from initial.txt") && diff.contains("rename to renamed.txt"),
+            "{diff}"
+        );
+    }
+
+    #[test]
+    fn parse_name_status_z_splits_ordinary_and_rename_records() {
+        let raw = "M\0a.txt\0R100\0old.txt\0new.txt\0A\0b.txt\0";
+        let entries = parse_name_status_z(raw);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].status, 'M');
+        assert_eq!(entries[0].path, "a.txt");
+        assert_eq!(entries[0].old_path, None);
+        assert_eq!(entries[1].status, 'R');
+        assert_eq!(entries[1].path, "new.txt");
+        assert_eq!(entries[1].old_path, Some("old.txt".to_string()));
+        assert_eq!(entries[2].status, 'A');
+        assert_eq!(entries[2].path, "b.txt");
+    }
+
+    #[tokio::test]
+    async fn get_git_diff_with_options_falls_back_to_plain_diff_above_the_file_cap() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        // One more file than the cap, each with a pure-case change so an
+        // options-aware diff would hide it — the fallback (which drops the
+        // options and runs plain `git diff`) must NOT hide these.
+        for i in 0..=MAX_OPTIONS_DIFF_FILES {
+            std::fs::write(path.join(format!("f{i}.txt")), format!("line{i}\n")).expect("write");
+        }
+        git_in(&path, &["add", "."]);
+        git_in(&path, &["commit", "-m", "many files"]);
+        for i in 0..=MAX_OPTIONS_DIFF_FILES {
+            std::fs::write(path.join(format!("f{i}.txt")), format!("LINE{i}\n")).expect("write");
+        }
+        let repo_path = path.to_string_lossy().to_string();
+
+        let opts = crate::diff_options::DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+        let diff = get_git_diff(repo_path, None, Some(opts)).await.unwrap();
+        assert!(
+            diff.contains("-line0") && diff.contains("+LINE0"),
+            "above the file cap, options must be dropped and the plain diff shown: {diff}"
+        );
     }
 }

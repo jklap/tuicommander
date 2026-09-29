@@ -615,6 +615,18 @@ describe("transport", () => {
 			expect(result.path).toBe("/repo/diff?path=%2Fmy%2Frepo");
 		});
 
+		it("maps get_git_diff's options to ignoreLeadingWs/ignoreTrailingWs/ignoreWsAmount/ignoreCase query params", () => {
+			const allOff = mapCommandToHttp("get_git_diff", { path: "/my/repo", options: {} });
+			expect(allOff.path).toBe("/repo/diff?path=%2Fmy%2Frepo");
+
+			const someOn = mapCommandToHttp("get_git_diff", {
+				path: "/my/repo",
+				scope: "staged",
+				options: { ignoreLeadingWs: true, ignoreCase: true, ignoreTrailingWs: false },
+			});
+			expect(someOn.path).toBe("/repo/diff?path=%2Fmy%2Frepo&scope=staged&ignoreLeadingWs=true&ignoreCase=true");
+		});
+
 		it("maps get_diff_stats to GET /repo/diff-stats?path=", () => {
 			const result = mapCommandToHttp("get_diff_stats", { path: "/my/repo" });
 			expect(result.method).toBe("GET");
@@ -625,6 +637,23 @@ describe("transport", () => {
 			const result = mapCommandToHttp("get_changed_files", { path: "/my/repo" });
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/repo/files?path=%2Fmy%2Frepo");
+		});
+
+		it("maps get_file_diff to GET /repo/file-diff?path=&file=, with optional scope/untracked/options", () => {
+			const bare = mapCommandToHttp("get_file_diff", { path: "/my/repo", file: "a.ts" });
+			expect(bare.method).toBe("GET");
+			expect(bare.path).toBe("/repo/file-diff?path=%2Fmy%2Frepo&file=a.ts");
+
+			const full = mapCommandToHttp("get_file_diff", {
+				path: "/my/repo",
+				file: "a.ts",
+				scope: "staged",
+				untracked: true,
+				options: { ignoreWsAmount: true },
+			});
+			expect(full.path).toBe(
+				"/repo/file-diff?path=%2Fmy%2Frepo&file=a.ts&scope=staged&untracked=true&ignoreWsAmount=true",
+			);
 		});
 
 		it("maps list_review_sessions to GET /repo/session-review/sessions?path=, with optional limit/includeCounts", () => {
