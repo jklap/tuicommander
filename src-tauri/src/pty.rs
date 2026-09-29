@@ -7541,9 +7541,11 @@ impl ChunkProcessor {
                         // accumulator) so `clear_agent_type_on_confirmed_shell` can
                         // snapshot the live identity/title into `resumable_session`
                         // the instant the shell confirms the agent has exited — see
-                        // that function's doc comment.
+                        // that function's doc comment. `ccsession` additionally feeds
+                        // `AppState.claude_session_map` (Session Diff Review's "jump
+                        // to tab" feature, below).
                         "ccsession" => {
-                            let decoded = percent_decode_osc_payload(&payload);
+                            let claude_session_id = percent_decode_osc_payload(&payload);
                             if let Some(mut entry) =
                                 state.session_maps.session_states.get_mut(session_id)
                             {
@@ -7551,14 +7553,26 @@ impl ChunkProcessor {
                                 // already recorded means a new agent session
                                 // started in this pane — any previously
                                 // snapshotted resumable session is stale.
-                                if entry.agent_session_id.as_deref() != Some(decoded.as_str()) {
+                                if entry.agent_session_id.as_deref()
+                                    != Some(claude_session_id.as_str())
+                                {
                                     entry.resumable_session = None;
                                 }
-                                entry.agent_session_id = Some(decoded.clone());
+                                entry.agent_session_id = Some(claude_session_id.clone());
                             }
+                            // Claude session id ↔ TUIC PTY session id map (Session
+                            // Diff Review's "jump to tab" feature; see
+                            // `AppState::claude_session_map`/`tuic_to_claude_session`
+                            // and `tuic_session_for_claude_session`).
+                            state
+                                .claude_session_map
+                                .insert(claude_session_id.clone(), session_id.to_string());
+                            state
+                                .tuic_to_claude_session
+                                .insert(session_id.to_string(), claude_session_id.clone());
                             tuic_events.push(ParsedEvent::AgentMetadata {
                                 field: "session_id".to_string(),
-                                value: decoded,
+                                value: claude_session_id,
                             });
                         }
                         "cwd" => {
@@ -8752,6 +8766,11 @@ fn retire_peer_identity(state: &AppState, tuic_session: &str) {
 /// exited normally leaked its terminal alias for the life of the process.
 /// **A new per-session map belongs in one of these two functions and nowhere else.**
 fn remove_live_session_state(session_id: &str, state: &AppState) {
+    // Reverse-map removal keeps this O(1) instead of scanning
+    // `claude_session_map` for a matching value.
+    if let Some((_, claude_session_id)) = state.tuic_to_claude_session.remove(session_id) {
+        state.claude_session_map.remove(&claude_session_id);
+    }
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast

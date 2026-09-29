@@ -438,6 +438,31 @@ pub enum AppEvent {
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
     DirChanged { dir_path: String },
+    /// A watched Claude Code session's transcript (or one of its subagent
+    /// transcripts) changed on disk — see `session_review_watcher.rs`. The
+    /// receiver should invalidate any cached `SessionReview` for
+    /// `session_id` and re-fetch if it's currently displayed.
+    #[serde(rename = "session-review-changed")]
+    SessionReviewChanged {
+        repo_path: String,
+        session_id: String,
+    },
+    /// A new Claude Code session `.jsonl` appeared in `repo_path`'s project
+    /// directory while its session list was being watched — the receiver
+    /// should re-list sessions for this repo.
+    #[serde(rename = "review-sessions-changed")]
+    ReviewSessionsChanged { repo_path: String },
+    /// The live watcher observed the first change to a Claude Code session's
+    /// transcript since it started being watched — fires once per session
+    /// (see `AppState::announced_edit_sessions`), for a "this session made
+    /// an edit" auto-open/notification feature to key off of.
+    #[serde(rename = "agent-edit-observed")]
+    AgentEditObserved {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tuic_session_id: Option<String>,
+        claude_session_id: String,
+        repo_path: String,
+    },
     /// A worktree was created via MCP — frontend may offer to switch to it
     #[serde(rename = "worktree-created")]
     WorktreeCreated(WorktreeCreatedPayload),
@@ -2436,6 +2461,24 @@ pub struct AppState {
     pub(crate) repo_head_emits_suppressed: AtomicU64,
     /// File watchers for directory contents (keyed by absolute dir path)
     pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
+    /// Live watchers for a Session Diff Review's transcript + subagent files,
+    /// keyed by `(project_dir, claude_session_id)` and ref-counted so multiple
+    /// UI subscribers to the same session share one underlying watcher — see
+    /// `session_review_watcher.rs`.
+    pub(crate) session_review_watchers:
+        DashMap<(String, String), crate::session_review_watcher::SessionWatchEntry>,
+    /// Claude session id → the TUIC PTY session currently running it, from
+    /// the `ccsession` OSC 7770 metadata verb (`pty.rs`). Read via
+    /// `AppState::tuic_session_for_claude_session`.
+    pub(crate) claude_session_map: DashMap<String, String>,
+    /// The reverse of `claude_session_map`, so a PTY session's cleanup path
+    /// can evict its entry in O(1) without scanning `claude_session_map`.
+    pub(crate) tuic_to_claude_session: DashMap<String, String>,
+    /// Claude session ids for which `AgentEditObserved` has already fired —
+    /// so the live watcher announces a session's first detected edit exactly
+    /// once, not on every subsequent debounced change. Cleared when the
+    /// session's last watcher subscriber unwatches, or its PTY session closes.
+    pub(crate) announced_edit_sessions: DashMap<String, ()>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
     pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
     /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
@@ -2753,6 +2796,14 @@ impl AppState {
     /// its id is `None` — and get double-applied. Routing a global event
     /// through a bare `event_bus.send` instead skips the lossless lane
     /// entirely, so only the broadcast arm ever sees it.
+    /// The TUIC PTY session currently running `claude_session_id`, if any —
+    /// see `claude_session_map`'s doc comment for how this is populated.
+    pub(crate) fn tuic_session_for_claude_session(&self, claude_session_id: &str) -> Option<String> {
+        self.claude_session_map
+            .get(claude_session_id)
+            .map(|e| e.clone())
+    }
+
     pub(crate) fn emit_dual(&self, event: AppEvent) {
         #[cfg(feature = "desktop")]
         if let Some(name) = crate::event_wire::window_event_name(&event)
@@ -3796,6 +3847,10 @@ impl AppState {
             repo_head_targets: DashMap::new(),
             repo_head_emits_suppressed: AtomicU64::new(0),
             dir_watchers: DashMap::new(),
+            session_review_watchers: DashMap::new(),
+            claude_session_map: DashMap::new(),
+            tuic_to_claude_session: DashMap::new(),
+            announced_edit_sessions: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: build_http_client(),
@@ -5472,6 +5527,10 @@ impl AppState {
             | AppEvent::AgentWrapPromptResolved { .. }
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
+            // A transcript-watcher signal, not agent/shell process state.
+            | AppEvent::SessionReviewChanged { .. }
+            | AppEvent::ReviewSessionsChanged { .. }
+            | AppEvent::AgentEditObserved { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }
             | AppEvent::PeerRegistered { .. }

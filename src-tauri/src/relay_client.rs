@@ -715,6 +715,22 @@ mod tests {
                 session_id: "s1".to_string(),
                 parsed: serde_json::json!({ "type": "question" }).into(),
             },
+            // Unlike `DirChanged` (raw filesystem-watcher churn with no
+            // remote consumer), these three ARE meaningful to a remote
+            // client watching Session Diff Review over the browser/PWA —
+            // deliberately not added to `is_relayable`'s exclusion list.
+            AppEvent::SessionReviewChanged {
+                repo_path: "/repo".to_string(),
+                session_id: "claude-1".to_string(),
+            },
+            AppEvent::ReviewSessionsChanged {
+                repo_path: "/repo".to_string(),
+            },
+            AppEvent::AgentEditObserved {
+                tuic_session_id: Some("s1".to_string()),
+                claude_session_id: "claude-1".to_string(),
+                repo_path: "/repo".to_string(),
+            },
         ] {
             assert!(
                 is_relayable(&event),

@@ -260,8 +260,34 @@ export function useRepository() {
 		repoPath: string,
 		sessionId: string,
 		includeSubagents?: boolean,
+		options?: DiffOptions,
 	): Promise<SessionReview> {
-		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents });
+		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents, options });
+	}
+
+	/** Start (or add a subscriber to) a live watch on this session's transcript
+	 *  and subagent files — the backend emits `session-review-changed`/
+	 *  `agent-edit-observed` while it's watched. Best-effort: a failure (e.g.
+	 *  the project directory doesn't exist yet) only means live updates won't
+	 *  arrive, not that the review itself is unavailable, so this swallows
+	 *  rather than throws, matching `listReviewSessions`. */
+	async function watchSessionReview(repoPath: string, sessionId: string): Promise<void> {
+		try {
+			await invoke<void>("watch_session_review", { repoPath, sessionId });
+		} catch (err) {
+			appLogger.error("git", "Failed to watch session review", err);
+		}
+	}
+
+	/** Drop this subscriber's watch — call exactly once per successful
+	 *  `watchSessionReview` for the same repoPath/sessionId, when the
+	 *  subscriber goes away (e.g. the tab closes or the session changes). */
+	async function unwatchSessionReview(repoPath: string, sessionId: string): Promise<void> {
+		try {
+			await invoke<void>("unwatch_session_review", { repoPath, sessionId });
+		} catch (err) {
+			appLogger.error("git", "Failed to unwatch session review", err);
+		}
 	}
 
 	/** Undo one step, keeping every later step. Throws — the caller surfaces the failure. */
@@ -601,6 +627,8 @@ export function useRepository() {
 		getRecentCommits,
 		listReviewSessions,
 		getSessionReview,
+		watchSessionReview,
+		unwatchSessionReview,
 		revertSessionStep,
 		revertFileToSessionStart,
 	};
