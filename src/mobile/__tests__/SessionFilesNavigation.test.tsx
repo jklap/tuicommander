@@ -77,6 +77,11 @@ afterEach(() => {
 	history.replaceState(null, "", "/mobile");
 });
 
+async function openSessionFiles(view: ReturnType<typeof render>) {
+	await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await fireEvent.click(view.getByRole("button", { name: "Files" }));
+}
+
 describe("session Files navigation", () => {
 	it("starts on the Sessions tab", () => {
 		mockSessions.current = [];
@@ -101,7 +106,7 @@ describe("session Files navigation", () => {
 		const composer = view.container.querySelector("textarea")!;
 		await fireEvent.input(composer, { target: { value: "unsent draft" } });
 		const writesBeforeBrowse = rpc.mock.calls.filter(([command]) => command === "write_pty").length;
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("list_directory", {
 				repoPath: "/worktrees/feature",
@@ -123,7 +128,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo/nested/src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("list_directory", {
 				repoPath: "/repo/nested",
@@ -138,7 +143,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("C:\\repo\\src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("list_directory", { repoPath: "C:\\repo", subdir: "" }));
 	});
 
@@ -147,7 +152,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session(null)];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/repository path.*unavailable/i));
 		expect(rpc).not.toHaveBeenCalledWith("list_directory", expect.anything());
 	});
@@ -157,7 +162,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo-other/src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/no registered repository/i));
 		expect(rpc).not.toHaveBeenCalledWith("list_directory", expect.anything());
 	});
@@ -167,7 +172,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo", "/refused")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/permission denied/i));
 		expect(view.queryByText("Empty directory")).toBeNull();
 	});
