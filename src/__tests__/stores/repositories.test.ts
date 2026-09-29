@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 describe("repositoriesStore", () => {
 	let store: typeof import("../../stores/repositories").repositoriesStore;
+	let logger: typeof import("../../stores/appLogger").appLogger;
 
 	function lastRepositoryMutation() {
 		const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
@@ -39,6 +40,7 @@ describe("repositoriesStore", () => {
 		}));
 
 		store = (await import("../../stores/repositories")).repositoriesStore;
+		logger = (await import("../../stores/appLogger")).appLogger;
 		store._testSetHydrated(true);
 	});
 
@@ -666,7 +668,13 @@ describe("repositoriesStore", () => {
 					expect(warnSpy).toHaveBeenCalledWith(
 						"[store]",
 						"Repository record had an invalid displayName; using path-derived fallback",
-						expect.objectContaining({ path: "/tmp/shell-repos/xyz-workspace" }),
+					);
+					expect(logger.getEntries()).toContainEqual(
+						expect.objectContaining({
+							level: "warn",
+							source: "store",
+							data: expect.objectContaining({ path: "/tmp/shell-repos/xyz-workspace" }),
+						}),
 					);
 				});
 
@@ -730,7 +738,15 @@ describe("repositoriesStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate(); // Should not throw
 				expect(store.getPaths()).toEqual([]);
-				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to hydrate repositories", expect.any(Error));
+				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to hydrate repositories");
+				expect(logger.getEntries()).toContainEqual(
+					expect.objectContaining({
+						level: "error",
+						source: "store",
+						message: "Failed to hydrate repositories",
+						data: expect.any(Error),
+					}),
+				);
 				errorSpy.mockRestore();
 			});
 		});
@@ -773,7 +789,7 @@ describe("repositoriesStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(store.getPaths()).toEqual([]);
-				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"), "");
+				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"));
 
 				// The file is still the user's only copy. Saving the empty in-memory state
 				// over it is what made the incident unrecoverable, so saves stay blocked.
@@ -828,7 +844,7 @@ describe("repositoriesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"), "");
+				expect(errorSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("mutation delta"));
 			});
 
 			errorSpy.mockRestore();
@@ -895,7 +911,13 @@ describe("repositoriesStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(localStorage.getItem("tui-commander-repos")).not.toBeNull();
-				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to migrate legacy repositories", expect.any(Error));
+				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to migrate legacy repositories");
+				expect(logger.getEntries()).toContainEqual(
+					expect.objectContaining({
+						message: "Failed to migrate legacy repositories",
+						data: expect.any(Error),
+					}),
+				);
 			});
 
 			errorSpy.mockRestore();
@@ -1607,7 +1629,12 @@ describe("repositoriesStore", () => {
 				expect(errorSpy).toHaveBeenCalledWith(
 					"[store]",
 					"Repository changes were not saved",
-					expect.objectContaining({ message: expect.stringContaining("repository configuration conflict") }),
+				);
+				expect(logger.getEntries()).toContainEqual(
+					expect.objectContaining({
+						message: "Repository changes were not saved",
+						data: expect.objectContaining({ message: expect.stringContaining("repository configuration conflict") }),
+					}),
 				);
 			});
 
@@ -1865,7 +1892,12 @@ describe("repositoriesStore", () => {
 				expect(errorSpy).toHaveBeenCalledWith(
 					"[store]",
 					"Failed to list stale-temp repository candidates",
-					expect.any(Error),
+				);
+				expect(logger.getEntries()).toContainEqual(
+					expect.objectContaining({
+						message: "Failed to list stale-temp repository candidates",
+						data: expect.any(Error),
+					}),
 				);
 			});
 			errorSpy.mockRestore();
