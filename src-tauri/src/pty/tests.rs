@@ -17927,6 +17927,59 @@ fn process_tree_snapshot_reports_own_process() {
 // replayed through the real `process_chunk`, so a regression shows up as a
 // diff in the recorded trace rather than as a subtle live-session bug.
 
+#[test]
+fn captured_codex_request_user_input_reaches_choice_prompt() {
+    let bytes = agent_prompt_fixture("codex-request-user-input-20260929.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("real Codex capture");
+    let (rows, cols) = capture.geometry.expect("capture records terminal geometry");
+    let sid = "codex-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut prompts = Vec::new();
+
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed.get("type").and_then(serde_json::Value::as_str) == Some("choice-prompt")
+            {
+                prompts.push(parsed);
+            }
+        }
+    }
+
+    assert!(
+        prompts.iter().any(|prompt| {
+            prompt.get("title").and_then(serde_json::Value::as_str)
+                == Some("Boss, scegli rosso o blu?")
+                && prompt["options"].as_array().is_some_and(|options| {
+                    options
+                        .iter()
+                        .any(|option| option["key"] == "2" && option["label"] == "Blu")
+                })
+        }),
+        "captured Codex question must reach the mobile choice-prompt state"
+    );
+}
+
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]
 struct ChunkTrace {

@@ -124,4 +124,56 @@ describe("mobile managed-agent reply", () => {
 		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 		expect(rpc.mock.calls.some(([command, args]) => command === "write_pty" && args.data === "1")).toBe(true);
 	});
+
+	it("submits a Codex question option once without an extra Enter", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="codex-question"
+				agentType="codex"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={{
+					title: "Boss, scegli rosso o blu?",
+					options: [
+						{ key: "1", label: "Rosso", highlighted: true, destructive: false },
+						{ key: "2", label: "Blu", highlighted: false, destructive: false },
+					],
+					dismiss_key: "ctrl+]",
+					amend_key: "alt+down",
+				}}
+			/>
+		));
+		const option = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Blu"))!;
+		await fireEvent.click(option);
+		await fireEvent.click(option);
+		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "2" });
+	});
+
+	it("opens Codex Other notes before typing a free-form answer", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="codex-other"
+				agentType="codex"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={{
+					title: "Which color?",
+					options: [
+						{ key: "1", label: "Red", highlighted: true, destructive: false },
+						{ key: "2", label: "Blue", highlighted: false, destructive: false },
+						{ key: "3", label: "Other", highlighted: false, destructive: false },
+					],
+					dismiss_key: "ctrl+]",
+				}}
+			/>
+		));
+		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!);
+		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-other", data: "\t" }));
+		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\t"]);
+		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Purple" } });
+		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await waitFor(() => expect(rpc.mock.calls.some(([, args]) => args.data === "\r")).toBe(true));
+		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
+	});
 });

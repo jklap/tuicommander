@@ -731,8 +731,16 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
         };
         let resolves = prompt.options.iter().any(|option| option.key == data)
             || matches!(data, "\r" | "\n")
-            || (data == "\x1b" && prompt.dismiss_key.is_some())
-            || (data == "\t" && prompt.amend_key.is_some());
+            || match prompt.dismiss_key.as_deref() {
+                Some("cancel") => data == "\x1b",
+                Some("ctrl+]") => data == "\x1d",
+                _ => false,
+            }
+            || match prompt.amend_key.as_deref() {
+                Some("amend") => data == "\t",
+                Some("alt+down") => data == "\x1b[1;3B",
+                _ => false,
+            };
         if !resolves {
             return false;
         }
@@ -9325,6 +9333,44 @@ mod tests {
         let session = state.session_maps.session_states.get("s1").unwrap();
         assert!(session.choice_prompt.is_none());
         assert!(!session.awaiting_input);
+    }
+
+    #[test]
+    fn test_codex_choice_prompt_uses_its_own_exit_keys() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Boss, scegli rosso o blu?",
+                    "options": [{"key": "2", "label": "Blu", "highlighted": false, "destructive": false}],
+                    "dismiss_key": "ctrl+]",
+                    "amend_key": "alt+down"
+                }),
+            ),
+        );
+        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
+        assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
+        assert!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .choice_prompt
+                .is_some()
+        );
+        assert!(resolve_choice_prompt_input(&state, "s1", "\x1d"));
+        assert!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .choice_prompt
+                .is_none()
+        );
     }
 
     #[test]
