@@ -8090,8 +8090,7 @@ mod tests {
             .insert("live-child".to_string(), TUIC.to_string());
 
         assert!(
-            reap_selected_mcp_session(&state, SID, std::time::Duration::from_secs(3600))
-                .is_some()
+            reap_selected_mcp_session(&state, SID, std::time::Duration::from_secs(3600)).is_some()
         );
         assert!(!state.mcp.sessions.contains_key(SID));
         assert!(!state.mcp.to_session.contains_key(SID));
@@ -8101,7 +8100,10 @@ mod tests {
 
         assert!(state.mcp.sessions.contains_key(SID));
         assert_eq!(state.mcp.to_session.get(SID).unwrap().value(), TUIC);
-        assert_eq!(state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(), [SID]);
+        assert_eq!(
+            state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(),
+            [SID]
+        );
         assert_eq!(state.peer_agents.get(TUIC).unwrap().mcp_session_id, SID);
     }
 
