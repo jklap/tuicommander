@@ -178,7 +178,7 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 								style={{ position: "absolute", top: `${vi.start}px`, left: "0", width: "100%" }}
 							>
 								<Show when={rowKey(row())} keyed>
-									{() => (
+									{(_key) => (
 										<SessionRowContent
 											row={row}
 											mode={props.mode}
