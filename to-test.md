@@ -29,6 +29,10 @@
 
 # To Test
 
+## Background wake retry (story 1233-4738) — rebuild the Rust CLI
+
+- [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg` command against an isolated instance. If the instance temporarily stops answering, check that `<log>.wake` shows `retrying` with `tuic_session` and `attempts`, then `queued` or `mailed` after recovery. The installed CLI cannot load the Rust change until rebuilt.
+
 ## CLI MCP worktree timeout (story 1240-8438) — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to create and remove a throwaway worktree through `tuic mcp repo`. Confirm both commands report the server result after a request longer than three seconds. A CLI socket read timeout must warn that the server may still complete the action. The installed CLI cannot load this Rust change until rebuilt; restart a live `make dev` process only when ready to end its current sessions.
