@@ -62,6 +62,7 @@ scripts/*
 !scripts/with-test-tmp.sh
 !scripts/install-launch-shells.sh
 !scripts/test-shell-entrypoint.sh
+!scripts/test-append-only-merge.sh
 !scripts/test-with-test-tmp-prune.sh
 !scripts/test-with-test-tmp-worktree-target.sh
 !scripts/hooks/
