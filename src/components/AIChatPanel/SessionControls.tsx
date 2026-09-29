@@ -252,8 +252,8 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 			<button
 				type="button"
 				class={s.headerBtn}
-				aria-label="Start another conversation on this repository"
-				title="Start another conversation on this repository"
+				aria-label="Start another conversation"
+				title="Start another conversation"
 				onClick={() => void props.chat.startSession()}
 			>
 				<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
