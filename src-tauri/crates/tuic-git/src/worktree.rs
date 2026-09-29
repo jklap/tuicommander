@@ -1351,6 +1351,13 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
+/// Remove a detached orphan. A checkout whose directory is already gone holds
+/// nothing to lose, so dropping its registration is confirmed by the safety
+/// assessment instead of a `force` flag.
+pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
+    remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
+}
+
 pub fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
     remove_worktree_internal_with_lock(worktree, force, false, None, None)
 }
@@ -8121,6 +8128,41 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    /// The directory was moved away but git still lists the worktree. Spawning
+    /// git in the missing cwd used to surface as "Failed to spawn git".
+    #[test]
+    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-moved-away");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+
+        let entry = assessments
+            .iter()
+            .find(|entry| entry.path.ends_with("orphan-moved-away"))
+            .expect("the tracked orphan is still listed");
+        assert!(entry.safe, "{entry:?}");
+        let reason = entry.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("already gone"), "{reason}");
+        assert!(!reason.contains("spawn"), "{reason}");
+
+        let worktree = WorktreeInfo {
+            name: "orphan-moved-away".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        remove_orphan_worktree_internal(&worktree).unwrap();
+        let listed = git_cmd(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains("orphan-moved-away"), "{listed}");
+    }
+
     #[tokio::test]
     async fn queued_warm_cannot_recreate_a_removed_worktree() {
         let (_temp, repo, _workspaces) = workspace_fixture();
@@ -8545,9 +8587,9 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
             .into_iter()
             .map(|path| match orphan_cleanup_safety(repo_path, &path) {
                 Ok(()) => OrphanCleanupAssessment {
+                    reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
                     path,
                     safe: true,
-                    reason: None,
                 },
                 Err(reason) => OrphanCleanupAssessment {
                     path,
@@ -8559,9 +8601,16 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     })
 }
 
+const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
+
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
+    // Nothing to inspect: git cannot run in a missing cwd, and there is no
+    // work left to lose.
+    if !worktree.exists() {
+        return Ok(());
+    }
     let status = git_cmd(worktree)
         .args([
             "status",
