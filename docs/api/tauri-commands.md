@@ -231,36 +231,36 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_app_config` | -- | `AppConfig` | Load app settings |
-| `save_app_config` | `config` | `()` | Save app settings |
+| `save_app_config` | `base, config` | `()` | Save app settings |
 | `load_notification_config` | -- | `NotificationConfig` | Load notifications |
-| `save_notification_config` | `config` | `()` | Save notifications |
+| `save_notification_config` | `base, config` | `()` | Save notifications |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
-| `save_ui_prefs` | `config` | `()` | Save UI preferences |
+| `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
 | `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
-| `save_repo_settings` | `config` | `()` | Save per-repo settings |
+| `save_repo_settings` | `base, config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |
 | `load_repo_defaults` | -- | `RepoDefaultsConfig` | Load repo defaults |
-| `save_repo_defaults` | `config` | `()` | Save repo defaults |
+| `save_repo_defaults` | `base, config` | `()` | Save repo defaults |
 | `load_repositories` | -- | `JSON` | Load saved repositories |
 | `save_repositories` | `config` (`mutationVersion: 1` keyed delta) | `()` | Apply repository/group/order/active-selection changes to the latest locked document; same-record conflicts are returned to the caller |
 | `list_stale_temp_repository_candidates` | -- | `StaleTempCandidate[]` (`{path, displayName}`) | Read-only preview of rows classified as stale-temp ghosts (#763-d219); never mutates |
 | `repair_stale_temp_repositories` | `paths` (`string[]`) | `StaleTempRepairSummary` (`{removed, backupPath}`) | Re-validates every path against the classifier on the current on-disk document, refusing the whole request if any no longer matches, then removes the validated rows in one transactional write after backing up the pre-repair document |
 | `load_prompt_library` | -- | `PromptLibraryConfig` | Load prompts |
-| `save_prompt_library` | `config` | `()` | Save prompts |
+| `save_prompt_library` | `base, config` | `()` | Save prompts |
 | `load_notes` | -- | `JSON` | Load notes |
-| `save_notes` | `config` | `()` | Save notes |
+| `save_notes` | `base, config` | `()` | Save notes |
 | `save_note_image` | `note_id, data_base64, extension` | `String` (absolute path) | Decode base64 image, validate ≤10 MB, write to `config_dir()/note-images/<note_id>/<timestamp>.<ext>` |
 | `delete_note_assets` | `note_id` | `()` | Remove `note-images/<note_id>/` directory recursively (no-op if missing) |
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
-| `save_keybindings` | `config` | `()` | Save keybinding overrides |
+| `save_keybindings` | `base, config` | `()` | Save keybinding overrides |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
-| `save_agents_config` | `config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
+| `save_agents_config` | `base, config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
 | `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |
-| `save_activity` | `config` | `()` | Save activity dashboard state |
+| `save_activity` | `base, items` | `()` | Save activity dashboard state |
 | `load_repo_local_config` | `repo_path` | `RepoLocalConfig?` | Read `.tuic.json` from repo root; returns null if absent or malformed |
 | `save_repo_local_config` | `repo_path` | `()` | Write the repo's **effective resolved** worktree/branch settings (global defaults + per-repo overrides) to `.tuic.json` at its root (committable, team-shareable). Preserves fields already in the file (e.g. `mcp_upstreams`); never writes script fields |
 
@@ -285,7 +285,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
-| `save_remote_connection` | `connection` | `()` | Create or update a remote machine. Validates before saving |
+| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
@@ -491,7 +491,7 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
 | `get_dictation_config` | -- | `DictationConfig` | Load saved config. With an activation phrase, the hands-free runtime applies at least 5000 ms of hold-back even when the saved `hands_free_hold_back_ms` is shorter; hands-free status reports the effective value |
 | `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
-| `set_dictation_config` | `config` | `()` | Save config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
+| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 
@@ -654,7 +654,7 @@ empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_config` | -- | `AppConfig` | Alias for load_app_config |
-| `save_config` | `config` | `()` | Alias for save_app_config |
+| `save_config` | `base, config` | `()` | Alias for save_app_config |
 | `hash_password` | `password` | `String` | Bcrypt hash |
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |

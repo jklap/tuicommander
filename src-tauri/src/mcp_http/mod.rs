@@ -4219,6 +4219,83 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
+    async fn stale_agents_http_saves_preserve_independent_changes() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = test_state();
+        let app = build_router(state, false, true);
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let base = serde_json::json!({"agents": {}});
+        let first =
+            serde_json::json!({"base": base, "config": {"agents": {}, "headless_agent": "claude"}});
+        let second = serde_json::json!({"base": base, "config": {"agents": {"codex": {"auto_retry_on_error": true}}}});
+
+        let first_response = app
+            .clone()
+            .oneshot(put_from("/config/agents", &first, addr))
+            .await
+            .unwrap();
+        assert_eq!(first_response.status(), StatusCode::OK);
+        let second_response = app
+            .oneshot(put_from("/config/agents", &second, addr))
+            .await
+            .unwrap();
+        assert_eq!(second_response.status(), StatusCode::OK);
+
+        let saved = crate::config::load_agents_config();
+        assert_eq!(saved.headless_agent.as_deref(), Some("claude"));
+        assert!(saved.agents.get("codex").unwrap().auto_retry_on_error);
+    }
+
+    #[tokio::test]
+    async fn stale_remote_connection_http_saves_preserve_independent_fields() {
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let original = crate::remote_connection::RemoteConnection::new_direct(
+            "original",
+            "https://host.example",
+            "alice",
+        );
+        let base = serde_json::to_value(&original).unwrap();
+        let created = app
+            .clone()
+            .oneshot(put_from(
+                "/config/remote-connections",
+                &serde_json::json!({"base": null, "connection": base}),
+                addr,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+
+        let mut auto_update = base.clone();
+        auto_update["auto_update"] = serde_json::json!(true);
+        let mut renamed = base.clone();
+        renamed["name"] = serde_json::json!("renamed");
+        for desired in [auto_update, renamed] {
+            let response = app
+                .clone()
+                .oneshot(put_from(
+                    "/config/remote-connections",
+                    &serde_json::json!({"base": base, "connection": desired}),
+                    addr,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let saved = crate::remote_connection::RemoteConnectionStore::load(&state.data_dir).unwrap();
+        let result = saved
+            .iter()
+            .find(|connection| connection.id == original.id)
+            .unwrap();
+        assert_eq!(result.name, "renamed");
+        assert!(result.auto_update);
+    }
+
+    #[tokio::test]
     async fn test_notification_config_rejects_non_loopback() {
         let state = test_state();
         let app = build_router(state, false, true);
@@ -5541,14 +5618,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_config_save_missing_config() {
+    async fn test_config_save_requires_base_and_config() {
         let state = test_state();
         let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "save"})).await;
         assert!(
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("requires 'config'")
+                .contains("Invalid config save request")
         );
     }
 
@@ -6818,14 +6895,15 @@ mod tests {
         let mut rx = state.mcp.tools_changed.subscribe();
 
         // Save config with a disabled tool
-        let mut config = state.config.read().clone();
+        let base = state.config.read().clone();
+        let mut config = base.clone();
         config.disabled_native_tools = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app
             .oneshot(put_from(
                 "/config",
-                &serde_json::to_value(&config).unwrap(),
+                &serde_json::json!({"base": base, "config": config}),
                 addr,
             ))
             .await
@@ -6852,14 +6930,15 @@ mod tests {
         let mut rx = state.mcp.tools_changed.subscribe();
 
         // Enable collapse_tools
-        let mut config = state.config.read().clone();
+        let base = state.config.read().clone();
+        let mut config = base.clone();
         config.collapse_tools = true;
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app
             .oneshot(put_from(
                 "/config",
-                &serde_json::to_value(&config).unwrap(),
+                &serde_json::json!({"base": base, "config": config}),
                 addr,
             ))
             .await
@@ -7792,14 +7871,21 @@ mod tests {
         state.config.write().services.auth.lan_auth_bypass = false;
         let app = build_remote_router(state);
         let body = serde_json::json!({
-            "agents": {
-                "claude": {"run_configs": [{"name": "remote", "command": "claude", "args": [], "env": {}, "is_default": true}]}
+            "base": {"agents": {}},
+            "config": {
+                "agents": {
+                    "claude": {"run_configs": [{"name": "remote", "command": "claude", "args": [], "env": {}, "is_default": true}]}
+                }
             }
         });
         let url = "/config/agents?token=remote-agent-config-test";
         let address = std::net::SocketAddr::from(([203, 0, 113, 5], 5555));
 
-        let put = app.clone().oneshot(put_from(url, &body, address)).await.unwrap();
+        let put = app
+            .clone()
+            .oneshot(put_from(url, &body, address))
+            .await
+            .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
         let mut get = Request::get(url).body(Body::empty()).unwrap();
@@ -7810,6 +7896,9 @@ mod tests {
             .await
             .unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(saved["agents"]["claude"]["run_configs"][0]["name"], "remote");
+        assert_eq!(
+            saved["agents"]["claude"]["run_configs"][0]["name"],
+            "remote"
+        );
     }
 }

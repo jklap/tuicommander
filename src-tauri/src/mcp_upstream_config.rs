@@ -579,6 +579,7 @@ pub(crate) fn set_project_mcp_upstreams_inner(
     upstream_names: Option<Vec<String>>,
 ) -> Result<(), String> {
     let mut settings = crate::config::load_repo_settings();
+    let base = settings.clone();
     let entry = settings
         .repos
         .entry(repo_path.to_string())
@@ -587,7 +588,7 @@ pub(crate) fn set_project_mcp_upstreams_inner(
             ..Default::default()
         });
     entry.mcp_upstreams = upstream_names;
-    crate::config::save_repo_settings(settings)?;
+    crate::config::save_repo_settings(base, settings)?;
     // Notify connected MCP clients that the tool list may have changed
     let _ = state.mcp.tools_changed.send(());
     Ok(())

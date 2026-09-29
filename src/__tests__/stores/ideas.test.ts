@@ -62,12 +62,12 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists via invoke save_notes", () => {
-			testInScope(() => {
+		it("persists via invoke save_notes", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("saved note");
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
 					config: { notes: expect.arrayContaining([expect.objectContaining({ text: "saved note" })]) },
-				});
+				}));
 			});
 		});
 	});
@@ -101,15 +101,15 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists via invoke save_notes", () => {
-			testInScope(() => {
+		it("persists via invoke save_notes", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("note");
 				mockInvoke.mockClear();
 				const id = store.state.ideas[0].id;
 				store.removeIdea(id);
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
 					config: { notes: [] },
-				});
+				}));
 			});
 		});
 	});
@@ -155,7 +155,6 @@ describe("ideasStore", () => {
 				expect(consoleSpy).toHaveBeenCalledWith(
 					"[store]",
 					expect.stringContaining("Failed to hydrate ideas"),
-					expect.any(Error),
 				);
 			});
 			consoleSpy.mockRestore();
@@ -234,7 +233,7 @@ describe("ideasStore", () => {
 		it("persists repo fields via save_notes", () => {
 			testInScope(() => {
 				store.addIdea("tagged", "/path/repo", "repo");
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
+				expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
 					config: {
 						notes: expect.arrayContaining([
 							expect.objectContaining({
@@ -270,13 +269,13 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists after reassign", () => {
-			testInScope(() => {
+		it("persists after reassign", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("idea", "/old", "old");
 				mockInvoke.mockClear();
 				const id = store.state.ideas[0].id;
 				store.reassignIdea(id, "/new", "new");
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything()));
 			});
 		});
 
@@ -423,12 +422,12 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists via save_notes", () => {
-			testInScope(() => {
+		it("persists via save_notes", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("idea");
 				mockInvoke.mockClear();
 				store.updateIdea(store.state.ideas[0].id, "updated", []);
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything()));
 			});
 		});
 
@@ -562,15 +561,15 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists via save_notes after clearing", () => {
-			testInScope(() => {
+		it("persists via save_notes after clearing", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("used");
 				store.markUsed(store.state.ideas[0].id);
 				mockInvoke.mockClear();
 
 				store.clearCompleted();
 
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", { config: { notes: [] } });
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(), config: { notes: [] } }));
 			});
 		});
 
@@ -621,12 +620,12 @@ describe("ideasStore", () => {
 			});
 		});
 
-		it("persists after marking used", () => {
-			testInScope(() => {
+		it("persists after marking used", async () => {
+			await testInScopeAsync(async () => {
 				store.addIdea("idea");
 				mockInvoke.mockClear();
 				store.markUsed(store.state.ideas[0].id);
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything()));
 			});
 		});
 

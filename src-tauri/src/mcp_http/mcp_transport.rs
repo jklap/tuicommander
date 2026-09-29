@@ -5375,20 +5375,14 @@ fn handle_config(
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "Config save is restricted to localhost connections"});
             }
-            let config_val = match args.get("config") {
-                Some(c) => c,
-                None => {
-                    return serde_json::json!({"error": "Action 'save' requires 'config' object"});
-                }
-            };
-            // The schema advertises "config fields to save", so callers legitimately
-            // send a subset. Merge it onto the live config — deserializing the
-            // payload on its own would default every omitted field away.
-            // The merge runs inside the config write lock so it applies to the config as
-            // it is at write time — this handler already runs on the blocking pool.
-            match crate::config::commit_config_change(state, |current| {
-                crate::config::merge_partial_app_config(current, config_val.clone())
-            }) {
+            let request: crate::config::ConfigSaveRequest<crate::config::AppConfig> =
+                match serde_json::from_value(args.clone()) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return serde_json::json!({"error": format!("Invalid config save request: {error}")});
+                    }
+                };
+            match crate::config::commit_config_save(state, request.base, request.config) {
                 Ok(effects) => {
                     if effects.tools_changed {
                         let _ = state.mcp.tools_changed.send(());
@@ -5444,6 +5438,7 @@ fn handle_config(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let mut lib = crate::config::load_prompt_library();
+            let base = lib.clone();
             if let Some(existing) = lib.prompts.iter_mut().find(|p| p.id == id) {
                 existing.label = label;
                 existing.text = text;
@@ -5456,7 +5451,7 @@ fn handle_config(
                     pinned,
                 });
             }
-            match crate::config::save_prompt_library(lib) {
+            match crate::config::save_prompt_library(base, lib) {
                 Ok(()) => serde_json::json!({"ok": true}),
                 Err(e) => serde_json::json!({"error": e}),
             }
@@ -10908,7 +10903,7 @@ mod tests {
             }]}}
         }))
         .unwrap();
-        crate::config::save_agents_config(config).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
         let state = test_state();
         state
             .mcp
@@ -11011,7 +11006,7 @@ mod tests {
                 {"name": "Legacy", "command": "/bin/sh", "args": ["-c", "exit 0", "--model", "opus"]}
             ]}}
         })).unwrap();
-        crate::config::save_agents_config(config).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
         let state = test_state();
         for (requested_model, expected) in
             [(None, "--model|sonnet"), (Some("opus"), "--model|opus")]
@@ -21132,7 +21127,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(agents).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents).unwrap();
         let state = test_state();
         let spawned = handle_agent(
             &state,
@@ -21205,7 +21200,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(agents).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents).unwrap();
         let state = test_state();
         crate::pty::spawn_process_snapshot_refresher(state.clone());
         let spawned = handle_agent(
@@ -21281,7 +21276,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(agents).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents).unwrap();
         let state = test_state();
         let spawned = handle_agent(
             &state,
@@ -21412,7 +21407,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(agents).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents).unwrap();
         let state = test_state();
         let spawned = handle_agent(
             &state,

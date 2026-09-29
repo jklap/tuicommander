@@ -116,13 +116,12 @@ describe("dictationStore", () => {
 		playEarcon.mockClear();
 		primeEarcons.mockClear();
 		addToast.mockClear();
-		// `get_dictation_config` answers with a config, never with nothing:
-		// `saveConfig` reads fields off it directly to hold the load-modify-save
-		// rule, so a bare `undefined` here would be a shape Rust cannot produce
-		// failing a save that works. Empty is enough — the fields a test cares
-		// about come from its own `mockResolvedValueOnce`.
+		// Rust always returns required fields plus defaults for old documents.
 		mockInvoke.mockImplementation((command: string) =>
-			Promise.resolve(command === "get_dictation_config" ? {} : undefined),
+			Promise.resolve(command === "get_dictation_config" ? {
+				enabled: false, hotkey: "F5", language: "auto", model: "large-v3-turbo", device: null,
+				rms_threshold: 0.001,
+			} : undefined),
 		);
 		store = (await import("../../stores/dictation")).dictationStore;
 	});
@@ -276,6 +275,7 @@ describe("dictationStore", () => {
 				expect(store.state.selectedModel).toBe("small");
 				// saveConfig is called with model included
 				expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({ model: "small" }),
 				});
 			});
@@ -420,6 +420,7 @@ describe("dictationStore", () => {
 			await testInScopeAsync(async () => {
 				await store.saveConfig({ language: "en" });
 				expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({
 						model: "large-v3-turbo",
 						language: "en",
@@ -597,6 +598,7 @@ describe("dictationStore", () => {
 				await store.saveConfig({ no_speech_threshold: 0.4 });
 
 				expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+					base: expect.anything(),
 					config: expect.objectContaining({
 						no_speech_threshold: 0.4,
 						rms_threshold: 0.001,
@@ -848,31 +850,25 @@ describe("dictationStore", () => {
 	});
 
 	/**
-	 * `set_dictation_config` takes the whole config object as its body and
-	 * `save` writes it wholesale, so a caller that rebuilds that object from a
-	 * hand-written list resets every field it forgot. Rust cannot refuse the
-	 * payload: every hands-free field carries `#[serde(default)]`, because a
-	 * config written before the field existed has to load. So a dropped field
-	 * is not an error anywhere — the setting just silently reverts.
+	 * The save request carries a loaded base and an edited document. If the
+	 * caller rebuilds the edited document from a hand-written field list,
+	 * every omitted field becomes an unintended deletion or default. The
+	 * frontend therefore starts with the complete loaded document and edits
+	 * only the fields owned by this surface.
 	 *
 	 * It has already happened twice. `hands_free_hold_back_ms` (814-6d13) has
 	 * been snapping back to its default since it was added, and
 	 * `hands_free_activation_phrase` (815-7c76) would have done the same, which
 	 * is worse: a gate the user configured and the UI quietly disarmed.
 	 *
-	 * Both have controls since 818-2a29, and that does not retire the rule: the
-	 * controls are in one panel, so a save from any other surface still runs
-	 * with store state that was never loaded from disk. What changed is only
-	 * which field carries the test — `speech_command` is now the one with no
-	 * control at all.
+	 * Both have controls since 818-2a29. A save from another surface still
+	 * runs with store state that was never loaded from disk; `speech_command`
+	 * has no control at all.
 	 *
 	 * The fix is the load-modify-save rule already recorded for `save_config`:
-	 * read the stored config, change only what this surface owns, write it
-	 * back. So the assertion is not "TypeScript lists the same fields as Rust"
-	 * — under load-modify-save it does not have to. It is the weaker and more
-	 * durable "a field the UI does not model survives a save", driven off the
-	 * Rust struct so the twelfth field is covered by the person who adds it
-	 * rather than by the person who later forgets it.
+	 * read the stored config, change only what this surface owns, and submit
+	 * both versions. The assertion is "a field the UI does not model survives
+	 * a save", driven off the Rust struct so newly added fields remain covered.
 	 */
 	describe("saveConfig() payload", () => {
 		/** Field names declared by `DictationConfig` in the Rust source. */
@@ -1454,6 +1450,7 @@ describe("dictationStore", () => {
 					store.setHandsFreeEarcons(false);
 					await vi.waitFor(() => expect(store.state.handsFreeEarcons).toBe(false));
 					expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+					base: expect.anything(),
 						config: expect.objectContaining({ hands_free_earcons: false }),
 					});
 					store.setHandsFreeEarcons(true);

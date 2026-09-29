@@ -7,6 +7,7 @@ import {
 	notificationManager,
 } from "../notifications";
 import { isTauri } from "../transport";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 import { setToastBellMirrorResolver } from "./toasts";
 import { uiStore } from "./ui";
@@ -58,6 +59,7 @@ function sendOsNotification(sound: NotificationSound, terminalId: string, tabNam
 }
 
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
+const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
 
 /** Create a fresh copy of the default config */
 function copyDefaults(): NotificationConfig {
@@ -70,7 +72,7 @@ function copyDefaults(): NotificationConfig {
 
 /** Persist config to Rust backend (fire-and-forget) */
 function saveConfig(config: NotificationConfig): void {
-	invoke("save_notification_config", { config }).catch((err) =>
+	notificationWriter.save(config).catch((err) =>
 		appLogger.debug("config", "Failed to save notification config", err),
 	);
 }
@@ -127,19 +129,20 @@ function createNotificationsStore() {
 		/** Load config from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {
+				const loaded = await invoke<NotificationConfig>("load_notification_config");
+				notificationWriter.loaded(loaded ?? copyDefaults());
 				// One-time migration from localStorage
 				const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
 				if (legacy) {
 					try {
 						const parsed = { ...copyDefaults(), ...JSON.parse(legacy) };
-						await invoke("save_notification_config", { config: parsed });
+						await notificationWriter.save(parsed);
 					} catch {
 						/* ignore corrupt legacy data */
 					}
 					localStorage.removeItem(LEGACY_STORAGE_KEY);
 				}
 
-				const loaded = await invoke<NotificationConfig>("load_notification_config");
 				const config = { ...copyDefaults(), ...loaded };
 				setState("config", config);
 				notificationManager.updateConfig(config);

@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 /** Worktree storage strategy — mirrors Rust WorktreeStorage enum */
@@ -54,12 +55,13 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	autoDeleteOnPrClose: "off",
 };
 
+const repoDefaultsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_repo_defaults");
+
 function createRepoDefaultsStore() {
 	const [state, setState] = createStore<RepoDefaults>({ ...INITIAL_DEFAULTS });
 
 	function save(): void {
-		invoke("save_repo_defaults", {
-			config: {
+		repoDefaultsWriter.save({
 				base_branch: state.baseBranch,
 				copy_ignored_files: state.copyIgnoredFiles,
 				copy_untracked_files: state.copyUntrackedFiles,
@@ -75,7 +77,6 @@ function createRepoDefaultsStore() {
 				after_merge: state.afterMerge,
 				auto_fetch_interval_minutes: state.autoFetchIntervalMinutes,
 				auto_delete_on_pr_close: state.autoDeleteOnPrClose,
-			},
 		}).catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
 	}
 
@@ -101,6 +102,7 @@ function createRepoDefaultsStore() {
 					auto_fetch_interval_minutes?: number;
 					auto_delete_on_pr_close?: AutoDeleteOnPrClose;
 				} | null>("load_repo_defaults");
+				repoDefaultsWriter.loaded(loaded ?? {});
 				if (loaded) {
 					setState({
 						baseBranch: loaded.base_branch ?? INITIAL_DEFAULTS.baseBranch,

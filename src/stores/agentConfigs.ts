@@ -8,12 +8,12 @@ import { appLogger } from "./appLogger";
 
 export interface AgentConfigIO {
 	load: () => Promise<AgentsConfig>;
-	save: (config: AgentsConfig) => Promise<void>;
+	save: (base: AgentsConfig, config: AgentsConfig) => Promise<void>;
 }
 
 const defaultIO: AgentConfigIO = {
 	load: () => invoke<AgentsConfig>("load_agents_config"),
-	save: (config) => invoke("save_agents_config", { config }),
+	save: (base, config) => invoke("save_agents_config", { base, config }),
 };
 
 /**
@@ -32,7 +32,7 @@ function remoteIO(connectionId: string): AgentConfigIO {
 				throw new Error(`${connectionId} (${endpoint}): ${err instanceof Error ? err.message : String(err)}`);
 			}
 		},
-		save: (config) => rpc<void>("save_agents_config", { config }, connectionId),
+		save: (base, config) => rpc<void>("save_agents_config", { base, config }, connectionId),
 	};
 }
 
@@ -66,6 +66,8 @@ function clone<T>(obj: T): T {
 }
 
 export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
+	let savedBase: AgentsConfig | null = null;
+	let saveTail: Promise<void> | null = null;
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
 		headless_agent: null,
@@ -73,15 +75,26 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		loadError: null,
 	});
 
-	/** Save full config to Rust. Logs and rethrows on failure so callers can surface errors. */
+	/** Save changes since the last acknowledged snapshot. */
 	async function saveToDisk(): Promise<void> {
 		try {
-			if (!state.loaded) throw new Error("Agent config has not loaded; save refused");
+			if (!state.loaded || !savedBase) throw new Error("Agent config has not loaded; save refused");
 			const full: AgentsConfig = {
 				agents: clone(state.agents),
 				headless_agent: state.headless_agent ?? undefined,
 			};
-			await io.save(full);
+			const write = async () => {
+				if (!savedBase) throw new Error("Agent config has not loaded; save refused");
+				await io.save(savedBase, full);
+				savedBase = full;
+			};
+			const operation = saveTail ? saveTail.then(write) : write();
+			const settled = operation.then(() => undefined, () => undefined);
+			saveTail = settled;
+			void settled.then(() => {
+				if (saveTail === settled) saveTail = null;
+			});
+			await operation;
 		} catch (err) {
 			appLogger.error("config", "Failed to save agent config", err);
 			throw err;
@@ -93,6 +106,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		async hydrate(): Promise<void> {
 			try {
 				const config = await io.load();
+				savedBase = clone(config);
 				setState(
 					produce((s) => {
 						s.agents = config.agents ?? {};
