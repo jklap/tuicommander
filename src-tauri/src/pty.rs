@@ -9310,6 +9310,9 @@ pub(crate) fn deliver_notice_to_managed_pty(
 /// The flush waits for agent acknowledgement as well as the Enter gaps. Give
 /// each pending session its own worker so one silent agent cannot delay a
 /// different session or ordered lifecycle notices on `INJECTION_QUEUE`.
+/// Each idle edge with pending input may start another short-lived worker;
+/// there is no global thread cap. A blocked claim returns immediately, while
+/// the successful claim can wait up to the one-second acknowledgement bound.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
 /// reads the queue to tell `Typed` from `Queued` — call the blocking form directly.
