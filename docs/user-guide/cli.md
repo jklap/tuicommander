@@ -142,15 +142,22 @@ that invocation.
 Run `tuic bg <log> -- <cmd> [args...]` from a managed terminal to return at
 once while the command runs in a separate process group. The command's stdout
 and stderr append to `<log>`, and its exit code is written to `<log>.exit`.
-When it finishes, `tuic` requests one `BG DONE exit=<code> log=<log> cmd=…`
+When it finishes, `tuic` requests a `BG DONE exit=<code> log=<log> cmd=…`
 wake for the originating session. If that session is busy, the wake is queued
 until it becomes idle. `<log>.wake` records the request outcome as JSON:
-`{"status":"queued"}`, `{"status":"mailed","queue_error":"…"}`, or
-`{"status":"failed","error":"…"}`. A queue lookup or request failure falls
+`queued`, `mailed`, `retrying`, or `failed`, with `tuic_session` and the number
+of queue attempts. A queue lookup or request failure falls
 back to MCP agent mail addressed to the same `TUIC_SESSION`; that mail includes
 the `BG DONE` text and the queue error. `queued` means the queue took the
 request, not that the agent later submitted it. `mailed` means the mail was
-surfaced to the caller; inbox-only mail remains a failure. The command works
+surfaced to the caller; inbox-only mail remains a failure. If both paths fail
+after a transient socket error or server error, the runner retries up to six
+queue-then-mail attempts with exponential delays of 0.2–3.2 seconds (6.2
+seconds of total retry waiting). A permanent queue rejection ends the retry
+immediately after mail fails. `retrying` records an attempt still in progress;
+`failed` records the last queue and mail errors. Each IPC read has its own
+three-second deadline, so a slow or unavailable server can extend the elapsed
+time beyond the retry waiting period. The command works
 on macOS, Linux, and Windows.
 
 ```bash
