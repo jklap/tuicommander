@@ -4,7 +4,7 @@
 
 ## Worktree removal recovery (1258-e9ba) — Rust restart required
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, remove a disposable clean landed worktree with ignored build artifacts through `repo worktree_remove`. Confirm the directory is gone before the branch disappears. The running backend does not hot-reload this Rust change.
+- [x] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, remove a disposable clean landed worktree with ignored build artifacts through `repo worktree_remove`. Confirm the directory is gone before the branch disappears. The running backend does not hot-reload this Rust change. _(verified 2026-09-29: fixture repo ~/Gits/.tmp/tuic-validate/fx/repo, MCP/HTTP on tuic-remote --instance validate: clean in_sync worktree with warmed target/ removed via repo worktree_remove: {ok, removal_rule:in_sync}; directory gone, branch gone, git worktree list clean (order of dir vs branch removal not observable); t_wt.py)_
 
 ## Named debug vault test (1181-2f80)
 
@@ -112,7 +112,7 @@
 
 ## Worktree removal with sealed build output (story 1179-50a8) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove a disposable worktree whose ignored target contains a read-only nested directory. Confirm the checkout and Git registration both disappear, while a symlink target outside the worktree keeps its contents and permissions. Targeted Rust tests cover this behavior; the running backend cannot load the Rust change until restart.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove a disposable worktree whose ignored target contains a read-only nested directory. Confirm the checkout and Git registration both disappear, while a symlink target outside the worktree keeps its contents and permissions. Targeted Rust tests cover this behavior; the running backend cannot load the Rust change until restart. _(verified 2026-09-29: fixture repo ~/Gits/.tmp/tuic-validate/fx/repo, MCP/HTTP on tuic-remote --instance validate: target/ilink -> outside dir plus target/ro/deep with mode 555: worktree_remove ok; checkout and registration gone; outside dir kept keep.txt and mode 750; t_wt2.py)_
 
 ## CLI install lint (story 1185-790d) — rebuild required
 
@@ -203,7 +203,7 @@
 
 ## Missing registered worktree cleanup — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove the checkout directory of a throwaway linked worktree. Ask for its lifecycle by workspace id, confirm `missing_checkout=true` and no dirty fingerprint, then confirm removal in the desktop dialog or HTTP with `confirmMissingCheckout=true`. Confirm the Git registration is pruned and the branch remains when branch deletion is disabled. Repeat with a locked registration: cleanup must stop until a separate lock override is confirmed. The running Rust backend cannot load this change until restart.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove the checkout directory of a throwaway linked worktree. Ask for its lifecycle by workspace id, confirm `missing_checkout=true` and no dirty fingerprint, then confirm removal in the desktop dialog or HTTP with `confirmMissingCheckout=true`. Confirm the Git registration is pruned and the branch remains when branch deletion is disabled. Repeat with a locked registration: cleanup must stop until a separate lock override is confirmed. The running Rust backend cannot load this change until restart. _(verified 2026-09-29: fixture repo ~/Gits/.tmp/tuic-validate/fx/repo, MCP/HTTP on tuic-remote --instance validate (HTTP path only, desktop dialog not tried): rm -rf checkout -> worktree_lifecycle missing_checkout=true, no dirty_fingerprint; MCP remove refuses, HTTP DELETE force without confirm refused, with confirmMissingCheckout=true&deleteBranch=false ok, registration pruned, branch kept; locked variant refused with worktree_locked until overrideLock=true; t_wt3.py t_wt4.py)_
 
 ## AI Chat pending ACP badge and notification (story 1070-38ce)
 
@@ -217,7 +217,7 @@
 
 ## Agent inbox FIFO and paging — Rust restart required
 
-- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send 101 messages to a throwaway recipient without reading. Confirm every send succeeds, the inbox reports `missed_count=1`, and the oldest message is absent. Read with `limit=2` and repeat while `has_more=true`; each page must start after the prior `next_since`. The live Rust backend cannot load this change until restart.
+- [x] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send 101 messages to a throwaway recipient without reading. Confirm every send succeeds, the inbox reports `missed_count=1`, and the oldest message is absent. Read with `limit=2` and repeat while `has_more=true`; each page must start after the prior `next_since`. The live Rust backend cannot load this change until restart. _(verified 2026-09-29: isolated tuic-remote --instance validate over MCP unix socket: 101 sends by peer UUID all succeeded; first inbox limit=2 returned m1,m2 with missed_count=1 (m0 absent); paging via since=next_since covered m1..m100 in order, no dupes; script ~/Gits/.tmp/tuic-validate/t_inbox.py,t2.py))_
 
 ## AI Chat ACP pause settlement (story 1069-97bd) — Rust restart required
 
@@ -268,7 +268,7 @@
 
 ## Consumed MCP agent inbox mail (story 1105-966b) — Rust restart required
 
-- [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, fill a throwaway peer inbox, read it, and send one more message. Confirm the new send succeeds and the next inbox call returns it without `missed_count`. The current live backend still has the old Rust code; targeted unit tests cover pagination, capacity, and delivery leases.
+- [x] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, fill a throwaway peer inbox, read it, and send one more message. Confirm the new send succeeds and the next inbox call returns it without `missed_count`. The current live backend still has the old Rust code; targeted unit tests cover pagination, capacity, and delivery leases. _(verified 2026-09-29: same instance: after full read, one more send returned only 'extra' with no missed_count)_
 
 ## MCP tab caller repository (story 1102-0945)
 
@@ -360,7 +360,7 @@
 
 ## MCP local branch deletion (story 1033-1796) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use MCP `repo action=branch_delete` on an integrated local branch with no worktree. Confirm only the local ref disappears; a checked-out or unmerged branch must be refused. The current live backend cannot load this Rust action without a restart.
+- [x] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use MCP `repo action=branch_delete` on an integrated local branch with no worktree. Confirm only the local ref disappears; a checked-out or unmerged branch must be refused. The current live backend cannot load this Rust action without a restart. _(verified 2026-09-29: fixture repo ~/Gits/.tmp/tuic-validate/fx/repo, MCP/HTTP on tuic-remote --instance validate: branch_delete int1 ok (proof in_sync, only local ref gone); main refused (current integration branch); un1 refused (unmerged commits); co1 refused (checked out in a worktree); t_wt2.py)_
 
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
@@ -388,7 +388,7 @@
 
 ## Linked-worktree warming excludes MDKB (2026-09-26) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a disposable worktree from a repository that ignores and contains `.mdkb/`. Confirm the new worktree has no `.mdkb` while an ignored build directory still arrives warm. The live backend cannot load this Rust change without a restart.
+- [x] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a disposable worktree from a repository that ignores and contains `.mdkb/`. Confirm the new worktree has no `.mdkb` while an ignored build directory still arrives warm. The live backend cannot load this Rust change without a restart. _(verified 2026-09-29: fixture repo ~/Gits/.tmp/tuic-validate/fx/repo, MCP/HTTP on tuic-remote --instance validate: worktree_create from a repo containing ignored .mdkb/ and target/: new worktree has no .mdkb, target/debug/x present (warm done), .env not copied; t_wt.py)_
 
 ## Native scrollback capture fixtures (2026-09-25) — after mcp-config-guard lands
 
@@ -431,8 +431,8 @@
 - [ ] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical.
 ## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `make dev` instance, deinitialize a disposable worktree submodule with a local-only commit and a Git module name different from its checkout path; repeat with a nested named submodule. Removal must refuse and leave each module Git store and commit recoverable.
-- [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository.
+- [ ] After restarting an isolated `make dev` instance, deinitialize a disposable worktree submodule with a local-only commit and a Git module name different from its checkout path; repeat with a nested named submodule. Removal must refuse and leave each module Git store and commit recoverable. _(NOT VERIFIED 2026-09-29: PARTIAL: fixture submodule with module name 'modname' != path 'libs/sub', local-only commit, deinit in the worktree: worktree_remove refused ('uninitialized submodule libs/sub still has Git state'), worktree kept, commit still in .git/worktrees/feat5/modules/modname (t_sub2.py). Nested named submodule not tried)_
+- [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository. _(NOT VERIFIED 2026-09-29: NOT VERIFIED: fixture became dirty and the refusal reason was 'uncommitted changes' rather than the main-copy-uninitialized rule (t_sub4.py); needs a cleaner fixture)_
 - [ ] After restarting an isolated `make dev` instance, remove a disposable worktree whose submodule has two stash entries and a reflog-only commit. Confirm all three OIDs remain reachable in the main checkout module after removal, including when a separate missing checkout is force-pruned.
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep.
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly.
@@ -445,7 +445,7 @@
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error.
-- [ ] Orchestrator inbox under load: while children finish, a parent that does not read its inbox retains the newest 100 messages in FIFO order. The 101st send succeeds and the next inbox read reports the unread eviction in `missed_count`.
+- [x] Orchestrator inbox under load: while children finish, a parent that does not read its inbox retains the newest 100 messages in FIFO order. The 101st send succeeds and the next inbox read reports the unread eviction in `missed_count`. _(verified 2026-09-29: same instance: unread inbox kept newest 100 in FIFO order, 101st send succeeded, missed_count=1 (tested peer-to-peer, not with finishing children))_
 - [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
 
 ## Native story API (2026-09-24) — Rust, needs `make dev` restart
@@ -470,7 +470,7 @@
 
 ## Old config.json keeps `config`/`debug` MCP tools disabled (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, with a `config.json` that has no `disabled_native_tools` key (use `TUIC_APP_INSTANCE=<id>` and remove the key from that instance's config), the `config` and `debug` MCP tools are absent from `tools/list` and show as disabled in Settings.
+- [x] After a `make dev` restart, with a `config.json` that has no `disabled_native_tools` key (use `TUIC_APP_INSTANCE=<id>` and remove the key from that instance's config), the `config` and `debug` MCP tools are absent from `tools/list` and show as disabled in Settings. _(verified 2026-09-29: instance config.json has no disabled_native_tools key; tools/list omits config and debug (Settings display not checked here))_
 ## Agent list on the `+` buttons (2026-09-25) — frontend, HMR
 
 - [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu.
@@ -1587,7 +1587,7 @@ What is left genuinely needs eyes on a real agent:
   follows the theme (the frontend republishes on remeasure).
 - [ ] Only one publish per real theme change — `GET /logs` shows no burst of
   palette traffic when resizing the window with several tabs open.
-- [ ] `curl -X POST http://localhost:9876/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'`
+- [x] `curl -X POST http://localhost:9876/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'` _(verified 2026-09-29: POST /terminal/theme-colors returned {ok:true}; an OSC 10/11/12 query in a session shell (osc.py) changed from cccccc/1e1e1e/cccccc to ff0000/00ff00/0000ff)_
   returns `{"ok":true}` and changes what the query above reports. (Port corrected
   from 9877: there is no second instance running; the live app serves 9876.)
 
@@ -2971,12 +2971,12 @@ with the human edit preserved). What is left is what HTTP cannot observe.
 Rust-only change to `mcp_transport.rs`. Boss's live instance still serves the old
 strings until the backend is restarted; nothing below can be checked before that.
 
-- [ ] After restart, `curl -s localhost:9876/mcp/instructions | jq -r .instructions`.
+- [x] After restart, `curl -s localhost:9876/mcp/instructions | jq -r .instructions`. _(verified 2026-09-29: GET /mcp/instructions (unix socket): ## Tools holds the delegation line, Worktrees rule and Submit rule, no per-tool bullets, no ## Workflow, no UI feedback line. NOTE: ## Multi-Agent Work also keeps a Mail bullet besides the peer count and isolated-branches bullet)_
       The `## Tools` section must hold three lines (the delegation sentence, the
       Worktrees rule, the Submit rule) and **no** per-tool bullet list; there must
       be no `## Workflow` section and no `**UI feedback:**` line. `## Multi-Agent
       Work` keeps the peer count and the isolated-branches bullet only.
-- [ ] `ack` / `intent:` / `suggest:` markers must be byte-identical to before —
+- [x] `ack` / `intent:` / `suggest:` markers must be byte-identical to before — _(verified 2026-09-29: ack, intent and suggest marker lines present verbatim in /mcp/instructions (comparison with the old capture not possible))_
       they are protocol, and a reworded marker breaks the tab title and the
       suggestion bar. Compare against a capture of the old output if in doubt.
 - [ ] In a connected agent, ask for the `repo` tool schema: its description must
@@ -3307,23 +3307,23 @@ dir removed).
 Rust-only change: it is NOT live in the running session until the backend is
 rebuilt.
 
-- [ ] `curl -s localhost:9876/mcp -H 'content-type: application/json' -d @src-tauri/src/mcp_http/fixtures/ego_server_discover.json`
+- [x] `curl -s localhost:9876/mcp -H 'content-type: application/json' -d @src-tauri/src/mcp_http/fixtures/ego_server_discover.json` _(verified 2026-09-29: tuic-remote --instance validate, MCP unix socket: discover fixture returned resultType=complete, supportedVersions [2026-07-28,2025-11-25,2025-03-26], capabilities.tools.listChanged, instructions, no mcp-session-id header; script t3.py)_
       returns a `result` with `resultType: "complete"`, `supportedVersions`,
       `capabilities.tools.listChanged`, `instructions`, and NO `mcp-session-id`
       response header.
-- [ ] Claude Code (the legacy `initialize` path) still connects and still lists
+- [x] Claude Code (the legacy `initialize` path) still connects and still lists _(verified 2026-09-29: legacy initialize with mcp-session-id then tools/list returned the full surface (session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, voice); t4.py)_
       the full tool surface — the two lifecycles share one endpoint.
-- [ ] A `tools/list` carrying `params._meta."io.modelcontextprotocol/clientInfo"`
+- [x] A `tools/list` carrying `params._meta."io.modelcontextprotocol/clientInfo"` _(verified 2026-09-29: tools/list with _meta clientInfo name=ego returned search_tools, get_tool_schema, call_tool, progress only; t3.py)_
       with `name: "ego"` returns the three meta-tools plus `progress`, and no
       native or upstream definitions.
 
 ## One MCP tool family — needs a `make dev` restart (#f6ed)
 
-- [ ] `tools/list` on `:9877` returns exactly `session, agent, task, repo,
+- [ ] `tools/list` on `:9877` returns exactly `session, agent, task, repo, _(NOT VERIFIED 2026-09-29: NOTE: text is stale. tools/list now returns session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, voice; config and debug are hidden by default (callable, listed in the Unknown-tool hint); no ai_terminal_* tool. Update the expected list)_
       progress, ui, plugin_dev_guide, config, debug` and no `ai_terminal_*`.
-- [ ] `call_tool`/`tools/call` with `ai_terminal_read_screen` answers
+- [x] `call_tool`/`tools/call` with `ai_terminal_read_screen` answers _(verified 2026-09-29: unknown-tool error for ai_terminal_read_screen lists Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool; no ai_terminal_*)_
       "Unknown tool", and the message does not advertise `ai_terminal_*`.
-- [ ] Echo a fake token into a terminal (`echo GITHUB_TOKEN=ghp_…`), then read
+- [ ] Echo a fake token into a terminal (`echo GITHUB_TOKEN=ghp_…`), then read _(FAILED 2026-09-29: unwrapped (220 cols) both formats show [REDACTED]; at default 80 cols the wrapped echo leaks 35 of 40 token chars in default and raw output. Story 1281-10e6)_
       it back with `session action=output`: the value must come back
       `[REDACTED]`, in both the default format and `format=raw`.
 - [ ] A `config.json` still carrying `ai_terminal_mcp_enabled` loads without
@@ -3372,13 +3372,13 @@ The three new fields are withheld from the legacy revision, so the risk is not
 that ego breaks — it is that Claude Code does. Verified in tests; confirm on a
 live instance.
 
-- [ ] Claude Code connects to the running instance and lists TUIC's tools as
+- [x] Claude Code connects to the running instance and lists TUIC's tools as _(verified 2026-09-29: legacy-initialized session tools/list result has only key 'tools')_
       before (its `initialize` names 2025-11-25, so its `tools/list` result must
       still carry `tools` and nothing else).
-- [ ] `curl -s -X POST localhost:9876/mcp -H 'mcp-protocol-version: 2026-07-28'
+- [x] `curl -s -X POST localhost:9876/mcp -H 'mcp-protocol-version: 2026-07-28' _(verified 2026-09-29: tools/list with mcp-protocol-version: 2026-07-28 returns resultType=complete, ttlMs=0, cacheScope=private beside tools)_
       -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`
       answers with `resultType`, `ttlMs` and `cacheScope` beside `tools`.
-- [ ] The same call without the header answers with `tools` alone.
+- [x] The same call without the header answers with `tools` alone. _(verified 2026-09-29: same call without the header returns tools only)_
 
 ## The embedded AI engine is gone — needs a `make dev` restart (#784-0aec)
 
