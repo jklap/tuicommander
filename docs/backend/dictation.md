@@ -44,6 +44,9 @@ ggml does not add its own sccache or ccache compiler wrapper. That wrapper can
 fail when it invokes an mbx compiler shim. mbx still caches the Cargo build,
 including the resulting `whisper-rs-sys` artifacts. Run
 `cargo check -p tuic-dictation` from `src-tauri/` to verify the native build.
+On macOS, `tuic-dictation/build.rs` also links Xcode's `libclang_rt.osx.a` for
+ggml-metal's availability checks. Keeping this directive in the domain crate
+lets standalone release tests link without building the Tauri root package.
 
 ## Tauri Commands
 
