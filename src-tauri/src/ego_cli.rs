@@ -179,7 +179,9 @@ pub(crate) async fn run(program: &Path, args: &[String]) -> Result<String, EgoCl
         });
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
 }
 
 /// The ego binary this host may launch, as configured right now.
