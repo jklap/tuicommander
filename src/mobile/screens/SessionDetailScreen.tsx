@@ -17,6 +17,7 @@ interface SessionDetailScreenProps {
 	sessionExists: boolean;
 	onBack: () => void;
 	onOpenFiles: () => void;
+	onOpenFileLink?: (candidate: string, line?: number) => void;
 }
 
 function projectName(cwd: string | null): string {
@@ -213,6 +214,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			<div class={styles.outputArea}>
 				<OutputView
 					sessionId={props.session.session_id}
+					onOpenFileLink={props.onOpenFileLink}
 					onStateChange={setWsState}
 					onInputLine={setPtyInputLine}
 					searchQuery={searchQuery()}

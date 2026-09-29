@@ -27,6 +27,7 @@ import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
+import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
@@ -228,13 +229,22 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 					const dotClass = () => {
 						const t = term();
 						if (!t) return s.branchTabDot;
-						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
-						if (t.awaitingInput) return cx(s.branchTabDot, s.branchTabDotQuestion);
-						if ((t.sessionId && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id))
-							return cx(s.branchTabDot, s.branchTabDotBusy);
-						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
-						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
-						return s.branchTabDot;
+						const visual = terminalVisualState({
+							error: t.awaitingInput === "error",
+							question: t.awaitingInput === "question",
+							busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
+							unseen: t.unseen,
+							idle: t.shellState === "idle",
+						});
+						const visualClass = {
+							error: s.branchTabDotError,
+							question: s.branchTabDotQuestion,
+							busy: s.branchTabDotBusy,
+							unseen: s.branchTabDotUnseen,
+							idle: s.branchTabDotIdle,
+							default: undefined,
+						}[visual];
+						return cx(s.branchTabDot, visualClass);
 					};
 
 					return (
