@@ -874,6 +874,9 @@ one configured ego binary and speaks ACP to it, per
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
 - The composer grows up to a bounded height. Pastes over 200 words are shown as
   numbered markers until Send restores the full text
+- `Ctrl+S` in the composer parks text and image previews with a visible chip;
+  pressing it again restores or swaps drafts. Sending an intervening prompt
+  restores the parked draft. The same control is tappable in mobile AI Chat.
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client
@@ -1641,6 +1644,7 @@ All data persisted to platform config directory via Rust:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Alt+A` | Toggle AI Chat panel (`toggle-ai-chat`) |
+| `Ctrl+S` (AI Chat composer) | Park, restore, or swap the current prompt draft |
 | `Cmd+Enter` (panel focused) | Send message |
 | `Esc` (panel focused) | Cancel in-flight stream |
 
