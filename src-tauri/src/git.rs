@@ -689,11 +689,21 @@ pub(crate) async fn get_recent_commits(
         .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
 
+/// `options` is `None`/default for the ordinary byte-exact diff (plain
+/// `git diff`, unchanged); any whitespace/case option re-diffs each changed
+/// file through the shared `crate::diff_options` engine (tuic-git).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn get_git_diff(path: String, scope: Option<String>) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || tuic_git::git::get_git_diff_blocking(path, scope))
-        .await
-        .map_err(|e| format!("spawn_blocking join error: {e}"))?
+pub(crate) async fn get_git_diff(
+    path: String,
+    scope: Option<String>,
+    options: Option<crate::diff_options::DiffOptions>,
+) -> Result<String, String> {
+    let opts = options.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        tuic_git::git::get_git_diff_with_options_blocking(path, scope, opts)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -722,9 +732,11 @@ pub(crate) async fn get_file_diff(
     file: String,
     scope: Option<String>,
     untracked: Option<bool>,
+    options: Option<crate::diff_options::DiffOptions>,
 ) -> Result<String, String> {
+    let opts = options.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
-        tuic_git::git::get_file_diff_blocking(path, file, scope, untracked)
+        tuic_git::git::get_file_diff_with_options_blocking(path, file, scope, untracked, opts)
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
