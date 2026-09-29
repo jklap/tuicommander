@@ -1160,8 +1160,10 @@ increases the gain slowly during the first words and boosts the silence.
 config clamps a stored value into that range) and
 `levelling` from 0 to 1. The envelopes use a running sum, so the cost is O(n).
 The test `a_thirty_second_reply_is_processed_within_budget` holds 30 s of audio
-at 24 kHz to 5 ms in release (50 ms in debug). Empty audio, a zero sample rate
-and audio with no sample above the gate are not changed.
+at 24 kHz to 5 ms in release (50 ms in debug). It is excluded from coverage
+builds because instrumentation changes the work being timed; run the normal
+release test to verify the 5 ms budget. Empty audio, a zero sample rate and
+audio with no sample above the gate are not changed.
 
 ### What `hush` guarantees
 
