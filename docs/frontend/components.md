@@ -489,7 +489,9 @@ component only renders what `progress_flow` returns.
 
 `embedded` drops the overlay and the floating box so the mobile PWA's Progress
 tab can host the same component full-bleed; a whole bottom tab is already the
-modal surface a dialog would create.
+modal surface a dialog would create. On phone widths, its header wraps the
+title, project and terminal selectors, view toggle, and blocked filter so each
+control remains visible without horizontal scrolling.
 
 ### ConfirmDialog (`ConfirmDialog/`)
 
