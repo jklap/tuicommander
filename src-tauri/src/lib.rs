@@ -1767,6 +1767,7 @@ pub fn run() {
 
                 // Install Fn/Globe key monitor for push-to-talk dictation
                 dictation::fn_key_monitor::install(app.handle().clone());
+                dictation::spawn_idle_unload_sweeper(app.handle().clone());
                 // Before any conversation can be armed: a speaker built without
                 // this one reports its replies to nobody but a poller.
                 dictation::commands::install_utterance_observer(app.handle());
