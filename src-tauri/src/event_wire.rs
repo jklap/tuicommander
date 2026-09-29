@@ -42,6 +42,9 @@ pub(crate) fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
+        AppEvent::SessionReviewChanged { .. } => "session-review-changed",
+        AppEvent::ReviewSessionsChanged { .. } => "review-sessions-changed",
+        AppEvent::AgentEditObserved { .. } => "agent-edit-observed",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
         AppEvent::WorktreeRemoved { .. } => "worktree-removed",
         AppEvent::PeerRegistered { .. } => "peer-registered",
@@ -278,6 +281,26 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RepositoriesChanged => serde_json::json!({}),
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })
+        }
+        AppEvent::SessionReviewChanged {
+            repo_path,
+            session_id,
+        } => {
+            serde_json::json!({ "repo_path": repo_path, "session_id": session_id })
+        }
+        AppEvent::ReviewSessionsChanged { repo_path } => {
+            serde_json::json!({ "repo_path": repo_path })
+        }
+        AppEvent::AgentEditObserved {
+            tuic_session_id,
+            claude_session_id,
+            repo_path,
+        } => {
+            serde_json::json!({
+                "tuic_session_id": tuic_session_id,
+                "claude_session_id": claude_session_id,
+                "repo_path": repo_path,
+            })
         }
         // Forwarded whole, like `AcpNotice`: the desktop `emit` in
         // `notify_worktree_created`/`notify_worktree_removed` serializes this

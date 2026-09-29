@@ -558,8 +558,23 @@ const EXTENDED_COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => {
 			let url = `/repo/session-review?path=${p("repoPath")}&session_id=${p("sessionId")}`;
 			if (args?.includeSubagents === false) url += `&include_subagents=false`;
+			url += diffOptionsQueryString(args?.options);
 			return { method: "GET", path: url };
 		},
+	},
+	watch_session_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/watch",
+			body: { path: args.repoPath, session_id: args.sessionId },
+		}),
+	},
+	unwatch_session_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/unwatch",
+			body: { path: args.repoPath, session_id: args.sessionId },
+		}),
 	},
 	revert_session_step: {
 		map: (args) => ({

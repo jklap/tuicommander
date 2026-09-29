@@ -40,6 +40,11 @@ const STEP: EditStep = {
 	agent_name: null,
 	user_modified: false,
 	replace_all: false,
+	turn_index: 0,
+	turn_started_at: null,
+	prompt_preview: null,
+	agent_id: null,
+	agent_display_name: null,
 };
 
 describe("StepCard", () => {
