@@ -7,9 +7,39 @@ BUNDLE_ID=com.tuic.commander
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 # Optional runtime override used by isolated verification sessions. An empty
-# value preserves the production default; TUIC_APP_INSTANCE is intentionally
-# left undefined here so the test target can keep its own default below.
+# value preserves the production default.
 TUIC_PORT?=
+
+# Isolated per-checkout instance id (#763-d219): every `make dev`/`make test`
+# run gets its OWN `instances/<id>/` config directory (repositories.json,
+# agents.json, disabled_mcp_agents, etc.), never the shared default config
+# directory that Boss's real, separately-launched TUICommander.app uses (see
+# "Test instance vs orchestrator instance" in src-tauri/AGENTS.md — that
+# release build is never started through this Makefile at all, so this
+# default can't touch it either way). The Rust side also refuses to
+# auto-install/repair the user's global agent MCP configs (~/.claude.json and
+# friends) whenever a named instance is active — see `app_instance.rs` and the
+# guard in `lib.rs`'s `run()`/`run_headless()` — so a debug build under a
+# named instance can never clobber Claude Code's `tuicommander` MCP entry
+# either.
+#
+# Derived from the checkout's own directory name (not a shared literal like
+# "tuic-test") so two worktrees running `make dev`/`make test` concurrently —
+# the normal multi-agent shape in this repo — get separate instances instead
+# of colliding with each other's repositories.json.
+#
+# Override with `make dev TUIC_APP_INSTANCE=some-other-id`, or
+# `TUIC_APP_INSTANCE= make dev` to explicitly opt into the shared default
+# config for one run — both `dev` and `test` warn loudly when you do, since
+# that's the one way to still hit the production config directory from here.
+TUIC_APP_INSTANCE?=tuic-$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-//; s/-$$//' | cut -c1-58)
+
+# Shared by `dev`/`test`: an explicit `TUIC_APP_INSTANCE=` override is the one
+# way to still land on the shared default config directory from this
+# Makefile, so it gets a loud warning rather than a silent switch.
+define warn-if-shared-instance
+if [ -z "$(TUIC_APP_INSTANCE)" ]; then echo "WARNING: TUIC_APP_INSTANCE is empty for this run - using the SHARED default config directory, the same one Boss's real long-running TUICommander.app uses (repositories.json, agents.json, disabled_mcp_agents, ...). Only do this on purpose."; fi
+endef
 
 # rtk (Rust Token Killer) is an optional output-compacting proxy: `rtk <cmd>`
 # runs <cmd> and trims its output. It is a personal tool, not a project
@@ -57,25 +87,17 @@ hooks:
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
 # Rust changes require a manual `make dev` restart — see src-tauri/AGENTS.md "Dev Hot Reload".
+# Isolated config instance by default — see the `TUIC_APP_INSTANCE` comment above.
 dev: hooks
+	@$(call warn-if-shared-instance)
 	@pnpm build:sidecar
 	@pnpm exec vite build
 	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 
-# Build frontend + launch Tauri dev (for quick manual testing).
-#
-# Isolated by default (#763-d219): this target exists specifically for
-# throwaway manual verification, not as a daily-driver launch — unlike `make
-# dev`, which stays on the shared default config directory because it IS
-# Boss's actual long-running instance and switching it would look like every
-# repository had vanished. TUIC_APP_INSTANCE points this one at its own
-# `instances/tuic-test/` config namespace (see docs/backend/config.md), so a
-# verification session can add/remove repositories, worktrees, whatever it
-# needs, without ever touching production `repositories.json`. Override with
-# `make test TUIC_APP_INSTANCE=some-other-id`, or `TUIC_APP_INSTANCE= make
-# test` to opt back into the shared default instance for one run.
-TUIC_APP_INSTANCE?=tuic-test
+# Build frontend + launch Tauri dev (for quick manual, throwaway verification).
+# Isolated config instance by default — see the `TUIC_APP_INSTANCE` comment above.
 test:
+	@$(call warn-if-shared-instance)
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
 	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
