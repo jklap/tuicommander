@@ -11598,6 +11598,50 @@ mod tests {
         assert!(state.session_maps.sessions.is_empty());
     }
 
+    /// Poll until `path` holds non-empty content, or the deadline passes.
+    /// A shell `> file` redirect creates (truncates) the file before writing
+    /// any bytes, so polling on existence alone can observe a 0-byte window.
+    fn wait_for_file_content(path: &std::path::Path, timeout: std::time::Duration) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            if !content.is_empty() || std::time::Instant::now() >= deadline {
+                return content;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// This bit agent_spawn_run_config_model_is_overridable_and_legacy_args_keep_conflict
+    /// once on the rb box under heavy contention (story 1268-8a01, box wall
+    /// time 209s vs a normal ~11s run).
+    #[cfg(unix)]
+    #[test]
+    fn wait_for_file_content_survives_a_truncate_then_delayed_write() {
+        let root = tempfile::Builder::new()
+            .prefix("mcp-wait-file-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let output = root.path().join("delayed");
+        // Truncates immediately, then stalls before writing content: the exact
+        // shape of the race a shell `> file` redirect exposes under scheduling
+        // delay.
+        let command = format!(
+            ": > '{0}'; sleep 0.2; printf 'ready' >> '{0}'",
+            output.display()
+        );
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .spawn()
+            .unwrap();
+        let content = wait_for_file_content(&output, std::time::Duration::from_secs(2));
+        assert_eq!(
+            content, "ready",
+            "must wait past the truncate-then-delayed-write window, not read the empty file"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn agent_spawn_run_config_model_is_overridable_and_legacy_args_keep_conflict() {
@@ -11625,11 +11669,8 @@ mod tests {
             }
             let spawned = handle_agent(&state, "127.0.0.1:1".parse().unwrap(), &request, None);
             assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while !output.exists() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+            let content = wait_for_file_content(&output, std::time::Duration::from_secs(5));
+            assert_eq!(content, expected);
             std::fs::remove_file(&output).unwrap();
         }
         let legacy = handle_agent(
