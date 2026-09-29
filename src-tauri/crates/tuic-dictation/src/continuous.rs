@@ -286,6 +286,19 @@ impl Segmenter {
     }
 }
 
+/// Apply the hands-free utterance gate to a finished push-to-talk recording.
+/// Feed bounded chunks so a long recording does not copy its whole buffer into
+/// the segmenter at once. An open utterance at key release also counts.
+pub fn has_sustained_speech(samples: &[f32], config: SegmenterConfig) -> bool {
+    let mut segmenter = Segmenter::new(config);
+    for chunk in samples.chunks(SAMPLE_RATE as usize) {
+        if !segmenter.push(chunk).is_empty() || segmenter.has_speech() {
+            return true;
+        }
+    }
+    false
+}
+
 fn ms_to_samples(ms: u32) -> usize {
     (SAMPLE_RATE as usize * ms as usize) / 1000
 }

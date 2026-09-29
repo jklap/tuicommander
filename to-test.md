@@ -32,6 +32,10 @@
 
 - [ ] After a manual `make dev` restart, use an isolated `TUIC_APP_INSTANCE=<id>` and a disposable repository to remove a worktree while its build-input warming is pending, after Git has already unregistered the checkout. Confirm the pending status clears even if a leftover directory cannot be removed. The running backend cannot load this Rust change until restart; the targeted Rust test covers the cleanup failure path.
 
+## Push-to-talk sustained speech (story 1135-b600) — Rust restart required
+
+- [ ] [HUMAN] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, record a short noise burst, ordinary speech, and quiet genuine speech with push-to-talk. Confirm that only sustained speech reaches the prompt and that a rejected capture shows `no sustained speech` in the dictation ring. The synthetic command tests cover duration and threshold boundaries; the real microphone separation remains unverified and is tracked by story 1117.
+
 ## Push-to-talk final skip reason (story 1140-28e3) — Rust restart required
 
 - [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, use a microphone capture that triggers a final RMS or Whisper speech gate. Confirm the dictation status and ring show the specific gate reason. An empty successful transcript still shows `no speech detected`. The focused Rust command tests prove response mapping without a microphone; live audio remains unverified.
