@@ -1,7 +1,14 @@
 import { type AnimationId, isKnownAnimationId } from "./animations";
 import { type IconId, isKnownIconId } from "./icons";
 
-export type IndicatorGroup = "terminalStatus" | "tabType" | "sidebarSymbol" | "prBadge" | "gitState" | "diffStat";
+export type IndicatorGroup =
+	| "terminalStatus"
+	| "tabType"
+	| "sidebarSymbol"
+	| "prBadge"
+	| "gitState"
+	| "diffStat"
+	| "tabActivity";
 
 export type IndicatorCapability = "color" | "icon" | "animation";
 
@@ -162,6 +169,27 @@ export const INDICATORS: readonly IndicatorDef[] = [
 		defaultColor: "var(--error)",
 		animVar: "--ind-anim-terminal-error",
 		defaultAnimation: "pulse",
+		defaultIconId: "dot",
+		capabilities: ["color", "icon", "animation"],
+		animations: DOT_ANIMATIONS,
+		preview: "dot",
+	},
+
+	// -------------------------------------------------------------------
+	// Tab Activity Dots — a small badge on a non-terminal tab (currently
+	// just Session Diff Review) showing content arrived while unviewed.
+	// Same shape as terminalStatus's "Unseen" entry above, just a
+	// different tab family — see TabBar.module.css's `.diffUnseenBadge`.
+	// -------------------------------------------------------------------
+	{
+		id: "diffTab.unseen",
+		group: "tabActivity",
+		label: "Session Diff unseen",
+		description: "A watched session changed while the tab wasn't active",
+		colorVar: "--ind-diff-unseen",
+		defaultColor: "var(--unseen)",
+		animVar: "--ind-anim-diff-unseen",
+		defaultAnimation: "none",
 		defaultIconId: "dot",
 		capabilities: ["color", "icon", "animation"],
 		animations: DOT_ANIMATIONS,
@@ -602,6 +630,7 @@ export const GROUP_LABELS: Record<IndicatorGroup, string> = {
 	prBadge: "PR Status Badges",
 	gitState: "Git Repo Status",
 	diffStat: "Diff Stats",
+	tabActivity: "Tab Activity Dots",
 };
 
 export const GROUP_HINTS: Partial<Record<IndicatorGroup, string>> = {
@@ -609,4 +638,5 @@ export const GROUP_HINTS: Partial<Record<IndicatorGroup, string>> = {
 	tabType: "Background tint and bottom border color by tab type",
 	prBadge: "Shown next to branches with a pull request",
 	gitState: "In-progress git operations and unmerged conflicts",
+	tabActivity: "The unseen-content dot on a Session Diff Review tab",
 };

@@ -27,6 +27,11 @@ export interface DiffTabData extends BaseTab {
 	/** Only set when scope === SESSION_SCOPE. Mutable — the in-tab session
 	 *  picker writes back into it so the choice survives remount/detach. */
 	sessionId?: string;
+	/** Session Diff Review only: a `session-review-changed` event arrived for
+	 *  this tab's session while it wasn't the active tab. Cleared the moment
+	 *  the tab becomes active (see `setActive` below) — mirrors
+	 *  `terminalsStore`'s own `unseen` field/clear-on-activate pattern. */
+	unseen?: boolean;
 }
 
 /** Whether a diff tab is the Session Diff Review surface. */
@@ -38,10 +43,25 @@ function createDiffTabsStore() {
 	const base = createTabManager<DiffTabData>("diff");
 	const handles = new Map<string, unknown>();
 
+	/** Clears `unseen` (if set) before delegating to `base.setActive` — mirrors
+	 *  `terminalsStore.setActive`'s own inline clear for its `unseen` field.
+	 *  Shared by every path that activates a diff tab, not just the public
+	 *  `setActive` passthrough — `add()`/`addSessionReview()`'s "tab already
+	 *  exists, focus it" branches must clear it too. */
+	function setActiveAndClearUnseen(id: string): void {
+		if (base.state.tabs[id]?.unseen) {
+			base._setState("tabs", id, "unseen", false);
+		}
+		base.setActive(id);
+	}
+
 	return {
 		state: base.state,
 		remove: base.remove,
-		setActive: base.setActive,
+		setActive(id: string | null): void {
+			if (id) setActiveAndClearUnseen(id);
+			else base.setActive(id);
+		},
 		clearAll: base.clearAll,
 		get: base.get,
 		getIds: base.getIds,
@@ -58,7 +78,7 @@ function createDiffTabsStore() {
 				(tab) => tab.repoPath === repoPath && tab.filePath === filePath && tab.scope === scope,
 			);
 			if (existing) {
-				base.setActive(existing.id);
+				setActiveAndClearUnseen(existing.id);
 				return existing.id;
 			}
 
@@ -83,18 +103,18 @@ function createDiffTabsStore() {
 		 *  the dedupe key (repo + SESSION_SCOPE only, ignoring filePath) and the
 		 *  `fileName` derivation both differ from `add()`'s, which already has
 		 *  7 call sites depending on its existing contract. */
-		addSessionReview(repoPath: string, sessionId?: string): string {
+		addSessionReview(repoPath: string, sessionId?: string, activate = true): string {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) => tab.repoPath === repoPath && tab.scope === SESSION_SCOPE,
 			);
 			if (existing) {
-				base.setActive(existing.id);
+				if (activate) setActiveAndClearUnseen(existing.id);
 				if (sessionId) base._setState("tabs", existing.id, "sessionId", sessionId);
 				return existing.id;
 			}
 
 			const id = base._nextId("diff");
-			return base._addTab({
+			return (activate ? base._addTab : base._addTabBackground)({
 				id,
 				repoPath,
 				filePath: "",
@@ -109,6 +129,18 @@ function createDiffTabsStore() {
 		/** Persist the in-tab session picker's choice, so it survives remount/detach. */
 		setSessionId(tabId: string, sessionId: string): void {
 			base._setState("tabs", tabId, "sessionId", sessionId);
+		},
+
+		/** Called on a `session-review-changed` event: flags the matching, open,
+		 *  currently-INACTIVE Session Diff tab as having unseen content. A no-op
+		 *  when the tab is already active (the user is looking at it) or when
+		 *  no tab for this repo+session is even open. */
+		markSessionReviewUnseen(repoPath: string, sessionId: string): void {
+			const tab = Object.values(base.state.tabs).find(
+				(t) => t.repoPath === repoPath && t.scope === SESSION_SCOPE && t.sessionId === sessionId,
+			);
+			if (!tab || tab.id === base.state.activeId) return;
+			base._setState("tabs", tab.id, "unseen", true);
 		},
 
 		/** Register an imperative handle for a tab (e.g. openSearch) */
