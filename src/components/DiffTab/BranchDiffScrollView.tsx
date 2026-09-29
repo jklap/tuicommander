@@ -2,14 +2,19 @@ import { type Component, createEffect, createMemo, createSignal, Show } from "so
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { repositoriesStore } from "../../stores/repositories";
-import { type DiffViewMode, uiStore } from "../../stores/ui";
+import type { DiffViewMode } from "../../stores/ui";
 import { openFileAction } from "../../utils/filePreview";
 import s from "../PrDiffTab/PrDiffTab.module.css";
-import { DiffFileList } from "../shared/DiffFileList";
+import { DiffFileList, fileRowKeys } from "../shared/DiffFileList";
 import { parseDiffFiles } from "../ui/DiffViewer";
 
 export interface BranchDiffScrollViewProps {
 	repoPath: string;
+	/** Split vs. unified — owned by the caller (`DiffTab`), which already
+	 *  resolves the shared `uiStore.diffViewMode`. `DiffViewMode` no longer has
+	 *  a "scroll" variant (that's this component's own reason to exist, not a
+	 *  mode a value of this type can carry), so no mapping is needed here. */
+	mode: DiffViewMode;
 	/** Pass a ref callback to get the scroll container for Cmd+F search */
 	contentRef?: (el: HTMLElement) => void;
 }
@@ -58,10 +63,24 @@ export const BranchDiffScrollView: Component<BranchDiffScrollViewProps> = (props
 	const totalAdd = createMemo(() => files().reduce((sum, f) => sum + f.additions, 0));
 	const totalDel = createMemo(() => files().reduce((sum, f) => sum + f.deletions, 0));
 
-	// In scroll mode, each DiffViewer uses unified or split (not "scroll" which DiffViewer doesn't understand)
-	const baseMode = (): DiffViewMode => {
-		const m = uiStore.state.diffViewMode;
-		return m === "scroll" ? "unified" : m;
+	// Owns collapse state here (rather than letting DiffFileList fall back to
+	// its own internal signal) so a refresh that drops a file also drops its
+	// now-meaningless collapsed entry, instead of growing forever.
+	const [collapsedKeys, setCollapsedKeys] = createSignal<Set<string>>(new Set());
+	createEffect(() => {
+		const live = new Set(fileRowKeys(files()));
+		setCollapsedKeys((prev) => {
+			const next = new Set([...prev].filter((k) => live.has(k)));
+			return next.size === prev.size ? prev : next;
+		});
+	});
+	const toggleCollapsed = (key: string) => {
+		setCollapsedKeys((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
 	};
 
 	const summaryHeader = () => (
@@ -96,10 +115,13 @@ export const BranchDiffScrollView: Component<BranchDiffScrollViewProps> = (props
 		>
 			<DiffFileList
 				files={files()}
-				mode={baseMode()}
+				mode={props.mode}
 				onOpenFile={(path) => openFileAction(path, props.repoPath)}
 				scrollRef={props.contentRef}
 				header={summaryHeader()}
+				headerHeight={35}
+				collapsedKeys={collapsedKeys()}
+				onToggleCollapsed={toggleCollapsed}
 			/>
 		</Show>
 	);

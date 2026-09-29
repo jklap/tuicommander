@@ -99,7 +99,9 @@ import { SessionDiffTab } from "../../components/SessionDiffTab/SessionDiffTab";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import type { EditStep, FileReview, SessionReview, SessionSummary } from "../../types/sessionDiff";
+import { writeClipboard } from "../../utils/clipboard";
 import { makeTerminal } from "../helpers/store";
 
 const REPO = "/repo";
@@ -377,5 +379,106 @@ describe("SessionDiffTab", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("switching the selected session clears the old session's content instead of leaving it on screen mid-fetch", async () => {
+		h.listReviewSessions.mockResolvedValue([
+			summary({ session_id: "sess-1", title: "First session" }),
+			summary({ session_id: "sess-2", title: "Second session" }),
+		]);
+		let resolveSecond: (r: SessionReview) => void = () => {};
+		h.getSessionReview.mockImplementation((_repo: string, sessionId: string) => {
+			if (sessionId === "sess-1") return Promise.resolve(review({ session_id: "sess-1" }));
+			return new Promise<SessionReview>((resolve) => {
+				resolveSecond = resolve;
+			});
+		});
+
+		const { getByText, getAllByText, getByTitle, queryAllByText } = render(() => (
+			<SessionDiffTab tabId={tabId} repoPath={REPO} />
+		));
+		await settle();
+		expect(getAllByText("a.ts").length).toBeGreaterThan(0);
+
+		// Open the session picker and switch to sess-2, whose review is still pending.
+		getByTitle("Choose which Claude Code session to review").click();
+		await settle();
+		getByText((content) => content.startsWith("Second session")).click();
+		await settle();
+
+		// sess-1's content must not still be on screen while sess-2 loads —
+		// today `loadReview` only shows the loading state when `!review()`
+		// (SessionDiffTab.tsx:97), so the stale review lingers until the new
+		// one resolves.
+		expect(queryAllByText("a.ts").length).toBe(0);
+
+		resolveSecond(review({ session_id: "sess-2", files: [fileGroup({ abs_path: "/repo/z.ts", display_path: "z.ts" })] }));
+		await settle();
+		expect(getByText("z.ts")).toBeTruthy();
+	});
+
+	it("toggling 'include subagents' re-fetches the review with the new flag", async () => {
+		const { getByRole } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+		await settle();
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", true);
+
+		const checkbox = getByRole("checkbox") as HTMLInputElement;
+		checkbox.click();
+		await settle();
+		expect(h.getSessionReview).toHaveBeenCalledWith(REPO, "sess-1", false);
+	});
+
+	it("'Copy all' copies every file's cumulative patch joined together", async () => {
+		const r = review({
+			files: [
+				fileGroup({ abs_path: "/repo/a.ts", cumulative_patch: "PATCH_A" }),
+				fileGroup({ abs_path: "/repo/b.ts", cumulative_patch: "PATCH_B" }),
+			],
+		});
+		h.getSessionReview.mockResolvedValue(r);
+		const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+		await settle();
+
+		getByText("Copy all").click();
+		await settle();
+
+		expect(writeClipboard).toHaveBeenCalledWith("PATCH_A\nPATCH_B");
+		expect(toastsStore.add).toHaveBeenCalledWith("Copied", expect.stringContaining("combined diff"), "info");
+	});
+
+	it("a file revert that needs force shows a toast with a 'force revert anyway' action, which retries with force:true", async () => {
+		h.revertFileToSessionStart.mockResolvedValueOnce({
+			applied: false,
+			method: "restore_backup",
+			abs_path: "/repo/a.ts",
+			message: "File changed since — force?",
+		});
+		h.revertFileToSessionStart.mockResolvedValueOnce({
+			applied: true,
+			method: "restore_backup",
+			abs_path: "/repo/a.ts",
+			message: null,
+		});
+		(toastsStore.add as ReturnType<typeof vi.fn>).mockClear();
+
+		const { container, getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+		await settle();
+
+		(container.querySelector('[title="Revert this file to its session-start content"]') as HTMLButtonElement).click();
+		await settle();
+		getByText("Revert").click();
+		await settle();
+
+		expect(h.revertFileToSessionStart).toHaveBeenCalledWith(REPO, "sess-1", "/repo/a.ts", false);
+		const toastCall = (toastsStore.add as ReturnType<typeof vi.fn>).mock.calls.find(
+			(c: unknown[]) => c[0] === "Can't revert — file changed since",
+		);
+		expect(toastCall).toBeTruthy();
+		const action = toastCall?.[4] as { label: string; onClick: () => void } | undefined;
+		expect(action?.label).toBe("Force revert anyway");
+
+		action?.onClick();
+		await settle();
+		expect(h.revertFileToSessionStart).toHaveBeenCalledWith(REPO, "sess-1", "/repo/a.ts", true);
 	});
 });

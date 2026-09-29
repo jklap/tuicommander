@@ -72,6 +72,7 @@ function createOptions() {
 		toggleWorktreeManager: vi.fn(),
 		toggleBranchSwitcher: vi.fn(),
 		toggleActivityDashboard: vi.fn(),
+		toggleDiffScroll: vi.fn(),
 	};
 	const terminalLifecycle = {
 		reopenClosedTab: vi.fn(),
@@ -158,11 +159,11 @@ describe("native menu bridge", () => {
 		expect(options.forceQuit).not.toHaveBeenCalled();
 	});
 
-	it("routes diff scroll through the active repository", () => {
-		dispatchNativeMenuAction("diff-scroll", createOptions() as never);
+	it("routes diff scroll through toggleDiffScroll (worktree-aware, structural — no global view-mode flag)", () => {
+		const options = createOptions();
+		dispatchNativeMenuAction("diff-scroll", options as never);
 
-		expect(mockStores.ui.setDiffViewMode).toHaveBeenCalledWith("scroll");
-		expect(mockStores.diffTabs.add).toHaveBeenCalledWith("/repo", "", "M");
+		expect(options.shortcutHandlers.toggleDiffScroll).toHaveBeenCalledOnce();
 	});
 
 	it("listens for native menu and ctrl-tab events and cleans both up", async () => {

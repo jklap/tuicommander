@@ -251,7 +251,10 @@ fn backup_path(session_id: &str, backup_file_name: &str, cfg: Option<&str>) -> O
 /// allocating.
 #[inline]
 fn line_is_interesting(line: &str) -> bool {
-    line.contains("\"toolUseResult\"") || line.contains("\"file-history-delta\"")
+    line.contains("\"toolUseResult\"")
+        || line.contains("\"file-history-delta\"")
+        || line.contains("\"custom-title\"")
+        || line.contains("\"last-prompt\"")
 }
 
 /// Raw per-step facts lifted straight out of one `toolUseResult`.
@@ -270,6 +273,104 @@ struct RawEdit {
     user_modified: bool,
     is_sidechain: bool,
     agent_name: Option<String>,
+    /// The record's own `structuredPatch` hunks, when present and non-empty.
+    /// Only consulted today by the Edit fallback path (see
+    /// `patch_from_structured_hunks`) — a Create/Overwrite always has its
+    /// full post-content available and never needs it. Real Claude Code
+    /// write results carry an empty `structuredPatch` (a known format trap,
+    /// see the module doc comment), which is why an empty array is treated
+    /// the same as absent rather than as "zero real hunks."
+    structured_patch: Option<Vec<StructuredHunk>>,
+    /// The transcript's `promptId` for this record, when present. Not
+    /// consumed anywhere yet — parsed here so a later turn-grouping feature
+    /// doesn't need a second pass over the transcript.
+    #[allow(dead_code)]
+    prompt_id: Option<String>,
+}
+
+/// One hunk from a transcript record's own `structuredPatch` array (the same
+/// shape Claude Code's diff library emits): real file line numbers, plus
+/// already-prefixed (`+`/`-`/` `) line text.
+#[derive(Debug, Clone)]
+struct StructuredHunk {
+    old_start: i64,
+    old_lines: i64,
+    new_start: i64,
+    new_lines: i64,
+    lines: Vec<String>,
+}
+
+/// Parse a `toolUseResult.structuredPatch` array, if present and non-empty.
+/// An absent or empty array (the normal case for Create/Overwrite, and for
+/// any Edit whose hunks were resolvable through the disk-fold-based patch)
+/// is treated as "no structured patch," not as a zero-hunk one.
+fn parse_structured_patch(tur: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<StructuredHunk>> {
+    let arr = tur.get("structuredPatch")?.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+    let mut hunks = Vec::with_capacity(arr.len());
+    for h in arr {
+        let old_start = h.get("oldStart")?.as_i64()?;
+        let old_lines = h.get("oldLines")?.as_i64()?;
+        let new_start = h.get("newStart")?.as_i64()?;
+        let new_lines = h.get("newLines")?.as_i64()?;
+        let lines: Vec<String> = h
+            .get("lines")?
+            .as_array()?
+            .iter()
+            .filter_map(|l| l.as_str().map(String::from))
+            .collect();
+        hunks.push(StructuredHunk {
+            old_start,
+            old_lines,
+            new_start,
+            new_lines,
+            lines,
+        });
+    }
+    Some(hunks)
+}
+
+/// Render a step's `structuredPatch` hunks directly as a unified diff body,
+/// preserving their real file line numbers — used by the Edit fallback path
+/// when fold/replay couldn't establish a session-start base, instead of
+/// resynthesizing a from-scratch diff of the bare `old_string`/`new_string`
+/// (which always starts at line 1, see `fallback_step_patch_uses_structured_patch_line_numbers`).
+fn patch_from_structured_hunks(hunks: &[StructuredHunk], display_path: &str) -> (String, u32, u32) {
+    let mut body = String::new();
+    let mut additions = 0u32;
+    let mut deletions = 0u32;
+    for h in hunks {
+        body.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            h.old_start, h.old_lines, h.new_start, h.new_lines
+        ));
+        for line in &h.lines {
+            if let Some(rest) = line.strip_prefix('+') {
+                additions += 1;
+                body.push('+');
+                body.push_str(rest);
+            } else if let Some(rest) = line.strip_prefix('-') {
+                deletions += 1;
+                body.push('-');
+                body.push_str(rest);
+            } else {
+                body.push(' ');
+                body.push_str(line.strip_prefix(' ').unwrap_or(line));
+            }
+            body.push('\n');
+        }
+    }
+    if additions == 0 && deletions == 0 {
+        return (String::new(), 0, 0);
+    }
+    let mut patch = String::new();
+    patch.push_str(&format!("diff --git a/{display_path} b/{display_path}\n"));
+    patch.push_str(&format!("--- a/{display_path}\n"));
+    patch.push_str(&format!("+++ b/{display_path}\n"));
+    patch.push_str(&body);
+    (patch, additions, deletions)
 }
 
 /// A `file-history-delta` record's backup pointer for one tracked path.
@@ -317,6 +418,7 @@ fn raw_edit_from_record(
         .and_then(|s| s.as_str())
         .map(String::from);
     let agent_name = agent_name.map(String::from);
+    let prompt_id = v.get("promptId").and_then(|s| s.as_str()).map(String::from);
 
     // Write result: has its own "type" field, "create" or "update".
     if let Some(write_kind) = tur.get("type").and_then(|s| s.as_str()) {
@@ -342,6 +444,8 @@ fn raw_edit_from_record(
             user_modified,
             is_sidechain,
             agent_name,
+            structured_patch: parse_structured_patch(tur),
+            prompt_id,
         });
     }
 
@@ -371,6 +475,8 @@ fn raw_edit_from_record(
         user_modified,
         is_sidechain,
         agent_name,
+        structured_patch: parse_structured_patch(tur),
+        prompt_id,
     })
 }
 
@@ -884,11 +990,14 @@ fn build_session_review_full(
                     unified_patch(b, a, old_exists, true, &display_path)
                 }
                 _ => match e.kind {
-                    StepKind::Edit => {
-                        let old = e.old_string.as_deref().unwrap_or("");
-                        let new = e.new_string.as_deref().unwrap_or("");
-                        unified_patch(old, new, true, true, &display_path)
-                    }
+                    StepKind::Edit => match e.structured_patch.as_ref() {
+                        Some(hunks) => patch_from_structured_hunks(hunks, &display_path),
+                        None => {
+                            let old = e.old_string.as_deref().unwrap_or("");
+                            let new = e.new_string.as_deref().unwrap_or("");
+                            unified_patch(old, new, true, true, &display_path)
+                        }
+                    },
                     StepKind::Create | StepKind::Overwrite => {
                         let content = e.content.as_deref().unwrap_or("");
                         unified_patch("", content, false, true, &display_path)
@@ -1274,7 +1383,67 @@ struct CachedReview {
     /// checkbox silently no-ops until the transcript's mtime happens to
     /// change for an unrelated reason.
     include_subagents: bool,
+    /// Also part of the cache key: a revert/growth of a *subagent*
+    /// transcript never touches the main transcript's own (len, mtime), so
+    /// without this a session with subagent edits could keep serving a
+    /// stale review indefinitely after a subagent transcript grew.
+    subagent_fp: SubagentFingerprint,
+    /// Monotonic use counter for LRU eviction — see `next_use_tick`. Not a
+    /// wall-clock timestamp: two entries touched within the same instant
+    /// must still have a well-defined "least recently used" answer.
+    last_used: u64,
     review: SessionReview,
+}
+
+/// A cheap fingerprint of a transcript's subagent transcripts, used as part
+/// of the review cache key. `transcript`'s session id and project directory
+/// are re-derived from its own path, so no caller needs to pass them
+/// separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SubagentFingerprint {
+    count: usize,
+    max_mtime: Option<std::time::SystemTime>,
+    total_len: u64,
+}
+
+fn subagent_fingerprint_for_transcript(transcript: &Path) -> SubagentFingerprint {
+    let (Some(session_id), Some(project_dir)) = (
+        transcript.file_stem().and_then(|s| s.to_str()),
+        transcript.parent(),
+    ) else {
+        return SubagentFingerprint {
+            count: 0,
+            max_mtime: None,
+            total_len: 0,
+        };
+    };
+    let files = subagent_transcripts(project_dir, session_id);
+    let mut max_mtime = None;
+    let mut total_len = 0u64;
+    for f in &files {
+        let Ok(meta) = std::fs::metadata(f) else {
+            continue;
+        };
+        total_len += meta.len();
+        if let Ok(mtime) = meta.modified() {
+            max_mtime = Some(match max_mtime {
+                Some(m) if m >= mtime => m,
+                _ => mtime,
+            });
+        }
+    }
+    SubagentFingerprint {
+        count: files.len(),
+        max_mtime,
+        total_len,
+    }
+}
+
+/// Monotonic tick for LRU bookkeeping — cheaper and unambiguous compared to
+/// re-reading the wall clock on every cache touch.
+fn next_use_tick() -> u64 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 const MAX_CACHED_REVIEWS: usize = 4;
@@ -1287,12 +1456,19 @@ fn review_cache() -> &'static Mutex<HashMap<PathBuf, CachedReview>> {
 fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<SessionReview> {
     let meta = std::fs::metadata(transcript).ok()?;
     let mtime = meta.modified().ok()?;
-    let map = review_cache().lock().ok()?;
-    let entry = map.get(transcript)?;
-    (entry.len == meta.len()
+    let subagent_fp = subagent_fingerprint_for_transcript(transcript);
+    let mut map = review_cache().lock().ok()?;
+    let entry = map.get_mut(transcript)?;
+    if entry.len == meta.len()
         && entry.mtime == mtime
-        && entry.include_subagents == include_subagents)
-        .then(|| entry.review.clone())
+        && entry.include_subagents == include_subagents
+        && entry.subagent_fp == subagent_fp
+    {
+        entry.last_used = next_use_tick();
+        Some(entry.review.clone())
+    } else {
+        None
+    }
 }
 
 fn put_cached_review(transcript: &Path, include_subagents: bool, review: &SessionReview) {
@@ -1302,12 +1478,16 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
     let Ok(mtime) = meta.modified() else {
         return;
     };
+    let subagent_fp = subagent_fingerprint_for_transcript(transcript);
     let Ok(mut map) = review_cache().lock() else {
         return;
     };
     if map.len() >= MAX_CACHED_REVIEWS
         && !map.contains_key(transcript)
-        && let Some(k) = map.keys().next().cloned()
+        && let Some(k) = map
+            .iter()
+            .min_by_key(|(_, v)| v.last_used)
+            .map(|(k, _)| k.clone())
     {
         map.remove(&k);
     }
@@ -1317,6 +1497,8 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
             len: meta.len(),
             mtime,
             include_subagents,
+            subagent_fp,
+            last_used: next_use_tick(),
             review: review.clone(),
         },
     );
@@ -3051,5 +3233,313 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("Invalid session id"), "got: {err}");
+    }
+
+    // ── Session Diff View overhaul — Phase 0 coverage gaps ──────────────────
+    // See plans/enchanted-puzzling-teacup.md. These describe intended
+    // behavior for bugs found during exploration; several are expected to
+    // fail against today's code until the matching Phase 1/2 fix lands.
+
+    #[test]
+    fn title_is_read_from_custom_title_record() {
+        // `line_is_interesting` (the cheap byte pre-filter) only admits lines
+        // containing "toolUseResult" or "file-history-delta" — a
+        // `custom-title` record has neither, so it's dropped before the
+        // match logic that would populate `scan.title` ever sees it. This
+        // means `SessionReview.title` is effectively always `None` today.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("titled.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "a\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).custom_title("My Session Title");
+        let (cfg, transcript) = tb.edit(&abs, "a\n", "A\n", false).build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build(
+            &repo,
+            &transcript,
+            session_id,
+            &cfg.path().to_string_lossy(),
+        );
+        assert_eq!(
+            review.title.as_deref(),
+            Some("My Session Title"),
+            "the custom-title record must survive the pre-filter and populate SessionReview.title"
+        );
+    }
+
+    #[test]
+    fn fallback_step_patch_uses_structured_patch_line_numbers() {
+        // When fold/replay can't establish a session-start base (here: the
+        // file was never written to disk in this test, so there's no
+        // backup, no originalFile, and nothing to reverse-fold from — an
+        // unconditional BaseSource::Unknown), the fallback at the bottom of
+        // `build_session_review_full`'s per-step loop currently diffs only
+        // `oldString`/`newString` in isolation via `unified_patch`, so every
+        // hunk header starts at "@@ -1,1 +1,1 @@" regardless of where the
+        // edit actually landed in the real file. The transcript record's own
+        // `structuredPatch` array (synthesized here by hand, matching the
+        // real Claude Code wire shape) already carries the correct line
+        // numbers — this documents that the fallback should use them
+        // instead of resynthesizing a patch from the bare strings.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("unresolvable.txt").to_string_lossy().to_string();
+        // Deliberately never written to disk: guarantees the fold has no
+        // disk content to reverse-fold from, and no backup/originalFile
+        // either, so base resolution bottoms out at BaseSource::Unknown.
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy());
+        let record = serde_json::json!({
+            "type": "user",
+            "timestamp": "2026-09-14T21:00:01.000Z",
+            "cwd": repo.to_string_lossy(),
+            "gitBranch": "main",
+            "isSidechain": false,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fallback_test"}]},
+            "toolUseResult": {
+                "filePath": abs,
+                "oldString": "line-that-does-not-exist-anywhere",
+                "newString": "its-replacement",
+                "originalFile": serde_json::Value::Null,
+                "replaceAll": false,
+                "structuredPatch": [{
+                    "oldStart": 42, "oldLines": 1, "newStart": 42, "newLines": 1,
+                    "lines": ["-line-that-does-not-exist-anywhere", "+its-replacement"],
+                }],
+                "userModified": false,
+            },
+        });
+        let tb = tb.raw_line(&record.to_string());
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build(
+            &repo,
+            &transcript,
+            session_id,
+            &cfg.path().to_string_lossy(),
+        );
+
+        assert_eq!(review.steps.len(), 1);
+        let step = &review.steps[0];
+        assert!(
+            step.patch.contains("@@ -42,1 +42,1 @@") || step.patch.contains("@@ -42 +42 @@"),
+            "fallback patch should use the record's own structuredPatch line \
+             numbers (expected a hunk header anchored at line 42), got:\n{}",
+            step.patch
+        );
+    }
+
+    #[test]
+    fn create_step_ignores_a_stray_structured_patch_and_stays_all_added() {
+        // Guard for the fix above: a Create/Overwrite step always has its
+        // full post-content available (`RawEdit.content`), so even if a
+        // future transcript variant carries a non-empty `structuredPatch`
+        // alongside a `create` write result, the synthesized patch must
+        // still be a plain "every line added" hunk against the real
+        // content — never routed through the structuredPatch-aware fallback
+        // meant for unresolvable Edits.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("create_with_patch.txt").to_string_lossy().to_string();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy());
+        let record = serde_json::json!({
+            "type": "user",
+            "timestamp": "2026-09-14T21:00:01.000Z",
+            "cwd": repo.to_string_lossy(),
+            "isSidechain": false,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_create_test"}]},
+            "toolUseResult": {
+                "type": "create",
+                "filePath": abs,
+                "content": "hello\nworld\n",
+                "originalFile": serde_json::Value::Null,
+                "structuredPatch": [{
+                    "oldStart": 99, "oldLines": 0, "newStart": 1, "newLines": 2,
+                    "lines": ["+hello", "+world"],
+                }],
+                "userModified": false,
+            },
+        });
+        let tb = tb.raw_line(&record.to_string());
+        let (cfg, transcript) = tb.build();
+        std::fs::write(&abs, "hello\nworld\n").unwrap();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build(
+            &repo,
+            &transcript,
+            session_id,
+            &cfg.path().to_string_lossy(),
+        );
+
+        assert_eq!(review.steps.len(), 1);
+        let step = &review.steps[0];
+        assert_eq!(step.kind, StepKind::Create);
+        assert_eq!(step.additions, 2);
+        assert_eq!(step.deletions, 0);
+        assert!(!step.patch.contains("@@ -99"));
+    }
+
+    #[tokio::test]
+    async fn cache_invalidates_when_subagent_transcript_grows() {
+        // `get_session_review`'s cache key is only the MAIN transcript's
+        // (len, mtime) — a new subagent transcript appearing after the
+        // first request doesn't touch the main transcript at all, so today
+        // the second request incorrectly gets served the stale, pre-growth
+        // cached review.
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("subgrow.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "orig\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).subagent_edit(
+            "worker1",
+            &abs,
+            "orig\n",
+            "changed\n",
+        );
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+
+        let r1 = get_session_review(
+            repo_str.clone(),
+            session_id.clone(),
+            Some(true),
+            Some(cfg_str.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r1.steps.len(), 1);
+
+        // A second subagent transcript appears — the main transcript's own
+        // (len, mtime) is untouched.
+        let sub_dir = transcript
+            .parent()
+            .unwrap()
+            .join(&session_id)
+            .join("subagents");
+        let abs2 = repo.join("subgrow2.txt").to_string_lossy().to_string();
+        let second_agent_line = serde_json::json!({
+            "type": "user", "timestamp": "2026-09-14T21:59:59.000Z", "isSidechain": true,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_second_agent"}]},
+            "toolUseResult": {
+                "filePath": abs2, "oldString": "old\n", "newString": "new\n",
+                "originalFile": serde_json::Value::Null, "replaceAll": false,
+                "structuredPatch": [], "userModified": false,
+            },
+        });
+        std::fs::write(
+            sub_dir.join("agent-worker2.jsonl"),
+            second_agent_line.to_string() + "\n",
+        )
+        .unwrap();
+
+        let r2 = get_session_review(repo_str, session_id, Some(true), Some(cfg_str))
+            .await
+            .unwrap();
+        assert_eq!(
+            r2.steps.len(),
+            2,
+            "a new subagent transcript must invalidate the cache even though \
+             the main transcript's (len, mtime) didn't change"
+        );
+    }
+
+    #[test]
+    fn cache_eviction_is_lru() {
+        // `put_cached_review`'s eviction picks `map.keys().next()` — an
+        // arbitrary HashMap iteration order, not the least-recently-used
+        // entry. Touching an entry via `get_cached_review` should protect it
+        // from eviction when a new entry pushes the cache past
+        // MAX_CACHED_REVIEWS; today it does not.
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = (0..5)
+            .map(|i| {
+                let p = dir.path().join(format!("t{i}.jsonl"));
+                std::fs::write(&p, format!("dummy{i}")).unwrap();
+                p
+            })
+            .collect();
+        let dummy_review = |id: &str| SessionReview {
+            session_id: id.to_string(),
+            transcript_path: String::new(),
+            repo_path: String::new(),
+            started_at: None,
+            ended_at: None,
+            title: None,
+            steps: Vec::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+            included_subagents: false,
+        };
+
+        for (i, p) in paths.iter().take(4).enumerate() {
+            put_cached_review(p, false, &dummy_review(&format!("s{i}")));
+        }
+        // Touch entry 0, making it the most-recently-used.
+        assert!(get_cached_review(&paths[0], false).is_some());
+        // Insert a 5th entry, forcing an eviction.
+        put_cached_review(&paths[4], false, &dummy_review("s4"));
+
+        assert!(
+            get_cached_review(&paths[0], false).is_some(),
+            "the just-touched entry must survive eviction"
+        );
+        let still_present = paths[1..4]
+            .iter()
+            .filter(|p| get_cached_review(p, false).is_some())
+            .count();
+        assert_eq!(
+            still_present, 2,
+            "exactly one of the untouched entries (1,2,3) must have been \
+             evicted to make room for entry 4 — LRU eviction must not touch \
+             the just-accessed entry 0"
+        );
+    }
+
+    #[test]
+    fn interleaved_main_and_subagent_steps_order_by_timestamp() {
+        // Guard/confirmation test: main-thread and subagent edits are
+        // scanned from separate files and then merged by a stable sort on
+        // the raw timestamp *string* (session_review.rs's
+        // `build_session_review_full`). This is correct as long as every
+        // transcript uses the same zero-padded ISO-8601 format, which is
+        // what `TranscriptBuilder::ts` (and real Claude Code transcripts)
+        // produce — confirms the ordering isn't accidentally scrambled by
+        // main-then-subagent scan order.
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("first.txt").to_string_lossy().to_string();
+        let abs2 = repo.join("third.txt").to_string_lossy().to_string();
+        let abs_sub = repo.join("second.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "a\n").unwrap();
+        std::fs::write(&abs2, "c\n").unwrap();
+        std::fs::write(&abs_sub, "b\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .edit(&abs1, "a\n", "A\n", false) // ts 1, main
+            .subagent_edit("worker1", &abs_sub, "b\n", "B\n") // ts 2, subagent
+            .edit(&abs2, "c\n", "C\n", false); // ts 3, main
+
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 3);
+        let paths: Vec<&str> = review.steps.iter().map(|s| s.abs_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![abs1.as_str(), abs_sub.as_str(), abs2.as_str()],
+            "steps from main and subagent transcripts must interleave in \
+             real chronological order, not main-first-then-subagent"
+        );
     }
 }

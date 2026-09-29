@@ -26,7 +26,8 @@ pub(super) async fn repo_diff(Query(q): Query<PathQuery>) -> Response {
         return e.into_response();
     }
     let path = q.path;
-    match crate::git::get_git_diff(path, None).await {
+    let scope = q.scope;
+    match crate::git::get_git_diff(path, scope).await {
         Ok(diff) => (StatusCode::OK, Json(serde_json::json!({"diff": diff}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -916,6 +917,83 @@ mod tests {
                 .unwrap_or_default()
                 .contains("timed out"),
             "expected the deadline named in stderr, got {json}"
+        );
+    }
+
+    // ── Session Diff View overhaul — Phase 0 coverage gap ───────────────────
+    // See plans/enchanted-puzzling-teacup.md. `repo_diff`'s `PathQuery` has
+    // no `scope` field at all, so the handler always calls
+    // `get_git_diff(path, None)` regardless of what a caller wants — this is
+    // what drives the duplicate-files-in-browser-mode bug the plan calls
+    // out (a caller expecting a staged-only diff via `scope=staged` always
+    // gets the unstaged diff back instead). Expected to fail until `scope`
+    // is threaded through `PathQuery`/`repo_diff`/`get_git_diff`.
+
+    #[tokio::test]
+    async fn repo_diff_route_honors_scope() {
+        let repo = create_temp_git_repo();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .expect("git")
+        };
+        std::fs::write(repo.path().join("a.txt"), "orig\n").unwrap();
+        std::fs::write(repo.path().join("b.txt"), "b-orig\n").unwrap();
+        run(&["add", "a.txt", "b.txt"]);
+        run(&["commit", "-m", "init"]);
+
+        // Stage a change to a.txt only.
+        std::fs::write(repo.path().join("a.txt"), "a-staged-change\n").unwrap();
+        run(&["add", "a.txt"]);
+        // Leave a separate, unstaged change to b.txt only.
+        std::fs::write(repo.path().join("b.txt"), "b-unstaged-change\n").unwrap();
+
+        let path = repo.path().to_string_lossy().to_string();
+
+        // Sanity check: the two scopes genuinely differ for this repo state,
+        // or this test would prove nothing regardless of the route's logic.
+        let staged_diff = crate::git::get_git_diff(path.clone(), Some("staged".to_string()))
+            .await
+            .unwrap();
+        let unstaged_diff = crate::git::get_git_diff(path.clone(), None).await.unwrap();
+        assert!(
+            staged_diff.contains("a-staged-change") && !staged_diff.contains("b-unstaged-change"),
+            "setup should have produced a staged-only diff of a.txt, got:\n{staged_diff}"
+        );
+        assert!(
+            unstaged_diff.contains("b-unstaged-change")
+                && !unstaged_diff.contains("a-staged-change"),
+            "setup should have produced an unstaged-only diff of b.txt, got:\n{unstaged_diff}"
+        );
+
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let app = crate::mcp_http::build_router(state, false, true);
+
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::get(format!("/repo/diff?path={path}&scope=staged"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        ));
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = json_body(response).await;
+        let http_diff = json["diff"].as_str().unwrap_or_default();
+
+        assert!(
+            http_diff.contains("a-staged-change"),
+            "requesting ?scope=staged over HTTP must return the staged diff \
+             (a.txt's change), got:\n{http_diff}"
+        );
+        assert!(
+            !http_diff.contains("b-unstaged-change"),
+            "requesting ?scope=staged over HTTP must NOT leak the unstaged \
+             diff (b.txt's change) — PathQuery has no scope field today, so \
+             the handler always calls get_git_diff(path, None) regardless of \
+             the query string, got:\n{http_diff}"
         );
     }
 }
