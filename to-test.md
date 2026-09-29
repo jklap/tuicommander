@@ -4318,3 +4318,12 @@ or credential is touched.
 ## Mobile session detail task text (story 1216-a482) — real phone
 
 - [ ] On a 360 px phone, open idle, awaiting-input, and ended Claude sessions whose terminal status line has a decorative spinner verb. Confirm no task row repeats that verb and the terminal gains the freed row; a Codex session with a substantive task such as “Reading files” should still show it.
+## Mobile Markdown images (1215-8e00)
+
+- [ ] After restarting `make dev` to load the Rust HTTP route, open a nested Markdown file with a repository-relative image in the mobile Files tab and confirm the image loads. Check that a path escaping the repository does not load.
+
+## Mobile Progress, Activity, and Settings (1226-eb95)
+
+- [ ] On a 360 px phone, confirm a long Progress message shows about four lines, More reveals it all, and Less collapses it again.
+- [ ] Confirm Activity shows local 24-hour times, a completed 2343-second run as 39 min, and a single block as `1 block`.
+- [ ] In mobile Settings, choose Light, reload the PWA, and confirm the theme stays light; check that app and server versions are visible.

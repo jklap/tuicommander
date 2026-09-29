@@ -45,6 +45,9 @@
 }
 .body { flex: 1; min-width: 0; }
 .text { margin: 0; color: var(--fg-primary); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.textCollapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.more { margin-top: 4px; padding: 4px 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-xs); cursor: pointer; }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; color: var(--fg-muted); font-size: var(--font-xs); }
 /* Only an intent carries a word: it is the one line that says what the agent
    started, not what it finished, and muted italics alone do not say that. */
