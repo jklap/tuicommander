@@ -10,6 +10,12 @@ command = "sh scripts/nextest-test-tmp.sh"
 [scripts.setup.repo-test-temp-windows]
 command = "powershell -NoProfile -File scripts/nextest-test-tmp.ps1"
 
+[scripts.setup.fixture-bins-unix]
+command = "sh scripts/build-fixture-bins.sh"
+
+[scripts.setup.fixture-bins-windows]
+command = "powershell -NoProfile -File scripts/build-fixture-bins.ps1"
+
 [profile.default]
 # Surface long-running tests (warn at 30s, 60s, 90s) and hard-kill true hangs
 # at 120s. The slowest legit tests here are the tunnels supervisor retry tests
@@ -23,6 +29,14 @@ setup = "repo-test-temp-unix"
 [[profile.default.scripts]]
 platform = { host = "cfg(windows)" }
 setup = "repo-test-temp-windows"
+
+[[profile.default.scripts]]
+platform = { host = "cfg(unix)" }
+setup = "fixture-bins-unix"
+
+[[profile.default.scripts]]
+platform = { host = "cfg(windows)" }
+setup = "fixture-bins-windows"
 
 # The git_reads parity/shootout tests each spawn several `git` subprocesses in
 # their own TempDir fixture. Under the full parallel run they occasionally hit
@@ -51,6 +65,14 @@ setup = "repo-test-temp-unix"
 [[profile.ci.scripts]]
 platform = { host = "cfg(windows)" }
 setup = "repo-test-temp-windows"
+
+[[profile.ci.scripts]]
+platform = { host = "cfg(unix)" }
+setup = "fixture-bins-unix"
+
+[[profile.ci.scripts]]
+platform = { host = "cfg(windows)" }
+setup = "fixture-bins-windows"
 
 [profile.ci.junit]
 path = "junit.xml"
