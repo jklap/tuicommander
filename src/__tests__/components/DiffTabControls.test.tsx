@@ -43,7 +43,9 @@ it("catches view icon migration losing mode changes or one-sided disabled state"
 	);
 	const view = render(() => <DiffTab tabId="controls" repoPath="/fixture" filePath="file.txt" />);
 	await waitFor(() => expect(view.getByRole("button", { name: "Side-by-side" })).toBeDisabled());
-	expect(view.getByRole("button", { name: "All files" })).toBeDisabled();
+	// "All files" opens the separate all-files scroll tab (no longer a view mode),
+	// so a one-sided file tab keeps it enabled; it is disabled only on that scroll tab.
+	expect(view.getByRole("button", { name: "All files" })).not.toBeDisabled();
 	expect(view.getByRole("button", { name: "Inline" })).toHaveAttribute("aria-pressed", "true");
 	cleanup();
 	getFileDiff.mockResolvedValue(diff);

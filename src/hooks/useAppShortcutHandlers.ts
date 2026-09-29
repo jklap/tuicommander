@@ -171,13 +171,15 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			else globalWorkspaceStore.activate(key);
 		},
 		toggleDiffScroll: () => {
-			const repoPath = repositoriesStore.state.activeRepoPath;
+			const repoPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath;
 			if (!repoPath) return;
-			uiStore.setDiffViewMode("scroll");
+			// The Diff Scroll tab is identified structurally (`filePath === ""`),
+			// not by a shared global view mode — opening it must never affect any
+			// other open per-file diff tab.
 			diffTabsStore.add(repoPath, "", "M");
 		},
 		openSessionReview: () => {
-			const repoPath = repositoriesStore.state.activeRepoPath;
+			const repoPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath;
 			if (!repoPath) return;
 			diffTabsStore.addSessionReview(repoPath);
 		},

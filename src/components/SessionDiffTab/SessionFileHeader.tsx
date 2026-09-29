@@ -29,12 +29,24 @@ const BASE_SOURCE_LABEL: Record<FileReview["base_source"], string> = {
  *  a confidence/drift badge, and the file-level actions (copy, revert, open). */
 export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 	return (
-		<div class={fl.fileHeader}>
+		<div
+			class={fl.fileHeader}
+			role="button"
+			tabIndex={0}
+			onClick={props.onToggleExpanded}
+			onKeyDown={onClickKeyDown(props.onToggleExpanded)}
+		>
 			<button
 				type="button"
 				class={s.chevronBtn}
-				onClick={props.onToggleExpanded}
-				onKeyDown={onClickKeyDown(props.onToggleExpanded)}
+				onClick={(e) => {
+					e.stopPropagation();
+					props.onToggleExpanded();
+				}}
+				onKeyDown={onClickKeyDown((e) => {
+					e.stopPropagation();
+					props.onToggleExpanded();
+				})}
 			>
 				<svg
 					class={cx(fl.chevron, !props.expanded && fl.chevronCollapsed)}
@@ -46,7 +58,13 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 					<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 				</svg>
 			</button>
-			<span class={fl.filePath} onClick={props.onOpenFile}>
+			<span
+				class={fl.filePath}
+				onClick={(e) => {
+					e.stopPropagation();
+					props.onOpenFile();
+				}}
+			>
 				{props.group.display_path}
 			</span>
 			<Show when={!props.group.in_repo}>
@@ -73,7 +91,15 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 				</Show>
 			</span>
 			<div class={s.fileActions}>
-				<button type="button" class={s.iconBtn} onClick={props.onCopyFile} title="Copy this file's diff">
+				<button
+					type="button"
+					class={s.iconBtn}
+					onClick={(e) => {
+						e.stopPropagation();
+						props.onCopyFile();
+					}}
+					title="Copy this file's diff"
+				>
 					<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M4 2a2 2 0 0 0-2 2v7h1.5V4a.5.5 0 0 1 .5-.5h7V2H4zm3 3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H7z" />
 					</svg>
@@ -82,7 +108,10 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 					<button
 						type="button"
 						class={s.iconBtn}
-						onClick={props.onRevertFile}
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onRevertFile();
+						}}
 						title="Revert this file to its session-start content"
 					>
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -91,7 +120,14 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 					</button>
 				</Show>
 				<Show when={props.stepCount > 1}>
-					<button type="button" class={s.linkBtn} onClick={props.onToggleStepsOpen}>
+					<button
+						type="button"
+						class={s.linkBtn}
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onToggleStepsOpen();
+						}}
+					>
 						{props.stepsOpen ? "Hide" : "Show"} {props.stepCount} edits
 					</button>
 				</Show>

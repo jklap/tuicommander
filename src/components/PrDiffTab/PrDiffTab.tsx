@@ -171,6 +171,10 @@ export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
 						<Show when={session}>{(active) => <ReviewSubmitBar session={active()} />}</Show>
 					</>
 				}
+				// DEFERRED (2026-10-28) — 35 is the toolbar alone; with a review session the
+				// ReviewSubmitBar adds height this offset ignores, so sticky file headers can
+				// sit under the bar. Measure the header instead of hard-coding it.
+				headerHeight={35}
 				collapsedByDefault={collapsedByDefault}
 				viewerProps={viewerProps}
 				fileExtras={fileExtras}

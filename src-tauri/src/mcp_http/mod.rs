@@ -3397,6 +3397,7 @@ mod tests {
             None,
             Query(types::PathQuery {
                 path: project.into(),
+                scope: None,
             }),
             Json(crate::workflows::WorkflowAction::Publish {
                 id: draft.id.clone(),
@@ -4497,6 +4498,7 @@ mod tests {
             None,
             Query(types::PathQuery {
                 path: project.into(),
+                scope: None,
             }),
             Json(WorkflowAction::Publish {
                 id: draft.id,

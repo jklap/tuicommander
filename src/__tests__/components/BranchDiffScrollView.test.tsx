@@ -1,6 +1,6 @@
 import { render } from "@solidjs/testing-library";
 import type { JSX } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // DiffFileList renders each file through DiffViewer (@git-diff-view/solid),
 // which needs a real Canvas this test environment doesn't have (see
@@ -13,10 +13,11 @@ const h = vi.hoisted(() => ({ getDiff: vi.fn(), openFileAction: vi.fn() }));
 vi.mock("../../components/shared/DiffFileList", () => ({
 	DiffFileList: (props: {
 		files: Array<{ path: string; additions: number; deletions: number }>;
+		mode: string;
 		header?: JSX.Element;
 		onOpenFile?: (path: string) => void;
 	}) => (
-		<div data-testid="mock-file-list">
+		<div data-testid="mock-file-list" data-mode={props.mode}>
 			{props.header}
 			{props.files.map((f) => (
 				<button type="button" data-testid={`file-${f.path}`} onClick={() => props.onOpenFile?.(f.path)}>
@@ -25,6 +26,17 @@ vi.mock("../../components/shared/DiffFileList", () => ({
 			))}
 		</div>
 	),
+	// Real implementation kept: BranchDiffScrollView calls this directly (not
+	// through the mocked component) to prune its own collapse-state set.
+	fileRowKeys: (files: Array<{ path: string }>) => {
+		const counts = new Map<string, number>();
+		return files.map((f) => {
+			const path = f.path ?? "";
+			const n = counts.get(path) ?? 0;
+			counts.set(path, n + 1);
+			return `${path}#${n}`;
+		});
+	},
 }));
 vi.mock("../../hooks/useRepository", () => ({
 	useRepository: () => ({ getDiff: h.getDiff }),
@@ -35,6 +47,7 @@ vi.mock("../../utils/filePreview", () => ({
 
 import { BranchDiffScrollView } from "../../components/DiffTab/BranchDiffScrollView";
 import { repositoriesStore } from "../../stores/repositories";
+import { uiStore } from "../../stores/ui";
 
 const REPO = "/repo";
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -51,12 +64,17 @@ describe("BranchDiffScrollView", () => {
 		h.getDiff.mockReset();
 		h.openFileAction.mockReset();
 	});
+	afterEach(() => {
+		// setDiffViewMode() schedules a debounced save(); cancel it so it
+		// doesn't fire (and leak a timer) after the test has already ended.
+		uiStore._testCancelPendingSave();
+	});
 
 	it("fetches staged and unstaged, joining staged first then unstaged", async () => {
 		h.getDiff.mockImplementation((_path: string, scope?: string) =>
 			Promise.resolve(scope === "staged" ? diffFor("staged.txt") : diffFor("unstaged.txt")),
 		);
-		render(() => <BranchDiffScrollView repoPath={REPO} />);
+		render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 
 		expect(h.getDiff).toHaveBeenCalledWith(REPO);
@@ -72,7 +90,7 @@ describe("BranchDiffScrollView", () => {
 		h.getDiff.mockImplementation((_path: string, scope?: string) =>
 			Promise.resolve(scope === "staged" ? ZERO_CHANGE_DIFF : diffFor("real.txt")),
 		);
-		const { queryByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} />);
+		const { queryByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 
 		expect(queryByTestId("file-renamed2.txt")).toBeNull();
@@ -81,7 +99,7 @@ describe("BranchDiffScrollView", () => {
 
 	it("shows a loading state, then the empty state when there are no changes", async () => {
 		h.getDiff.mockResolvedValue("");
-		const { getByText } = render(() => <BranchDiffScrollView repoPath={REPO} />);
+		const { getByText } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		expect(getByText(/Loading diff/)).toBeTruthy();
 		await settle();
 		expect(getByText(/No uncommitted changes/)).toBeTruthy();
@@ -89,7 +107,7 @@ describe("BranchDiffScrollView", () => {
 
 	it("shows an error state when a fetch rejects", async () => {
 		h.getDiff.mockRejectedValue(new Error("boom"));
-		const { getByText } = render(() => <BranchDiffScrollView repoPath={REPO} />);
+		const { getByText } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 		expect(getByText(/Error:/)).toBeTruthy();
 	});
@@ -107,7 +125,7 @@ describe("BranchDiffScrollView", () => {
 			}
 			return Promise.resolve(diffFor("second.txt"));
 		});
-		const { queryByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} />);
+		const { queryByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 
 		repositoriesStore.bumpRevision(REPO);
@@ -123,10 +141,49 @@ describe("BranchDiffScrollView", () => {
 		h.getDiff.mockImplementation((_path: string, scope?: string) =>
 			Promise.resolve(scope === "staged" ? "" : diffFor("clickme.txt")),
 		);
-		const { getByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} />);
+		const { getByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 
 		getByTestId("file-clickme.txt").click();
 		expect(h.openFileAction).toHaveBeenCalledWith("clickme.txt", REPO);
+	});
+
+	it("passes 'unified' straight through to the underlying DiffFileList", async () => {
+		// BranchDiffScrollView takes `mode` as an explicit prop now (DiffTab.tsx
+		// owns/computes it) instead of reading the shared uiStore.diffViewMode
+		// itself — DiffViewMode no longer has a "scroll" value to map at all.
+		h.getDiff.mockImplementation((_path: string, scope?: string) =>
+			Promise.resolve(scope === "staged" ? "" : diffFor("a.txt")),
+		);
+		const { getByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="unified" />);
+		await settle();
+		expect(getByTestId("mock-file-list").dataset.mode).toBe("unified");
+	});
+
+	it("passes 'split' straight through to the underlying DiffFileList", async () => {
+		h.getDiff.mockImplementation((_path: string, scope?: string) =>
+			Promise.resolve(scope === "staged" ? "" : diffFor("a.txt")),
+		);
+		const { getByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
+		await settle();
+		expect(getByTestId("mock-file-list").dataset.mode).toBe("split");
+	});
+
+	it("the summary header totals additions and deletions across all files", async () => {
+		h.getDiff.mockImplementation((_path: string, scope?: string) =>
+			Promise.resolve(
+				scope === "staged"
+					? "diff --git a/one.txt b/one.txt\n@@ -1,2 +1,3 @@\n a\n-b\n+c\n+d\n"
+					: "diff --git a/two.txt b/two.txt\n@@ -1,1 +1,1 @@\n-x\n+y\n",
+			),
+		);
+		const { container } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
+		await settle();
+
+		// one.txt: +2/-1, two.txt: +1/-1 → totals +3/-2, across 2 files.
+		const stats = container.querySelector(".headerStats");
+		expect(stats?.textContent).toContain("2");
+		expect(stats?.textContent).toContain("+3");
+		expect(stats?.textContent).toContain("-2");
 	});
 });
