@@ -35,9 +35,41 @@ impl GitHubAccountRegistry {
         crate::config::load_json_config(GITHUB_ACCOUNTS_FILE)
     }
 
-    /// Persist the registry to disk atomically.
+    /// Apply account-id changes to the latest locked registry. The on-disk
+    /// representation is an array, but independent account additions compose.
     pub(crate) fn save(&self, base: &Self) -> Result<(), String> {
-        crate::config::ConfigFile::<Self>::new(GITHUB_ACCOUNTS_FILE).save_delta(base, self)
+        let changed: Vec<_> = self
+            .accounts
+            .iter()
+            .filter(|account| base.get(&account.id) != Some(*account))
+            .cloned()
+            .collect();
+        let removed: Vec<_> = base
+            .accounts
+            .iter()
+            .filter(|account| self.get(&account.id).is_none())
+            .map(|account| account.id.clone())
+            .collect();
+        crate::config::ConfigFile::<Self>::new(GITHUB_ACCOUNTS_FILE).update_with(|latest| {
+            let mut did_change = false;
+            for id in removed {
+                did_change |= latest.remove(&id);
+            }
+            for account in changed {
+                if let Some(existing) = latest.get(&account.id)
+                    && existing.host != account.host
+                {
+                    return Err(format!(
+                        "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
+                        account.id,
+                        existing.host.as_str()
+                    ));
+                }
+                latest.upsert(account);
+                did_change = true;
+            }
+            Ok(((), did_change))
+        })
     }
 
     pub(crate) fn list(&self) -> &[GitHubAccount] {
@@ -304,26 +336,26 @@ fn store_guard() -> std::sync::MutexGuard<'static, ()> {
 /// Add or update an account record, storing its PAT (GHE accounts) in the vault.
 pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> Result<(), String> {
     let _guard = store_guard();
-    let mut registry = GitHubAccountRegistry::load();
-    let base = registry.clone();
-    // Reject an id already used by a DIFFERENT host: a bare-hostname GHE account
-    // (id = host) and a named github.com account (id = login) could otherwise
-    // collide and silently clobber each other's record + vault token. Same host
-    // = a legitimate update (e.g. PAT refresh), so upsert is allowed.
-    if let Some(existing) = registry.get(&account.id)
-        && existing.host != account.host
-    {
-        return Err(format!(
-            "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
-            account.id,
-            existing.host.as_str()
-        ));
-    }
-    if let Some(pat) = pat {
-        crate::credentials::set(Credential::GithubToken(&account.id), pat)?;
-    }
-    registry.upsert(account);
-    registry.save(&base)
+    crate::config::ConfigFile::<GitHubAccountRegistry>::new(GITHUB_ACCOUNTS_FILE).update_with(
+        |latest| {
+            // Validate against the current file, not a snapshot taken before
+            // another process acquired the cross-process lock.
+            if let Some(existing) = latest.get(&account.id)
+                && existing.host != account.host
+            {
+                return Err(format!(
+                    "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
+                    account.id,
+                    existing.host.as_str()
+                ));
+            }
+            if let Some(pat) = pat {
+                crate::credentials::set(Credential::GithubToken(&account.id), pat)?;
+            }
+            latest.upsert(account);
+            Ok(((), true))
+        },
+    )
 }
 
 /// Remove an account everywhere: its PAT, its registry record, and every binding
@@ -333,10 +365,8 @@ pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> 
     let _guard = store_guard();
     // Best-effort token delete — absence is not an error.
     let _ = crate::credentials::delete(Credential::GithubToken(account_id));
-    let mut registry = GitHubAccountRegistry::load();
-    let registry_base = registry.clone();
-    registry.remove(account_id);
-    registry.save(&registry_base)?;
+    crate::config::ConfigFile::<GitHubAccountRegistry>::new(GITHUB_ACCOUNTS_FILE)
+        .update(|latest| latest.remove(account_id))?;
     let mut bindings = RepoBindingStore::load();
     let bindings_base = bindings.clone();
     bindings.remove_account_bindings(account_id);
@@ -686,6 +716,31 @@ mod tests {
 
         let loaded = GitHubAccountRegistry::load();
         assert_eq!(loaded, reg);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_account_additions_preserve_both_accounts() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let base = GitHubAccountRegistry::load();
+        let mut first = base.clone();
+        first.upsert(GitHubAccount::ghe_pat(
+            GitHubHost::new("first.example.com").unwrap(),
+            None,
+        ));
+        let mut second = base.clone();
+        second.upsert(GitHubAccount::ghe_pat(
+            GitHubHost::new("second.example.com").unwrap(),
+            None,
+        ));
+
+        first.save(&base).unwrap();
+        second.save(&base).unwrap();
+
+        let saved = GitHubAccountRegistry::load();
+        assert!(saved.get("first.example.com").is_some());
+        assert!(saved.get("second.example.com").is_some());
     }
 
     // --- repo → account bindings ---

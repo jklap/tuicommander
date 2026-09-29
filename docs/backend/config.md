@@ -150,6 +150,7 @@ One runtime cache and one transient SSH socket support SSH-managed remote daemon
 Remote pairing tokens use the credential vault key
 `remote/connection/<uuid>/pairing-token`; they never live in either directory or
 in `connections.json`.
+Each connection stores `auto_update` there. Missing values default to `false`.
 
 ## Core Functions
 
@@ -169,6 +170,7 @@ impl<T: Serialize + DeserializeOwned + Default> ConfigFile<T> {
     pub fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError>
     pub fn save_delta(&self, base: &T, desired: &T) -> Result<(), String>
     pub fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String>
+    pub fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String>
     pub fn save(&self, value: &T) -> Result<(), String>
 }
 ```
@@ -183,8 +185,14 @@ saw. Interactive per-domain saves use `save_delta`: each request carries the
 snapshot loaded by that client (`base`) and its edited document (`config`). The
 server applies only the base-to-config changes to the latest locked file. Object
 keys merge recursively, arrays replace as a unit, and JSON null deletes a key.
+Null also deletes a key within a newly added nested object, so that key is not
+persisted there.
 `save_delta_strict` uses the same rules but refuses to replace a corrupt notes
-file. `config.json` (`AppConfig`) and `mcp-upstreams.json` also merge deltas under
+file. Dictation's recovery save rechecks under the lock: it repairs a file that
+is still malformed, or merges its edit into a valid file saved meanwhile.
+Remote connection edits use the same JSON delta per connection id; they also
+hold the shared file lock while reading and writing `connections.json`.
+`config.json` (`AppConfig`) and `mcp-upstreams.json` also merge deltas under
 the lock. `repositories.json` uses the ID-keyed optimistic delta protocol
 documented below. See
 [`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
@@ -881,7 +889,7 @@ Defined in the root `src-tauri/src/config.rs` and re-exported by the dictation c
 | `model` | `String` | `"large-v3-turbo"` | Whisper model name |
 | `auto_send` | `bool` | `true` | Auto-submit after transcription |
 
-**Commands:** `get_dictation_config()`, `set_dictation_config(config)`
+**Commands:** `get_dictation_config()`, `set_dictation_config(base, config)`
 
 ### Config Defaults (read-only, no file)
 

@@ -31,7 +31,7 @@
 //! connection is currently attached to, and which reply belongs to which
 //! caller.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -317,8 +317,8 @@ pub(super) struct ConnectionActor {
     capabilities: Arc<AcpCapabilitySnapshot>,
     journal: Arc<AcpEventJournal>,
     attachments: HashMap<v1::SessionId, AcpAttachmentSnapshot>,
-    /// Sessions a load or resume has been sent for and not yet answered.
-    attaching: HashSet<v1::SessionId>,
+    /// Pending load/resume sessions and usage received before their reply.
+    attaching: HashMap<v1::SessionId, Option<AcpUsageSnapshot>>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
     queued_contents: HashMap<AcpTurnId, (Vec<v1::ContentBlock>, Option<v1::Meta>)>,
     /// Open seats in the order the agent asked, which is the order they are
@@ -358,7 +358,7 @@ impl ConnectionActor {
             capabilities,
             journal,
             attachments: HashMap::new(),
-            attaching: HashSet::new(),
+            attaching: HashMap::new(),
             queued_contents: HashMap::new(),
             seats: Vec::new(),
             contradicted: Arc::new(AtomicBool::new(false)),
@@ -922,10 +922,8 @@ impl ConnectionActor {
                 authority,
                 reply,
             } => {
-                if let Some(session_id) = &claimed {
-                    self.attaching.remove(session_id);
-                }
-                let outcome = outcome.map(|attached| self.record(attached, authority));
+                let usage = claimed.and_then(|id| self.attaching.remove(&id)).flatten();
+                let outcome = outcome.map(|attached| self.record(attached, authority, usage));
                 let _ = reply.send(outcome);
             }
             Pending::Detach {
@@ -1004,6 +1002,24 @@ impl ConnectionActor {
     /// owner would put one turn's output into another turn's transcript.
     fn project(&mut self, notification: v1::SessionNotification) {
         let Some(attachment) = self.attachments.get_mut(&notification.session_id) else {
+            // Ego sends replay chunks before answering session/load. This id is
+            // known from the request even though its attachment is not yet
+            // recorded; other unknown session ids must still be ignored.
+            if let Some(usage) = self.attaching.get_mut(&notification.session_id) {
+                if let v1::SessionUpdate::UsageUpdate(context) = &notification.update {
+                    *usage = Some(AcpUsageSnapshot {
+                        context: Some(context.clone()),
+                        end_turn: None,
+                    });
+                }
+                self.journal.append(
+                    Some(notification.session_id),
+                    None,
+                    AcpClientEvent::SessionUpdate {
+                        update: Box::new(notification.update),
+                    },
+                );
+            }
             return;
         };
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
@@ -1085,13 +1101,15 @@ impl ConnectionActor {
         let claimed = if matches!(kind, AcpAttachKind::Fork) {
             None
         } else {
-            if self.attachments.contains_key(&session_id) || self.attaching.contains(&session_id) {
+            if self.attachments.contains_key(&session_id)
+                || self.attaching.contains_key(&session_id)
+            {
                 return Err(AcpClientError::already_attached(
                     self.connection_id,
                     session_id,
                 ));
             }
-            self.attaching.insert(session_id.clone());
+            self.attaching.insert(session_id.clone(), None);
             Some(session_id.clone())
         };
         let operation = Some(operation);
@@ -1501,6 +1519,7 @@ impl ConnectionActor {
         &mut self,
         attached: Attached,
         authority: AcpSessionAuthority,
+        usage: Option<AcpUsageSnapshot>,
     ) -> AcpAttachmentSnapshot {
         let attachment = AcpAttachmentSnapshot {
             session_id: attached.session_id,
@@ -1508,7 +1527,7 @@ impl ConnectionActor {
             cwd: authority.cwd,
             additional_directories: authority.additional_directories,
             config_options: attached.config_options.unwrap_or_default(),
-            usage: None,
+            usage,
             active_turn: None,
             queued_prompts: Vec::new(),
             pending_permission_ids: Vec::new(),

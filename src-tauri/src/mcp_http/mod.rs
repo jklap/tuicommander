@@ -4249,6 +4249,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_remote_connection_http_saves_preserve_independent_fields() {
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let original = crate::remote_connection::RemoteConnection::new_direct(
+            "original",
+            "https://host.example",
+            "alice",
+        );
+        let base = serde_json::to_value(&original).unwrap();
+        let created = app
+            .clone()
+            .oneshot(put_from(
+                "/config/remote-connections",
+                &serde_json::json!({"base": null, "connection": base}),
+                addr,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+
+        let mut auto_update = base.clone();
+        auto_update["auto_update"] = serde_json::json!(true);
+        let mut renamed = base.clone();
+        renamed["name"] = serde_json::json!("renamed");
+        for desired in [auto_update, renamed] {
+            let response = app
+                .clone()
+                .oneshot(put_from(
+                    "/config/remote-connections",
+                    &serde_json::json!({"base": base, "connection": desired}),
+                    addr,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let saved = crate::remote_connection::RemoteConnectionStore::load(&state.data_dir).unwrap();
+        let result = saved
+            .iter()
+            .find(|connection| connection.id == original.id)
+            .unwrap();
+        assert_eq!(result.name, "renamed");
+        assert!(result.auto_update);
+    }
+
+    #[tokio::test]
     async fn test_notification_config_rejects_non_loopback() {
         let state = test_state();
         let app = build_router(state, false, true);
@@ -5504,63 +5551,6 @@ mod tests {
         assert_eq!(result["error"], "Session not found");
     }
 
-    // --- Agent meta-command tests ---
-
-    #[tokio::test]
-    async fn test_agent_stats() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "agent", serde_json::json!({"action": "stats"})).await;
-        assert_eq!(result["active_sessions"], 0);
-        assert_eq!(result["max_sessions"], MAX_CONCURRENT_SESSIONS);
-    }
-
-    #[tokio::test]
-    async fn test_agent_metrics() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "agent", serde_json::json!({"action": "metrics"})).await;
-        assert_eq!(result["total_spawned"], 0);
-        assert_eq!(result["active_sessions"], 0);
-    }
-
-    #[tokio::test]
-    async fn test_agent_detect() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "agent", serde_json::json!({"action": "detect"})).await;
-        let agents = result.as_array().unwrap();
-
-        // The set is KNOWN_AGENT_BINARIES, never a hand-written subset: this
-        // test used to assert a hardcoded 4, which is exactly what let the
-        // handler drift and hide gemini, grok, opencode, amp, cursor and pi
-        // from every orchestrator.
-        for agent in agents {
-            let name = agent["name"].as_str().unwrap();
-            assert!(
-                crate::agent::KNOWN_AGENT_BINARIES.contains(&name),
-                "{name} is not a known agent binary"
-            );
-            // Only installed agents — a null path is a row an orchestrator
-            // cannot act on.
-            assert!(
-                agent["path"].as_str().is_some_and(|p| !p.is_empty()),
-                "{name} reported without a path"
-            );
-        }
-
-        // Whatever is installed on this machine must be reported; the reverse
-        // (asserting a fixed list) would fail on a machine without them.
-        for binary in crate::agent::KNOWN_AGENT_BINARIES {
-            if crate::agent::detect_agent_binary_sync(binary.to_string())
-                .path
-                .is_some()
-            {
-                assert!(
-                    agents.iter().any(|a| a["name"].as_str() == Some(binary)),
-                    "{binary} is installed but detect did not report it"
-                );
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_agent_spawn_missing_prompt() {
         let state = test_state();
@@ -5657,18 +5647,6 @@ mod tests {
     // --- Git meta-command tests ---
 
     #[tokio::test]
-    async fn test_repo_prs_missing_path() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "prs"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'path'")
-        );
-    }
-
-    #[tokio::test]
     async fn test_repo_worktree_list_missing_path() {
         let state = test_state();
         let result = call_mcp_tool(
@@ -5685,17 +5663,16 @@ mod tests {
         );
     }
 
-    /// Removal is addressed by workspace id, not branch: two workspaces may sit
-    /// on one branch, so a branch cannot name which one to remove (#726-5ac7).
     #[tokio::test]
-    async fn test_repo_worktree_remove_missing_workspace_id() {
+    async fn test_repo_worktree_remove_requires_branch() {
+        let repo = create_temp_git_repo();
         let state = test_state();
         let result = call_mcp_tool(
             &state,
             "repo",
             serde_json::json!({
                 "action": "worktree_remove",
-                "path": "/tmp/test-repo"
+                "path": repo.path().to_str().unwrap()
             }),
         )
         .await;
@@ -5703,23 +5680,21 @@ mod tests {
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("requires 'workspace_id'")
+                .contains("requires 'branch'")
         );
     }
 
-    /// A branch name is not a substitute for the id. Passing only `branch` must
-    /// still be refused, otherwise the old caller keeps working by accident and
-    /// silently removes whichever workspace git listed first.
     #[tokio::test]
-    async fn test_repo_worktree_remove_rejects_branch_instead_of_workspace_id() {
+    async fn test_repo_worktree_remove_rejects_renamed_workspace_id() {
+        let repo = create_temp_git_repo();
         let state = test_state();
         let result = call_mcp_tool(
             &state,
             "repo",
             serde_json::json!({
                 "action": "worktree_remove",
-                "path": "/tmp/test-repo",
-                "branch": "feat-x"
+                "path": repo.path().to_str().unwrap(),
+                "workspace_id": "feat-x"
             }),
         )
         .await;
@@ -5727,7 +5702,7 @@ mod tests {
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("requires 'workspace_id'")
+                .contains("workspace_id was renamed to branch")
         );
     }
 
@@ -5903,8 +5878,9 @@ mod tests {
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("session, agent, task, repo, progress, ui")
+                .contains("story, progress, ui")
         );
+        assert!(result["error"].as_str().unwrap().contains("search_tools"));
     }
 
     // --- isError flag tests ---

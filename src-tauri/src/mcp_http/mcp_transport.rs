@@ -1202,7 +1202,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice write, coalesced notice, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -3480,15 +3480,26 @@ async fn handle_worktree(
                 return error;
             }
             let workspace_id = match args["branch"].as_str() {
-                Some(id) => id,
+                Some(id) => id.to_owned(),
                 None => {
                     return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'branch' parameter"});
                 }
             };
-            to_json_or_error(crate::worktree::inspect_workspace_lifecycle(
-                std::path::Path::new(&path),
-                workspace_id,
-            ))
+            let state = Arc::clone(state);
+            match tokio::task::spawn_blocking(move || {
+                crate::worktree::inspect_worktree_removal(
+                    &state,
+                    std::path::Path::new(&path),
+                    &workspace_id,
+                )
+            })
+            .await
+            {
+                Ok(preview) => to_json_or_error(preview),
+                Err(error) => {
+                    serde_json::json!({"error": format!("worktree lifecycle task failed: {error}")})
+                }
+            }
         }
         "worktree_create" => {
             let path = match require_path(args, "worktree_create") {
@@ -3596,9 +3607,16 @@ async fn handle_worktree(
             }
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
+            let preview_state = Arc::clone(state);
             let result = tokio::task::spawn_blocking(move || {
+                let warnings = crate::worktree::inspect_worktree_removal(
+                    &preview_state,
+                    std::path::Path::new(&path_for_remove),
+                    &workspace_id_for_remove,
+                )
+                .warnings;
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
-                crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
+                let outcome = crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
                     &path_for_remove,
                     &workspace_id_for_remove,
                     delete_branch,
@@ -3606,20 +3624,23 @@ async fn handle_worktree(
                     force,
                     override_lock,
                     expected_fingerprint.as_deref(),
-                )
+                )?;
+                Ok::<_, String>((outcome, warnings))
             })
             .await;
             match result {
-                Ok(Ok(outcome)) => {
+                Ok(Ok((outcome, warnings))) => {
                     state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                         repo_path: path.clone(),
                         workspace_id: workspace_id.clone(),
                         branch: outcome.branch,
                     });
-                    worktree_remove_success_response(
+                    let mut response = worktree_remove_success_response(
                         outcome.branch_delete_warning,
                         &outcome.removal_rule,
-                    )
+                    );
+                    response["warnings"] = serde_json::json!(warnings);
+                    response
                 }
                 Ok(Err(e)) => serde_json::json!({"error": e}),
                 Err(e) => serde_json::json!({
@@ -4487,6 +4508,27 @@ fn managed_recipient_state(state: &AppState, tuic_session: &str) -> Option<serde
     Some(serde_json::Value::Object(summary))
 }
 
+/// Preserve a higher-priority delivery route; otherwise report the subscribed
+/// ACP inbox notification in the same way for urgent, orchestrator, and normal mail.
+fn apply_acp_inbox_receipt(response: &mut serde_json::Value, subscribed: bool) {
+    if !subscribed || response["delivery_path"] != "inbox_only" {
+        return;
+    }
+    let object = response
+        .as_object_mut()
+        .expect("send response is an object");
+    object.insert("delivered".to_owned(), serde_json::json!(true));
+    object.insert(
+        "delivery_path".to_owned(),
+        serde_json::json!("acp_inbox_resource"),
+    );
+    if object.contains_key("urgent_delivered") {
+        object.insert("urgent_delivered".to_owned(), serde_json::json!(true));
+        object.remove("urgent_fallback_reason");
+    }
+    object.remove("warning");
+}
+
 fn handle_messaging(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -4677,7 +4719,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
+                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers path=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -4858,6 +4900,7 @@ fn handle_messaging(
             // that had not been spawned by the server itself.
             let live_pty = state.live_pty_for_peer(to);
             let managed_recipient = live_pty.is_some();
+            let acp_inbox_subscriber = !managed_recipient && state.acp.has_acp_inbox_subscriber(to);
             if urgent {
                 use crate::state::{AgentDeliveryAssignment, UrgentNoticeReservation};
 
@@ -4977,16 +5020,6 @@ fn handle_messaging(
                         }
                     }
                 }
-                tracing::info!(
-                    source = "agent_msg",
-                    event = "urgent_send",
-                    from = %sender_tuic,
-                    to = %to,
-                    message_id = %msg_id,
-                    urgent_delivered,
-                    delivery_path,
-                    "Urgent peer mail routed"
-                );
                 let mut response = serde_json::json!({
                     "message_id": msg_id,
                     "delivered": delivered,
@@ -4996,6 +5029,17 @@ fn handle_messaging(
                 if let Some(reason) = fallback_reason {
                     response["urgent_fallback_reason"] = serde_json::json!(reason);
                 }
+                apply_acp_inbox_receipt(&mut response, acp_inbox_subscriber);
+                tracing::info!(
+                    source = "agent_msg",
+                    event = "urgent_send",
+                    from = %sender_tuic,
+                    to = %to,
+                    message_id = %msg_id,
+                    urgent_delivered = %response["urgent_delivered"],
+                    delivery_path = %response["delivery_path"],
+                    "Urgent peer mail routed"
+                );
                 insert_optional_value(
                     response
                         .as_object_mut()
@@ -5031,17 +5075,6 @@ fn handle_messaging(
                     }
                     OrchestratorDeliveryAssignment::InboxOnly => (false, "inbox_only"),
                 };
-                tracing::info!(
-                    source = "agent_msg",
-                    event = "send",
-                    from = %sender_tuic,
-                    from_name = %sender_name,
-                    to = %to,
-                    bytes = message.len(),
-                    delivered_via_channel = false,
-                    message_id = %msg_id,
-                    "Peer message routed to orchestrator inbox"
-                );
                 let mut response = serde_json::json!({
                     "message_id": msg_id,
                     "delivered": delivered,
@@ -5064,6 +5097,19 @@ fn handle_messaging(
                         }),
                     );
                 }
+                apply_acp_inbox_receipt(&mut response, acp_inbox_subscriber);
+                tracing::info!(
+                    source = "agent_msg",
+                    event = "send",
+                    from = %sender_tuic,
+                    from_name = %sender_name,
+                    to = %to,
+                    bytes = message.len(),
+                    delivered_via_channel = false,
+                    delivery_path = %response["delivery_path"],
+                    message_id = %msg_id,
+                    "Peer message routed to orchestrator inbox"
+                );
                 insert_optional_value(
                     response
                         .as_object_mut()
@@ -5185,19 +5231,15 @@ fn handle_messaging(
                 // would understate what happens.
                 inbox_only = outcome == crate::pty::PtyDelivery::Unavailable;
             }
-            // Forensic trail: sender, recipient, size, and delivery path — but never the
-            // content (it can be up to 64 KB and may carry sensitive coordination text).
-            tracing::info!(
-                source = "agent_msg",
-                event = "send",
-                from = %sender_tuic,
-                from_name = %sender_name,
-                to = %to,
-                bytes = message.len(),
-                delivered_via_channel = pushed,
-                message_id = %msg_id,
-                "Peer message delivered"
-            );
+            let delivery_path = if waiter_owned {
+                "waiter_and_inbox"
+            } else if pushed {
+                "sse_channel_and_inbox"
+            } else if inbox_only {
+                "inbox_only"
+            } else {
+                "wake_notification_and_inbox"
+            };
             let mut response = serde_json::json!({
                 "message_id": msg_id,
                 // `delivered` answers the only question the sender actually has:
@@ -5212,18 +5254,7 @@ fn handle_messaging(
                 // but read as a delivery verdict, so `false` alongside a confirming
                 // `delivery_path` was pure ambiguity. `delivery_path` names the SSE
                 // case as `sse_channel_and_inbox` and subsumes it.
-                "delivery_path": if waiter_owned {
-                    "waiter_and_inbox"
-                } else if pushed {
-                    "sse_channel_and_inbox"
-                } else if inbox_only {
-                    "inbox_only"
-                } else {
-                    // Same name the orchestrator route uses, because it is now
-                    // the same thing: a payload-free notice pointing at the
-                    // inbox, typed now or on the recipient's next idle window.
-                    "wake_notification_and_inbox"
-                },
+                "delivery_path": delivery_path,
             });
             if inbox_only {
                 let object = response
@@ -5246,6 +5277,20 @@ fn handle_messaging(
                 live_pty
                     .as_deref()
                     .and_then(|pty_session| managed_recipient_state(state, pty_session)),
+            );
+            apply_acp_inbox_receipt(&mut response, acp_inbox_subscriber);
+            // Forensic trail omits the mail body, which may contain sensitive data.
+            tracing::info!(
+                source = "agent_msg",
+                event = "send",
+                from = %sender_tuic,
+                from_name = %sender_name,
+                to = %to,
+                bytes = message.len(),
+                delivered_via_channel = pushed,
+                delivery_path = %response["delivery_path"],
+                message_id = %msg_id,
+                "Peer message delivered"
             );
             response
         }
@@ -8707,6 +8752,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_mcp_worktree_lifecycle_uses_the_blocking_pool() {
+        let source = include_str!("mcp_transport.rs");
+        let at = source
+            .find("\"worktree_lifecycle\" => {")
+            .expect("worktree_lifecycle action");
+        let body = source[at..]
+            .split("\"worktree_create\" => {")
+            .next()
+            .expect("lifecycle arm");
+        assert!(
+            body.contains("tokio::task::spawn_blocking"),
+            "lifecycle Git and session inspection must not park the async worker"
+        );
+    }
+
     #[tokio::test]
     async fn github_dispatch_reports_missing_and_unknown_actions() {
         let state = test_state();
@@ -9941,6 +10002,7 @@ mod tests {
             Some("mcp-acp-sender"),
         );
         assert_eq!(sent["delivery_path"], "inbox_only", "{sent}");
+        assert_eq!(sent["delivered"], false, "{sent}");
         let received = handle_agent_wait(
             &state,
             &serde_json::json!({"action": "wait", "timeout_ms": 1000}),
@@ -9949,6 +10011,156 @@ mod tests {
         .await;
         assert_eq!(received["messages"][0]["content"], "Please review the plan");
         assert!(state.live_pty_for_peer(peer).is_none());
+    }
+
+    #[tokio::test]
+    async fn send_to_connected_acp_peer_reports_the_inbox_resource_route() {
+        use crate::acp::McpOverAcpHost;
+
+        let state = test_state();
+        let peer = "550e8400-e29b-41d4-a716-446655440a01";
+        let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+        let notified = Arc::clone(&heard);
+        let host = Arc::new(crate::mcp_http::acp_mcp::AcpMcpHost::new(&state));
+        state.acp.set_mcp_host(host.clone());
+        let connection = host
+            .connect(
+                Some(peer),
+                Arc::new(move |method, params| {
+                    if method == "notifications/resources/updated"
+                        && params.as_ref().and_then(|p| p.get("uri"))
+                            == Some(&serde_json::json!("tuic://inbox"))
+                    {
+                        notified.lock().push(method);
+                    }
+                }),
+            )
+            .expect("mcp/connect");
+        register_peer(&state, TEST_UUID_B, "sender", "mcp-acp-sender");
+        let unsubscribed = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "Before subscription"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(
+            unsubscribed["delivery_path"], "inbox_only",
+            "{unsubscribed}"
+        );
+        assert_eq!(unsubscribed["delivered"], false, "{unsubscribed}");
+        host.message(
+            &connection,
+            "resources/subscribe".to_owned(),
+            Some(
+                serde_json::json!({"uri": "tuic://inbox"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("subscribe inbox");
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "Please review the plan"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "acp_inbox_resource", "{sent}");
+        assert_eq!(sent["delivered"], true, "{sent}");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while heard.lock().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("ACP inbox notification");
+        let inbox = host
+            .message(
+                &connection,
+                "resources/read".to_owned(),
+                Some(
+                    serde_json::json!({"uri": "tuic://inbox"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .expect("read inbox resource");
+        assert!(
+            inbox.to_string().contains("Please review the plan"),
+            "{inbox}"
+        );
+
+        host.disconnect(&connection);
+        register_peer(&state, peer, "ego", "mcp-acp-disconnected");
+        let offline = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "After disconnect"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(offline["delivery_path"], "inbox_only", "{offline}");
+        assert_eq!(offline["delivered"], false, "{offline}");
+    }
+
+    async fn subscribed_acp_mail_recipient() -> (Arc<AppState>, String, String) {
+        use crate::acp::McpOverAcpHost;
+
+        let state = test_state();
+        let peer = "550e8400-e29b-41d4-a716-446655440a01";
+        let host = Arc::new(crate::mcp_http::acp_mcp::AcpMcpHost::new(&state));
+        state.acp.set_mcp_host(host.clone());
+        let connection = host
+            .connect(Some(peer), Arc::new(|_, _| {}))
+            .expect("mcp/connect");
+        host.message(
+            &connection,
+            "resources/subscribe".to_owned(),
+            Some(
+                serde_json::json!({"uri": "tuic://inbox"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("subscribe inbox");
+        register_peer(&state, TEST_UUID_B, "sender", "mcp-acp-sender");
+        (state, peer.to_owned(), connection)
+    }
+
+    #[tokio::test]
+    async fn send_to_subscribed_acp_orchestrator_reports_the_resource_route() {
+        let (state, peer, connection) = subscribed_acp_mail_recipient().await;
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": peer, "orchestrator": true}),
+            Some(&connection),
+        );
+        assert_eq!(registered["orchestrator"], true, "{registered}");
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "Review the plan"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "acp_inbox_resource", "{sent}");
+        assert_eq!(sent["delivered"], true, "{sent}");
+    }
+
+    #[tokio::test]
+    async fn urgent_send_to_subscribed_acp_peer_reports_delivery() {
+        let (state, peer, _connection) = subscribed_acp_mail_recipient().await;
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": peer, "message": "Please act", "urgency": "urgent"}),
+            Some("mcp-acp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "acp_inbox_resource", "{sent}");
+        assert_eq!(sent["delivered"], true, "{sent}");
+        assert_eq!(sent["urgent_delivered"], true, "{sent}");
+        assert!(sent.get("urgent_fallback_reason").is_none(), "{sent}");
     }
 
     #[cfg(unix)]

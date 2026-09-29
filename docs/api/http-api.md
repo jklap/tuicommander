@@ -1312,6 +1312,9 @@ only: it goes to the OS credential vault keyed by the connection's UUID and is
 never returned, never written to `connections.json` — `GET .../password` answers
 whether one is stored, not what it is. `POST .../token` trades it for the remote
 daemon's in-memory session token.
+`PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
+for a new machine, or the loaded connection as `base` when editing. The server
+merges only changed fields into that connection's latest locked record.
 
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists
@@ -1346,11 +1349,12 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, step? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
-connected, because they are the answer to "where do I send a call", and a
+connected; `update_in_progress` is present as `true` while an unattended update
+owns the connection. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
@@ -1789,8 +1793,12 @@ GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 ```
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
-`{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the loaded
-`base` and edited `config`; unchanged keys survive a concurrent save.
+`{ text, skip_reason, duration_s, truncated_s }`. A final transcription gate's
+`skip_reason` is returned unchanged. A capture without 200 ms of activity at
+the configured transcription RMS floor returns `no sustained speech` before
+Whisper; an empty successful transcription uses
+`no speech detected`. `PUT /dictation/config` takes the loaded `base` and
+edited `config`; unchanged keys survive a concurrent save.
 
 The speech-asset routes take `asset`, an id from the catalogue in
 `dictation::speech::assets`. That is an allowlist, not a hint: an unknown id is
@@ -1914,6 +1922,9 @@ wire and identical on both transports:
 
 `pendingText` is the turn waiting out its hold-back, or held by a permission
 dialog or a draft in the composer (phase `holding_back`) until it can be typed.
+With an activation phrase, `holdBackMs` reports the effective minimum of 5000
+ms, even when the saved hold-back setting is shorter. A continuation that
+starts before that deadline joins the same pending turn.
 
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
@@ -2191,6 +2202,8 @@ returns `pending` and warms in the background.
 response rather than deriving it from display data. MCP
 `repo action=worktree_create` returns the same two fields.
 
+`GET /worktrees/lifecycle` provides the removal preview: branch history, dirty and untracked counts, live session names, and warnings. `DELETE /worktrees/:workspaceId` includes the same warnings on success.
+
 Creation announces itself on both transports as `worktree-created`
 (`{ repo_path, workspace_id, branch, worktree_path, kind }`, with `kind` equal
 to `"worktree"`) and removal as
@@ -2234,7 +2247,7 @@ for commits absent from its remote-tracking branches. `commit_status` is
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
-safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. This is the HTTP twin of `get_workspace_lifecycle`.
+safe. A missing registered checkout returns `missing_checkout: true`, `dirty_files: null`, no fingerprint, and `requires_force`; unknown ids remain `unknown`. The response also includes `untracked_files`, `live_sessions` with names, and `warnings` for removal review. This is the HTTP twin of `get_workspace_lifecycle`.
 
 ### Generate Worktree Name
 
@@ -2260,7 +2273,7 @@ Finalizes a merged worktree, addressed by workspace id. The merge already
 happened, so no branch is needed here — only which checkout to dispose of. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
 
-`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true` and `"expectedFingerprint"` from the confirmed lifecycle verdict. A changed fingerprint aborts cleanup. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl_with_confirmation` with the Tauri command, so both transports pass the identical gate.
+`force` (optional, default `false`) records explicit confirmation. A dirty, unverified, or live worktree returns `{ "action": "needs_confirmation", "merged": true }` without cleanup; an archive also waits if commit integration is unverified. Ask the user, then re-send with `"force": true` and `"expectedFingerprint"` from the confirmed lifecycle verdict. A changed fingerprint aborts cleanup. This route shares `finalize_merged_worktree_impl_with_confirmation` with the Tauri command, so both transports pass the identical gate.
 
 ### Run Setup Script
 

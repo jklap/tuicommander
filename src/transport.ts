@@ -1934,7 +1934,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
 	save_remote_connection: {
-		map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: args.connection }),
+		map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: { base: args.base, connection: args.connection } }),
 	},
 	delete_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),

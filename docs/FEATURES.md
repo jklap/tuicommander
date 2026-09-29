@@ -943,6 +943,7 @@ re-derived later.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
+- Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
@@ -1176,6 +1177,8 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - Floating toast shows partial text above status bar during recording, with a live microphone meter beside the partial text. The level is an RMS reading curved as `sqrt(rms * 20)` and clamped to 0–1 so ordinary speech is visible rather than pinned near zero, published through an atomic so the UI never blocks audio capture
 - 200ms audio window overlap (`keep_ms`) carries context across windows for continuity
 - Final transcription pass on full captured audio at key release
+- Before the final pass, the hands-free 20 ms frame and sustained-duration rule rejects short bursts; push-to-talk uses the configured transcription RMS floor for frame activity so quiet sustained speech still reaches Whisper. Speech still open at key release is kept.
+- A skipped final pass shows its specific speech-gate reason in the dictation status; an empty successful pass reports `no speech detected`.
 - Hallucination filter (`transcribe.rs`) as the backstop after the RMS gate: quiet audio makes Whisper emit a subtitle credit in whatever language it guessed. Short thanks (`grazie`, `thank you`, `merci`, `danke`, `спасибо`, …) are dropped only when they are the entire transcript, so a dictated sentence containing one survives; channel boilerplate (`amara.org`, `sottotitoli e revisione a cura di`, `thanks for watching`, …) is dropped anywhere in the text. Covers all 11 languages in `WHISPER_LANGUAGES` because the default setting is `auto`
 
 ### 9.5 Microphone Permission Detection (macOS)
@@ -1233,6 +1236,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - **One titled section per job, speech-to-text and text-to-speech kept apart:** Dictation (enable, hotkey, auto-send), Speech recognition (input device, Whisper model, language, voice tuning), Auto-Corrections, Hands-free conversation, Spoken replies. Each section holds its own advanced settings; there is no shared "Advanced" section.
 - **Spoken replies** lists the speech languages and the ONNX runtime with their state, size and Download / Repair / Cancel / delete, plus the voice to speak with. There is **no** speech-language control — the language is the Whisper one, and a second control would be a second source that disagrees with it.
 - **Hands-free conversation** picks the terminal to talk to, starts and stops the mode, and shows the live phase (waiting, capturing, transcribing, holding back, delivered), the turn being held back, what is being spoken and any error. It also holds the activation phrase and the hold-back delay.
+- **Breath and continuation:** 1.5 s of quiet closes an utterance. With an activation phrase, a turn waits at least 5 s for speech that continues without repeating the phrase; the displayed pending text grows before it reaches the agent as one message.
 - **Earcons** — an 80 ms blip when a spoken turn reaches the agent, and a softer, lower one when the activation phrase drops a turn, so the user knows without looking. Web Audio on the desktop and in a browser alike, played only by the client whose microphone holds the conversation. Too short for the capture VAD to take as speech (`min_speech_ms` is 200 ms). On by default; the `hands_free_earcons` dictation setting turns them off.
 - **Opening the panel never opens the microphone**, and neither does starting the app. Nothing arms by itself; the mode starts only when you press Start (here or in the Command Palette) or say the activation phrase in a conversation you already armed.
 
@@ -2341,12 +2345,17 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   will be lost, deploy, and verify the new hash after automatic reconnect.
   Direct uses an authenticated, size-limited upload; SSH uses SCP. Windows
   in-process replacement is explicitly unsupported.
+- **Auto-update remote daemons** — An opt-in per-connection setting. On connect,
+  update an out-of-date daemon only when it reports zero live PTY sessions.
+  With live sessions, show the count and offer the manual update without a queue.
+  Progress, success and errors appear in Remote Machines.
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
 - Each connection has UUID, name, transport, auth username, enabled flag,
-  `deploy` (`never | on_connect | installed`) and `survive_secs`
+  `deploy` (`never | on_connect | installed`), `survive_secs` and
+  `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a

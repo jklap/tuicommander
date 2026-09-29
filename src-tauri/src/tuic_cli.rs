@@ -286,20 +286,23 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Try direct copy first
-    if std::fs::copy(src, dst).is_ok() {
+    // Stage beside the destination so a running CLI keeps its old inode.
+    let direct_result =
+        replace_cli_atomically(std::path::Path::new(src), std::path::Path::new(dst));
+    if direct_result.is_ok() {
         return Ok(());
     }
 
     // Need elevation
     #[cfg(target_os = "macos")]
     {
+        let staged = format!("{dst}.update.{}", uuid::Uuid::new_v4());
         let parent = std::path::Path::new(dst)
             .parent()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "/usr/local/bin".to_string());
         let script = format!(
-            "do shell script \"mkdir -p '{parent}' && cp -f '{src}' '{dst}' && chmod 755 '{dst}'\" with administrator privileges"
+            "do shell script \"mkdir -p '{parent}' && cp -f '{src}' '{staged}' && chmod 755 '{staged}' && mv -f '{staged}' '{dst}'\" with administrator privileges"
         );
         let status = std::process::Command::new("osascript")
             .arg("-e")
@@ -314,12 +317,14 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
+        let staged = format!("{dst}.update.{}", uuid::Uuid::new_v4());
+        let script = "cp -- \"$1\" \"$2\" && chmod 755 \"$2\" && mv -f -- \"$2\" \"$3\"";
         let status = std::process::Command::new("pkexec")
-            .args(["cp", "-f", src, dst])
+            .args(["sh", "-c", script, "sh", src, &staged, dst])
             .status()
             .or_else(|_| {
                 std::process::Command::new("sudo")
-                    .args(["cp", "-f", src, dst])
+                    .args(["sh", "-c", script, "sh", src, &staged, dst])
                     .status()
             })
             .map_err(|e| format!("Failed to elevate: {e}"))?;
@@ -331,9 +336,8 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // On Windows the install path is user-writable (LOCALAPPDATA)
-        std::fs::copy(src, dst).map_err(|e| format!("Failed to copy: {e}"))?;
-        return Ok(());
+        // On Windows the install path is user-writable (LOCALAPPDATA).
+        return direct_result;
     }
 
     #[allow(unreachable_code)]
@@ -412,6 +416,44 @@ mod tests {
             2,
             "the staging file must not survive the replacement"
         );
+    }
+
+    #[test]
+    fn manual_cli_install_keeps_existing_reader_on_old_binary() {
+        let dir =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp CLI dir");
+        let sidecar = dir.path().join("sidecar-tuic");
+        let installed = dir.path().join("tuic");
+        let reader = dir.path().join("running-reader");
+        std::fs::write(&sidecar, b"complete-new-binary").expect("write sidecar");
+        std::fs::write(&installed, b"complete-old-binary").expect("write installed CLI");
+        std::fs::hard_link(&installed, &reader).expect("preserve old inode for reader");
+
+        copy_with_elevation(sidecar.to_str().unwrap(), installed.to_str().unwrap())
+            .expect("install CLI");
+
+        assert_eq!(std::fs::read(&reader).unwrap(), b"complete-old-binary");
+        assert_eq!(std::fs::read(&installed).unwrap(), b"complete-new-binary");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manual_cli_install_replaces_a_link_without_rewriting_its_target() {
+        let dir =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("temp CLI dir");
+        let sidecar = dir.path().join("new-sidecar");
+        let old_target = dir.path().join("old-sidecar");
+        let installed = dir.path().join("tuic");
+        std::fs::write(&sidecar, b"complete-new-binary").unwrap();
+        std::fs::write(&old_target, b"complete-old-binary").unwrap();
+        std::os::unix::fs::symlink(&old_target, &installed).unwrap();
+
+        copy_with_elevation(sidecar.to_str().unwrap(), installed.to_str().unwrap())
+            .expect("install CLI");
+
+        assert_eq!(std::fs::read(&old_target).unwrap(), b"complete-old-binary");
+        assert_eq!(std::fs::read(&installed).unwrap(), b"complete-new-binary");
+        assert!(!std::fs::symlink_metadata(&installed).unwrap().is_symlink());
     }
 
     /// Regression for issue #52: the bundled sidecar must be looked up by its

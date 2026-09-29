@@ -737,6 +737,17 @@ describe("transport", () => {
 		// boolean and `token` answers the daemon's session token. All three keep the
 		// IPC shape (`json_result`), so no mapping needs a transform.
 		describe("remote-connection credential mappings", () => {
+			it("maps a remote edit with its loaded base", () => {
+				const base = { id: "c1", name: "before", auto_update: false };
+				const connection = { ...base, auto_update: true };
+				const result = mapCommandToHttp("save_remote_connection", { base, connection });
+				expect(result).toMatchObject({
+					method: "PUT",
+					path: "/config/remote-connections",
+					body: { base, connection },
+				});
+			});
+
 			it("maps set_remote_connection_password to PUT with the password in the body", () => {
 				const result = mapCommandToHttp("set_remote_connection_password", { id: "c1", password: "hunter2" });
 				expect(result.method).toBe("PUT");

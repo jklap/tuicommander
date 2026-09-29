@@ -149,6 +149,44 @@ describe("useConfirmDialog", () => {
 	});
 
 	describe("confirmRemoveWorktree()", () => {
+		it("distinguishes unstarted work from merged commits before confirmation", async () => {
+			const pending = dialog.confirmRemoveWorktree(
+				"unstarted",
+				{ dirtyFiles: 0, commitStatus: "in_sync", removalSafety: "safe" },
+				true,
+			);
+			expect(dialog.dialogState()?.message).toContain("nothing of its own, not merged work");
+			dialog.handleClose();
+			expect(await pending).toBe(false);
+
+			const merged = dialog.confirmRemoveWorktree(
+				"completed",
+				{ dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" },
+				true,
+			);
+			expect(dialog.dialogState()?.message).toContain("commits are in the default branch");
+			dialog.handleClose();
+			expect(await merged).toBe(false);
+		});
+
+		it("names live sessions and counts untracked files before removing", async () => {
+			const pending = dialog.confirmRemoveWorktree(
+				"active",
+				{
+					dirtyFiles: 4,
+					untrackedFiles: 2,
+					liveSessions: [{ sessionId: "pty-1", name: "Codex: gate work" }],
+					commitStatus: "in_sync",
+					removalSafety: "requires_force",
+				},
+				true,
+			);
+			expect(dialog.dialogState()?.message).toContain("Codex: gate work");
+			expect(dialog.dialogState()?.message).toContain("4 uncommitted files");
+			expect(dialog.dialogState()?.message).toContain("2 untracked files");
+			dialog.handleConfirm();
+			expect(await pending).toBe(true);
+		});
 		it("identifies a missing checkout and offers cancellation before pruning its registration", async () => {
 			const promise = dialog.confirmRemoveWorktree(
 				"feature-missing",
@@ -204,6 +242,27 @@ describe("useConfirmDialog", () => {
 			expect(dialog.dialogState()?.message).toContain("plugins: 7 commits not on a remote-tracking branch");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmDirtyWorktreeCleanup()", () => {
+		it("names a live agent before archiving a clean worktree", async () => {
+			const pending = dialog.confirmDirtyWorktreeCleanup("active-feature", "archive", 1, {
+				dirtyFiles: 0,
+				dirtyFingerprint: "confirmed-clean",
+				commitStatus: "unmerged",
+				removalSafety: "safe",
+				liveSessions: [{ sessionId: "pty-active", name: "Codex: gate work" }],
+				warnings: ["Live session: Codex: gate work"],
+			});
+
+			try {
+				expect(dialog.dialogState()?.message).toContain("Codex: gate work");
+				expect(dialog.dialogState()?.message).not.toContain("has uncommitted changes");
+			} finally {
+				dialog.handleClose();
+				expect(await pending).toBe(false);
+			}
 		});
 	});
 

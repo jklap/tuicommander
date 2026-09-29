@@ -2049,6 +2049,16 @@ fn apply_json_merge_delta(target: &mut serde_json::Value, delta: &serde_json::Va
     }
 }
 
+pub(crate) fn apply_typed_json_merge_delta<T: Serialize + DeserializeOwned>(
+    latest: &mut T,
+    delta: &serde_json::Value,
+) -> Result<(), String> {
+    let mut merged = serde_json::to_value(&*latest).map_err(|e| e.to_string())?;
+    apply_json_merge_delta(&mut merged, delta);
+    *latest = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn app_config_delta(base: &AppConfig, desired: &AppConfig) -> Result<serde_json::Value, String> {
     let base =
         serde_json::to_value(base).map_err(|e| format!("Could not serialize base config: {e}"))?;
@@ -2227,6 +2237,24 @@ where
         self.save_delta_with(base, desired, true)
     }
 
+    /// Repair a caller's malformed load without overwriting a valid document
+    /// another process saved since that load. Both cases are decided under one lock.
+    pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
+        let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
+        let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
+        let delta = json_merge_delta(&base_json, &desired_json);
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        match load_json_config_strict_from_path::<T>(&self.path) {
+            Ok(mut latest) => {
+                let Some(delta) = delta else { return Ok(()) };
+                apply_typed_json_merge_delta(&mut latest, &delta)?;
+                self.write_atomic(&latest)
+            }
+            Err(_) => self.write_atomic(desired),
+        }
+    }
+
     fn save_delta_with(&self, base: &T, desired: &T, strict: bool) -> Result<(), String> {
         let base = serde_json::to_value(base).map_err(|e| e.to_string())?;
         let desired = serde_json::to_value(desired).map_err(|e| e.to_string())?;
@@ -2234,9 +2262,7 @@ where
             return Ok(());
         };
         let apply = move |latest: &mut T| {
-            let mut merged = serde_json::to_value(&*latest).map_err(|e| e.to_string())?;
-            apply_json_merge_delta(&mut merged, &delta);
-            *latest = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+            apply_typed_json_merge_delta(latest, &delta)?;
             Ok(((), true))
         };
         if strict {
@@ -8207,6 +8233,23 @@ mod tests {
         assert_eq!(
             load_notes().unwrap(),
             serde_json::json!({"notes": [], "other": "new"})
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn notes_null_inside_new_object_is_a_delete_marker() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = serde_json::json!({});
+        save_notes(
+            base,
+            serde_json::json!({"metadata": {"unset": null, "kept": "value"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            load_notes().unwrap(),
+            serde_json::json!({"metadata": {"kept": "value"}})
         );
     }
 
