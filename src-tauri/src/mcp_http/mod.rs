@@ -2182,11 +2182,11 @@ pub(crate) fn restart_after_server_settings_change(state: &Arc<AppState>, reason
 /// and report `(removed, retained)`.
 ///
 /// Split out of the reaper loop so the eviction rule can be tested without a
-/// one-hour timer. The rule itself is
+/// one-hour timer. Callers hold `PEER_IDENTITY_BIND_LOCK`. The rule itself is
 /// [`AppState::peer_identity_is_reapable`](crate::state::AppState::peer_identity_is_reapable):
 /// the transport is gone, but an identity someone can still reach — or still
 /// name as a parent — must outlive it.
-fn evict_peers_for_reaped_mcp_session(
+fn evict_peers_for_reaped_mcp_session_locked(
     state: &AppState,
     mcp_sid: &str,
 ) -> (Vec<String>, Vec<String>) {
@@ -2194,7 +2194,6 @@ fn evict_peers_for_reaped_mcp_session(
     // under the same lock as bridge registration and DELETE. A surviving
     // sibling inherits delivery ownership; an addressable peer with no sibling
     // keeps its identity but no route to the expired transport.
-    let _bind_guard = mcp_transport::PEER_IDENTITY_BIND_LOCK.lock();
     state.session_maps.messaging_channels.remove(mcp_sid);
     if let Some((_, tuic)) = state.mcp.to_session.remove(mcp_sid) {
         let survivors = if let Some(mut reverse) = state.mcp.session_to_mcp.get_mut(&tuic) {
@@ -2232,6 +2231,31 @@ fn evict_peers_for_reaped_mcp_session(
     (removed, retained)
 }
 
+#[cfg(test)]
+fn evict_peers_for_reaped_mcp_session(state: &AppState, sid: &str) -> (Vec<String>, Vec<String>) {
+    let _bind_guard = mcp_transport::PEER_IDENTITY_BIND_LOCK.lock();
+    evict_peers_for_reaped_mcp_session_locked(state, sid)
+}
+
+fn reap_selected_mcp_session(
+    state: &AppState,
+    sid: &str,
+    ttl: std::time::Duration,
+) -> Option<(Vec<String>, Vec<String>)> {
+    // Refresh of a missing session also takes this lock. A refresh that found
+    // existing metadata holds its DashMap entry while stamping last_activity,
+    // so remove_if either observes the new timestamp or wins first; in the
+    // latter case refresh recreates the session after route cleanup finishes.
+    let _bind_guard = mcp_transport::PEER_IDENTITY_BIND_LOCK.lock();
+    state
+        .mcp
+        .sessions
+        .remove_if(sid, |_, meta| meta.last_activity.elapsed() >= ttl)?;
+    // Clean up peer agents whose MCP session was reaped. An identity that
+    // is still addressable outlives the transport that carried it.
+    Some(evict_peers_for_reaped_mcp_session_locked(state, sid))
+}
+
 /// Spawn the once-a-minute maintenance sweep: reap idle MCP protocol sessions
 /// and the peer identities they carried, expired auth rate-limit entries and
 /// expired task handles.
@@ -2247,20 +2271,22 @@ pub(crate) fn spawn_maintenance_sweep(state: &Arc<AppState>) {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             let now = std::time::Instant::now();
-            let reaped: Vec<String> = reaper_state
+            let selected: Vec<String> = reaper_state
                 .mcp
                 .sessions
                 .iter()
                 .filter(|e| now.duration_since(e.value().last_activity) >= MCP_SESSION_TTL)
                 .map(|e| e.key().clone())
                 .collect();
-            for sid in &reaped {
+            let mut any_reaped = false;
+            for sid in &selected {
+                let Some((_removed, retained)) =
+                    reap_selected_mcp_session(&reaper_state, sid, MCP_SESSION_TTL)
+                else {
+                    continue;
+                };
+                any_reaped = true;
                 tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
-                reaper_state.mcp.sessions.remove(sid);
-                // Clean up peer agents whose MCP session was reaped. An
-                // identity that is still addressable outlives the transport
-                // that carried it.
-                let (_removed, retained) = evict_peers_for_reaped_mcp_session(&reaper_state, sid);
                 if !retained.is_empty() {
                     tracing::info!(
                         "MCP session {sid} reaped, {} peer identity/identities kept addressable: {}",
@@ -2270,7 +2296,7 @@ pub(crate) fn spawn_maintenance_sweep(state: &Arc<AppState>) {
                 }
             }
             // Evict orphaned inboxes for peers that no longer exist
-            if !reaped.is_empty() {
+            if any_reaped {
                 let known_tuic: std::collections::HashSet<String> = reaper_state
                     .peer_agents
                     .iter()
@@ -7895,6 +7921,258 @@ mod tests {
                 .messaging_channels
                 .contains_key("mcp-live")
         );
+    }
+
+    /// Catches: the sweep deletes a session refreshed after its stale-ID scan.
+    #[test]
+    fn refresh_after_reaper_snapshot_preserves_session_and_route() {
+        const TUIC: &str = "550e8400-e29b-41d4-a716-446655440000";
+        const SID: &str = "mcp-refreshed";
+        let state = crate::state::tests_support::make_test_app_state();
+        let now = std::time::Instant::now();
+        state.mcp.sessions.insert(
+            SID.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: now - std::time::Duration::from_secs(7200),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        register_reaper_peer(&state, TUIC, SID);
+        state
+            .mcp
+            .to_session
+            .insert(SID.to_string(), TUIC.to_string());
+        state
+            .mcp
+            .session_to_mcp
+            .insert(TUIC.to_string(), vec![SID.to_string()]);
+        let (channel, _) = tokio::sync::broadcast::channel(8);
+        state
+            .session_maps
+            .messaging_channels
+            .insert(SID.to_string(), channel);
+
+        let selected: Vec<String> = state
+            .mcp
+            .sessions
+            .iter()
+            .filter(|entry| {
+                now.duration_since(entry.value().last_activity)
+                    >= std::time::Duration::from_secs(3600)
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+        assert_eq!(selected, vec![SID.to_string()]);
+        mcp_transport::refresh_mcp_session(&state, SID, true, Some(TUIC));
+        assert!(
+            reap_selected_mcp_session(&state, &selected[0], std::time::Duration::from_secs(3600))
+                .is_none(),
+            "refreshed session must no longer meet the idle deadline"
+        );
+
+        assert!(
+            state.mcp.sessions.contains_key(SID),
+            "fresh protocol session was reaped"
+        );
+        assert_eq!(
+            state.mcp.to_session.get(SID).map(|v| v.value().clone()),
+            Some(TUIC.to_string())
+        );
+        assert_eq!(
+            state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(),
+            [SID]
+        );
+        assert!(state.session_maps.messaging_channels.contains_key(SID));
+        assert_eq!(state.peer_agents.get(TUIC).unwrap().mcp_session_id, SID);
+    }
+
+    /// Catches: a fresh-session guard prevents the sweep from freeing truly
+    /// expired routes, or removes the sibling that still serves the identity.
+    #[test]
+    fn expired_reaper_candidate_releases_only_its_own_session_state() {
+        const TUIC: &str = "550e8400-e29b-41d4-a716-446655440001";
+        let state = crate::state::tests_support::make_test_app_state();
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("mcp-expired", now - std::time::Duration::from_secs(7200)),
+            ("mcp-sibling", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.to_string(),
+                crate::state::McpSessionMeta {
+                    last_activity,
+                    is_claude_code: true,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+            state
+                .mcp
+                .to_session
+                .insert(sid.to_string(), TUIC.to_string());
+            let (channel, _) = tokio::sync::broadcast::channel(8);
+            state
+                .session_maps
+                .messaging_channels
+                .insert(sid.to_string(), channel);
+        }
+        state.mcp.session_to_mcp.insert(
+            TUIC.to_string(),
+            vec!["mcp-expired".to_string(), "mcp-sibling".to_string()],
+        );
+        register_reaper_peer(&state, TUIC, "mcp-expired");
+
+        assert!(
+            reap_selected_mcp_session(&state, "mcp-expired", std::time::Duration::from_secs(3600))
+                .is_some()
+        );
+        assert!(!state.mcp.sessions.contains_key("mcp-expired"));
+        assert!(!state.mcp.to_session.contains_key("mcp-expired"));
+        assert!(
+            !state
+                .session_maps
+                .messaging_channels
+                .contains_key("mcp-expired")
+        );
+        assert!(state.mcp.sessions.contains_key("mcp-sibling"));
+        assert_eq!(
+            state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(),
+            ["mcp-sibling"]
+        );
+        assert!(
+            state
+                .session_maps
+                .messaging_channels
+                .contains_key("mcp-sibling")
+        );
+        assert_eq!(
+            state.peer_agents.get(TUIC).unwrap().mcp_session_id,
+            "mcp-sibling"
+        );
+    }
+
+    /// Catches: a request after a completed reap recreates metadata but
+    /// leaves its addressable peer without a delivery route.
+    #[test]
+    fn refresh_after_completed_reap_restores_peer_route() {
+        const TUIC: &str = "550e8400-e29b-41d4-a716-446655440003";
+        const SID: &str = "mcp-reconnect-after-reap";
+        let state = crate::state::tests_support::make_test_app_state();
+        state.mcp.sessions.insert(
+            SID.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now() - std::time::Duration::from_secs(7200),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        register_reaper_peer(&state, TUIC, SID);
+        state
+            .mcp
+            .to_session
+            .insert(SID.to_string(), TUIC.to_string());
+        state
+            .mcp
+            .session_to_mcp
+            .insert(TUIC.to_string(), vec![SID.to_string()]);
+        state
+            .session_maps
+            .session_parent
+            .insert("live-child".to_string(), TUIC.to_string());
+
+        assert!(
+            reap_selected_mcp_session(&state, SID, std::time::Duration::from_secs(3600))
+                .is_some()
+        );
+        assert!(!state.mcp.sessions.contains_key(SID));
+        assert!(!state.mcp.to_session.contains_key(SID));
+        assert!(state.peer_agents.contains_key(TUIC));
+
+        mcp_transport::refresh_mcp_session(&state, SID, true, Some(TUIC));
+
+        assert!(state.mcp.sessions.contains_key(SID));
+        assert_eq!(state.mcp.to_session.get(SID).unwrap().value(), TUIC);
+        assert_eq!(state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(), [SID]);
+        assert_eq!(state.peer_agents.get(TUIC).unwrap().mcp_session_id, SID);
+    }
+
+    /// Catches: refresh re-creates metadata while the reaper is still dropping
+    /// its routes, leaving the peer alive but unable to receive sibling mail.
+    #[test]
+    fn concurrent_refresh_and_reap_keep_peer_and_sibling_routes() {
+        const TUIC: &str = "550e8400-e29b-41d4-a716-446655440002";
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("mcp-racing", now - std::time::Duration::from_secs(7200)),
+            ("mcp-sibling", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.to_string(),
+                crate::state::McpSessionMeta {
+                    last_activity,
+                    is_claude_code: true,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+            state
+                .mcp
+                .to_session
+                .insert(sid.to_string(), TUIC.to_string());
+        }
+        state.mcp.session_to_mcp.insert(
+            TUIC.to_string(),
+            vec!["mcp-racing".to_string(), "mcp-sibling".to_string()],
+        );
+        register_reaper_peer(&state, TUIC, "mcp-racing");
+
+        let gate = Arc::new(std::sync::Barrier::new(3));
+        let refresh_state = state.clone();
+        let refresh_gate = gate.clone();
+        let refresh = std::thread::spawn(move || {
+            refresh_gate.wait();
+            mcp_transport::refresh_mcp_session(&refresh_state, "mcp-racing", true, Some(TUIC));
+        });
+        let reap_state = state.clone();
+        let reap_gate = gate.clone();
+        let reap = std::thread::spawn(move || {
+            reap_gate.wait();
+            reap_selected_mcp_session(
+                &reap_state,
+                "mcp-racing",
+                std::time::Duration::from_secs(3600),
+            );
+        });
+        gate.wait();
+        refresh.join().unwrap();
+        reap.join().unwrap();
+
+        assert!(state.mcp.sessions.contains_key("mcp-racing"));
+        assert_eq!(
+            state.mcp.to_session.get("mcp-racing").unwrap().value(),
+            TUIC
+        );
+        assert_eq!(
+            state.mcp.to_session.get("mcp-sibling").unwrap().value(),
+            TUIC
+        );
+        let routes = state.mcp.session_to_mcp.get(TUIC).unwrap();
+        assert!(routes.contains(&"mcp-racing".to_string()));
+        assert!(routes.contains(&"mcp-sibling".to_string()));
+        assert!(state.peer_agents.contains_key(TUIC));
+        assert!(routes.contains(&state.peer_agents.get(TUIC).unwrap().mcp_session_id));
     }
 
     /// Catches: reaping protocol metadata leaves routing entries and broadcast
