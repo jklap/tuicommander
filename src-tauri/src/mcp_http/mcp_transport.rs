@@ -3141,8 +3141,11 @@ fn handle_session(
                     log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
                 if args["from_line"].is_null() {
-                    let mut screen: Vec<(String, bool)> =
-                        buf.screen_rows().into_iter().zip(buf.screen_row_wraps()).collect();
+                    let mut screen: Vec<(String, bool)> = buf
+                        .screen_rows()
+                        .into_iter()
+                        .zip(buf.screen_row_wraps())
+                        .collect();
                     let cutoff = {
                         let refs: Vec<&str> = screen.iter().map(|(row, _)| row.as_str()).collect();
                         crate::chrome::find_empty_input_box_cutoff(&refs)
@@ -19969,7 +19972,11 @@ mod tests {
             None,
         );
         let data = response["data"].as_str().expect("raw data");
-        assert_eq!(leaks_fragment(data, WRAP_SECRET), None, "raw leaked: {data:?}");
+        assert_eq!(
+            leaks_fragment(data, WRAP_SECRET),
+            None,
+            "raw leaked: {data:?}"
+        );
     }
 
     /// The tail read is what an orchestrator pays for on every check of a child:
