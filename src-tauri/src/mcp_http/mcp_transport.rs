@@ -17834,7 +17834,10 @@ mod tests {
                     .is_some_and(|e| e.contains("injected resize failure")),
                 "attempt {attempt}: {response}"
             );
-            assert!(response.get("ok").is_none(), "attempt {attempt}: {response}");
+            assert!(
+                response.get("ok").is_none(),
+                "attempt {attempt}: {response}"
+            );
         }
     }
 
