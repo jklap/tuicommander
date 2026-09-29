@@ -1,6 +1,5 @@
 import { emitTo } from "@tauri-apps/api/event";
-import { type Component, createSignal, onCleanup, onMount } from "solid-js";
-import { MarkdownTab } from "../components/MarkdownTab";
+import { type Component, createSignal, lazy, onCleanup, onMount, Suspense } from "solid-js";
 import type { MarkdownFileLink } from "../components/MarkdownTab/MarkdownTab";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import { invoke } from "../invoke";
@@ -10,6 +9,8 @@ import { type FileTab, mdTabsStore } from "../stores/mdTabs";
 import { uiStore } from "../stores/ui";
 import { openFileAction } from "../utils/filePreview";
 import { markdownDocumentPanelId } from "../utils/markdownDocumentPanelId";
+
+const MarkdownTab = lazy(() => import("../components/MarkdownTab").then((module) => ({ default: module.MarkdownTab })));
 
 const DetachedMarkdownDocument: Component<{ params: URLSearchParams }> = (props) => {
 	const tabId = props.params.get("tabId") ?? "";
@@ -38,7 +39,11 @@ const DetachedMarkdownDocument: Component<{ params: URLSearchParams }> = (props)
 			.catch((error) => appLogger.warn("app", "Failed to open detached Markdown link", error));
 	};
 
-	return <MarkdownTab tab={tab} reloadToken={reloadToken} onOpenFileLink={openInMain} onClose={() => window.close()} />;
+	return (
+		<Suspense>
+			<MarkdownTab tab={tab} reloadToken={reloadToken} onOpenFileLink={openInMain} onClose={() => window.close()} />
+		</Suspense>
+	);
 };
 
 export function createMarkdownDocumentPanelAdapter(tabId: string, onSelect?: (id: string) => void): PanelAdapter {

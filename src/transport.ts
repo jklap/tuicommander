@@ -749,7 +749,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	load_config: { map: () => ({ method: "GET", path: "/config" }) },
 	save_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
 	load_app_config: { map: () => ({ method: "GET", path: "/config" }) },
-	save_app_config: { map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }) },
+	save_app_config: {
+		map: (args) => ({ method: "PUT", path: "/config", body: { base: args.base, config: args.config } }),
+	},
 	hash_password: {
 		map: (args) => ({
 			method: "POST",
@@ -1918,7 +1920,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Notes ---
 	load_notes: { map: () => ({ method: "GET", path: "/config/notes" }) },
-	save_notes: { map: (args) => ({ method: "PUT", path: "/config/notes", body: { base: args.base, config: args.config } }) },
+	save_notes: {
+		map: (args) => ({ method: "PUT", path: "/config/notes", body: { base: args.base, config: args.config } }),
+	},
 
 	// --- Recent commits ---
 	get_recent_commits: {
@@ -1934,7 +1938,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
 	save_remote_connection: {
-		map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: { base: args.base, connection: args.connection } }),
+		map: (args) => ({
+			method: "PUT",
+			path: "/config/remote-connections",
+			body: { base: args.base, connection: args.connection },
+		}),
 	},
 	delete_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),
@@ -2179,6 +2187,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
+	// the equivalent /attachments/upload route instead of JSON rpc mapping.
+	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
 	"open_panel_window",

@@ -903,6 +903,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/write-parts",
             post(session::write_parts_to_session),
         )
+        .route("/attachments/upload", post(crate::attachments::upload_http))
         .route(
             "/sessions/{id}/queue",
             get(session::list_queued_commands)
@@ -1381,7 +1382,16 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// The one buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// The client image cap is shared with the browser draft. Base64 expands each
+/// three bytes to four; allow JSON framing and text alongside the image.
+fn acp_prompt_body_limit() -> usize {
+    let image_bytes: usize =
+        serde_json::from_str(include_str!("../../../src/shared/acp-image-limit.json"))
+            .expect("valid shared ACP image limit");
+    image_bytes.div_ceil(3) * 4 + 64 * 1024
+}
+
+/// Another buffered route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
 /// voice file, which travels whole as base64 in JSON so the payload is the same
 /// over IPC and HTTP. The cap is what the largest accepted voice
 /// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
@@ -2180,6 +2190,29 @@ fn evict_peers_for_reaped_mcp_session(
     state: &AppState,
     mcp_sid: &str,
 ) -> (Vec<String>, Vec<String>) {
+    // Reaping the protocol metadata must retire its other per-session state
+    // under the same lock as bridge registration and DELETE. A surviving
+    // sibling inherits delivery ownership; an addressable peer with no sibling
+    // keeps its identity but no route to the expired transport.
+    let _bind_guard = mcp_transport::PEER_IDENTITY_BIND_LOCK.lock();
+    state.session_maps.messaging_channels.remove(mcp_sid);
+    if let Some((_, tuic)) = state.mcp.to_session.remove(mcp_sid) {
+        let survivors = if let Some(mut reverse) = state.mcp.session_to_mcp.get_mut(&tuic) {
+            reverse.retain(|sid| sid != mcp_sid);
+            reverse.clone()
+        } else {
+            Vec::new()
+        };
+        if let Some(next_owner) = survivors.first() {
+            if let Some(mut peer) = state.peer_agents.get_mut(&tuic)
+                && peer.mcp_session_id == mcp_sid
+            {
+                peer.mcp_session_id = next_owner.clone();
+            }
+        } else {
+            state.mcp.session_to_mcp.remove(&tuic);
+        }
+    }
     let (removed, retained): (Vec<String>, Vec<String>) = state
         .peer_agents
         .iter()
@@ -3347,11 +3380,14 @@ mod tests {
         )
         .unwrap();
 
-        let uri = |file: &str| {
+        let uri = |file: &str, token: Option<&str>| {
             let mut params = url::form_urlencoded::Serializer::new(String::new());
             params
                 .append_pair("repoPath", root.to_str().unwrap())
                 .append_pair("file", file);
+            if let Some(token) = token {
+                params.append_pair("token", token);
+            }
             format!("/fs/markdown-image?{}", params.finish())
         };
         let request = |path: String, addr: std::net::SocketAddr| {
@@ -3361,17 +3397,48 @@ mod tests {
         };
         let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), true, true);
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, true, true);
         let denied = app
             .clone()
-            .oneshot(request(uri("docs/images/chart.png"), remote))
+            .oneshot(request(uri("docs/images/chart.png", None), remote))
             .await
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
+        #[cfg(feature = "desktop")]
+        {
+            let accepted_local = app
+                .clone()
+                .oneshot(request(uri("docs/images/chart.png", None), local))
+                .await
+                .unwrap();
+            assert_eq!(accepted_local.status(), StatusCode::OK);
+        }
+
+        // Headless serves remote clients and requires auth even over loopback.
+        // The desktop-only webview bypass is intentionally unavailable there.
+        #[cfg(not(feature = "desktop"))]
+        {
+            let denied_local = app
+                .clone()
+                .oneshot(request(uri("docs/images/chart.png", None), local))
+                .await
+                .unwrap();
+            assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let accepted_remote = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png", Some(&token)), remote))
+            .await
+            .unwrap();
+        assert_eq!(accepted_remote.status(), StatusCode::OK);
+
         let accepted = app
             .clone()
-            .oneshot(request(uri("docs/images/chart.png"), local))
+            .oneshot(request(uri("docs/images/chart.png", Some(&token)), local))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::OK);
@@ -3394,21 +3461,21 @@ mod tests {
         ] {
             let response = app
                 .clone()
-                .oneshot(request(uri(path), local))
+                .oneshot(request(uri(path, Some(&token)), local))
                 .await
                 .unwrap();
             assert_eq!(response.status(), expected, "wrong response for {path}");
         }
         let huge = app
             .clone()
-            .oneshot(request(uri("docs/images/huge.png"), local))
+            .oneshot(request(uri("docs/images/huge.png", Some(&token)), local))
             .await
             .unwrap();
         assert_eq!(huge.status(), StatusCode::PAYLOAD_TOO_LARGE);
         #[cfg(unix)]
         {
             let response = app
-                .oneshot(request(uri("docs/images/link.png"), local))
+                .oneshot(request(uri("docs/images/link.png", Some(&token)), local))
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -7716,11 +7783,21 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         crate::state::tests_support::insert_dummy_session(&state, "pty-owner");
         register_reaper_peer(&state, "pty-owner", "mcp-1");
+        state
+            .mcp
+            .to_session
+            .insert("mcp-1".to_string(), "pty-owner".to_string());
+        state
+            .mcp
+            .session_to_mcp
+            .insert("pty-owner".to_string(), vec!["mcp-1".to_string()]);
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-1");
         assert!(removed.is_empty(), "a live PTY is still addressable");
         assert_eq!(retained, vec!["pty-owner".to_string()]);
         assert!(state.peer_agents.contains_key("pty-owner"));
+        assert!(state.mcp.to_session.is_empty());
+        assert!(state.mcp.session_to_mcp.is_empty());
     }
 
     /// The unrecoverable case. A headerless orchestrator owns no PTY, so nothing
@@ -7770,6 +7847,114 @@ mod tests {
         let (removed, _) = evict_peers_for_reaped_mcp_session(&state, "mcp-4");
         assert_eq!(removed, vec!["ghost".to_string()]);
         assert!(state.peer_agents.contains_key("bystander"));
+    }
+
+    #[test]
+    fn reaping_one_mcp_bridge_promotes_its_surviving_sibling() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_reaper_peer(&state, "shared", "mcp-old");
+        state
+            .mcp
+            .to_session
+            .insert("mcp-old".to_string(), "shared".to_string());
+        state
+            .mcp
+            .to_session
+            .insert("mcp-live".to_string(), "shared".to_string());
+        state.mcp.session_to_mcp.insert(
+            "shared".to_string(),
+            vec!["mcp-old".to_string(), "mcp-live".to_string()],
+        );
+        let (old_channel, _) = tokio::sync::broadcast::channel(8);
+        let (live_channel, _) = tokio::sync::broadcast::channel(8);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-old".to_string(), old_channel);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-live".to_string(), live_channel);
+
+        let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-old");
+        assert!(removed.is_empty());
+        assert!(retained.is_empty());
+        assert_eq!(
+            state.peer_agents.get("shared").unwrap().mcp_session_id,
+            "mcp-live"
+        );
+        assert_eq!(state.mcp.to_session.len(), 1);
+        assert_eq!(
+            state.mcp.session_to_mcp.get("shared").unwrap().as_slice(),
+            ["mcp-live"]
+        );
+        assert_eq!(state.session_maps.messaging_channels.len(), 1);
+        assert!(
+            state
+                .session_maps
+                .messaging_channels
+                .contains_key("mcp-live")
+        );
+    }
+
+    /// Catches: reaping protocol metadata leaves routing entries and broadcast
+    /// senders allocated for every fresh initialize in a reconnect storm.
+    #[tokio::test]
+    async fn reaping_fresh_mcp_sessions_releases_per_session_state() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut session_ids = Vec::new();
+        for _ in 0..12 {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                mcp_transport::TUIC_SESSION_HEADER,
+                "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
+            );
+            let response = mcp_transport::mcp_post(
+                State(state.clone()),
+                ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+                headers,
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"clientInfo": {"name": "tuic-bridge"}}
+                })),
+            )
+            .await
+            .into_response();
+            let sid = response
+                .headers()
+                .get(mcp_transport::MCP_SESSION_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let (channel, _) = tokio::sync::broadcast::channel(8);
+            state
+                .session_maps
+                .messaging_channels
+                .insert(sid.clone(), channel);
+            session_ids.push(sid);
+        }
+        assert_eq!(state.mcp.sessions.len(), session_ids.len());
+        assert_eq!(state.mcp.to_session.len(), session_ids.len());
+        assert_eq!(
+            state.session_maps.messaging_channels.len(),
+            session_ids.len()
+        );
+
+        for sid in &session_ids {
+            state.mcp.sessions.remove(sid);
+            evict_peers_for_reaped_mcp_session(&state, sid);
+        }
+        assert!(state.mcp.sessions.is_empty());
+        assert!(state.mcp.to_session.is_empty(), "reaped routes retained");
+        assert!(
+            state.mcp.session_to_mcp.is_empty(),
+            "reaped reverse routes retained"
+        );
+        assert!(
+            state.session_maps.messaging_channels.is_empty(),
+            "reaped broadcast senders retained"
+        );
     }
 
     /// The three routes below stand in for the shapes the real router serves: a
@@ -7902,6 +8087,221 @@ mod tests {
             StatusCode::PAYLOAD_TOO_LARGE,
             "the import route is still capped"
         );
+    }
+
+    #[tokio::test]
+    async fn acp_prompt_accepts_a_three_mib_image_without_raising_other_routes_cap() {
+        let image_data = "A".repeat(4 * 1024 * 1024); // 3 MiB encoded as base64.
+        let payload = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{image_data}"}}]}}"#
+        );
+        async fn status(path: &str, payload: String) -> StatusCode {
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        assert_ne!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                payload.clone()
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the mobile image prompt must reach its handler"
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions",
+                payload
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the larger prompt cap must not apply to another ACP route"
+        );
+        let oversized_image = "A".repeat(11 * 1024 * 1024 / 3 * 4);
+        let oversized_prompt = format!(
+            r#"{{"prompt":[{{"type":"image","mimeType":"image/jpeg","data":"{oversized_image}"}}]}}"#
+        );
+        assert_eq!(
+            status(
+                "/acp/connections/00000000-0000-0000-0000-000000000001/sessions/y/prompt",
+                oversized_prompt
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "an image above the 10 MiB draft cap must not be buffered"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_streams_into_session_cwd_and_stays_out_of_git() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "upload-session");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "upload-session",
+            repo.path().to_str().unwrap(),
+        );
+        let route = build_router(state.clone(), false, true);
+        let response = route
+            .clone()
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=upload-session&name=notes.txt")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from("attachment bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json",
+            "the upload endpoint must answer with attachment metadata, not the SPA fallback"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        assert!(path.starts_with(repo.path().join(".tuic/attachments")));
+        assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
+        let ignored = std::process::Command::new("git")
+            .args(["check-ignore", "-q"])
+            .arg(path)
+            .current_dir(repo.path())
+            .status()
+            .unwrap();
+        assert!(
+            ignored.success(),
+            "an uploaded file must stay out of commits"
+        );
+
+        let oversized = route
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=upload-session&name=too-big.bin")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(vec![0u8; 26 * 1024 * 1024]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            std::fs::read_dir(repo.path().join(".tuic/attachments"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let fresh = repo.path().join(".tuic/attachments/2-fresh.txt");
+        std::fs::write(&fresh, b"keep me").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        std::fs::File::open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        crate::pty::cleanup_session("upload-session", &state);
+        assert!(
+            !path.exists(),
+            "closing the session removes attachments older than seven days"
+        );
+        assert_eq!(
+            std::fs::read(&fresh).unwrap(),
+            b"keep me",
+            "recent attachments survive cleanup"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_honors_a_configured_one_mib_cap() {
+        let cwd = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "limited-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "limited-upload",
+            cwd.path().to_str().unwrap(),
+        );
+        let mut config = serde_json::to_value(state.config.read().clone()).unwrap();
+        config["attachment_max_bytes"] = serde_json::json!(1024 * 1024);
+        *state.config.write() = serde_json::from_value(config).unwrap();
+
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=limited-upload&name=photo.jpg")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(vec![0u8; 2 * 1024 * 1024]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_upload_excludes_nested_session_directory_from_git() {
+        let repo = create_temp_git_repo();
+        let nested = repo.path().join("project/subdir");
+        std::fs::create_dir_all(&nested).unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "nested-upload");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "nested-upload",
+            nested.to_str().unwrap(),
+        );
+        let response = build_router(state, false, true)
+            .oneshot(
+                Request::post("/attachments/upload?kind=pty&id=nested-upload&name=notes.txt")
+                    .body(Body::from("nested bytes"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let path = std::path::Path::new(reply["path"].as_str().unwrap());
+        assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
+        assert!(
+            std::process::Command::new("git")
+                .args(["check-ignore", "-q"])
+                .arg(path)
+                .current_dir(repo.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_upload_recognizes_acp_targets_without_accepting_unknown_ids() {
+        let response = build_router(test_state(), false, true)
+            .oneshot(
+                Request::post(format!(
+                    "/attachments/upload?kind=acp&id={}&name=notes.txt",
+                    crate::acp::AcpConnectionId::new()
+                ))
+                .body(Body::from("bytes"))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     /// The failure this guards against is a timeout that looks correct on every

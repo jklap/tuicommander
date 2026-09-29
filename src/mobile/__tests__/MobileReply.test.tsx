@@ -1,13 +1,20 @@
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommandInput } from "../components/CommandInput";
-import { HttpRpcError } from "../../transport";
 import codexQuestion from "../../../src-tauri/src/fixtures/choice_prompts/codex-request-user-input.json";
+import { HttpRpcError } from "../../transport";
+import { CommandInput } from "../components/CommandInput";
 
 const { rpc } = vi.hoisted(() => ({
-	rpc: vi.fn(async (_command: string, _args: Record<string, unknown>) => ({ status: "acknowledged", submitted: true, acknowledged: true })),
+	rpc: vi.fn(async (_command: string, _args: Record<string, unknown>) => ({
+		status: "acknowledged",
+		submitted: true,
+		acknowledged: true,
+	})),
 }));
-vi.mock("../../transport", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../transport")>()), rpc }));
+vi.mock("../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../transport")>()),
+	rpc,
+}));
 const { toastAdd } = vi.hoisted(() => ({ toastAdd: vi.fn() }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
 
@@ -25,7 +32,7 @@ describe("mobile managed-agent reply", () => {
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Please wait for me" } });
 		expect(rpc).not.toHaveBeenCalled();
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
 		expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
 			sessionId: "question-session",
@@ -35,10 +42,16 @@ describe("mobile managed-agent reply", () => {
 
 	it("does not write any answer to a closed session", async () => {
 		const { container } = render(() => (
-			<CommandInput sessionId="closed-session" agentType="claude" awaitingInput={true} managedSession={true} sessionExists={false} />
+			<CommandInput
+				sessionId="closed-session"
+				agentType="claude"
+				awaitingInput={true}
+				managedSession={true}
+				sessionExists={false}
+			/>
 		));
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "yes" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		expect(rpc).not.toHaveBeenCalled();
 	});
 
@@ -49,47 +62,61 @@ describe("mobile managed-agent reply", () => {
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for approval" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
 		expect(input.value).toBe("Wait for approval");
 	});
 
 	it("explains a closed-session HTTP rejection without losing the answer", async () => {
-		rpc.mockRejectedValueOnce(new HttpRpcError("submit_agent_reply", 404, '{"submitted":false,"reason":"session_not_found"}'));
+		rpc.mockRejectedValueOnce(
+			new HttpRpcError("submit_agent_reply", 404, '{"submitted":false,"reason":"session_not_found"}'),
+		);
 		const { container } = render(() => (
 			<CommandInput sessionId="closed-session" agentType="claude" awaitingInput={true} managedSession={true} />
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for me" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
-		await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "This session has ended", "error", true));
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() =>
+			expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "This session has ended", "error", true),
+		);
 		expect(input.value).toBe("Wait for me");
 	});
 
 	it("explains a busy-agent HTTP rejection without losing the answer", async () => {
-		rpc.mockRejectedValueOnce(new HttpRpcError("submit_agent_reply", 409, '{"submitted":false,"reason":"agent_not_ready"}'));
+		rpc.mockRejectedValueOnce(
+			new HttpRpcError("submit_agent_reply", 409, '{"submitted":false,"reason":"agent_not_ready"}'),
+		);
 		const { container } = render(() => (
 			<CommandInput sessionId="busy-session" agentType="claude" awaitingInput={true} managedSession={true} />
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for me" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
-		await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "The agent is busy. Check the session before retrying.", "error", true));
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() =>
+			expect(toastAdd).toHaveBeenCalledWith(
+				"Reply not sent",
+				"The agent is busy. Check the session before retrying.",
+				"error",
+				true,
+			),
+		);
 		expect(input.value).toBe("Wait for me");
 	});
 
 	it("does not submit the same answer twice while the first receipt is pending", async () => {
 		let finish!: (receipt: { status: string; submitted: boolean; acknowledged: boolean }) => void;
 		rpc.mockImplementationOnce(
-			() => new Promise((resolve) => {
-				finish = resolve;
-			}),
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
 		);
 		const { container } = render(() => (
 			<CommandInput sessionId="question-session" agentType="claude" awaitingInput={true} managedSession={true} />
 		));
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "yes" } });
-		const send = container.querySelector("button[type=button]")!;
+		const send = screen.getByRole("button", { name: "Send" });
 		await fireEvent.click(send);
 		await fireEvent.click(send);
 		expect(rpc).toHaveBeenCalledTimes(1);
@@ -121,7 +148,9 @@ describe("mobile managed-agent reply", () => {
 				}}
 			/>
 		));
-		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Approve"))!);
+		await fireEvent.click(
+			Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Approve"))!,
+		);
 		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 		expect(rpc.mock.calls.some(([command, args]) => command === "write_pty" && args.data === "1")).toBe(true);
 	});
@@ -137,7 +166,9 @@ describe("mobile managed-agent reply", () => {
 				choicePrompt={codexQuestion}
 			/>
 		));
-		const option = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Blu"))!;
+		const option = Array.from(container.querySelectorAll("button")).find((button) =>
+			button.textContent?.includes("Blu"),
+		)!;
 		await fireEvent.click(option);
 		await fireEvent.click(option);
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
@@ -166,7 +197,9 @@ describe("mobile managed-agent reply", () => {
 				}}
 			/>
 		));
-		const green = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Green"))!;
+		const green = Array.from(container.querySelectorAll("button")).find((button) =>
+			button.textContent?.includes("Green"),
+		)!;
 		await fireEvent.click(green);
 		await fireEvent.click(green);
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(2));
@@ -183,11 +216,13 @@ describe("mobile managed-agent reply", () => {
 				choicePrompt={codexQuestion}
 			/>
 		));
-		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!);
+		await fireEvent.click(
+			Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!,
+		);
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-other", data: "\t" }));
 		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\t"]);
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Purple" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc.mock.calls.some(([, args]) => args.data === "\r")).toBe(true));
 		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 	});

@@ -1,3 +1,7 @@
+## Worktree removal recovery (1258-e9ba) — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, remove a disposable clean landed worktree with ignored build artifacts through `repo worktree_remove`. Confirm the directory is gone before the branch disappears. The running backend does not hot-reload this Rust change.
+
 ## Named debug vault test (1181-2f80)
 
 - [x] Rebuild the headless test binary and confirm a named instance writes its seeded session token to its own credentials file without changing the default file. _(verified: `app_instance_cli` whole-module run passed 11/11 after rebuilding; `named_debug_vault_ignores_and_does_not_mutate_default_legacy_entries` asserts both files.)_
@@ -32,6 +36,9 @@
 ## Queued Claude notice confirmation (story 1251-9ec8) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated instance, queue a notice to a disposable Claude session with the UserPromptSubmit hooks enabled. When Claude accepts it after more than one second, confirm the notice appears without an "Agent input was not confirmed" toast. A notice left in the composer must still show the uncertainty toast after the six-second bound. The running backend does not hot-reload this Rust change.
+## Shared agent mail identity (story 1246-46e3) — Rust restart required
+
+- [ ] After rebuilding `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, use a disposable managed PTY with two MCP bridges asserting its durable tab UUID and PTY UUID. Send distinct messages to each UUID and to the PTY display name, once through `tuic mcp` and once through the MCP client. Confirm both bridges read every message in `agent action=inbox`, `list_peers` shows one recipient for the PTY, and reconnecting one bridge leaves the inbox readable. Boss's live Rust backend does not hot-reload this change.
 
 ## Managed child idle close (story 1209-cc47) — Rust restart required
 
@@ -4302,6 +4309,7 @@ or credential is touched.
 ## MCP initialize storm — Rust restart required (#1148-c25f)
 
 - [ ] After restarting an isolated `make dev` instance, run short-lived MCP stdio bridge clients under one disposable `TUIC_SESSION` identity and inspect `/diagnostics/memory`: normal exits should release their protocol sessions immediately, while abrupt exits should be reaped after the next initialize once the six-second activity grace has elapsed. Stop the MCP endpoint briefly and verify one surviving bridge spaces its retries. The running backend and bridge binary cannot load these Rust changes until rebuilt.
+- [ ] After that Rust restart, let an isolated disposable MCP protocol session pass the one-hour TTL (or invoke the maintenance sweep in a test build). Confirm its protocol session, route, reverse route, and broadcast sender all disappear while an addressable PTY peer and any live sibling remain usable. This checks the reaper cleanup added for story 1148; the source of the incident's 27.3 GB malloc growth is still unknown.
 
 ## Worktree removal preview — Rust restart and visual review (#1138-ed2e)
 
@@ -4309,6 +4317,15 @@ or credential is touched.
 # Mobile session search (story 1200-4dd4)
 
 - [ ] [HUMAN] After `make dev`, check the magnifier position at the top right of the session list on a phone. Tap it, enter a filter, and confirm the field and matching cards fit without clipping. The component test covers matching and clearing; phone layout remains to be checked.
+
+# Mobile AI Chat image prompts (story 1219-e2a1) — Rust restart required
+
+- [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the HTTPS mobile PWA on an iPhone and paste a 4 MiB photo from the camera roll into AI Chat. Confirm ego receives it; check an image over 10 MiB is refused in the composer with its size and limit. The HTTP route and composer have targeted automated tests; iPhone Photos behavior requires the device.
+
+## Mobile attachments (story 1227-7838) — Rust restart and real phone
+
+- [ ] [HUMAN] After restarting an isolated `make dev` instance, use an iPhone to pick a HEIC photo and a 4 MiB camera photo from the single paperclip picker. Check conversion/type handling, the displayed size limit, and that the selected file remains a draft until Send. The phone's Photos provider and touch layout require the device.
+- [ ] [HUMAN] On an Android Chrome installed PWA, share a photo from another app into TUICommander. Confirm it appears as an AI Chat draft, then send it. The OS share sheet requires a real device.
 
 ## Mobile session output links (story 1202-dd5b)
 

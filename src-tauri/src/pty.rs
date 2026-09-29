@@ -7775,6 +7775,17 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
+    if let Some(cwd) = state
+        .session_maps
+        .sessions
+        .get(session_id)
+        .and_then(|session| session.lock().cwd.clone())
+    {
+        crate::attachments::cleanup_old(
+            std::path::Path::new(&cwd),
+            state.config.read().attachment_retention_days,
+        );
+    }
     flush_open_intent_before_session_removal(session_id, state);
     if state.session_maps.sessions.remove(session_id).is_some() {
         state
@@ -7790,6 +7801,17 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
 /// tombstone sweeper can age the entry out. What a post-mortem read needs stays —
 /// see [`remove_post_mortem_session_state`].
 fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
+    if let Some(cwd) = state
+        .session_maps
+        .sessions
+        .get(session_id)
+        .and_then(|session| session.lock().cwd.clone())
+    {
+        crate::attachments::cleanup_old(
+            std::path::Path::new(&cwd),
+            state.config.read().attachment_retention_days,
+        );
+    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

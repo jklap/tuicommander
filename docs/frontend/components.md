@@ -107,6 +107,8 @@ behavioral boundaries rather than generic service wrappers.
 keeps it mounted when hidden. The detached AI Chat adapter loads the same panel
 when its window opens. Neither path loads its markdown renderer before the
 desktop terminal view.
+The detached Markdown document adapter likewise loads `MarkdownTab` only when
+its window renders, so its renderer stays outside the initial desktop graph.
 `SessionControls` lists ego's durable `session/list` results by `updatedAt` and
 loads a picked session through ACP. `useAcpChat` restores the saved root-to-session
 binding from app config after a fresh document opens.
@@ -140,16 +142,25 @@ missing final tool update cannot leave an old dot animating.
 The status-bar AI Chat toggle uses the shared `CountBadge` to show pending ACP
 questions while the panel is hidden.
 The composer stages pasted images in its shared draft and sends ACP image
-blocks through `acpClient.prompt`. It checks `promptImage` and the 10 MiB cap
+blocks through `acpClient.prompt`. It checks `promptImage` and the shared 10 MiB cap
 before reading clipboard bytes; each preview can be removed before sending.
+The mobile HTTP prompt route allows base64 expansion of that cap; images refused
+by the draft show their size and the limit in the composer.
 During a turn it offers **Queue** beside **Stop**, lists the host-owned queued
 prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+The session composer has a 44 px paperclip in its existing row. It uploads a
+selected file and stages `@path` without Enter; the upload chip floats above
+the row. Mobile AI Chat uses the shared composer to stage images as ACP image
+blocks and other files as ACP resource links with a readable path in text.
 The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
 Files, Progress, and Activity; Settings opens from the app-bar overflow.
+The session detail screen loads after a session is selected (or opened from a
+deep link), keeping its terminal and attachment controls out of the Sessions
+entry graph.
 
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
