@@ -5121,6 +5121,15 @@ pub(crate) fn spawn_reader_thread(
                     Ok(0) => break,
                     Ok(n) => {
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
+                        // Per-session sibling of the global counter above — see
+                        // `state::drain_counter_map`. Answers "which session
+                        // produced the most raw output recently," which the
+                        // global-only counter never could.
+                        crate::state::bump_counter(
+                            &state.session_maps.session_output_bytes,
+                            &session_id,
+                            n as u64,
+                        );
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
                         // dumped and replayed offline (story 056-7545).

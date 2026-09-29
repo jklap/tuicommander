@@ -13799,6 +13799,18 @@ fn cleanup_session_clears_transient_session_maps() {
         .session_maps
         .pty_accent_colors
         .insert(sid.to_string(), "blue".to_string());
+    state
+        .session_maps
+        .session_event_counts
+        .insert(sid.to_string(), AtomicU64::new(5));
+    state
+        .session_maps
+        .session_output_bytes
+        .insert(sid.to_string(), AtomicU64::new(1024));
+    state
+        .session_maps
+        .session_ws_lag
+        .insert(sid.to_string(), AtomicU64::new(3));
 
     cleanup_session(sid, &state, "closed");
 
@@ -13827,6 +13839,12 @@ fn cleanup_session_clears_transient_session_maps() {
          shim's set-option dispatch is the only writer, but every session that ever \
          gets one must still have it reaped on close"
     );
+    assert!(
+        !state.session_maps.session_event_counts.contains_key(sid),
+        "must not leak a stale watchdog attribution counter past teardown"
+    );
+    assert!(!state.session_maps.session_output_bytes.contains_key(sid));
+    assert!(!state.session_maps.session_ws_lag.contains_key(sid));
 }
 
 // ── list_active_sessions ────────────────────────────────────────

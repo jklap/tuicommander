@@ -4551,6 +4551,49 @@ fn cleanup_session_removes_session_and_decrements_metrics() {
     );
 }
 
+/// Regression test for the bug fixed 2026-09-29: `cleanup_session` used to
+/// remove the session with a bare `.remove(session_id).is_some()`, dropping
+/// the returned `Mutex<PtySession>` (and its `Box<dyn portable_pty::Child>`,
+/// which on Unix wraps a plain `std::process::Child`) with no `kill()` and no
+/// wait — `std::process::Child` does NOT terminate its process on drop, so
+/// the real OS process leaked for as long as it happened to keep running on
+/// its own. `sleep 5` proves this isn't "the process happened to exit before
+/// we checked": 5s comfortably outlasts `terminate_child_with_grace`'s
+/// ~100-200ms grace-then-SIGKILL window, so a passing test here means the
+/// SIGKILL fallback path actually fired, not that the process exited by
+/// coincidence.
+#[cfg(unix)]
+#[test]
+fn cleanup_session_actually_kills_a_process_that_ignores_everything_but_sigkill() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "cleanup-must-kill";
+    spawn_short_session(&state, sid);
+    let pid = state
+        .session_maps
+        .sessions
+        .get(sid)
+        .unwrap()
+        .lock()
+        ._child
+        .process_id()
+        .expect("a freshly spawned child has a pid");
+
+    cleanup_session(sid, &state, "closed");
+
+    // `kill -0` reports whether the process exists at all, without sending a
+    // real signal — the standard "is this pid still alive" check.
+    let still_alive = std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .expect("kill -0 runs")
+        .success();
+    assert!(
+        !still_alive,
+        "cleanup_session must actually terminate the child process (pid {pid}), \
+         not just remove it from the sessions map and drop the handle"
+    );
+}
+
 /// Insert a minimal real PTY session (short-lived `sleep`) so functions that
 /// require a live `PtySession` can be exercised. Mirrors `create_pty`'s
 /// active-session bookkeeping.
