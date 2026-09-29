@@ -612,7 +612,9 @@ queued BUSY-to-IDLE transition also carries the task epoch observed before it
 waited for the lock and is discarded if a new submitted turn won first.
 Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
-**Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. `session status` exposes the additive `delivery_uncertain` flag.
+**Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. A queued injection waits up to one second after Enter for child output plus an agent hook, a new Working screen, or (for Gemini and Aider) the ready prompt disappearing. A Working screen already present before Enter cannot confirm the new turn: the rb-tool capture showed cursor updates while the queued wake remained in a Codex composer until a manual Enter. A Ready-to-Working transition in output *after* Enter does confirm it, even if the pre-write screen classification was stale. A silent or unrecognised composer reports `delivery_uncertain` and emits an error toast to desktop and browser clients. The toast tells the user to inspect the transcript and composer, and to press Enter once only if the text remains. Further queued entries wait until a human submission or later activity resolves the uncertainty. Enter alone never proves submission. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. Amp, Cursor, and Droid retain the previous PTY-write result because they have neither verified screen adapters nor hook support; they need live captures before semantic confirmation can be enabled. `session status` exposes the additive `delivery_uncertain` flag.
+
+Queued confirmation waits run per session so a silent agent does not block other sessions or ordered lifecycle notices on the global injection worker. The HTTP queue handler runs the blocking delivery on Tokio's blocking pool.
 
 **Atomic MCP submission reuses the same claim:** `session action=submit` first
 requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
@@ -652,8 +654,8 @@ a queue position would shift under the caller as the FIFO drains.
 
 Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
 the session id, agent and shell states at the attempt, queued counts before and
-after, whether text reached the composer, whether submission completed, and
-whether Enter was sent separately. An uncertain write reports uncertain fields
+after, whether text reached the composer, whether submission was confirmed, and
+whether Enter was sent separately. An uncertain delivery reports uncertain fields
 rather than claiming a completed submission; command text is never logged.
 Deferred attempts include `defer_reason` (unavailable agent, shell busy,
 unconfirmed idle, confident question, partial composer, or a lost claim). If a
