@@ -8586,6 +8586,9 @@ pub(crate) fn prefill_agent_input(
 /// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+// A Codex stop hook delayed the accepted turn's Working repaint by four seconds.
+const CODEX_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
+    std::time::Duration::from_secs(6);
 
 /// The same framed multiline payload works for every supported agent; only the
 /// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
@@ -9368,7 +9371,7 @@ pub(crate) fn deliver_notice_to_managed_pty(
 /// different session or ordered lifecycle notices on `INJECTION_QUEUE`.
 /// Each idle edge with pending input may start another short-lived worker;
 /// there is no global thread cap. A blocked claim returns immediately, while
-/// the successful claim can wait up to the one-second acknowledgement bound.
+/// the successful claim waits for the agent-specific acknowledgement bound.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
 /// reads the queue to tell `Typed` from `Queued` — call the blocking form directly.
@@ -9420,7 +9423,12 @@ fn wait_for_queued_submission(
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
     let profile = agent_submit_profile(agent_type.as_deref());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let confirmation_window = if agent_type.as_deref() == Some("codex") {
+        CODEX_QUEUED_SUBMISSION_CONFIRMATION
+    } else {
+        std::time::Duration::from_secs(1)
+    };
+    let deadline = std::time::Instant::now() + confirmation_window;
     loop {
         let output_advanced = state
             .session_maps
