@@ -90,6 +90,7 @@ Nested agent and terminal rows are an opt-in feature and are disabled by default
 When enabled, the branch icon of a branch with at least one open terminal session is a toggle: hover it and it turns into an arrow, click it to hide or show the agents. Agents are shown by default; a branch stays collapsed once you hide them. Clicking the row itself only opens the branch. Expanded, it shows a single activity card containing the sessions assigned to that branch:
 
 - Detected agents show their icon, terminal name, current intent or task, last-update age, and status.
+- A sub-agent row has a muted robot tag; hover or focus it to see the parent agent. The GitHub badge in the repo header keeps its accent color.
 - Plain shells appear as terminal rows.
 - Clicking a row switches to that session.
 - A branch with one session can still expand.
