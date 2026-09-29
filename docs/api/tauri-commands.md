@@ -304,7 +304,7 @@ remote daemon.
 |---------|------|---------|-------------|
 | `connect_remote_connection` | `id` | `()` | Bring a connection up. SSH connections may deploy a matching loopback-only daemon first, then authenticate with the vault pairing token; direct and unmanaged connections use the stored password exchange. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
 | `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
-| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected; `update_in_progress` is true during an unattended update. A disconnected machine has no route to hand out |
+| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected; `update_in_progress` is true during a manual or unattended update. A disconnected machine has no route to hand out |
 | `prepare_remote_update` | `id` | `UpdatePreview` | Select the release or matching local daemon binary and report both build identities and the live session count |
 | `update_and_restart_remote` | `id, confirmedSessions, expectedSha256` | `UpdatePreview` | Check the confirmation, update by Direct upload or SSH deployment, and verify the new build after reconnect |
 
