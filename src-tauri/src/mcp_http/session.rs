@@ -1504,6 +1504,47 @@ async fn relay_remote_ws(
     }
 }
 
+/// Record one `RecvError::Lagged(n)` observation on a per-session broadcast
+/// receiver and, once `cpu_watchdog::should_disconnect_for_lag` says the
+/// connection can't recover, close it. Shared by `handle_ws_session` and
+/// `handle_ws_grid_session` — both had this identical sequence (warn, bump
+/// counters, check the threshold, close) hand-copied before a code review
+/// caught the risk of the two drifting on a future edit. `sse_events`
+/// (`sse_routes.rs`) does NOT use this: it rides the global bus rather than a
+/// per-session channel, so it has no per-session counter to bump, and its
+/// stream isn't a `WebSocket`.
+///
+/// `consecutive_lag`/`cumulative_lag` are owned by the caller's task (a plain
+/// local `u32`/`u64`, reset to 0 on `consecutive_lag` — never on
+/// `cumulative_lag` — by the caller's own `Ok(event)` arm); this function only
+/// mutates them. Returns `true` when the connection was closed, i.e. the
+/// caller must `break` out of its loop.
+async fn close_ws_if_lag_exceeded(
+    ws_sender: &mut WsFrameSender,
+    state: &Arc<AppState>,
+    session_id: &str,
+    n: u64,
+    consecutive_lag: &mut u32,
+    cumulative_lag: &mut u64,
+    context: &'static str,
+) -> bool {
+    tracing::warn!(session_id = %session_id, lagged = n, "{context} broadcast lagged");
+    *consecutive_lag += 1;
+    *cumulative_lag = cumulative_lag.saturating_add(n);
+    crate::state::bump_counter(&state.session_maps.session_ws_lag, session_id, n);
+    if !crate::cpu_watchdog::should_disconnect_for_lag(*consecutive_lag, *cumulative_lag) {
+        return false;
+    }
+    tracing::warn!(
+        session_id = %session_id,
+        consecutive_lag = *consecutive_lag,
+        cumulative_lag = *cumulative_lag,
+        "{context} broadcast lag exceeded the recovery threshold — closing so the client reconnects with a fresh snapshot"
+    );
+    let _ = ws_sender.close().await;
+    true
+}
+
 /// Handle a WebSocket connection for a PTY session.
 ///
 /// Multiplexes two streams to the client:
@@ -1591,7 +1632,12 @@ async fn handle_ws_session(
 
     // Spawn a task to forward PTY output + parsed events to the WebSocket
     let sid_for_events = session_id.clone();
+    let state_for_events = state.clone();
     let send_task = tokio::spawn(async move {
+        // See `cpu_watchdog::should_disconnect_for_lag` — `consecutive` resets on
+        // every clean recv, `cumulative` never resets for this connection's life.
+        let mut consecutive_lag: u32 = 0;
+        let mut cumulative_lag: u64 = 0;
         loop {
             tokio::select! {
                 // Raw PTY output from mpsc channel
@@ -1606,6 +1652,7 @@ async fn handle_ws_session(
                 result = event_rx.recv() => {
                     match result {
                         Ok(event) => {
+                            consecutive_lag = 0;
                             // Per-session channel — every event belongs to this session.
                             // Extract the inner payload (without serde tag wrapping).
                             let payload = match &event {
@@ -1645,7 +1692,19 @@ async fn handle_ws_session(
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(session_id = %sid_for_events, lagged = n, "WebSocket broadcast lagged");
+                            if close_ws_if_lag_exceeded(
+                                &mut ws_sender,
+                                &state_for_events,
+                                &sid_for_events,
+                                n,
+                                &mut consecutive_lag,
+                                &mut cumulative_lag,
+                                "WebSocket",
+                            )
+                            .await
+                            {
+                                break;
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -2020,6 +2079,10 @@ async fn handle_ws_grid_session(
     let resync_sid = session_id.clone();
 
     let send_task = tokio::spawn(async move {
+        // See `cpu_watchdog::should_disconnect_for_lag` — `consecutive` resets on
+        // every clean recv, `cumulative` never resets for this connection's life.
+        let mut consecutive_lag: u32 = 0;
+        let mut cumulative_lag: u64 = 0;
         loop {
             tokio::select! {
                 result = frame_rx.changed() => {
@@ -2059,13 +2122,26 @@ async fn handle_ws_grid_session(
                 result = event_rx.recv() => {
                     match result {
                         Ok(event) => {
+                            consecutive_lag = 0;
                             let Some(payload) = grid_ws_frame(&event) else { continue };
                             if ws_sender.text(&payload.to_string()).await.is_err() {
                                 break;
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(session_id = %sid_for_events, lagged = n, "grid WS broadcast lagged");
+                            if close_ws_if_lag_exceeded(
+                                &mut ws_sender,
+                                &resync_state,
+                                &sid_for_events,
+                                n,
+                                &mut consecutive_lag,
+                                &mut cumulative_lag,
+                                "grid WS",
+                            )
+                            .await
+                            {
+                                break;
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -3216,6 +3292,142 @@ mod tests {
     // Production builds a grid through `AppState::new_vt_log_buffer` so it picks
     // up the config; tests that only exercise the grid construct it directly.
     use crate::state::VtLogBuffer;
+
+    /// Read WS messages until either a `Close` arrives or the connection ends,
+    /// or `deadline` passes with neither — used to prove a lagging connection
+    /// actually gets disconnected rather than looping forever. A regular
+    /// `output`/`parsed` frame in between (real PTY chatter from the dummy
+    /// session, or a catch-up frame) is not the thing under test, so it's
+    /// skipped rather than failing the read.
+    async fn wait_for_ws_close(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        deadline: std::time::Duration,
+    ) -> bool {
+        let end = tokio::time::Instant::now() + deadline;
+        while tokio::time::Instant::now() < end {
+            let remaining = end.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, futures_util::StreamExt::next(ws)).await {
+                Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))) => return true,
+                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Err(_))) | Ok(None) => return true,
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    /// Real end-to-end proof for the `handle_ws_session` half of the
+    /// `0b421c3a` incident fix: a connection whose per-session broadcast
+    /// receiver falls behind past `cpu_watchdog::MAX_CUMULATIVE_LAG` gets
+    /// disconnected instead of logging a warning and looping forever
+    /// re-lagging (which is what let that session's WS lag climb from 419ms
+    /// to 12.4s with no recovery). This needs a real network round trip —
+    /// `event_rx`/`pty_event_channels` are created only once axum finishes
+    /// the WS upgrade, so there is no way to pre-fill the channel the way the
+    /// SSE test can pre-fill the always-live global bus.
+    #[tokio::test]
+    async fn a_session_ws_that_lags_past_the_cumulative_bound_disconnects() {
+        let state = crate::mcp_http::tests::test_state();
+        let sid = "lagging-plain-ws";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        // Without this, `output_buffers.get(sid)` is `None`, the raw-output
+        // `tx` the handler creates is dropped unused, and `send_task`'s
+        // `rx.recv()` arm sees the channel close and exits the whole select
+        // loop almost immediately — long before the flood below ever reaches
+        // `event_rx`. A real session always has this entry; `insert_dummy_session`
+        // just doesn't set one up on its own.
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        let app = crate::mcp_http::build_router(state.clone(), false, true);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let (mut ws, _) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/sessions/{sid}/stream"))
+                .await
+                .expect("a real session upgrades cleanly");
+
+        // `event_rx = state.subscribe_pty_events(...)` runs synchronously near
+        // the top of the handler, before any `.await` — this margin is
+        // generous insurance against a slow CI scheduler, not load-bearing.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        for i in 0..2000 {
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: sid.to_string(),
+                parsed: serde_json::json!({ "type": "x", "i": i }).into(),
+            });
+        }
+
+        assert!(
+            wait_for_ws_close(&mut ws, std::time::Duration::from_secs(5)).await,
+            "the connection must close once lag crosses the recovery threshold, \
+             not keep looping and re-lagging forever"
+        );
+    }
+
+    /// Same proof as above, for `handle_ws_grid_session`'s identical
+    /// `event_rx` arm (the grid *frame* `watch` channel is unaffected — it
+    /// already resyncs correctly on a gap, which is why only the event lane
+    /// needed this fix).
+    #[tokio::test]
+    async fn a_grid_ws_that_lags_past_the_cumulative_bound_disconnects() {
+        let state = crate::mcp_http::tests::test_state();
+        let sid = "lagging-grid-ws";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        // `handle_ws_grid_session` closes immediately with no watch channel to
+        // subscribe to — this is the gate the plain WS handler doesn't have.
+        state
+            .grid
+            .watch
+            .insert(sid.to_string(), crate::grid_watch::new_grid_watch());
+        let app = crate::mcp_http::build_router(state.clone(), false, true);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{addr}/sessions/{sid}/stream?format=grid"
+        ))
+        .await
+        .expect("a real session upgrades cleanly");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        for i in 0..2000 {
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: sid.to_string(),
+                parsed: serde_json::json!({ "type": "x", "i": i }).into(),
+            });
+        }
+
+        assert!(
+            wait_for_ws_close(&mut ws, std::time::Duration::from_secs(5)).await,
+            "the grid WS connection must close once lag crosses the recovery \
+             threshold, not keep looping and re-lagging forever"
+        );
+    }
 
     #[cfg(unix)]
     struct WriteProbe {
