@@ -98,7 +98,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
 | `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
-| `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB | `413 Payload Too Large` | Bounds how much any route will buffer |
+| `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
 `ui action=confirm`'s own answer window (`CONFIRM_TIMEOUT`, `mcp_transport.rs`)
@@ -501,7 +501,14 @@ On normal stdio EOF, the bridge sends `DELETE /mcp` after its in-flight requests
 
 After a failed upstream initialize, the bridge waits before trying again. The pause starts at one second, doubles up to eight seconds on consecutive failures, and resets after a successful connection. Request-triggered, downstream initialize, and background retries share this limit within one bridge process.
 
-A currently subscribed or recently active owner is never replaced — but it can be *joined*. One PTY may hold more than one bridge (Codex opens two), and both inherit the same `$TUIC_SESSION`, so both assert the same `x-tuic-session`. Only a process that inherited that PTY's environment can assert it, so a second asserting bridge is a sibling, not a claimant: it is added to the identity's routing (`mcp_to_session` plus the `session_to_mcp` list) while the live owner keeps delivery ownership. Ownership stays put on purpose — two live siblings that traded it on every request would flip the delivery channel back and forth. The inbox is keyed by the PTY identity, so both bridges read the same mail. `agent action=register` from a joined sibling is a rename, not a takeover; a protocol session with neither the header nor an existing route is still refused with "already registered to another active MCP session" (throttled to one WARN per claimant pair). Ending one co-owner's protocol session drops only its own routes and promotes a survivor to delivery owner; the peer entry, inbox and orchestrator role are torn down only when the last co-owner goes.
+A currently subscribed or recently active owner is never replaced — but it can be *joined*. One PTY may hold more than one bridge (Codex opens two). They usually inherit the same `$TUIC_SESSION` and assert the same `x-tuic-session`. Only a process that inherited that PTY's environment can assert it, so a second asserting bridge is a sibling, not a claimant: it is added to the identity's routing (`mcp_to_session` plus the `session_to_mcp` list) while the live owner keeps delivery ownership. Ownership stays put on purpose — two live siblings that traded it on every request would flip the delivery channel back and forth. The inbox is keyed by the PTY identity, so both bridges read the same mail. `agent action=register` from a joined sibling is a rename, not a takeover; a protocol session with neither the header nor an existing route is still refused with "already registered to another active MCP session" (throttled to one WARN per claimant pair). Ending one co-owner's protocol session drops only its own routes and promotes a survivor to delivery owner; the peer entry, inbox and orchestrator role are torn down only when the last co-owner goes.
+
+If a second bridge in the same live PTY asserts a different UUID (the persisted
+tab UUID versus the PTY key), initialize joins the first registered peer's
+mailbox. `register` from that bridge keeps the shared identity. Both asserted
+UUIDs still resolve through the PTY for `agent send`, but `list_peers` exposes
+one recipient and both MCP connections read the same inbox. This coalescing
+requires the same live PTY; peers on different PTYs remain separate.
 
 **Blocking tool actions run off the runtime worker.** Dispatch is action-aware:
 session create/input/close/kill/process-stats, agent spawn/detect/send, and config
@@ -1636,7 +1643,13 @@ This requires the client to be launched with `--dangerously-load-development-cha
 The 1h TTL reaper evicts an MCP protocol session nobody has used for an hour. A
 peer identity is a different thing: it is the address other agents `send` to,
 and `refresh_mcp_session` re-asserts it on the owner's next request. The reaper
-used to delete both together, which broke agents that were still running:
+also drops that protocol session's routing entry, reverse route, and message
+broadcast sender; if another bridge still serves the identity, it becomes the
+delivery owner. These small per-session allocations must not survive a reap.
+They do not account for the 27.3 GB malloc growth observed during the 2026-09-28
+initialize storm; that allocation source and its triggering ego operation loop
+remain under investigation. The reaper used to delete both session and identity
+together, which broke agents that were still running:
 `last_activity` only moves on an MCP request, so an agent that spends more than
 an hour on one turn without calling a TUIC tool had its address deleted while it
 was mid-turn. Its children's handoffs then failed with `Recipient '<uuid>' is not

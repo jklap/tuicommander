@@ -855,8 +855,9 @@ one configured ego binary and speaks ACP to it, per
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
 - Transcript text and tool output are selectable. User and assistant messages,
   tool outputs and code blocks have copy actions using the terminal clipboard
-  adapter. Web links open externally and file paths use the terminal file opener
-  after backend resolution. Transcript focus gives `Cmd/Ctrl+A` (select this
+  adapter. Web links open externally; after backend resolution, file paths use
+  the terminal file opener and directory paths open the file browser, including
+  from a detached chat. Transcript focus gives `Cmd/Ctrl+A` (select this
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
@@ -1981,6 +1982,11 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Open Desktop UI link
 
 ### 18.8 PWA Support
+- Mobile session and AI Chat composers accept camera photos and files from one
+  picker. Binary files stream to `.tuic/attachments/` in the session working
+  directory and are excluded from Git locally; older files are cleaned at close.
+- Installed Android Chrome PWAs accept shared files through the manifest share
+  target and stage them in AI Chat. Safari on iOS has no Web Share Target support.
 - Web app manifest (`mobile-manifest.json`) with standalone display mode
 - iOS Safari and Android Chrome Add to Home Screen support
 - `apple-mobile-web-app-capable` meta tags

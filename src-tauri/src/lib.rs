@@ -16,6 +16,7 @@ pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
+pub(crate) mod attachments;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -1877,6 +1878,7 @@ pub fn run() {
             pty::list_worktrees,
             pty::write_pty,
             pty::write_pty_parts,
+            attachments::upload_attachment,
             pty::get_input_buffer_content,
             pty::resize_pty,
             pty::set_ansi_colors,

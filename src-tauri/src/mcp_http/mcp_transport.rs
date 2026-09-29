@@ -236,7 +236,7 @@ fn now_unix_ms() -> u64 {
 
 /// Peer ownership spans several DashMaps, so registration/reconnect takeover
 /// must update them as one critical section rather than racing map-by-map.
-static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(super) static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// A bridge checks liveness every three seconds. A session is an active owner
 /// while it has a real SSE subscriber, or while requests arrived recently enough
@@ -521,6 +521,21 @@ fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) ->
         .is_some_and(|bound| bound.value() == tuic_session)
 }
 
+/// A managed PTY has one mailbox even if two bridges assert different UUIDs
+/// for it (for example, a persisted tab UUID and the PTY key). Choose the
+/// first registered peer so the mailbox address stays stable on reconnect.
+/// Callers that create a binding hold PEER_IDENTITY_BIND_LOCK while using it.
+fn peer_identity_for_live_pty(state: &AppState, asserted: &str) -> Option<String> {
+    let pty = state.live_pty_for_peer(asserted)?;
+    state
+        .peer_agents
+        .iter()
+        .filter(|peer| state.live_pty_for_peer(peer.key()).as_deref() == Some(pty.as_str()))
+        .map(|peer| (peer.registered_at, peer.key().clone()))
+        .min()
+        .map(|(_, identity)| identity)
+}
+
 /// A short-lived bridge can exit without DELETE /mcp. Retire its protocol
 /// metadata and routes when another bridge for the same identity arrives,
 /// while preserving subscribed and recently active sibling bridges.
@@ -726,10 +741,10 @@ fn register_peer_identity(
 /// A fresh MCP session may reclaim a stale owner, but cannot replace another
 /// subscribed or recently active bridge. Returns whether a bind happened.
 fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&str>) -> bool {
-    let Some(tuic) = header.filter(|s| !s.is_empty()) else {
+    let Some(asserted) = header.filter(|s| !s.is_empty()) else {
         return false;
     };
-    if !is_valid_uuid(tuic) {
+    if !is_valid_uuid(asserted) {
         return false;
     }
     // Steady state for a connected bridge: it already routes to the identity and
@@ -737,15 +752,26 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     // there. Every bridge asserts this header on a `ping` every 3s, so without
     // this the liveness poll serialises N terminals on a process-global mutex to
     // do nothing. Any disagreement between the maps still takes the lock.
-    if mcp_session_routes_to(state, mcp_sid, tuic)
+    if mcp_session_routes_to(state, mcp_sid, asserted)
         && state
             .peer_agents
-            .get(tuic)
+            .get(asserted)
             .is_some_and(|peer| peer.mcp_session_id == mcp_sid)
     {
         return true;
     }
+    // An aliased sibling pings with its asserted UUID every three seconds.
+    // Keep the steady state lock-free after its first canonical bind.
+    if let Some(bound) = state.mcp.to_session.get(mcp_sid)
+        && state.peer_agents.contains_key(bound.value())
+        && state.live_pty_for_peer(bound.value()).is_some()
+        && state.live_pty_for_peer(bound.value()) == state.live_pty_for_peer(asserted)
+    {
+        return true;
+    }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    let canonical = peer_identity_for_live_pty(state, asserted);
+    let tuic = canonical.as_deref().unwrap_or(asserted);
     retire_stale_identity_sessions_locked(state, tuic, mcp_sid);
     // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
     // header, so a second asserting bridge is a sibling inside that PTY, not a
@@ -1178,10 +1204,10 @@ fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, close, kill, pause, resume" },
-                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, close, kill, pause, resume, wait" },
+                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
                 "enabled": { "type": "boolean", "description": "Required for action=keep_open: true disables idle close for a managed child; false restores it." },
@@ -4505,7 +4531,10 @@ fn resolve_registration_identity(
         // after having registered an invented UUID is repairing itself, and refusing
         // that leaves an orchestrator permanently unreachable through its terminal.
         if let Some(bound) = current.as_deref().filter(|bound| *bound != explicit) {
-            if state.live_pty_for_peer(bound).is_some() {
+            if let Some(bound_pty) = state.live_pty_for_peer(bound) {
+                if state.live_pty_for_peer(explicit).as_deref() == Some(bound_pty.as_str()) {
+                    return Ok((bound.to_string(), false));
+                }
                 return Err(serde_json::json!({
                     "error": format!(
                         "This MCP session is bound to '{bound}', which owns a live terminal. \
@@ -4521,7 +4550,10 @@ fn resolve_registration_identity(
                 }));
             }
         }
-        return Ok((explicit.to_string(), false));
+        return Ok((
+            peer_identity_for_live_pty(state, explicit).unwrap_or_else(|| explicit.to_string()),
+            false,
+        ));
     }
     if let Some(current) = current {
         return Ok((current, false));
@@ -10543,6 +10575,191 @@ mod tests {
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
             Some(vec!["mcp-live".to_string(), "mcp-sibling".to_string()])
+        );
+    }
+
+    /// A second bridge can assert the PTY key while the first inherited the
+    /// tab's durable UUID. Both addresses still name the same recipient.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mail_identity_two_addresses_on_one_pty_share_inbox() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_B, TEST_SPAWN_CWD);
+        state
+            .session_maps
+            .sessions
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .display_name = Some("coordinator".to_string());
+        state.bind_live_pty(TEST_UUID_A, TEST_UUID_B);
+        state.session_maps.shell_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        state.session_maps.session_states.insert(
+            TEST_UUID_B.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-durable",
+            Some(TEST_UUID_A)
+        ));
+        live_mcp_session(&state, "mcp-durable");
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-pty-key",
+            Some(TEST_UUID_B)
+        ));
+        register_peer(&state, TEST_UUID_A, "coordinator", "mcp-durable");
+        register_peer(&state, TEST_UUID_B, "coordinator", "mcp-pty-key");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-4466554400c1",
+            "worker",
+            "mcp-worker",
+        );
+
+        for (address, content) in [
+            (TEST_UUID_A, "reply addressed to durable UUID"),
+            (TEST_UUID_B, "reply addressed to PTY UUID"),
+        ] {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": address, "message": content}),
+                Some("mcp-worker"),
+            );
+            assert_eq!(sent["delivered"], true, "send to {address}: {sent}");
+        }
+
+        for reader in ["mcp-durable", "mcp-pty-key"] {
+            let inbox = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "inbox", "since": 0}),
+                Some(reader),
+            );
+            let contents: Vec<&str> = inbox["messages"]
+                .as_array()
+                .expect("registered recipient inbox")
+                .iter()
+                .filter_map(|message| message["content"].as_str())
+                .collect();
+            assert_eq!(
+                contents,
+                [
+                    "reply addressed to durable UUID",
+                    "reply addressed to PTY UUID"
+                ],
+                "reader {reader} must see both messages: {inbox}"
+            );
+        }
+
+        let peers = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-worker"),
+        );
+        let recipients = peers["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|peer| peer["session_id"] == TEST_UUID_B)
+            .count();
+        assert_eq!(recipients, 1, "one PTY must list one recipient: {peers}");
+
+        // Ending the first bridge must leave its co-owner able to read mail
+        // addressed by the PTY's display name and durable UUID.
+        end_mcp_session(&state, "mcp-durable").await;
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "coordinator", "message": "reply after reconnect"
+            }),
+            Some("mcp-worker"),
+        );
+        assert_eq!(sent["delivered"], true, "{sent}");
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": 0}),
+            Some("mcp-pty-key"),
+        );
+        assert!(
+            inbox["messages"].as_array().is_some_and(|messages| messages
+                .iter()
+                .any(|message| message["content"] == "reply after reconnect")),
+            "surviving bridge must read mail addressed by name: {inbox}"
+        );
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-pty-key",
+            Some(TEST_UUID_B)
+        ));
+        let peers = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-worker"),
+        );
+        assert_eq!(
+            peers["peers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|peer| peer["session_id"] == TEST_UUID_B)
+                .count(),
+            1,
+            "a repeated assertion must not restore a second recipient: {peers}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mail_identity_different_live_ptys_keep_separate_inboxes() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_A, TEST_SPAWN_CWD);
+        insert_managed_test_session(&state, TEST_UUID_B, TEST_SPAWN_CWD);
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-first",
+            Some(TEST_UUID_A)
+        ));
+        live_mcp_session(&state, "mcp-first");
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-second",
+            Some(TEST_UUID_B)
+        ));
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-4466554400c1",
+            "worker",
+            "mcp-worker",
+        );
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_A, "message": "first PTY only"}),
+            Some("mcp-worker"),
+        );
+        assert!(sent.get("error").is_none(), "{sent}");
+        let first = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": 0}),
+            Some("mcp-first"),
+        );
+        let second = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": 0}),
+            Some("mcp-second"),
+        );
+        assert_eq!(first["messages"][0]["content"], "first PTY only");
+        assert_eq!(
+            second["count"], 0,
+            "another PTY must not read the first peer's mail: {second}"
         );
     }
 
@@ -18251,16 +18468,38 @@ mod tests {
             "input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only."
         ));
         assert_eq!(
-            properties["action"]["description"],
-            "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume"
-        );
-        assert_eq!(
             properties["input"]["description"],
             "Non-empty command (action=submit) or raw text (action=input)"
         );
         assert_eq!(
             properties["timeout_ms"]["description"],
             "action=submit: acknowledgement wait, clamped 250-10000ms, default 3000. action=wait: max wait, default 60000; values at or above 300000 run as 295000."
+        );
+    }
+
+    #[test]
+    fn session_keep_open_schema_explains_the_managed_child_toggle() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .unwrap();
+        let description = session["description"].as_str().unwrap();
+        let keep_open = description
+            .lines()
+            .find(|line| line.starts_with("- keep_open:"))
+            .expect("session tool must document keep_open for MCP clients");
+        assert!(keep_open.contains("managed child"));
+        assert!(keep_open.contains("enabled=true"));
+        assert!(keep_open.contains("enabled=false"));
+        assert!(
+            session["inputSchema"]["properties"]["session_id"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("keep_open"),
+            "keep_open must list session_id as required"
         );
     }
 

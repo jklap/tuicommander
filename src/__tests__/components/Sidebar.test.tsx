@@ -1135,7 +1135,9 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			expect(container.querySelector(".statAdd")?.textContent).toBe("+9.9k");
 			expect(container.querySelector(".statDel")?.textContent).toBe("-2.9k");
-			expect(container.querySelector(".branchStats")?.getAttribute("data-tooltip")).toBe("Tracked line changes: +9876 -2913");
+			expect(container.querySelector(".branchStats")?.getAttribute("data-tooltip")).toBe(
+				"Tracked line changes: +9876 -2913",
+			);
 		});
 
 		it("does not show StatsBadge when both additions and deletions are 0", () => {
