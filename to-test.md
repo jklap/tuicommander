@@ -34,7 +34,7 @@
 
 ## Remote manual update guard (story 1183-7154) — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "Automatic remote update is already in progress". Targeted Rust tests cover the guard and the unchanged manual update path; the running backend cannot load this Rust change until restart.
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "remote update already in progress". Repeat with a manual update running first: another manual request is rejected and automatic update is skipped. Targeted Rust tests cover these races; the running backend cannot load this Rust change until restart.
 
 ## AI Chat layout and composer (story 1166-ef2f)
 

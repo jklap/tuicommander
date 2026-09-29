@@ -25,6 +25,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -65,6 +66,7 @@ const RETRY_JITTER: f64 = 0.25;
 /// two-minute hole in the retry schedule for a machine that failed at second
 /// one.
 const CONNECTING_POLL: Duration = Duration::from_millis(250);
+static NEXT_UPDATE_CLAIM: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,7 +151,7 @@ struct Entry {
     out_of_date: Option<bool>,
     live_sessions: Option<usize>,
     update_notice: Option<String>,
-    update_in_progress: bool,
+    update_in_progress: Option<u64>,
     error: Option<String>,
     tunnel_id: Option<String>,
     /// The task that owns this connection's whole lifecycle: bring it up, keep
@@ -190,7 +192,7 @@ impl Entry {
             out_of_date: connected.then_some(self.out_of_date).flatten(),
             live_sessions: connected.then_some(self.live_sessions).flatten(),
             update_notice: connected.then(|| self.update_notice.clone()).flatten(),
-            update_in_progress: (connected && self.update_in_progress).then_some(true),
+            update_in_progress: (connected && self.update_in_progress.is_some()).then_some(true),
             error: self.error.clone(),
             step,
         }
@@ -255,12 +257,6 @@ impl RemoteRuntime {
     /// The shared HTTP client. Cloning is an `Arc` bump, not a new pool.
     pub(crate) fn http_client(&self) -> reqwest::Client {
         self.client.clone()
-    }
-
-    pub(crate) fn automatic_update_in_progress(&self, id: &str) -> bool {
-        self.entries
-            .get(id)
-            .is_some_and(|entry| entry.update_in_progress)
     }
 
     /// Every connection this runtime knows about, in no particular order.
@@ -438,11 +434,61 @@ fn update_connected<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, muta
     }
 }
 
+/// Owns one update of one live entry. The token prevents an old cancelled task
+/// from clearing a replacement entry's claim after disconnect/reconnect.
+pub(crate) struct RemoteUpdateClaim {
+    state: Arc<AppState>,
+    id: String,
+    token: u64,
+}
+
+pub(crate) fn claim_update(state: &Arc<AppState>, id: &str) -> Result<RemoteUpdateClaim, String> {
+    let Some(mut entry) = state.remote.entries.get_mut(id) else {
+        load_connection(state, id)?;
+        return Err("Remote connection is not connected".to_string());
+    };
+    if entry.update_in_progress.is_some() {
+        return Err("remote update already in progress".to_string());
+    }
+    let before = entry.snapshot(id);
+    let token = NEXT_UPDATE_CLAIM.fetch_add(1, Ordering::Relaxed);
+    entry.update_in_progress = Some(token);
+    let after = entry.snapshot(id);
+    drop(entry);
+    let claim = RemoteUpdateClaim {
+        state: state.clone(),
+        id: id.to_string(),
+        token,
+    };
+    if before != after {
+        publish(state, &after);
+    }
+    Ok(claim)
+}
+
+impl Drop for RemoteUpdateClaim {
+    fn drop(&mut self) {
+        let Some(mut entry) = self.state.remote.entries.get_mut(&self.id) else {
+            return;
+        };
+        if entry.update_in_progress != Some(self.token) {
+            return;
+        }
+        let before = entry.snapshot(&self.id);
+        entry.update_in_progress = None;
+        let after = entry.snapshot(&self.id);
+        drop(entry);
+        if before != after {
+            publish(&self.state, &after);
+        }
+    }
+}
+
 fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
     let Some(mut entry) = state.remote.entries.get_mut(id) else {
         return;
     };
-    if entry.update_in_progress {
+    if entry.update_in_progress.is_some() {
         return;
     }
     let state = state.clone();
@@ -518,13 +564,16 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
         {
             return;
         }
+        let Ok(claim) = claim_update(&state, &id) else {
+            return;
+        };
         update_connected(&state, &id, |entry| {
             entry.update_notice = Some("Updating remote daemon...".to_string());
-            entry.update_in_progress = true;
         });
         let result =
             crate::remote_update::perform_update_and_restart(&state, &id, 0, &selected.sha256)
                 .await;
+        drop(claim);
         if !matches!(&result, Err(error) if error.starts_with("Live session count changed")) {
             state
                 .remote
@@ -534,14 +583,12 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
         match result {
             Ok(_) => {
                 update_connected(&state, &id, |entry| {
-                    entry.update_in_progress = false;
                     entry.update_notice = Some("Remote updated successfully.".to_string());
                     entry.live_sessions = Some(0);
                 });
                 reauthenticate(&state, &id, &base_url).await;
             }
             Err(error) => update_connected(&state, &id, |entry| {
-                entry.update_in_progress = false;
                 entry.update_notice = Some(format!("Remote update failed: {error}"));
             }),
         }
@@ -1491,7 +1538,7 @@ async fn poll_once(state: &Arc<AppState>, id: &str) {
         .remote
         .entries
         .get(id)
-        .is_some_and(|entry| entry.update_in_progress)
+        .is_some_and(|entry| entry.update_in_progress.is_some())
     {
         return;
     }
@@ -1504,7 +1551,7 @@ async fn poll_once(state: &Arc<AppState>, id: &str) {
         .remote
         .entries
         .get(id)
-        .is_some_and(|entry| entry.update_in_progress)
+        .is_some_and(|entry| entry.update_in_progress.is_some())
     {
         return;
     }
@@ -1524,7 +1571,7 @@ async fn poll_once(state: &Arc<AppState>, id: &str) {
                     let sessions = health.session_count;
                     let retry = state.remote.entries.get(id).is_some_and(|entry| {
                         entry.status == Some(RemoteStatus::Connected)
-                            && !entry.update_in_progress
+                            && entry.update_in_progress.is_none()
                             && sessions == Some(0)
                             && (entry.live_sessions != Some(0)
                                 || entry.update_notice.as_deref().is_some_and(|notice| {
@@ -2720,7 +2767,7 @@ mod tests {
         state.remote.entries.insert(
             "machine-1".to_string(),
             Entry {
-                update_in_progress: true,
+                update_in_progress: Some(1),
                 ..Entry::default()
             },
         );
@@ -2730,7 +2777,119 @@ mod tests {
                 .await
                 .unwrap_err();
 
-        assert_eq!(error, "Automatic remote update is already in progress");
+        assert_eq!(error, "remote update already in progress");
+    }
+
+    /// Hold the first real update at the daemon's health route. A later health
+    /// request gets an error instead of waiting, so a duplicate update is
+    /// observable without a timing assertion.
+    async fn held_manual_update() -> (
+        Arc<AppState>,
+        String,
+        tokio::task::JoinHandle<Result<crate::remote_update::UpdatePreview, String>>,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let requests = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let router = axum::Router::new().route(
+            "/health",
+            axum::routing::get({
+                let requests = requests.clone();
+                let started = started.clone();
+                let release = release.clone();
+                move || {
+                    let requests = requests.clone();
+                    let started = started.clone();
+                    let release = release.clone();
+                    async move {
+                        if requests.fetch_add(1, Ordering::SeqCst) == 0 {
+                            started.notify_one();
+                            release.notified().await;
+                        }
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let state = test_state();
+        let id = direct_connection(&state, &url);
+        state
+            .remote
+            .force_connected_for_test(&id, &url, Some("test-token"));
+        let first_state = state.clone();
+        let first_id = id.clone();
+        let first = tokio::spawn(async move {
+            crate::remote_update::update_and_restart(&first_state, &first_id, 0, &"a".repeat(64))
+                .await
+        });
+        started.notified().await;
+        (state, id, first, server, requests, release)
+    }
+
+    #[tokio::test]
+    async fn manual_update_in_flight_skips_automatic_update_start() {
+        use std::sync::atomic::Ordering;
+        let (state, id, first, server, requests, _release) = held_manual_update().await;
+        spawn_build_comparison(&state, &id);
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, Some(true));
+        assert!(state.remote.entries.get(&id).unwrap().comparison.is_none());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        first.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn concurrent_manual_updates_send_only_one_daemon_request() {
+        use std::sync::atomic::Ordering;
+        let (state, id, first, server, requests, _release) = held_manual_update().await;
+        let error = crate::remote_update::update_and_restart(&state, &id, 0, &"a".repeat(64))
+            .await
+            .unwrap_err();
+        assert_eq!(error, "remote update already in progress");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        first.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn manual_update_error_clears_claim_for_a_later_request() {
+        use std::sync::atomic::Ordering;
+        let (state, id, first, server, requests, release) = held_manual_update().await;
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, Some(true));
+        release.notify_one();
+        assert!(first.await.unwrap().is_err());
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, None);
+        assert!(
+            crate::remote_update::update_and_restart(&state, &id, 0, &"a".repeat(64))
+                .await
+                .is_err()
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cancelled_manual_update_releases_the_connection_for_a_later_request() {
+        use std::sync::atomic::Ordering;
+        let (state, id, first, server, requests, _release) = held_manual_update().await;
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, Some(true));
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert_eq!(state.remote.snapshot()[0].update_in_progress, None);
+        assert!(
+            crate::remote_update::update_and_restart(&state, &id, 0, &"a".repeat(64))
+                .await
+                .is_err()
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        server.abort();
     }
 
     /// Save a Direct connection pointing at `url`, where `connect` will find it.

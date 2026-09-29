@@ -1340,7 +1340,7 @@ connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
-connected; `update_in_progress` is present as `true` while an unattended update
+connected; `update_in_progress` is present as `true` while a manual or unattended update
 owns the connection. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 
