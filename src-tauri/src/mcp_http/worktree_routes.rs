@@ -491,7 +491,7 @@ pub(super) async fn remove_orphan_worktree_http(
             branch: None,
             base_repo: std::path::PathBuf::from(&repo_path),
         };
-        crate::worktree::remove_worktree_internal(&worktree, false)
+        tuic_git::worktree::remove_orphan_worktree_internal(&worktree)
     })
     .await;
     match result {

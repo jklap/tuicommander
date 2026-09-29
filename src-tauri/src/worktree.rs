@@ -530,7 +530,7 @@ pub(crate) fn remove_orphan_worktree(
         branch: None,
         base_repo,
     };
-    remove_worktree_internal(&worktree, false)?;
+    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
     state.invalidate_repo_caches(&repo_path);
     Ok(())
 }

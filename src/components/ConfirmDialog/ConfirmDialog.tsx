@@ -101,6 +101,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 							style={{
 								margin: 0,
 								"white-space": "pre-line",
+								"overflow-wrap": "anywhere",
 								color: "var(--fg-secondary)",
 								"font-size": "var(--font-md)",
 							}}
