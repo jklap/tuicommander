@@ -1,7 +1,9 @@
 .container {
   position: fixed;
   bottom: calc(var(--status-bar-height, 24px) + 8px);
-  right: 16px;
+  /* --toast-right-inset is set while a docked side panel (AI Chat) would
+     otherwise sit under the toasts. */
+  right: calc(16px + var(--toast-right-inset, 0px));
   z-index: 9999;
   display: flex;
   flex-direction: column;

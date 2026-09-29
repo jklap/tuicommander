@@ -57,6 +57,7 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
+		setAiChatPanelMeasuredWidth: vi.fn(),
 		setFileBrowserExternalRoot: mockSetFolderRoot,
 		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
@@ -114,6 +115,7 @@ import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
@@ -335,7 +337,7 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+	it("reserves a copy row under assistant messages only, and keeps the tool count on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -363,10 +365,12 @@ describe("AIChatPanel: transcript actions", () => {
 				},
 			});
 			await settle();
-			for (const label of ["Copy user message", "Copy assistant message"]) {
-				const button = container.querySelector(`button[aria-label="${label}"]`)!;
-				expect(getComputedStyle(button).minHeight, label).toBe("18px");
-			}
+			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
+			expect(getComputedStyle(assistantCopy).minHeight).toBe("18px");
+			// A user bubble hugs its text: its Copy sits outside the bubble instead of
+			// holding an invisible row that made "che model usi?" look two lines tall.
+			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
+			expect(getComputedStyle(userCopy).position).toBe("absolute");
 			const count = container.querySelector(".toolCallCount")!;
 			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
 		} finally {
@@ -1761,9 +1765,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = container.querySelector<HTMLButtonElement>(
-			'button[aria-label="Start another conversation on this repository"]',
-		);
+		const next = container.querySelector<HTMLButtonElement>('button[aria-label="Start another conversation"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -2605,11 +2607,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 			const bar = container.querySelector<HTMLElement>(".controlBar")!;
 			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
 			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of [
-				"Pause the turn",
-				"Compact the conversation",
-				"Start another conversation on this repository",
-			]) {
+			for (const label of ["Pause the turn", "Compact the conversation", "Start another conversation"]) {
 				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 				expect(button.title).toBe(label);
 				expect(button.querySelector("svg")).not.toBeNull();
@@ -2647,6 +2645,11 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("compacts the conversation", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
 		const { container } = await renderPanel();
 		await settle();
 
@@ -2655,6 +2658,87 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		await settle();
 
 		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+	});
+
+	it("opens the compacted successor session, which is where the conversation continues", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "sess-compacted", expect.anything());
+	});
+
+	it("reports a compaction ego did not publish instead of announcing success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "not_published", diagnostic: "checkpoint write refused" },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("checkpoint write refused");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	it("tells the person the conversation was compacted", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+	});
+
+	it("shows why a refused compaction did nothing, and does not claim success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockRejectedValueOnce(new Error("nothing to compact"));
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("nothing to compact");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+	});
+
+	it("draws an unavailable control-bar button visibly dimmed", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause the turn"]')!;
+			expect(pause.disabled).toBe(true);
+			expect(Number(getComputedStyle(pause).opacity)).toBeLessThan(1);
+			expect(getComputedStyle(pause).cursor).toBe("not-allowed");
+		} finally {
+			style.remove();
+		}
 	});
 
 	// An ego that did not advertise the extension gets no button, rather than a

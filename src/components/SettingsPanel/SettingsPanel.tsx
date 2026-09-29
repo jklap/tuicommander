@@ -359,7 +359,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 					<AgentsTab connectionId={activeConnectionId()} />
 				</Show>
 				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-					<AiChatTab />
+					<AiChatTab onClose={props.onClose} />
 				</Show>
 			</Show>
 		</SettingsShell>

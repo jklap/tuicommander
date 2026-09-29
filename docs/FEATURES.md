@@ -1468,7 +1468,7 @@ ego's own configuration; the `ego_executable` path is on General (**11.1**). Sho
 - Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the page does not
 - Per-provider rows: how many models are usable, and ego's own words for why the rest are not (once per distinct reason)
 - Credential state from `ego doctor`: stored, expired (ego renews it on its next run), missing, or "could not read the store" — which is deliberately not the same as an empty store
-- **No API key enters TUICommander**: none is stored, none reaches the OS keyring, and no provider HTTP call is made from this process. `ego auth login <provider>` is named, not run — the flow is interactive and would mean handling a secret on the way past
+- **No API key enters TUICommander**: none is stored, none reaches the OS keyring, and no provider HTTP call is made from this process. `ego auth login <provider>` runs in a terminal tab opened by the provider's Login button, typed as a command and answered by the person in the terminal, so the secret never passes through TUICommander
 - `model` is the only writable key, exposed as its own operation rather than a key/value pair, so no caller over IPC or HTTP can reach `sandbox` or `permissions.judge`
 - Four failure states, each distinct: ego not configured (names the field to fill), a configured path that will not start, an ego command that failed (shown with the command, exit code and its verbatim output), and a transport fault that is not attributed to ego
 

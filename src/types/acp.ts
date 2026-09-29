@@ -126,6 +126,16 @@ export interface AcpCapabilitySnapshot {
 	egoCompactVersion: number | null;
 }
 
+/** ego's answer to `_ego/compact`: the compacted continuation is a new session. */
+export interface EgoCompactResponse {
+	sourceSessionId: AcpSessionId;
+	targetSessionId: AcpSessionId;
+	publication:
+		| { kind: "not_published"; diagnostic: string }
+		| { kind: "published_durably"; diagnostic: string | null }
+		| { kind: "published_durability_uncertain"; diagnostic: string };
+}
+
 export interface AcpTurnSnapshot {
 	turnId: AcpTurnId;
 	state: AcpTurnState;
