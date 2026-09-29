@@ -2686,6 +2686,10 @@ mod tests {
         req
     }
 
+    fn config_save_body(config: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"base": config, "config": config})
+    }
+
     pub(super) fn test_state() -> Arc<AppState> {
         // Was a hand-copied 116-field `AppState` literal, kept in sync with
         // `AppState::new` by hand and sharing one `test-tuic-data` dir across
@@ -4205,8 +4209,10 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 1, 100], 12345));
-        let body = serde_json::to_value(crate::config::AppConfig::default())
-            .expect("serialize default AppConfig");
+        let body = config_save_body(
+            serde_json::to_value(crate::config::AppConfig::default())
+                .expect("serialize default AppConfig"),
+        );
         let resp = app
             .oneshot(put_from("/config", &body, remote_addr))
             .await
@@ -4300,8 +4306,9 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 1, 100], 12345));
-        let body =
-            serde_json::json!({"sound_enabled": false, "flash_enabled": false, "defer_secs": 10});
+        let body = config_save_body(
+            serde_json::json!({"sound_enabled": false, "flash_enabled": false, "defer_secs": 10}),
+        );
         let resp = app
             .oneshot(put_from("/config/notifications", &body, remote_addr))
             .await
@@ -4318,7 +4325,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([10, 0, 0, 1], 9999));
-        let body = serde_json::json!({});
+        let body = config_save_body(serde_json::json!({}));
         let resp = app
             .oneshot(put_from("/config/ui-prefs", &body, remote_addr))
             .await
@@ -4335,7 +4342,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([172, 16, 0, 5], 4000));
-        let body = serde_json::json!({});
+        let body = config_save_body(serde_json::json!({}));
         let resp = app
             .oneshot(put_from("/config/repo-settings", &body, remote_addr))
             .await
@@ -4369,7 +4376,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([10, 10, 10, 1], 3000));
-        let body = serde_json::json!({"prompts": []});
+        let body = config_save_body(serde_json::json!({"prompts": []}));
         let resp = app
             .oneshot(put_from("/config/prompt-library", &body, remote_addr))
             .await
@@ -4386,7 +4393,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 0, 1], 5000));
-        let body = serde_json::json!({});
+        let body = config_save_body(serde_json::json!({}));
         let resp = app
             .oneshot(put_from("/config/notes", &body, remote_addr))
             .await
