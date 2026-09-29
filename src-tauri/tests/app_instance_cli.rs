@@ -392,6 +392,7 @@ fn run_cli_until_killed(env: &IsolatedEnv, args: &[&str], token: &str) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuic-remote"));
         command
             .args(args)
+            .env("TUIC_TEST_USE_FILE_VAULT", "1")
             .env("HOME", &env.home)
             .env("XDG_CONFIG_HOME", &env.config)
             .env("APPDATA", &env.appdata)
