@@ -480,6 +480,8 @@ fn is_retryable_spawn_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::{assert_fake_ssh_stopped, fake_ssh_processes};
     use crate::test_support::{fake_ssh_script, system32_exe};
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
@@ -711,9 +713,17 @@ mod tests {
     #[tokio::test]
     async fn graceful_shutdown() {
         // Script that sleeps forever.
+        #[cfg(unix)]
+        let marker = crate::test_support::test_temp_root().join("graceful_shutdown_ssh.pid");
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&marker);
+        #[cfg(unix)]
+        let posix = format!("echo $$ > '{}'; exec sleep 3600", marker.display());
+        #[cfg(not(unix))]
+        let posix = "sleep 3600".to_string();
         let script = fake_ssh_script(
             "graceful_shutdown",
-            "sleep 3600",
+            &posix,
             &format!("{} -n 3601 127.0.0.1 >nul", system32_exe("ping.exe")),
         );
         let (cb, _statuses) = status_collector();
@@ -726,6 +736,9 @@ mod tests {
 
         // Should be Connected.
         assert_eq!(sup.status(), TunnelStatus::Connected);
+
+        #[cfg(unix)]
+        let pids = fake_ssh_processes(&marker);
 
         // Request shutdown.
         sup.stop();
@@ -743,6 +756,9 @@ mod tests {
             }
             other => panic!("expected Stopped after shutdown, got {other:?}"),
         }
+
+        #[cfg(unix)]
+        assert_fake_ssh_stopped(pids);
     }
 
     #[tokio::test]
@@ -766,9 +782,17 @@ mod tests {
         });
         // The long-lived SSH stub and the delayed listener together model an
         // SSH process that is alive before its -L forwarding socket is ready.
+        #[cfg(unix)]
+        let marker = crate::test_support::test_temp_root().join("local_forward_ssh.pid");
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&marker);
+        #[cfg(unix)]
+        let posix = format!("echo $$ > '{}'; exec sleep 3600", marker.display());
+        #[cfg(not(unix))]
+        let posix = "sleep 3600".to_string();
         let script = fake_ssh_script(
             "local_forward_stays_starting_until_its_port_accepts_connections",
-            "sleep 3600",
+            &posix,
             &format!("{} -n 3601 127.0.0.1 >nul", system32_exe("ping.exe")),
         );
         let (cb, _) = status_collector();
@@ -791,7 +815,15 @@ mod tests {
         assert_eq!(sup.status(), TunnelStatus::Connected);
         assert!(tokio::net::TcpStream::connect(addr).await.is_ok());
         assert!(tokio::net::TcpStream::connect(second_addr).await.is_ok());
+        #[cfg(unix)]
+        let pids = fake_ssh_processes(&marker);
         sup.stop();
+        assert!(matches!(
+            wait_for_stopped(&sup).await,
+            TunnelStatus::Stopped { .. }
+        ));
+        #[cfg(unix)]
+        assert_fake_ssh_stopped(pids);
         drop(listener);
         drop(second_listener);
     }
