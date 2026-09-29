@@ -15,6 +15,7 @@ const { invoke } = vi.hoisted(() => ({
 					icon: "<svg/>",
 					dismissible: true,
 					createdAt: 1000,
+					subtitle: "ran for 2343s · 1 blocks",
 				},
 			];
 		}
@@ -37,5 +38,7 @@ describe("mobile Activity", () => {
 		render(() => <ActivityScreen onNavigateSession={() => {}} />);
 		await waitFor(() => expect(screen.getByText("Agent completed work")).toBeTruthy());
 		await waitFor(() => expect(screen.queryByText("No recent activity")).toBeNull());
+		expect(screen.getByText("ran for 39 min · 1 block")).toBeTruthy();
+		expect(screen.queryByText("ran for 2343s · 1 blocks")).toBeNull();
 	});
 });

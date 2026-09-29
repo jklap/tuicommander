@@ -10,6 +10,10 @@ const files = new Map([
 	["src/hello.txt", "hello\n"],
 	["src/guide.md", "# Guide\n\n**Important** note.\n"],
 	["src/null.dat", "abc\0def"],
+	[
+		"src/deep/guide.md",
+		"![Local](images/diagram.png) ![Web](https://example.com/logo.png) ![Inline](data:image/png;base64,AAAA)",
+	],
 ]);
 const calls: string[] = [];
 let failSave = false;
@@ -41,6 +45,9 @@ vi.mock("../../transport", () => ({
 				? [{ name: "config.ts", path: "src/deep/config.ts", is_dir: false, size: 12 }]
 				: [];
 		}
+		if (command === "stat_path") return { exists: true, is_dir: false, size: 110 };
+		if (command === "resolve_terminal_path")
+			return { absolute_path: "/repo-one/src/deep/guide.md", is_directory: false };
 		if (command === "fs_read_file") {
 			if (args?.file === "src/image.bin") throw new Error("Failed to read file: stream did not contain valid UTF-8");
 			return files.get(args?.file ?? "") ?? "";
@@ -175,6 +182,23 @@ describe("FilesScreen", () => {
 		await waitFor(() => expect(view.container.querySelector("#markdown-content h2")?.textContent).toBe("Revised"));
 		expect(files.get("src/guide.md")).toBe("## Revised\n\nSaved from mobile.\n");
 		expect(view.queryByRole("textbox")).toBeNull();
+	});
+
+	it("serves nested Markdown images from the file directory while retaining absolute image sources", async () => {
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/deep/guide.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(3));
+		const images = view.container.querySelectorAll<HTMLImageElement>("#markdown-content img");
+		const local = new URL(images[0].src);
+		expect(local.pathname).toBe("/fs/markdown-image");
+		expect(local.searchParams.get("repoPath")).toBe("/repo-one");
+		expect(local.searchParams.get("file")).toBe("src/deep/images/diagram.png");
+		expect(images[1].getAttribute("src")).toBe("https://example.com/logo.png");
+		expect(images[2].getAttribute("src")).toBe("data:image/png;base64,AAAA");
 	});
 
 	it("refuses large and binary files without offering an editor", async () => {
