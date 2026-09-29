@@ -52,7 +52,7 @@ including the resulting `whisper-rs-sys` artifacts. Run
 | Command | Description |
 |---------|-------------|
 | `start_dictation()` | Start recording + streaming transcription |
-| `stop_dictation_and_transcribe()` | Stop streaming, final pass on full captured audio, return `TranscribeResponse { text, skip_reason, duration_s, truncated_s }`. A final Whisper skip keeps its specific reason; only an empty successful pass uses `no speech detected`. |
+| `stop_dictation_and_transcribe()` | Stop streaming, apply the hands-free sustained-speech gate to the full capture, then run the final transcription pass. Return `TranscribeResponse { text, skip_reason, duration_s, truncated_s }`. A gate skip keeps its specific reason; only an empty successful pass uses `no speech detected`. |
 | `inject_text(text)` | Apply corrections to text (called after transcription) |
 
 ### Hands-free
@@ -271,7 +271,7 @@ clock — the caller supplies frame durations and `now_ms`.
 | Setting | Default | Purpose |
 |---|---|---|
 | `pre_roll_ms` | 300 | audio kept ahead of the first speech frame, so a soft first syllable survives |
-| `trailing_silence_ms` | 800 | quiet interval that ends an utterance |
+| `trailing_silence_ms` | 1 500 | quiet interval that ends an utterance |
 | `min_speech_ms` | 200 | below this the utterance is discarded, not sent |
 | `max_utterance_ms` | 30 000 | hard cap; a monologue is cut rather than buffered without limit |
 | `activity_rms` | 0.01 | frame RMS at or above which a frame counts as speech |
@@ -588,8 +588,14 @@ struct so a newly added field is covered by whoever adds it.
 ## Speech gates
 
 Whisper transcribes whatever it is given. On room noise it invents subtitle
-boilerplate, so three gates in `transcribe()` decide whether audio is speech at
-all. They run in order and each returns a `skip_reason` the push-to-talk stop
+boilerplate. Before the final push-to-talk pass, the captured audio goes through
+the hands-free `Segmenter` with its 20 ms frame and `min_speech_ms` duration rule.
+Push-to-talk takes the frame activity floor from the configured transcription
+`rms_threshold`; hands-free retains its own `activity_rms` default. A short
+burst or capture below that floor returns `no sustained speech` without invoking
+Whisper; an utterance still open at key release counts. Three further gates in
+`transcribe()` decide whether the admitted audio is speech at all. They run in
+order and each returns a `skip_reason` the push-to-talk stop
 response, store and status show verbatim.
 
 | Gate | Rejects | Tunable |
