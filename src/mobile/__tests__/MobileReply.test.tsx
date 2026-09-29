@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
 import { HttpRpcError } from "../../transport";
@@ -25,7 +25,7 @@ describe("mobile managed-agent reply", () => {
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Please wait for me" } });
 		expect(rpc).not.toHaveBeenCalled();
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
 		expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
 			sessionId: "question-session",
@@ -38,7 +38,7 @@ describe("mobile managed-agent reply", () => {
 			<CommandInput sessionId="closed-session" agentType="claude" awaitingInput={true} managedSession={true} sessionExists={false} />
 		));
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "yes" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		expect(rpc).not.toHaveBeenCalled();
 	});
 
@@ -49,7 +49,7 @@ describe("mobile managed-agent reply", () => {
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for approval" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
 		expect(input.value).toBe("Wait for approval");
 	});
@@ -61,7 +61,7 @@ describe("mobile managed-agent reply", () => {
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for me" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "This session has ended", "error", true));
 		expect(input.value).toBe("Wait for me");
 	});
@@ -73,7 +73,7 @@ describe("mobile managed-agent reply", () => {
 		));
 		const input = container.querySelector("textarea")!;
 		await fireEvent.input(input, { target: { value: "Wait for me" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Reply not sent", "The agent is busy. Check the session before retrying.", "error", true));
 		expect(input.value).toBe("Wait for me");
 	});
@@ -89,7 +89,7 @@ describe("mobile managed-agent reply", () => {
 			<CommandInput sessionId="question-session" agentType="claude" awaitingInput={true} managedSession={true} />
 		));
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "yes" } });
-		const send = container.querySelector("button[type=button]")!;
+		const send = screen.getByRole("button", { name: "Send" });
 		await fireEvent.click(send);
 		await fireEvent.click(send);
 		expect(rpc).toHaveBeenCalledTimes(1);
@@ -187,7 +187,7 @@ describe("mobile managed-agent reply", () => {
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-other", data: "\t" }));
 		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\t"]);
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Purple" } });
-		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc.mock.calls.some(([, args]) => args.data === "\r")).toBe(true));
 		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 	});
