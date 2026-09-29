@@ -29,6 +29,10 @@
 
 # To Test
 
+## Claude dismissed question (story 1213-82e1) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable Claude session and trigger `AskUserQuestion`. Dismiss it with Esc, wait for Claude's ready composer, and confirm the awaiting badge disappears and `session action=submit` accepts a command. The running backend does not hot-reload this Rust change; the recorded PTY capture test covers the state transition and submit write after idle settlement.
+
 ## AI Chat prompt parking (story 1228-becb)
 
 - [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.

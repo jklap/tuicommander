@@ -16557,6 +16557,102 @@ async fn confident_awaiting_is_never_retracted() {
     );
 }
 
+/// Live Claude 2.1.280 capture: AskUserQuestion notified a confident wait,
+/// Esc dismissed it without a typed line, and the turn ended at the composer.
+/// The badge must follow that completed turn, not the historical notification.
+#[tokio::test(flavor = "current_thread")]
+async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "claude-askuser-esc";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_wait = false;
+    let mut saw_esc = false;
+    let mut saw_done = false;
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Output => {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+                if clean.contains("Claude needs your permission") {
+                    saw_wait = true;
+                    assert!(
+                        await_session(&state, sid, |s| {
+                            s.awaiting_input
+                                && s.question_confident
+                                && s.question_text.as_deref()
+                                    == Some("Claude needs your permission")
+                        })
+                        .await,
+                        "an open AskUserQuestion must keep the confident badge"
+                    );
+                }
+                saw_done |= clean.contains("Worked for 4s");
+            }
+            crate::pty_capture::CaptureDirection::Input if saw_wait && record.data == b"\x1b" => {
+                saw_esc = true;
+                assert!(
+                    await_session(&state, sid, |s| s.awaiting_input).await,
+                    "bare Esc must not retract a still-open dialog before Claude responds"
+                );
+            }
+            crate::pty_capture::CaptureDirection::Input => {}
+        }
+    }
+    assert!(
+        saw_wait && saw_esc && saw_done,
+        "capture must contain the full scenario"
+    );
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input && !s.question_confident).await,
+        "the completed turn must retract Claude's dismissed question"
+    );
+
+    // The captured composer is ready after Claude finishes. Model the normal
+    // idle settlement, then exercise the same PTY write used by MCP submit.
+    #[cfg(unix)]
+    {
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(SHELL_IDLE, Ordering::Release);
+        silence.lock().confirm_idle();
+        let bytes = insert_recording_session(&state, sid);
+        assert!(matches!(
+            write_agent_submission_to_pty(&state, sid, "echo ready"),
+            AgentSubmissionWrite::Complete { .. }
+        ));
+        assert!(
+            bytes
+                .lock()
+                .unwrap()
+                .windows(b"echo ready".len())
+                .any(|part| part == b"echo ready")
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn protocol_awaiting_clears_on_protocol_busy_and_idle() {
     for (session_id, target, label) in [
