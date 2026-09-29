@@ -50,7 +50,7 @@
 
 ## Managed child idle close (story 1209-cc47) — Rust restart required
 
-- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. Run a disposable `tuic bg` job with an unreachable queue and mail path; its failed wake marker must keep the child open. The current live backend and installed CLI need a rebuild to load this change.
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. Run a disposable `tuic bg` job with an unreachable queue and mail path; its failed wake marker must keep the child open. The current live backend and installed CLI need a rebuild to load this change. _(NOT VERIFIED 2026-09-29: partial — Verified on instance (fake agent binary, agent_type aider, idle_close_minutes=1 via PUT /config/agents): idle child closed ~70s after spawn; parent 'agent wait' got state_change closed/idle_timeout before it vanished; worktree fx/ag1/repo__wt/ag1wt remained; follow-up child closed 62s after its mail was read (timer restarted); keep_open child and h)_
 
 ## Background wake retry (story 1233-4738) — rebuild the Rust CLI
 
@@ -128,7 +128,7 @@
 
 ## Already unregistered worktree cleanup (1175-71fc) — Rust restart required
 
-- [ ] After a manual `make dev` restart, use an isolated `TUIC_APP_INSTANCE=<id>` and a disposable repository to remove a worktree while its build-input warming is pending, after Git has already unregistered the checkout. Confirm the pending status clears even if a leftover directory cannot be removed. The running backend cannot load this Rust change until restart; the targeted Rust test covers the cleanup failure path.
+- [ ] After a manual `make dev` restart, use an isolated `TUIC_APP_INSTANCE=<id>` and a disposable repository to remove a worktree while its build-input warming is pending, after Git has already unregistered the checkout. Confirm the pending status clears even if a leftover directory cannot be removed. The running backend cannot load this Rust change until restart; the targeted Rust test covers the cleanup failure path. _(NOT VERIFIED 2026-09-29: partial — Made warm stay 'pending' several seconds (156MB/40k ignored files, worktree_list warm_artifacts pending). External 'git worktree remove --force' during warm unregistered it but left dir (cp still writing); after that the app refuses ('No workspace found'), so the remove-after-unregister + unremovable-leftover path could not be driven live. Only Rus)_
 
 ## Push-to-talk sustained speech (story 1135-b600) — Rust restart required
 
@@ -253,7 +253,7 @@
 
 ## Detached CLI wake status — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `queued` when the queue takes the request. For an unbound caller, confirm MCP mail surfaces `BG DONE` with the queue error and `.wake` says `mailed`; when both channels fail, `.wake` says `failed` with both reasons. The installed CLI cannot load this Rust change until rebuilt.
+- [ ] After rebuilding and reinstalling `tuic`, run `tuic bg` from a throwaway managed agent and inspect `<log>.exit` and `<log>.wake`. Confirm the command exit code is preserved and wake status is `queued` when the queue takes the request. For an unbound caller, confirm MCP mail surfaces `BG DONE` with the queue error and `.wake` says `mailed`; when both channels fail, `.wake` says `failed` with both reasons. The installed CLI cannot load this Rust change until rebuilt. _(NOT VERIFIED 2026-09-29: blocked — Needs a tuic CLI with 'bg'. The only built tuic (debug target of the instance, Sep 29 23:55, non-executable; copied+chmod to test) has no 'mcp'/'bg' subcommands (--help lacks them; source main.rs:36,51 has them) and /usr/local/bin/tuic is older. Rebuild needs cargo (forbidden).)_
 
 ## Queued agent command diagnostics — Rust restart required
 
@@ -311,7 +311,7 @@
 
 ## Generic MCP CLI (story 1099-79b8) — rebuild the Rust CLI
 
-- [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to compare `tuic mcp session '{"action":"list"}' | jq length` with the instance's MCP session count. Run `tuic mcp agent '{"action":"wait","timeout_ms":8000}'` and confirm it waits for the server reply without a three-second socket failure. The installed CLI cannot load the Rust change until rebuilt; restart `make dev` only when ready to end its live sessions.
+- [ ] After rebuilding and reinstalling `tuic`, use an isolated test instance to compare `tuic mcp session '{"action":"list"}' | jq length` with the instance's MCP session count. Run `tuic mcp agent '{"action":"wait","timeout_ms":8000}'` and confirm it waits for the server reply without a three-second socket failure. The installed CLI cannot load the Rust change until rebuilt; restart `make dev` only when ready to end its live sessions. _(NOT VERIFIED 2026-09-29: blocked — Needs rebuilt tuic CLI: the built tuic in the instance target dir lacks the 'mcp' subcommand (tuic mcp session ... was treated as a path and tried tuic://edit URL); /usr/local/bin/tuic older. Cannot rebuild (no cargo).)_
 
 ## CLI blocking waits (story 1060-df82) — rebuild the Rust CLI
 
@@ -415,7 +415,7 @@
 - [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only): WontFix on an already cancelled story returns 'story is already cancelled' and revision unchanged; remove_dependency on a non-cancelled edge refused ('only cancelled dependencies in the same plan can be removed'); Backlog-only limitation not exercised)_
 ## Agent native scrollback (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout.
+- [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout. _(NOT VERIFIED 2026-09-29: partial — Fake 'codex' binary whose --help hangs (sleep 60 child), agent spawn timings: 1st 2.07s, 2nd 0.05s, 3rd 0.04s; after appending to the binary (new len/mtime) 2.24s then 0.03s. Warn 'Agent screen capability probe failed' logged; no leftover sleep 60 process on macOS. Windows cmd.exe/node.exe clause not testable (macOS host).)_
 - [ ] After a `make dev` restart, open a **new** TUIC shell and type `codex`, `grok`, and `opencode` in separate throwaway tabs. Confirm each supported installed CLI stays in native scrollback; repeat with its per-agent **Prevent alternate screen** setting off, then restore the setting. Existing shells retain the previous PTY environment and cannot verify this change. _(NOT VERIFIED 2026-09-29: Needs real installed codex/grok/opencode CLIs.)_
 - [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch. _(NOT VERIFIED 2026-09-29: Needs real Claude, Codex, Grok, OpenCode CLIs launched and resumed.)_
 - [x] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled. _(verified 2026-09-29: tuic-remote (own instance ag2a) with absolute TUIC_CAPTURE_DIR: POST /diagnostics/capture -> dir echoed, .tcap (114B) appeared there, GET reports dir+bytes. Relative 'relcap' -> {enabled:false,error:'TUIC_CAPTURE_DIR must be absolute'}, GET enabled:false, no dir created.)_
@@ -433,12 +433,12 @@
 
 - [ ] After restarting an isolated `make dev` instance, deinitialize a disposable worktree submodule with a local-only commit and a Git module name different from its checkout path; repeat with a nested named submodule. Removal must refuse and leave each module Git store and commit recoverable. _(NOT VERIFIED 2026-09-29: PARTIAL: fixture submodule with module name 'modname' != path 'libs/sub', local-only commit, deinit in the worktree: worktree_remove refused ('uninitialized submodule libs/sub still has Git state'), worktree kept, commit still in .git/worktrees/feat5/modules/modname (t_sub2.py). Nested named submodule not tried)_
 - [ ] After restarting an isolated `make dev` instance, attempt to remove a disposable worktree with a local-only submodule commit while the main checkout's copy of that submodule is uninitialized. Removal must refuse and leave the source worktree and commit intact; after initializing the main copy, removal should preserve the commit in the module repository. _(NOT VERIFIED 2026-09-29: NOT VERIFIED: fixture became dirty and the refusal reason was 'uncommitted changes' rather than the main-copy-uninitialized rule (t_sub4.py); needs a cleaner fixture)_
-- [ ] After restarting an isolated `make dev` instance, remove a disposable worktree whose submodule has two stash entries and a reflog-only commit. Confirm all three OIDs remain reachable in the main checkout module after removal, including when a separate missing checkout is force-pruned.
+- [x] After restarting an isolated `make dev` instance, remove a disposable worktree whose submodule has two stash entries and a reflog-only commit. Confirm all three OIDs remain reachable in the main checkout module after removal, including when a separate missing checkout is force-pruned. _(verified 2026-09-29: repo4 w/ submodule libs; worktree s1: 2 stashes + reflog-only commit in its private module. Before: OIDs absent in main .git/modules/libs (cat-file fails). After MCP worktree_remove: all 3 OIDs are commits there, kept as refs/tuic/preserved/... Also s2 (missing checkout, force-pruned): reflog commit + stash OID reachable afterwards.)_
 - [ ] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, archive a disposable linked worktree with an initialized submodule. Confirm the archive remains a usable Git checkout, its submodule `git status` and refs work, and it disappears from the active sidebar. A locked disposable worktree must remain at its original path during an automatic archive sweep. _(NOT VERIFIED 2026-09-29: partial — Own repo+submodule: worktree wt1 (sub initialized, merged) archived via POST /worktrees/finalize -> __archived/wt1; git status clean, submodule status/HEAD/refs OK, core.worktree repaired, hidden from /worktrees/paths. Locked wt2: finalize -> worktree_locked, stays in place. Config-driven auto sweep itself not triggered.)_
 - [x] After a `make dev` restart in an isolated `TUIC_APP_INSTANCE`, confirm Worktree Manager Prune refuses a detached checkout during a Git operation and one whose latest commit exists only at detached HEAD. A detached checkout whose HEAD is reachable from a branch or tag should prune cleanly. _(verified 2026-09-29: POST /repo/remove-orphan (what Prune calls) on disposable repo: real conflicting rebase in progress -> 'Cannot remove orphan worktree: a Git operation is in progress'; detached HEAD with commit only there -> 'detached HEAD commit has no durable ref' (both kept); detached at main-reachable commit -> ok; detached at tag-only commit -> ok. Manager UI )_
 
 - [x] After an isolated `TUIC_APP_INSTANCE=<id>` Rust restart, confirm a refused dirty non-force removal leaves the worktree's pending warm state visible. Remove a different worktree while another registered checkout directory is missing; the missing checkout's submodule Git state must remain available for later safe removal. _(verified 2026-09-29: Own repo r440: create worktree w/ 60k-file ignored dir -> warm_artifacts pending; dirty non-force remove refused ('has uncommitted changes'), status still pending, later done. Submodule repo: w2,w3 with modules; rm w3 dir; removed w2 ok; .git/worktrees/w3/modules/sub intact + w3 prunable; w3 later removed via confirmMissingCheckout.)_
-- [ ] After a `make dev` restart, verify a missing registered worktree refuses removal without force, and a separately confirmed lock override is needed if that registration is locked. After force removal, its submodule-only refs must remain in the main checkout's module repository.
+- [x] After a `make dev` restart, verify a missing registered worktree refuses removal without force, and a separately confirmed lock override is needed if that registration is locked. After force removal, its submodule-only refs must remain in the main checkout's module repository. _(verified 2026-09-29: Missing+locked registration (rm -rf dir; git worktree lock). DELETE /worktrees/s2 no force -> 'Worktree presence changed since confirmation' (MCP: 'uncommitted changes'), refused. force+confirmMissingCheckout -> 'worktree_locked:missing worktree is locked'. +overrideLock -> ok removal_rule=force; submodule stash+reflog OIDs then present in main mod)_
 - [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins. Remove the worktree and check its warm status is no longer retained. A clean squash-merged branch removes without force and the response names `patch_equivalence`. _(NOT VERIFIED 2026-09-29: partial: MCP create -> warm_artifacts pending then done in /worktrees/paths; squash-merged branch removed without force with removal_rule=patch_equivalence; warm status gone after removal. Setup-script ordering not tested)_
 - [ ] After that restart, create a worktree through desktop IPC and confirm its instructions report `pending` until warming completes. Confirm non-force removal preserves a dirty worktree with `delete_branch` both on and off; when an archive script adds a commit, the branch remains and the response includes `branch_delete_warning`. _(NOT VERIFIED 2026-09-29: partial: non-force removal of a dirty worktree refused with delete_branch on and off ('has uncommitted changes'), branch kept; archive-script/branch_delete_warning not tested)_
 
@@ -498,7 +498,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] `POST /dictation/speech/voices/import` with `{"language":"it","name":"nonna","dataBase64":"<base64 of an Italian .safetensors>"}` succeeds. Voice choice then accepts `speech_voice` `"nonna"`, and a reply speaks in it. _(NOT VERIFIED 2026-09-29: HTTP import (POST /dictation/speech/voices/import) is scriptable but needs a real Italian .safetensors and human ears for the spoken reply.)_
 - [x] The same with the French `8843db76` estelle file into language `"fr"` is refused with the "self_attn/pad … different model" reason, and nothing appears under `<speech>/user-voices/french/`. _(verified 2026-09-29: Installed French bundle via POST /dictation/speech/assets/download {asset:french} (removed afterward), POST /dictation/speech/voices/import {language:fr, 8843db76 french_24l/estelle.safetensors} -> error 'not a voice for French: ... transformer.layers.0.self_attn/pad ... made for a different model'; no user-voices dir created.)_
-- [ ] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing.
+- [x] `POST /dictation/speech/voices/delete` with `{"language":"it","name":"nonna"}` removes the file. A reply with `speech_voice` `"nonna"` then reports that the voice is missing. _(verified 2026-09-29: Placed dummy models/speech/user-voices/italian/nonna.safetensors; POST voices/delete {it,nonna} -> "Deleted the Italian voice nonna", file gone. Missing voice reported via /voices/preview (same choose_voice): 'Italian has no voice called "nonna"; it offers giovanni')_
 - [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak. _(NOT VERIFIED 2026-09-29: 'still speak' requires hearing audio output; listing part is browser-checkable)_
 - [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language". _(NOT VERIFIED 2026-09-29: partial: ?language=xx -> error naming xx; ?language=it with no bundle -> []; picker UI and bundle-present listing not checked)_
 - Note: an isolated `TUIC_APP_INSTANCE` debug instance binds no TCP port while remote access is off; reach it with `curl --unix-socket <tuic-mcp-*.sock>` (the path is in its log).
@@ -640,7 +640,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] Hold the `+` in the tab bar for half a second: a menu lists the enabled agents (a submenu per agent with 2+ run configs). Picking one opens a new tab in the active branch that starts the agent. Releasing does not also open a plain tab.
 - [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split.
-- [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer.
+- [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer. _(NOT VERIFIED 2026-09-29: partial — capture_window blocked (no Screen Recording perm) so no screenshot. DOM geometry via invoke_js in validate instance: Start-test button bottom 1172 vs Level gate label top 1190 (18px gap); Import/Export buttons 8px apart, 8px below prev row; Notifications Reset Defaults footer 20px below prev block. Human eyeball still advised.)_
 
 ## Mobile Progress header (story 1214-2b95)
 
@@ -1473,7 +1473,7 @@ cleared eventually.
 
 - [x] Normal case unchanged: a genuinely orphaned `index.lock` (kill a `git add` _(verified 2026-09-29: Disposable repo: killed a real 'git add many' (60k files) with SIGKILL when .git/index.lock appeared -> 0-byte orphan lock; after 31s GET /repo/files?path= answered normally, lock gone, plain git add then works.)_
   mid-write, wait 30 s) is still reclaimed and git works again.
-- [ ] With the probe unavailable, the lock survives: temporarily shadow `lsof`
+- [ ] With the probe unavailable, the lock survives: temporarily shadow `lsof` _(NOT VERIFIED 2026-09-29: blocked — probe_index_lock_owner does Command::new("lsof") using the running instance's own PATH; shadowing lsof needs the instance restarted with a modified PATH (forbidden). Not attempted; existing unit tests inject the probe (reclaim_stale_index_lock).)_
   with a non-executable stub on `PATH`, create a 30 s-old lock, run a git command
   through TUIC, and confirm the lock is **still there** and `GET /logs` carries
   `Keeping index.lock … ownership could not be determined`.
@@ -1739,7 +1739,7 @@ and the `repo` tool never dispatched its GitHub issue actions.
   implement would be a promise it cannot keep — see the doc comment on
   `negotiate_protocol_version`, `mcp_transport.rs:5450-5463`. A fallback answer
   is NOT the bug this item was written about.)_
-- [ ] `repo action=issues`, `action=close_issue` and `action=reopen_issue` all
+- [ ] `repo action=issues`, `action=close_issue` and `action=reopen_issue` all _(NOT VERIFIED 2026-09-29: partial — MCP repo action=issues/close_issue/reopen_issue now answer 'was removed; use GET /repo/issues | POST /repo/issues/close|reopen' (mcp_transport.rs:1163, removed_native_action_replacement) - not Unknown action, but not GitHub either: item is stale. HTTP routes do reach GitHub: GET /repo/issues ->[] ; close/reopen bogus #2000000000 -> 'Failed to close)_
   reach GitHub instead of answering `Unknown action 'issues' for tool 'repo'`.
 - [x] Register the same UI tab id repeatedly from one session: it dedupes, and the _(verified 2026-09-29: MCP ui action=tab from a peer named as a live PTY id: 5x id 'same' then session DELETE -> close-html-tabs tab_ids as one entry (see next); 75 distinct opens -> close list 64 entries (cap SESSION_HTML_TAB_LIMIT), oldest (same,t1-t6) evicted, t70 kept.)_
   per-session count stops at the cap instead of growing.
@@ -1860,7 +1860,7 @@ so these checks are looking for what a test cannot see on a live agent.
   again (`DEFERRED (2026-09-06)` at `pty.rs:4911`).
 - [ ] A choice dialog and an Ink question footer still badge the tab as awaiting, _(NOT VERIFIED 2026-09-29: Needs real agent choice dialog / Ink footer for awaiting badge set and clear.)_
   and the badge still CLEARS afterwards.
-- [ ] **Observability trade — check this deliberately.** The DECRST-leak
+- [x] **Observability trade — check this deliberately.** The DECRST-leak _(verified 2026-09-29: Shell session prints ESC[2J/ESC[3J and bare '1049l'. Diagnostics OFF: 0 'DECRST leak'/'Anomalous ANSI' in GET /logs (count unchanged 2/2 on a second OFF run). POST /diagnostics enabled:true then same output: error 'DECRST leak: kitty_clean has bare 1049l...' + warn 'Anomalous ANSI sequence: ESC[2J/3J' appear. Guards at pty.rs:6344/10758/10787. Disa)_
   `error!` and the "Anomalous ANSI sequence" `warn!` no longer appear unless
   Diagnostics is on. Run `curl -X POST localhost:9876/diagnostics -d
   '{"enabled":true}' -H 'content-type: application/json'`, then confirm they
@@ -2262,7 +2262,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   (4) **It persists:** flip it off, restart, confirm `config.json` carries
   `"scrollback_reflow": false` and the toggle is still off.
 
-- [ ] **Headless daemon serves Claude usage again** (678-9a75) — **Rust change,
+- [ ] **Headless daemon serves Claude usage again** (678-9a75) — **Rust change, _(NOT VERIFIED 2026-09-29: partial — Ran built tuic-remote (--no-default-features build in instance target, --instance ag1remote, TUIC_PORT=9891, own TMPDIR): starts; unix-socket GET /claude/usage reaches handler (500 upstream 'OAuth access token has expired', env not code), /claude/timeline 400 (needs params), /claude/session-stats 400, /claude/projects 200 - not 404. TCP needs auth )_
   needs a rebuild.** `claude_usage_cache` carried `#[cfg(feature = "desktop")]`
   while `build_router` mounts `/claude/usage` and `/claude/usage/timeline`
   unconditionally, so `cargo build --bin tuic-remote --no-default-features` did
@@ -2779,7 +2779,7 @@ seconds and confirm the duplicate receipt produces no second event.
       have been double-copied or left half-populated.
 - [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build, _(NOT VERIFIED 2026-09-29: blocked — Item times worktree warm on the tuicommander repo itself (~38s expectation); would create a worktree in Boss's real repo, which is forbidden here. Analog only: 60k-file ignored dir on disposable repo warmed in ~13s.)_
       say so rather than living with it.
-- [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
+- [x] Switch Settings → worktree storage to "inside repo" (`.worktrees/`), _(verified 2026-09-29: Disposable repo2 (.gitignore has .worktrees/ cache/), per-repo settings PUT /config/repo-settings worktree_storage=inside-repo + copy_ignored_files=true: repo worktree_create returned in 0.06s, worktree at repo2/.worktrees/in1, warm_artifacts status done, cache/c.bin copied, no nested .worktrees/recursion (find depth 4).)_
       create a worktree, and confirm creation does not hang or recurse — the
       destination's own ignored ancestor must be skipped.
 - [x] Confirm Settings and settings search contain no copy-on-write workspace _(verified 2026-09-29: by code/test inspection, tests not executed here: cow.rs:3 says COW workspace clones are gone; rg for copy-on-write/cowMode in src/ finds no Settings or dialog UI. Verified by absence in src/.)_
@@ -3119,7 +3119,7 @@ build has the old behaviour until restart.
       `scripts/ts-mutants.mjs` on `pathUtils.ts:65-65` reported 6 Killed, 0
       Survived, and 1.00 tests per mutant; JSON saved under
       `~/Gits/.tmp/results/ts-mutation-gate/mutation.json`.)_
-- [ ] On the next changed TypeScript source/test pair, run the same scoped
+- [x] On the next changed TypeScript source/test pair, run the same scoped _(verified 2026-09-29: Ran node scripts/ts-mutants.mjs 'src/utils/panelSync.ts:30-40' -- src/__tests__/utils/panelSync.test.ts (changed pair from 8b3e740d2) with TMPDIR set: completes in 1m26s, 20 mutants (8 killed, 2 timeout, 8 survived), score 55.56, 0.89 tests/mutant, mutation.json written. Removed reports/mutation after.)_
       command before using its mutation score as a story gate.
 - [x] After the StoriesDialog dependency-removal change is present in this _(verified 2026-09-29: ts-mutants.mjs on StoriesDialog.tsx:532 (story row onClick) with StoriesDialog.test.tsx: 1 mutant, Killed, 100% score, 1.00 tests/mutant. Only that one click handler was mutated; the original false-survivor identity not confirmed.)_
       checkout, run its targeted test through `scripts/ts-mutants.mjs` and
@@ -3214,7 +3214,7 @@ point of the story — plus the two things only the backend can do.
       that clicked.
 - [ ] A wrong password reports `unauthenticated` (not "connection error") and no _(NOT VERIFIED 2026-09-29: partial — Own tuic-remote (bcrypt password) + validate instance connection via PUT /config/remote-connections: WRONG password -> GET /config/remote-connections/status = 'unauthenticated' 'Authentication rejected by the remote daemon' (stable 6 polls) with no base_url/token/protocol_version; right password -> 'connected' with base_url+token. Actual UI/JS call)_
       repo or terminal call is routed to that machine while it is in that state.
-- [ ] Restart `tuic-remote` under a live connection: within one poll the
+- [ ] Restart `tuic-remote` under a live connection: within one poll the _(NOT VERIFIED 2026-09-29: partial — Direct conn to local tuic-remote (127.0.0.1:9891) via PUT /config/remote-connections + password. Killed and restarted daemon: status went error(Unreachable) then connected by itself in ~10s with a new token. Window-closed-to-tray case not tested (desktop window stays open).)_
       connection re-authenticates by itself and stays Connected. This is now a
       Rust task, so it keeps working with the TUICommander window closed to the
       tray or the WebView asleep — the case the WebView implementation lost.
@@ -3355,7 +3355,7 @@ the path it resolves for `tuic-bridge`.
       `session`, `repo`, `progress`, `agent` — not an empty tool list.
 - [ ] `repo action=worktree_list` from that agent answers about the daemon's _(NOT VERIFIED 2026-09-29: partial — Own local tuic-remote daemon: MCP repo action=worktree_list via a bridge on the daemon socket answers from the daemon process (daemon 'repo list' = [] vs validate instance list [fx/repo]); same filesystem so cannot show 'daemon repos not the Mac's' and no real agent/bridge listing tools on a separate host.)_
       repos, not the Mac's.
-- [ ] Remove `tuic-bridge` from beside the daemon, restart, and confirm the
+- [x] Remove `tuic-bridge` from beside the daemon, restart, and confirm the _(verified 2026-09-29: Ran daemon with HOME=fakehome, TUIC_MCP_CONFIG_OWNER=1: with bin/tuic-bridge present ~/.claude.json got command=<bin>/tuic-bridge. Removed bridge, restarted: log 'Skipping agent MCP config updates: no bridge beside this executable', .claude.json stayed {} (no dead path written). Bridge restored.)_
       written config names a path that does not exist (the failure this story
       exists to remove) — then put it back.
 - [ ] On a daemon with no agents installed at all: no agent config file and no _(NOT VERIFIED 2026-09-29: partial — Own tuic-remote, empty HOME, no --instance: only codex/grok/opencode/VSCode configs created; no .claude/.cursor/.gemini etc. (skip-if-not-installed works). Cannot test zero agents: has_cli finds /opt/homebrew/bin/{codex,opencode,code}, ~/.grok/bin on this machine, so those count as installed.)_
@@ -3419,7 +3419,7 @@ restart, not before.
       first answer starts with `TUICommander v1.7.7 is connected.` followed by
       `intent:`. The status appears and no clipped acknowledgement such as
       `.7.7 is connected.` remains in the transcript.
-- [ ] **Needs a `make dev` restart (Rust).** In a tab *you* opened by hand (not
+- [x] **Needs a `make dev` restart (Rust).** In a tab *you* opened by hand (not _(verified 2026-09-29: Hand-opened shell PTY (POST /sessions cwd=registered repo) e2b29bb4 used as MCP peer: progress type=done -> {id:50} (no project_required); repo progress_list shows entry in that project with ptyId; webview DOM contains toast element (class *_toast > *_message) with the text.)_
       one an orchestrator spawned), an agent calling `progress type=done` no
       longer answers `project_required`: the entry lands in that project's
       journal and a toast appears. `resolve_mcp_origin_repo_path` used to read
@@ -3553,7 +3553,7 @@ the HTTP delete route call it.
       (`pgrep -fl ssh`), then delete the machine from Settings -> Remote
       Machines. The `ssh` process must be gone within a second, and the app must
       not show a status push for the deleted id afterwards.
-- [ ] Do the same over HTTP against the dev instance:
+- [x] Do the same over HTTP against the dev instance: _(verified 2026-09-29: Connected conn via API, then DELETE /config/remote-connections/{id} -> {ok}; status [] at once, log 'Disconnected'. Killed+restarted daemon and waited 20s: no further Connecting/Connected log, status stays []. Supervisor stopped.)_
       `curl -X DELETE http://127.0.0.1:9877/config/remote-connections/<id>` —
       same result. Before this change the HTTP route stopped nothing.
 - [ ] Any sessions that machine had mirrored disappear from the session list on _(NOT VERIFIED 2026-09-29: Needs a real connected remote machine with mirrored sessions.)_
@@ -3688,7 +3688,7 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
 - [ ] Press Disconnect on a connected machine. It must stay disconnected —
       watch it for longer than 60s. A retry that resurrects it is the bug the
       generation counter exists to stop.
-- [ ] Disconnect, then Connect again immediately. The machine must come up, and
+- [x] Disconnect, then Connect again immediately. The machine must come up, and _(verified 2026-09-29: DELETE /connect then POST /connect immediately: status connected (same token). Then killed daemon: status error Unreachable, restarted daemon: back to connected in 3s with new token, so the new supervisor still retries after the retired one was taken down.)_
       it must still retry if it later drops — the new supervisor must not have
       been taken down with the retired one.
 - [x] Give a machine the WRONG password and connect. It must land in _(verified 2026-09-29: Own tuic-remote w/ password (--set-password) on :9894; connection with WRONGPW + POST /connect -> 502 'Authentication rejected', status unauthenticated; over 60s /logs shows one 'Connecting'+one 'Remote connection failed' for it, no retries (other conn kept retrying). Correct PW + POST connect -> status connected.)_
@@ -3721,7 +3721,7 @@ _(NOTE 2026-09-23: superseded — hands-free turns and notices are now typed str
 Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
 (Step 8), so this checks the queue half through the existing HTTP surface.
 
-- [ ] With an agent tab busy, `POST /sessions/{id}/queue` a command, then check
+- [x] With an agent tab busy, `POST /sessions/{id}/queue` a command, then check _(verified 2026-09-29: Fake agent child (agent_type claude, idle-not-ready) : POST /sessions/{id}/queue twice -> queued 1,2; GET queue -> every entry has kind=user_command. No voice_command kind exists (state.rs kind() only notice/initial_prompt/user_command; kind removed in 560709f9e).)_
       `GET /sessions/{id}/queue`: every entry still lists a `kind`, and an
       ordinary Compose command still reads `user_command`. The new
       `voice_command` kind must not appear for anything typed by hand.
@@ -3848,7 +3848,7 @@ Needs a `make dev` restart — the Rust backend does not hot-reload.
       and hands-free fell back to `PassThrough`, which cannot hear the user over
       the speaker. It is logged at warn level on purpose; a quiet fallback would
       look exactly like a working canceller until someone tried to interrupt.
-- [ ] Startup must not be visibly slower. `DictationState::new()` now builds one
+- [ ] Startup must not be visibly slower. `DictationState::new()` now builds one _(NOT VERIFIED 2026-09-29: partial — desktop.log: first log 22:39:23.595, HTTP TCP+unix listening 22:39:24.617 (~1.0s incl. Tailscale detection 0.5s), key monitors 22:39:25.7. No AEC3-less baseline build to compare, so 'not slower' is not proven; nothing looks slow.)_
       AEC3 instance for the life of the app, before any dictation is used.
 
 ## Speech assets download and install (#813-e84b)
@@ -3872,7 +3872,7 @@ expected to complete rather than 404 on its last file.
 - [x] While that download runs, the same list must report _(verified 2026-09-29: During POST /dictation/speech/assets/download {asset:german}: GET /dictation/speech/assets showed german state=downloading (3 polls, italian ready); second identical POST refused: 'could not write the download: German is already downloading'. (First download later failed on a HuggingFace 'error decoding response body' network error, state absent.))_
       `"state": "downloading"` for it, and a second download of the same asset
       must be refused rather than started.
-- [ ] `POST /dictation/speech/assets/cancel {"asset":"onnxruntime"}` mid-download
+- [x] `POST /dictation/speech/assets/cancel {"asset":"onnxruntime"}` mid-download _(verified 2026-09-29: Deleted onnxruntime, started POST assets/download, POST assets/cancel at 0.05/0.15/0.4s: download returned {error:'download cancelled'}, GET assets state=absent (not incomplete), models/speech/.staging empty each time. 3 runs; asset removed afterwards.)_
       must stop it, and the list must go back to `absent` — not `incomplete`.
       Nothing may be left under `<config>/models/speech/.staging/`.
 - [x] `POST /dictation/speech/assets/delete {"asset":"onnxruntime"}` removes the _(verified 2026-09-29: Downloaded onnxruntime (state ready, libonnxruntime.dylib), POST assets/delete {asset:onnxruntime} -> 'Deleted ONNX Runtime', dir gone; second delete -> same success string. Also on already-absent asset.)_
@@ -3920,7 +3920,7 @@ the download items above first, then work through these.
 - [ ] From a **second** terminal's Claude Code, `voice action=status`: it must _(NOT VERIFIED 2026-09-29: Needs two real Claude Code sessions plus audible speech.)_
       report the binding refusal, not the first conversation's queue. From the
       armed terminal's own Claude Code, `voice action=speak` must be heard.
-- [ ] With nothing armed, `GET /dictation/speech/status` must answer
+- [x] With nothing armed, `GET /dictation/speech/status` must answer _(verified 2026-09-29: GET /dictation/speech/status with nothing armed -> {available:false,unavailableReason:"Hands-free is not armed",...} HTTP 200 JSON, no error)_
       `available: false`, `unavailableReason: "Hands-free is not armed"` — never
       an error.
 - [ ] In Claude Code connected to this build, `voice` must appear in the tool _(NOT VERIFIED 2026-09-29: Needs real Claude Code connected to this build for tool-list/status.)_
@@ -4199,7 +4199,7 @@ or credential is touched.
       `get_dictation_config` response, and every field holding that domain's
       documented default value (see `docs/backend/config.md` → "Config
       Defaults"). Confirm `dictation` is present on the desktop build.
-- [ ] Toggle `settingsExpertMode` (via `ui.ts`'s `setSettingsExpertMode`, once a
+- [ ] Toggle `settingsExpertMode` (via `ui.ts`'s `setSettingsExpertMode`, once a _(NOT VERIFIED 2026-09-29: partial — Via invoke_js (import /src/stores/ui.ts, hydrate, setSettingsExpertMode(true)): instance ui-prefs.json got settings_expert_mode:true (NOT config.json, item path is wrong); after reload_webview + hydrate it read true. Full process restart not done (forbidden). Reset to false.)_
       caller wires it in — this story only persists the pref, no UI control
       yet) and confirm `settings_expert_mode` round-trips through
       `~/Library/Application Support/tuicommander/config.json` (or platform
@@ -4257,7 +4257,7 @@ or credential is touched.
 
 ## PTY build environment — Rust, needs a `make dev` restart
 
-- [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart.
+- [ ] After restarting an isolated TUIC build, open a shell PTY in a different Rust repository and check that `CARGO_TARGET_DIR`, `CARGO_MANIFEST_DIR`, and `OUT_DIR` are unset while `CARGO_HOME` and an ordinary user environment variable remain available. Spawn a managed agent in the same repository and confirm the same. The running TUIC backend cannot load this Rust change until restart. _(NOT VERIFIED 2026-09-29: partial — Shell PTY and fake managed agent child show CARGO_HOME=~/.cargo and USER present; CARGO_TARGET_DIR/MANIFEST_DIR/OUT_DIR absent. But the running instance's own env (ps eww) has none of them, so stripping is not exercised (sanitize_pty_parent_env pty.rs:75). Not proven.)_
 - [x] After restarting an isolated `make dev` build, open a new terminal and run `env | grep -E 'CARGO_INCREMENTAL|RUSTC_WRAPPER|^MBX_'`; expect no matches. In a managed agent PTY, check that `HOST_CC` and `HOST_CXX` are also unset. Confirm a configured per-agent `CARGO_INCREMENTAL=1` still reaches its PTY. The current Rust backend requires a restart before this can be checked. _(verified 2026-09-29: Own tuic-remote started with CARGO_INCREMENTAL=0 RUSTC_WRAPPER MBX_* HOST_CC HOST_CXX in its env (confirmed via ps): new shell PTY env|grep -> no matches; spawned agent PTY (env in spawn) -> HOST_CC/CXX unset, none of the vars; spawn env CARGO_INCREMENTAL=1 -> reaches agent PTY.)_
 
 ## Peer mail wake after Rust restart
@@ -4279,7 +4279,7 @@ or credential is touched.
 
 ## Activity Dashboard window after Rust restart
 
-- [ ] After restarting an isolated `make dev` build, restore Activity Dashboard with saved geometry larger than 550×650. The detached OS window opens at 550×650 while retaining its saved position; a smaller saved size remains unchanged. The running Rust backend cannot load this fix until restart.
+- [ ] After restarting an isolated `make dev` build, restore Activity Dashboard with saved geometry larger than 550×650. The detached OS window opens at 550×650 while retaining its saved position; a smaller saved size remains unchanged. The running Rust backend cannot load this fix until restart. _(NOT VERIFIED 2026-09-29: blocked — Needs saved >550x650 activity geometry (panel-geometry.json in instance dir, off-limits to edit), a restart/restore, and window size observation; maccontrol list_windows gives no size and capture_window lacks Screen Recording permission. Only Rust unit tests in panel_window.rs cover initial_size.)_
 
 ## Rust dead-code warning cleanup after restart
 
@@ -4304,7 +4304,7 @@ or credential is touched.
 
 ## Detached Markdown document window
 
-- [ ] After restarting an isolated test build, open a Markdown file tab and a `tuic://open` Markdown tab. Detach each from its context menu, resize the document window, edit each file on disk, and confirm the detached content updates. Clicking either tab should focus its window; closing the window should restore the document in the tab. Check an inline comment and a relative Markdown link in the detached view.
+- [ ] After restarting an isolated test build, open a Markdown file tab and a `tuic://open` Markdown tab. Detach each from its context menu, resize the document window, edit each file on disk, and confirm the detached content updates. Clicking either tab should focus its window; closing the window should restore the document in the tab. Check an inline comment and a relative Markdown link in the detached view. _(NOT VERIFIED 2026-09-29: blocked — Needs observing detached panel windows' content/size/focus; maccontrol capture_window lacks Screen Recording permission, invoke_js reaches only the main webview, and two identical 'tuicommander' windows make clicking ambiguous with Boss's app. Not attempted.)_
 
 ## ACP mobile interaction push (story 1078-05cf) — Rust restart required
 
