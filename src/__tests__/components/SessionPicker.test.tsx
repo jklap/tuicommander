@@ -17,6 +17,7 @@ function summary(overrides: Partial<SessionSummary>): SessionSummary {
 		edit_count: 3,
 		file_count: 2,
 		has_subagents: false,
+		tuic_session_id: null,
 		...overrides,
 	};
 }

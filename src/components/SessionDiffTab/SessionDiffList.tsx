@@ -20,6 +20,7 @@ interface SessionRowContentProps {
 	onCopyFile: (group: FileReview) => void;
 	onToggleExpanded: (absPath: string) => void;
 	onToggleStepsOpen: (absPath: string) => void;
+	onJumpToAgent?: () => void;
 }
 
 /**
@@ -79,6 +80,7 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 												onOpenAtLine={props.onOpenAtLine}
 												onRevertStep={props.onRevertStep}
 												onCopyStep={props.onCopyStep}
+												onJumpToAgent={props.onJumpToAgent}
 											/>
 										)}
 									</For>
@@ -97,6 +99,7 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 						onOpenAtLine={props.onOpenAtLine}
 						onRevertStep={props.onRevertStep}
 						onCopyStep={props.onCopyStep}
+						onJumpToAgent={props.onJumpToAgent}
 					/>
 				)}
 			</Show>
@@ -115,6 +118,7 @@ export interface SessionDiffListProps {
 	onCopyFile: (group: FileReview) => void;
 	onToggleExpanded: (absPath: string) => void;
 	onToggleStepsOpen: (absPath: string) => void;
+	onJumpToAgent?: () => void;
 	scrollRef?: (el: HTMLElement) => void;
 	header?: JSX.Element;
 }
@@ -190,6 +194,7 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 											onCopyFile={props.onCopyFile}
 											onToggleExpanded={props.onToggleExpanded}
 											onToggleStepsOpen={props.onToggleStepsOpen}
+											onJumpToAgent={props.onJumpToAgent}
 										/>
 									)}
 								</Show>

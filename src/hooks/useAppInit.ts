@@ -7,6 +7,7 @@ import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavig
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { CLIENT_INSTANCE_ID } from "../stores/clientInstance";
+import { diffTabsStore, SESSION_SCOPE } from "../stores/diffTabs";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
@@ -827,6 +828,45 @@ export async function initApp(deps: AppInitDeps) {
 		);
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
+
+	// A watched Claude Code session's transcript changed — flag its open
+	// Session Diff Review tab (if any, and if it's not the active tab) as
+	// having unseen content. See `diffTabsStore.markSessionReviewUnseen`.
+	listen<{ repo_path: string; session_id: string }>("session-review-changed", (event) => {
+		const { repo_path, session_id } = event.payload;
+		diffTabsStore.markSessionReviewUnseen(repo_path, session_id);
+	}).catch((err) => appLogger.error("app", "Failed to register session-review-changed listener", err));
+
+	// The live watcher observed the first edit of a Claude Code session since
+	// it started being watched — offer (or automatically open) Session Diff
+	// Review for it, per the `sessionDiffAutoOpen` setting ("off"|"ask"|"auto").
+	listen<{ tuic_session_id: string | null; claude_session_id: string; repo_path: string }>(
+		"agent-edit-observed",
+		(event) => {
+			const { tuic_session_id, claude_session_id, repo_path } = event.payload;
+			const mode = settingsStore.state.sessionDiffAutoOpen;
+			if (mode === "off") return;
+			const alreadyOpen = diffTabsStore
+				.getForRepo(repo_path)
+				.some((tab) => tab.scope === SESSION_SCOPE && tab.sessionId === claude_session_id);
+			if (alreadyOpen) return;
+			if (mode === "auto") {
+				diffTabsStore.addSessionReview(repo_path, claude_session_id, false);
+				return;
+			}
+			// "ask": a backend-originated notice, so it goes to the bell (never a
+			// transient toast over the active input — see the MCP toast listener
+			// above); the bell item carries the "Open Session Diff" action.
+			toastsStore.addToBell(
+				"Session made changes",
+				"A Claude Code session edited files in this repo.",
+				"info",
+				repo_path,
+				{ label: "Open Session Diff", onClick: () => diffTabsStore.addSessionReview(repo_path, claude_session_id) },
+				tuic_session_id ?? undefined,
+			);
+		},
+	).catch((err) => appLogger.error("app", "Failed to register agent-edit-observed listener", err));
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {

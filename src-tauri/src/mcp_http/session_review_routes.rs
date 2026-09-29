@@ -57,14 +57,14 @@ pub(super) async fn list_sessions_http(
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
-    let result = crate::session_review::list_review_sessions(q.path, q.limit, q.include_counts, None)
+    let result = crate::session_review::list_review_sessions_impl(q.path, q.limit, q.include_counts, None)
         .await
         .map(|mut sessions| {
             // Populated here, not inside `session_review.rs`: that module is a
             // pure disk reader with no `AppState` access — see
             // `SessionSummary::tuic_session_id`'s doc comment. The desktop
-            // Tauri command path does not yet get this treatment (a known,
-            // documented gap — see that same doc comment).
+            // Tauri command (`list_review_sessions`) does the identical
+            // override itself now, at its own transport boundary.
             for s in &mut sessions {
                 s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
             }
@@ -82,7 +82,7 @@ pub(super) async fn get_review_http(
     }
     let options = q.diff_options();
     let claude_session_id = q.session_id.clone();
-    let result = crate::session_review::get_session_review(
+    let result = crate::session_review::get_session_review_impl(
         q.path,
         q.session_id,
         q.include_subagents,
