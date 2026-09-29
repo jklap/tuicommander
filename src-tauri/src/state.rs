@@ -10503,6 +10503,7 @@ mod tests {
                 },
                 cols: 0,
                 chrome: false,
+                wrapped: false,
             })
             .collect()
     }
@@ -10902,6 +10903,7 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         assert_eq!(line.text(), "hello world");
     }
@@ -10949,6 +10951,7 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         let json = serde_json::to_value(&line).unwrap();
         let spans = json["spans"].as_array().unwrap();
@@ -10971,6 +10974,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "normal output");
@@ -10985,6 +10989,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11002,6 +11007,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11026,6 +11032,7 @@ mod tests {
                 }],
                 cols: 0,
                 chrome: false,
+                wrapped: false,
             };
             line.strip_structural_tokens();
             assert!(
@@ -11047,6 +11054,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
@@ -11061,6 +11069,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "The intent: of this code is clear");
@@ -11076,6 +11085,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented suggest should be stripped");
@@ -11090,6 +11100,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented intent should be stripped");
@@ -11105,6 +11116,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11122,6 +11134,7 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
         };
         line.strip_structural_tokens();
         assert!(
