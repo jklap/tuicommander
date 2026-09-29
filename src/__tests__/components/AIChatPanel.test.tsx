@@ -763,7 +763,11 @@ describe("AIChatPanel: parallel tabs", () => {
 	const loadsOf = (session: string) => client.loadSession.mock.calls.filter((call) => call[1] === session).length;
 
 	it("does not load a tab again while its first load is still pending", async () => {
-		client.loadSession.mockImplementation(() => new Promise(() => {}));
+		let finishLoads!: () => void;
+		const pendingLoads = new Promise<void>((resolve) => {
+			finishLoads = resolve;
+		});
+		client.loadSession.mockReturnValue(pendingLoads);
 		const [visible, setVisible] = createSignal(true);
 		await unattachedTabs(visible, setVisible);
 		expect(loadsOf(SECOND_SESSION)).toBe(1);
@@ -776,6 +780,8 @@ describe("AIChatPanel: parallel tabs", () => {
 		setVisible(true);
 		await settle();
 		expect(loadsOf(SECOND_SESSION)).toBe(1);
+		finishLoads();
+		await settle();
 	});
 
 	it("does not re-load a failed tab on the next update, and says why", async () => {
