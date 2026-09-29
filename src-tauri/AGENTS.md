@@ -866,6 +866,114 @@ Two traps this exists to close. **`grid frame gate stuck` is not a frontend-live
 - FD/thread leak (progressive growth without cleanup)
 - Sleep/wake false idle cascades (tokio timers firing stale)
 
+**Per-session attribution + SESSION OVERLOAD trigger, and the lag-disconnect fix
+that motivated it (2026-09-28).** Diagnosing a flickering-title/high-CPU report on
+one tab took ~45 minutes of manual correlation across `debug logs`,
+`explain_state`, and `lsof`: a *different* session (a live Claude Code Agent
+Teams/tmux-swarm test) was driving sustained 108%→212%→174% process CPU spikes for
+several minutes via its own screen/lifecycle repaint churn, and — as an unrelated
+but compounding symptom — a completely different tab's per-session WebSocket
+broadcast (`AppState::subscribe_pty_events`, `mcp_http/session.rs`'s
+`handle_ws_session`/`handle_ws_grid_session`) fell behind and never recovered:
+`WebSocket broadcast lagged`/`grid WS broadcast lagged` climbed from 419ms to
+12.4s with no self-correction, because the code that handled a lagging broadcast
+receiver only ever logged a warning and looped forever. Nothing at the time named
+*which* session was responsible for the CPU, and nothing bounded the lag.
+
+Two fixes, plus new attribution:
+
+- **`cpu_watchdog::should_disconnect_for_lag`** is now the shared decision behind
+  every per-connection consumer of a `tokio::sync::broadcast` channel that can
+  lag — the two per-session WS handlers above, and the global-bus SSE handler
+  (`mcp_http/sse_routes.rs::sse_events`). Once a receiver's lag crosses
+  `MAX_CUMULATIVE_LAG` (1000, ~4x a channel's 256 capacity) or it lags 3 times in
+  a row with no clean recv between (`MAX_CONSECUTIVE_LAG`), the connection is
+  closed instead of left to keep re-lagging — the client reconnects and gets a
+  fresh snapshot, the same way it already has to handle any other disconnect.
+  The grid *frame* `watch` channel was never part of this bug — it already
+  resyncs correctly on a gap (`watch_dropped_frames` → a fresh full frame); only
+  the lifecycle/diff-event lanes had no equivalent recovery.
+- **Per-session attribution counters** (`AppState::session_maps`:
+  `session_event_counts`, `session_output_bytes`, `session_ws_lag`) are bumped at
+  the same single choke points the events/bytes/lag already flow through
+  (`emit_pty_event`, the PTY reader's `bytes_emitted` bump, and the disconnect
+  logic above) and read-and-reset once per watchdog tick
+  (`state::drain_counter_map`) — a rate, not a lifetime total. `state::peek_counter`
+  gives an on-demand read that does *not* reset them, for `GET
+  /diagnostics/sessions` (below).
+- **`SESSION OVERLOAD` log line** — independent of the existing process-wide
+  CPU-spike trigger, runs every tick: if any single session's per-tick event
+  count, output bytes, or WS lag crosses a hard threshold
+  (`SESSION_EVENT_RATE_THRESHOLD`/`SESSION_OUTPUT_BYTES_THRESHOLD`/
+  `MAX_CUMULATIVE_LAG`), it's named directly — this is the exact gap that let
+  the swarm-test session drive minutes of elevated CPU without ever being
+  individually flagged, since process-wide CPU alone never says which session
+  caused it.
+- The existing `CPU SPIKE` line now also carries `top_sessions_by_event_rate`,
+  `top_sessions_by_output_bytes`, and `top_sessions_by_ws_lag` (top 5 each,
+  `cpu_watchdog::top_n`) — computed from the same per-tick drain `SESSION
+  OVERLOAD` uses, not a second one (draining twice in one tick would make
+  whichever ran second see zeros).
+- **`GET /diagnostics/sessions`** (new, mirrors `GET /diagnostics/markers`'s
+  per-session-array shape) answers "who's hot right now" on demand, instead of
+  only after the fact in a log line — a peek (not a drain), so reading it never
+  disturbs the watchdog's own next-tick rate calculation.
+
+Deferred, not forgotten: `in_flight_stuck` (the grid IPC ack gate) still reports
+presence only, not how long a session has been stuck — weighting it by duration
+would need a new timestamp on `GridGate` and wasn't worth the added surface for
+this fix. If a future incident needs to tell "routinely backgrounded" apart from
+"pathologically stuck" on this specific axis, that's the next thing to add here.
+
+**Four real bugs a code review caught in the first version of this feature,
+all fixed:** (1) `GET /diagnostics/sessions` originally listed any session id
+that had EVER appeared in the three counter maps, because `drain_counter_map`
+zeroes a counter's value but never removes its key — so a session the
+watchdog had already drained back to zero sat there forever as a dead
+all-zero row, exactly the outcome the endpoint's own doc comment said it was
+avoiding. Fixed by filtering to entries with at least one nonzero value (or an
+outstanding grid frame) at read time, since that's the only place "the
+watchdog reset this" and "this never had activity" can be told apart.
+(2) `SESSION OVERLOAD` had no cooldown analogous to `CPU SPIKE`'s
+`COOLDOWN_BETWEEN_REPORTS` — a session sustaining overload for the
+`cddded98` incident's actual multi-minute duration would have logged one
+near-duplicate line every single tick the whole time. Fixed with
+`SESSION_OVERLOAD_COOLDOWN` (60s), keyed per `(session_id, axis)` so one loud
+session/axis never silences a report about a different one.
+(3) `SESSION_EVENT_RATE_THRESHOLD`/`SESSION_OUTPUT_BYTES_THRESHOLD` compared a
+raw per-tick count against a fixed constant with no regard for how long the
+tick actually took — since diagnostic mode doubles the tick length
+(`POLL_INTERVAL` 5s → `DIAGNOSTIC_POLL_INTERVAL` 10s), the same sustained
+per-second rate used to take twice as long to trip the trigger the moment
+diagnostic mode was turned on to investigate a live problem — backwards from
+what enabling it should do. Fixed with `normalize_to_nominal_tick`, which
+scales each raw count to what it would have been at a nominal-length tick
+using the tick's real elapsed wall-time before comparing. Deliberately NOT
+applied to the `ws_lag` axis — a lag backlog can build in a fraction of a
+second and is exactly as bad regardless of tick length, so normalizing it
+down would make a genuinely bad connection look artificially fine during a
+long tick.
+(4) On the pre-rebase branch `cleanup_session` (then the explicit-close HTTP
+handler's teardown) removed a session by dropping its `Mutex<PtySession>` with
+no `kill()` and no wait — `std::process::Child` does not terminate its process
+on drop, so an agent that ignores Ctrl-C leaked its OS process and the reader
+thread blocked on its orphaned PTY master (which the new per-session counters
+made visible: the orphan's reader re-created `session_event_counts`/
+`session_output_bytes` entries for a session every caller believed gone). On
+this tree `cleanup_session` is a test-only wrapper (main's `60f1a527a`) and
+`DELETE /sessions/{id}` closes through `close_pty_core`, which always had the
+wait-then-SIGKILL-with-foreground-process-group fallback; that fallback is now
+the named helper `terminate_child_with_grace`, and
+`pty::tests::close_pty_core_kills_agent_grandchild` pins it.
+
+**Boundedness (added when this landed on main):** every counter key is pruned on
+the watchdog tick if its session is no longer in `session_maps.sessions` (after the
+drain, so a session's last tick is still reported) — a reader thread or a late
+`emit_pty_event` bumping a counter after `remove_live_session_state` would
+otherwise re-create a key nobody ever removes; the `SESSION OVERLOAD` cooldown map
+drops entries older than `SESSION_OVERLOAD_COOLDOWN` each tick; the hot-path bumps
+use `get()` first and only allocate a key on a session's first bump.
+
 ## The bottom zone is not agent output — never parse it
 
 Below an agent's input box sits a status line **the user configures**: a Claude

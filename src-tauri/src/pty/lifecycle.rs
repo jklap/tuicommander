@@ -4213,6 +4213,11 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // Input mode and shell integration describe the process that just died.
     state.session_maps.slash_mode.remove(session_id);
     state.session_maps.last_input_ms.remove(session_id);
+    // Watchdog attribution counters — see `state::drain_counter_map`. Live-only:
+    // once the session is gone there is nothing left to attribute a rate to.
+    state.session_maps.session_event_counts.remove(session_id);
+    state.session_maps.session_output_bytes.remove(session_id);
+    state.session_maps.session_ws_lag.remove(session_id);
     // These three integration/flag markers must not leak — every session that
     // ever spoke OSC 133 or OSC 7770 left a permanent dead entry keyed by its
     // UUID otherwise, on both this path and the explicit close/kill path
@@ -5124,6 +5129,52 @@ fn signal_foreground_process_group(session: &PtySession, session_id: &str, signa
     }
 }
 
+/// Wait up to 100ms for `session`'s child to exit gracefully (the caller has
+/// already delivered an interrupt, or is relying on whatever the process does with the
+/// grace window on its own), then force-kill it — nuking the foreground
+/// process group first — if it's still alive. Without the fallback, agents
+/// that ignore Ctrl-C (e.g. claude) become orphans: the cloned reader fd
+/// keeps the pty master alive, the slave never sees EOF, and the reader
+/// thread spins forever. Pulled out of `close_pty_core` as a named step.
+/// (wip also routed `cleanup_session` through it; on this tree that function
+/// is a test-only wrapper with no production caller — explicit close goes
+/// through `close_pty_core` — so it keeps `remove_pty_session`.)
+fn terminate_child_with_grace(session: &mut PtySession, session_id: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match session._child.try_wait() {
+            Ok(Some(_)) => return, // Process exited cleanly
+            Ok(None) if std::time::Instant::now() >= deadline => break,
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+
+    tracing::info!(
+        source = "session",
+        session_id = %session_id,
+        reason = "close_timeout",
+        "Closing session: sending SIGKILL after Ctrl-C grace period"
+    );
+    // Nuke the agent's foreground process group first; SIGKILL on the shell
+    // alone leaves the agent (a grandchild) orphaned. See
+    // kill_foreground_process_group.
+    #[cfg(unix)]
+    kill_foreground_process_group(session, session_id);
+
+    if let Err(e) = session._child.kill() {
+        tracing::warn!(session_id = %session_id, "terminate_child_with_grace SIGKILL fallback failed: {e}");
+    }
+    // Brief wait so try_wait can observe the termination and record the code.
+    let kill_deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match session._child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= kill_deadline => break,
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+}
+
 /// Close a PTY session core: signals an interrupt, waits briefly for graceful exit,
 /// captures the exit code for the tombstone, and leaves `output_buffers` +
 /// `vt_log_buffers` + `last_output_ms` + `exit_codes` alive so post-mortem
@@ -5175,46 +5226,7 @@ pub(crate) fn close_pty_core_with_reason(
         tracing::warn!(session_id, %error, "close_pty_core termination failed");
     }
 
-    // Wait up to 100ms for process to exit gracefully
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-    loop {
-        match session._child.try_wait() {
-            Ok(Some(_)) => break, // Process exited cleanly
-            Ok(None) if std::time::Instant::now() >= deadline => break,
-            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
-        }
-    }
-
-    // If the child is still alive after the grace window, force-kill it.
-    // Without this, agents that ignore Ctrl-C (e.g. claude) become orphans —
-    // the cloned reader fd keeps the pty master alive, the slave never sees
-    // EOF, and the reader thread spins forever.
-    if matches!(session._child.try_wait(), Ok(None)) {
-        tracing::info!(
-            source = "session",
-            session_id = %session_id,
-            reason = "close_timeout",
-            "Closing session: sending SIGKILL after Ctrl-C grace period"
-        );
-        // Nuke the agent's foreground process group first; SIGKILL on the shell
-        // alone leaves the agent (a grandchild) orphaned. See
-        // kill_foreground_process_group.
-        #[cfg(unix)]
-        kill_foreground_process_group(&session, session_id);
-
-        if let Err(e) = session._child.kill() {
-            tracing::warn!(session_id = %session_id, "close_pty_core SIGKILL fallback failed: {e}");
-        }
-        // Brief wait so try_wait can observe the termination and record the code.
-        let kill_deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-        loop {
-            match session._child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() >= kill_deadline => break,
-                _ => std::thread::sleep(std::time::Duration::from_millis(10)),
-            }
-        }
-    }
+    terminate_child_with_grace(&mut session, session_id);
 
     // Capture exit code for the tombstone before dropping the child handle.
     if let Ok(Some(status)) = session._child.try_wait() {
