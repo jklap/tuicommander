@@ -1,6 +1,6 @@
+import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { SessionStatus } from "../components/StatusBadge";
 import type { SessionInfo } from "../useSessions";
-import { terminalVisualState } from "../../utils/terminalVisualState";
 
 /**
  * Derives the display status from session state.

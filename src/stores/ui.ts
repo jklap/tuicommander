@@ -185,7 +185,8 @@ function createUIStore() {
 		for (const { stateKey, backendKey } of exclusivePanelPrefs) {
 			panelVisibility[backendKey] = state[stateKey];
 		}
-		uiPrefsWriter.save({
+		uiPrefsWriter
+			.save({
 				sidebar_visible: state.sidebarVisible,
 				sidebar_width: state.sidebarWidth,
 				...panelVisibility,
@@ -195,7 +196,8 @@ function createUIStore() {
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
 				github_section_collapsed: state.githubSectionCollapsed,
-		}).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
+			})
+			.catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
 
 	/** Open one exclusive panel and close the others, or close all if `key` is already open (toggle). */

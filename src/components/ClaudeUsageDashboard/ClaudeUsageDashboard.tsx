@@ -496,7 +496,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 		}
 	};
 
-	const selectedSessionId = () => typeof props.sessionId === "function" ? props.sessionId() : props.sessionId;
+	const selectedSessionId = () => (typeof props.sessionId === "function" ? props.sessionId() : props.sessionId);
 	createEffect(() => {
 		setApiData(null);
 		void fetchApi(selectedSessionId());

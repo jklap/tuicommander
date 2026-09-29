@@ -102,7 +102,8 @@ describe("repoSettingsStore", () => {
 		it("persists via invoke", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
+					base: expect.anything(),
 					config: expect.objectContaining({
 						repos: expect.objectContaining({
 							"/repo": expect.objectContaining({ path: "/repo" }),
@@ -483,7 +484,8 @@ describe("repoSettingsStore", () => {
 				expect(localStorage.getItem("tui-commander-repo-settings")).toBeNull();
 				// The migration writes the wire shape too, or it hands the backend an
 				// entry it reads as empty and the old settings are gone for good.
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_settings", {
+					base: expect.anything(),
 					config: { repos: { "/repo": { path: "/repo", display_name: "my-repo", base_branch: "main" } } },
 				});
 			});

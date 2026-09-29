@@ -64,7 +64,8 @@ describe("promptLibraryStore", () => {
 					isFavorite: false,
 				});
 				vi.advanceTimersByTime(600); // flush debounced save
-				expect(mockInvoke).toHaveBeenCalledWith("save_prompt_library", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_prompt_library", {
+					base: expect.anything(),
 					config: expect.objectContaining({
 						prompts: expect.arrayContaining([
 							expect.objectContaining({ label: "Test", text: expect.stringContaining('"content":"content"') }),

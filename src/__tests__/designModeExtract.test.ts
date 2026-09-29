@@ -164,7 +164,9 @@ describe("design mode extraction", () => {
 		const [hostSelector, inner] = result.selector.split(" >>> ");
 		expect(dom.window.document.querySelectorAll(hostSelector)).toHaveLength(1);
 		expect(root.querySelectorAll(inner)).toHaveLength(1);
-		expect(result.fullPath).toBe("html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(1) > #card >>> div.body > button.save");
+		expect(result.fullPath).toBe(
+			"html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(1) > #card >>> div.body > button.save",
+		);
 		expect(result.elementPath.endsWith("#card >>> div.body > button.save")).toBe(true);
 	});
 

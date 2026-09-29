@@ -96,15 +96,12 @@ describe("prepareAgentLaunchCommand", () => {
 		expect(await prepareAgentLaunchCommand("PROFILE='work' codex", null, "codex")).toBe(
 			"PROFILE='work' codex --no-alt-screen",
 		);
-		expect(mockRpc).toHaveBeenCalledWith(
-			"prepare_agent_launch_args",
-			{
-				agentType: "codex",
-				binaryPath: "codex",
-				args: [],
-				repoPath: undefined,
-			},
-		);
+		expect(mockRpc).toHaveBeenCalledWith("prepare_agent_launch_args", {
+			agentType: "codex",
+			binaryPath: "codex",
+			args: [],
+			repoPath: undefined,
+		});
 	});
 });
 

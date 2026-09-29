@@ -72,7 +72,10 @@ describe("useAgentPolling", () => {
 		const now = Date.now();
 		store.touchLastDataAt(id, now - 30_000);
 		mockInvoke.mockResolvedValueOnce([
-			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle", last_activity_ms: now - 70 * 60_000 } },
+			{
+				session_id: "sess-1",
+				state: { shell_state: "idle", agent_state: "idle", last_activity_ms: now - 70 * 60_000 },
+			},
 		]);
 		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
 

@@ -22,7 +22,10 @@ export interface CommentOverlayProps {
 	/** Save a whole rendered Markdown block using its exact raw-source range.
 	 *  `comment.highlighted` is the raw source `blockSource` returned when the
 	 *  popover opened, so the caller can refuse a range the file moved under. */
-	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => Promise<boolean> | boolean | undefined;
+	onSaveBlock?: (
+		comment: TweakComment,
+		range: { start: number; end: number },
+	) => Promise<boolean> | boolean | undefined;
 	/** Raw source of a block range in the document currently rendered. */
 	blockSource?: (range: { start: number; end: number }) => string;
 	/** Called with the comment id when the user deletes a comment. */

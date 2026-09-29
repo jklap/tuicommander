@@ -57,7 +57,8 @@ describe("progressStore", () => {
 		await vi.waitFor(() => expect(store.state.projects["/repo"]?.loading).toBe(false));
 		expect(store.state.projects["/repo"].entries.map((item) => item.id)).toEqual([3, 2, 1]);
 		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
-			project: "/repo", input: { blockedOnly: false, limit: 100, cursor: 2 },
+			project: "/repo",
+			input: { blockedOnly: false, limit: 100, cursor: 2 },
 		});
 	});
 

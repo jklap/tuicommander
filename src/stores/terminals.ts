@@ -887,9 +887,7 @@ function createTerminalsStore() {
 		getSubAgentTag(id: string): string | null {
 			const parent = state.terminals[id]?.parentSession;
 			if (!parent) return null;
-			const parentTerm = Object.values(state.terminals).find(
-				(t) => t.sessionId === parent || t.tuicSession === parent,
-			);
+			const parentTerm = Object.values(state.terminals).find((t) => t.sessionId === parent || t.tuicSession === parent);
 			return parentTerm?.name ?? "external agent";
 		},
 
