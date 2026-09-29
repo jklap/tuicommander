@@ -65,9 +65,12 @@ describe("ideasStore", () => {
 		it("persists via invoke save_notes", async () => {
 			await testInScopeAsync(async () => {
 				store.addIdea("saved note");
-				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
-					config: { notes: expect.arrayContaining([expect.objectContaining({ text: "saved note" })]) },
-				}));
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
+						base: expect.anything(),
+						config: { notes: expect.arrayContaining([expect.objectContaining({ text: "saved note" })]) },
+					}),
+				);
 			});
 		});
 	});
@@ -107,9 +110,9 @@ describe("ideasStore", () => {
 				mockInvoke.mockClear();
 				const id = store.state.ideas[0].id;
 				store.removeIdea(id);
-				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
-					config: { notes: [] },
-				}));
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(), config: { notes: [] } }),
+				);
 			});
 		});
 	});
@@ -152,10 +155,7 @@ describe("ideasStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(store.state.ideas).toEqual([]);
-				expect(consoleSpy).toHaveBeenCalledWith(
-					"[store]",
-					expect.stringContaining("Failed to hydrate ideas"),
-				);
+				expect(consoleSpy).toHaveBeenCalledWith("[store]", expect.stringContaining("Failed to hydrate ideas"));
 			});
 			consoleSpy.mockRestore();
 		});
@@ -233,7 +233,8 @@ describe("ideasStore", () => {
 		it("persists repo fields via save_notes", () => {
 			testInScope(() => {
 				store.addIdea("tagged", "/path/repo", "repo");
-				expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
+					base: expect.anything(),
 					config: {
 						notes: expect.arrayContaining([
 							expect.objectContaining({
@@ -569,7 +570,9 @@ describe("ideasStore", () => {
 
 				store.clearCompleted();
 
-				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(), config: { notes: [] } }));
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith("save_notes", { base: expect.anything(), config: { notes: [] } }),
+				);
 			});
 		});
 

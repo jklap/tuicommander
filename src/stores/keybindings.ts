@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
-import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { ACTION_NAMES, type ActionName, DEFAULT_BINDINGS, normalizeCombo } from "../keybindingDefaults";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 interface KeybindingOverride {

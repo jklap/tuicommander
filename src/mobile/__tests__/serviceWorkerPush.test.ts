@@ -89,7 +89,9 @@ it("shows a generic actionable notification for invalid push payloads", async ()
 		},
 		clients: {
 			matchAll: async () => [],
-			openWindow: async (url: string) => { opened.push(url); },
+			openWindow: async (url: string) => {
+				opened.push(url);
+			},
 		},
 	});
 
@@ -103,7 +105,14 @@ it("shows a generic actionable notification for invalid push payloads", async ()
 
 	const invalidPayloads = [
 		{ name: "missing", data: undefined },
-		{ name: "malformed", data: { json: () => { throw new SyntaxError("bad JSON"); } } },
+		{
+			name: "malformed",
+			data: {
+				json: () => {
+					throw new SyntaxError("bad JSON");
+				},
+			},
+		},
 		{ name: "null", data: { json: () => null } },
 		{ name: "array", data: { json: () => ["unexpected"] } },
 		{ name: "string", data: { json: () => "unexpected" } },
@@ -114,7 +123,9 @@ it("shows a generic actionable notification for invalid push payloads", async ()
 		expect(notices, `${name} payload creates a new notification`).toHaveLength(index + 1);
 		const notice = notices.at(-1);
 		expect(notice, `${name} payload shows notification`).toMatchObject({
-			title: "TUICommander", body: "", data: { url: "/mobile" },
+			title: "TUICommander",
+			body: "",
+			data: { url: "/mobile" },
 		});
 		if (notice) await dispatch("notificationclick", { notification: notice });
 		expect(opened, `${name} click opens a window`).toHaveLength(index + 1);

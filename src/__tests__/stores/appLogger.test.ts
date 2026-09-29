@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testInScope, testInScopeAsync } from "../helpers/store";
 import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
+import { testInScope, testInScopeAsync } from "../helpers/store";
 
 // Mock rpc before importing appLogger
 const mockRpc = vi.fn().mockResolvedValue(undefined);

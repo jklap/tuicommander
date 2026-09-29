@@ -304,7 +304,11 @@ export function OutputView(props: OutputViewProps) {
 			offset = link.end;
 		}
 		parts.push(...styledRange(line, offset, text.length));
-		return <div class={styles.line} style={wrapStyle}>{parts}</div>;
+		return (
+			<div class={styles.line} style={wrapStyle}>
+				{parts}
+			</div>
+		);
 	}
 
 	return (

@@ -41,9 +41,13 @@ describe("CommandWidget", () => {
 
 	it("sends the supported Codex status command from the widget", async () => {
 		const { container } = render(() => <CommandWidget sessionId="s1" agentType="codex" onDismiss={() => {}} />);
-		fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "/status")!);
+		fireEvent.click(
+			Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "/status")!,
+		);
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "s1", data: "\r" }));
-		expect(vi.mocked(rpc).mock.calls.filter(([command, args]) => command === "write_pty" && args?.data === "/status")).toHaveLength(1);
+		expect(
+			vi.mocked(rpc).mock.calls.filter(([command, args]) => command === "write_pty" && args?.data === "/status"),
+		).toHaveLength(1);
 	});
 
 	it("renders model buttons for claude-code agent", () => {

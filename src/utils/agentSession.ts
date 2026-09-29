@@ -259,12 +259,5 @@ export async function verifyAndBuildResumeCommand(
 
 	// No verified session — fall back to static resumeCommand
 	const resumed = buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
-	return resumed
-		? prepareAgentLaunchCommand(
-				resumed,
-				null,
-				agentType,
-				cwd,
-			)
-		: null;
+	return resumed ? prepareAgentLaunchCommand(resumed, null, agentType, cwd) : null;
 }
