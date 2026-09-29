@@ -40,6 +40,10 @@ interface RepositoryRefreshCoordinatorDeps {
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
 		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		getWorkspaceLifecycle: (
+			repoPath: string,
+			workspaceId: string,
+		) => Promise<import("../../stores/workspaceIdentity").WorkspaceLifecycleStatus>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			workspaceId: string,
@@ -552,14 +556,33 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (mergedLinkedBranches.length === 0) return;
 
 		let archived = 0;
-		let kept = 0;
+		const kept: string[] = [];
+		const safe: typeof mergedLinkedBranches = [];
+		for (const ws of mergedLinkedBranches) {
+			try {
+				const preview = await deps.repo.getWorkspaceLifecycle(repoPath, ws.workspaceId);
+				if (
+					preview.commitStatus === "merged" &&
+					preview.removalSafety === "safe" &&
+					preview.dirtyFiles === 0 &&
+					!preview.liveSessions?.length
+				) {
+					safe.push(ws);
+				} else {
+					kept.push(`${ws.branchName}: ${(preview.warnings ?? []).join("; ") || "removal needs review"}`);
+				}
+			} catch (error) {
+				kept.push(`${ws.branchName}: removal preview failed`);
+				appLogger.warn("git", `Could not inspect ${ws.branchName} before auto-archive`, error);
+			}
+		}
 		const results = await Promise.allSettled(
 			// By workspaceId, never branchName: with two workspaces on one branch the
 			// branch cannot say which checkout to archive (#726-5ac7).
-			mergedLinkedBranches.map((ws) => deps.repo.finalizeMergedWorktree(repoPath, ws.workspaceId, "archive")),
+			safe.map((ws) => deps.repo.finalizeMergedWorktree(repoPath, ws.workspaceId, "archive")),
 		);
 		results.forEach((result, i) => {
-			const name = mergedLinkedBranches[i].branchName;
+			const name = safe[i].branchName;
 			if (result.status === "rejected") {
 				appLogger.warn("git", `Failed to auto-archive merged worktree for "${name}"`, result.reason);
 				return;
@@ -568,14 +591,14 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			// passes `force`. A worktree that is not known to be clean comes back
 			// untouched and stays in the sidebar for the user to handle by hand.
 			if (result.value.action === "needs_confirmation") {
-				kept++;
+				kept.push(`${name}: uncommitted work`);
 				appLogger.info("git", `Kept the merged worktree for "${name}" — it has uncommitted work`);
 				return;
 			}
 			archived++;
 		});
-		if (archived > 0 || kept > 0) {
-			const keptNote = kept > 0 ? `, kept ${kept} with uncommitted work` : "";
+		if (archived > 0 || kept.length > 0) {
+			const keptNote = kept.length > 0 ? `, kept ${kept.length}: ${kept.join(" | ")}` : "";
 			deps.setStatusInfo(`Auto-archived ${archived} merged worktree(s)${keptNote}`);
 		}
 	};
