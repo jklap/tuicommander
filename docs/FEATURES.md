@@ -948,6 +948,7 @@ re-derived later.
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
+- Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - Archived worktrees remain usable Git checkouts under `__archived`, including HEAD, reflogs, and initialized submodule refs; locked checkouts are left in place and archived paths are hidden from the active workspace list.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
@@ -1181,6 +1182,8 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - Floating toast shows partial text above status bar during recording, with a live microphone meter beside the partial text. The level is an RMS reading curved as `sqrt(rms * 20)` and clamped to 0–1 so ordinary speech is visible rather than pinned near zero, published through an atomic so the UI never blocks audio capture
 - 200ms audio window overlap (`keep_ms`) carries context across windows for continuity
 - Final transcription pass on full captured audio at key release
+- Before the final pass, the hands-free 20 ms frame and sustained-duration rule rejects short bursts; push-to-talk uses the configured transcription RMS floor for frame activity so quiet sustained speech still reaches Whisper. Speech still open at key release is kept.
+- A skipped final pass shows its specific speech-gate reason in the dictation status; an empty successful pass reports `no speech detected`.
 - Hallucination filter (`transcribe.rs`) as the backstop after the RMS gate: quiet audio makes Whisper emit a subtitle credit in whatever language it guessed. Short thanks (`grazie`, `thank you`, `merci`, `danke`, `спасибо`, …) are dropped only when they are the entire transcript, so a dictated sentence containing one survives; channel boilerplate (`amara.org`, `sottotitoli e revisione a cura di`, `thanks for watching`, …) is dropped anywhere in the text. Covers all 11 languages in `WHISPER_LANGUAGES` because the default setting is `auto`
 
 ### 9.5 Microphone Permission Detection (macOS)

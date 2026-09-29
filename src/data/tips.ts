@@ -278,7 +278,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Post-Merge Cleanup",
 		description:
-			"After merging a PR or worktree branch, a cleanup dialog lets you archive/delete the worktree, switch branch, pull, and delete the merged branch — all via backend, even while an agent runs in the terminal.",
+			"Before removing a worktree, review its branch history, uncommitted files, and live terminal sessions in the confirmation dialog. Cleanup can interrupt an agent working there.",
 		shortcut: null,
 	},
 	{
