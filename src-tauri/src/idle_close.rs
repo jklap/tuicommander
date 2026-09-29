@@ -86,11 +86,7 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
-fn observation(
-    state: &AppState,
-    session_id: &str,
-    runner_commands: &[String],
-) -> Option<(Observation, u64)> {
+fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
     if !state.session_maps.sessions.contains_key(session_id)
         || !state
             .session_maps
@@ -100,8 +96,6 @@ fn observation(
                 !crate::mcp_http::mcp_transport::is_pending_parent(parent.value())
             })
         || state.keep_open_sessions.contains(session_id)
-        || live_bg_runner_for_session(runner_commands, session_id)
-        || bg_wake_blocks_close(session_id)
     {
         return None;
     }
@@ -120,6 +114,7 @@ fn observation(
     if inbox
         .as_ref()
         .is_some_and(|mail| mail.iter().any(|message| message.timestamp > cursor))
+        || bg_wake_blocks_close(session_id)
     {
         return None;
     }
@@ -153,18 +148,11 @@ fn observation(
     ))
 }
 
-fn sweep(state: &Arc<AppState>, tracker: &mut IdleCloseTracker, now_ms: u64) {
-    let Some(runner_commands) = crate::pty::live_bg_runner_commands() else {
-        return;
-    };
-    sweep_with_commands(state, tracker, now_ms, &runner_commands);
-}
-
-fn sweep_with_commands(
+fn sweep_with_snapshot(
     state: &Arc<AppState>,
     tracker: &mut IdleCloseTracker,
     now_ms: u64,
-    runner_commands: &[String],
+    mut snapshot: impl FnMut() -> Option<Vec<String>>,
 ) {
     let children: Vec<String> = state
         .session_maps
@@ -175,8 +163,9 @@ fn sweep_with_commands(
     tracker
         .seen
         .retain(|session_id, _| children.contains(session_id));
+    let mut runner_commands: Option<Option<Vec<String>>> = None;
     for session_id in children {
-        let candidate = observation(state, &session_id, runner_commands);
+        let candidate = observation(state, &session_id);
         let (observed, delay) = match candidate {
             Some(value) => value,
             None => {
@@ -187,8 +176,24 @@ fn sweep_with_commands(
         if !tracker.observe(&session_id, now_ms, delay, Some(observed.clone())) {
             continue;
         }
-        // Recheck mail, output and state immediately before the destructive step.
-        if observation(state, &session_id, runner_commands)
+        // Cheap state may have changed while the timer matured; avoid a process
+        // scan unless this child still qualifies for closure.
+        if observation(state, &session_id)
+            .as_ref()
+            .is_none_or(|(current, _)| current != &observed)
+        {
+            continue;
+        }
+        let Some(commands) = runner_commands.get_or_insert_with(&mut snapshot).as_ref() else {
+            // A failed inventory cannot establish that no detached runner exists.
+            continue;
+        };
+        if live_bg_runner_for_session(commands, &session_id) {
+            tracker.seen.remove(&session_id);
+            continue;
+        }
+        // Recheck mail, output, marker and state after the process inventory.
+        if observation(state, &session_id)
             .as_ref()
             .is_none_or(|(current, _)| current != &observed)
         {
@@ -212,6 +217,36 @@ fn sweep_with_commands(
     }
 }
 
+#[cfg(test)]
+fn sweep_with_commands(
+    state: &Arc<AppState>,
+    tracker: &mut IdleCloseTracker,
+    now_ms: u64,
+    runner_commands: &[String],
+) {
+    sweep_with_snapshot(state, tracker, now_ms, || Some(runner_commands.to_vec()));
+}
+
+async fn sweep_step(
+    state: Arc<AppState>,
+    mut tracker: IdleCloseTracker,
+    now_ms: u64,
+    snapshot: impl FnMut() -> Option<Vec<String>> + Send + 'static,
+) -> IdleCloseTracker {
+    match tokio::task::spawn_blocking(move || {
+        sweep_with_snapshot(&state, &mut tracker, now_ms, snapshot);
+        tracker
+    })
+    .await
+    {
+        Ok(tracker) => tracker,
+        Err(error) => {
+            tracing::error!("idle-close sweep failed: {error}");
+            IdleCloseTracker::default()
+        }
+    }
+}
+
 pub(crate) fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -222,19 +257,13 @@ pub(crate) fn spawn(state: Arc<AppState>) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let sweep_state = Arc::clone(&state);
-            tracker = match tokio::task::spawn_blocking(move || {
-                sweep(&sweep_state, &mut tracker, now_ms);
-                tracker
-            })
-            .await
-            {
-                Ok(tracker) => tracker,
-                Err(error) => {
-                    tracing::error!("idle-close sweep failed: {error}");
-                    break;
-                }
-            };
+            tracker = sweep_step(
+                Arc::clone(&state),
+                tracker,
+                now_ms,
+                crate::pty::live_bg_runner_commands,
+            )
+            .await;
         }
     });
 }
@@ -332,6 +361,125 @@ mod tests {
         assert!(live_bg_runner_for_session(&commands, child));
         assert!(!live_bg_runner_for_session(&commands, other));
         assert!(!live_bg_runner_for_session(&[], child));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_sweep_skips_process_snapshot_until_managed_child_reaches_deadline() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = tempfile::Builder::new()
+            .prefix("idle-close-snapshot-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        let mut tracker = IdleCloseTracker::default();
+        let snapshots = std::cell::Cell::new(0);
+        let mut count_snapshot = || {
+            snapshots.set(snapshots.get() + 1);
+            Some(vec![])
+        };
+        sweep_with_snapshot(&state, &mut tracker, 0, &mut count_snapshot);
+        assert_eq!(snapshots.get(), 0, "no managed child needs a process scan");
+
+        live_child(&state, "managed-child", temp.path().to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert("managed-child".into(), "parent".into());
+        state
+            .session_maps
+            .session_states
+            .get_mut("managed-child")
+            .unwrap()
+            .background_work = true;
+        sweep_with_snapshot(&state, &mut tracker, 900_000, &mut count_snapshot);
+        assert_eq!(
+            snapshots.get(),
+            0,
+            "background work is not an idle-close candidate"
+        );
+        state
+            .session_maps
+            .session_states
+            .get_mut("managed-child")
+            .unwrap()
+            .background_work = false;
+        sweep_with_snapshot(&state, &mut tracker, 900_000, &mut count_snapshot);
+        sweep_with_snapshot(&state, &mut tracker, 1_799_999, &mut count_snapshot);
+        assert_eq!(
+            snapshots.get(),
+            0,
+            "an idle child is not due before its delay"
+        );
+        crate::mcp_http::mcp_transport::close_idle_managed_session(&state, "managed-child");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_sweep_rechecks_live_runner_at_deadline_before_closing() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = tempfile::Builder::new()
+            .prefix("idle-close-runner-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        let child = "managed-child";
+        live_child(&state, child, temp.path().to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+        let mut tracker = IdleCloseTracker::default();
+        let snapshots = std::cell::Cell::new(0);
+        sweep_with_snapshot(&state, &mut tracker, 0, || {
+            snapshots.set(snapshots.get() + 1);
+            Some(vec![])
+        });
+        assert_eq!(
+            snapshots.get(),
+            0,
+            "runner inventory waits until the close deadline"
+        );
+        sweep_with_snapshot(&state, &mut tracker, 900_000, || {
+            snapshots.set(snapshots.get() + 1);
+            Some(vec![format!("tuic __bg-runner /log {child} -- cargo test")])
+        });
+        assert_eq!(
+            snapshots.get(),
+            1,
+            "the destructive step checks live runners"
+        );
+        assert!(state.session_maps.sessions.contains_key(child));
+        crate::mcp_http::mcp_transport::close_idle_managed_session(&state, child);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_sweep_resumes_after_a_panicking_process_snapshot() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = tempfile::Builder::new()
+            .prefix("idle-close-panic-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        let child = "managed-child";
+        live_child(&state, child, temp.path().to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+        let tracker = sweep_step(Arc::clone(&state), IdleCloseTracker::default(), 0, || {
+            Some(vec![])
+        })
+        .await;
+        let tracker = sweep_step(Arc::clone(&state), tracker, 900_000, || {
+            panic!("injected process inventory failure")
+        })
+        .await;
+        assert!(state.session_maps.sessions.contains_key(child));
+        let tracker = sweep_step(Arc::clone(&state), tracker, 900_001, || Some(vec![])).await;
+        sweep_step(Arc::clone(&state), tracker, 1_800_001, || Some(vec![])).await;
+        assert!(!state.session_maps.sessions.contains_key(child));
     }
 
     #[cfg(unix)]
