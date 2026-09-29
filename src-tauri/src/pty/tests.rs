@@ -17161,7 +17161,12 @@ async fn hooked_dialog_capture_preserves_question_until_the_dialog_is_answered()
     // first busy hook after notify. The original PTY read boundaries are lost.
     let busy_tail = agent_prompt_fixture("claude-hooked-busy-choice-redraw-20260921.raw");
     assert_eq!(busy_tail, capture.as_bytes()[split..]);
-    processor.process_chunk(std::str::from_utf8(&busy_tail).unwrap(), &silence, sid, &state);
+    processor.process_chunk(
+        std::str::from_utf8(&busy_tail).unwrap(),
+        &silence,
+        sid,
+        &state,
+    );
     let screen = state
         .grid
         .vt_log_buffers
