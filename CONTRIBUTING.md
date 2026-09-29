@@ -108,6 +108,8 @@ Include:
 - **Summary:** What changed and why (not how -- the diff shows how).
 - **Test plan:** Checklist of what was tested, both automated and manual.
 
+Add user-visible changes under `[Unreleased]` in `CHANGELOG.md`, and add manual checks to `to-test.md` when needed. Both files use Git's union merge driver so concurrent additions survive a merge. Review their final ordering and remove duplicate entries before landing.
+
 ### What We Look For in Review
 
 | Area | Expectation |
