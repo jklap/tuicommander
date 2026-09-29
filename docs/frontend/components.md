@@ -155,6 +155,9 @@ the backend list and card order remain unchanged. Closing search clears the quer
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;
 the regular Files bottom tab still starts at the repository picker.
+Markdown references in output use the desktop path resolver and open the Files
+viewer only within a registered repository. External paths show a toast with the
+resolved path. HTTP(S) output links open outside the PWA.
 
 ## Core Components
 

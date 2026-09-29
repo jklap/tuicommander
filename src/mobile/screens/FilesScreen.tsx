@@ -1,6 +1,7 @@
 import { createSignal, For, onMount, Show } from "solid-js";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
+import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
 import styles from "./FilesScreen.module.css";
 
@@ -15,7 +16,18 @@ const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
 interface FilesScreenProps {
 	initialRepo?: { worktreePath: string | null; cwd: string | null };
+	initialLink?: { candidate: string; line?: number };
 	onExit?: () => void;
+}
+
+function normalizedPath(path: string): string {
+	return path.replaceAll("\\", "/").replace(/\/+$/, "");
+}
+
+function withinRoot(path: string, root: string): boolean {
+	const file = normalizedPath(path);
+	const directory = normalizedPath(root);
+	return file === directory || file.startsWith(`${directory}/`);
 }
 
 export function FilesScreen(props: FilesScreenProps) {
@@ -30,9 +42,14 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
 	let requestId = 0;
+	let editorEl: HTMLTextAreaElement | undefined;
 
 	onMount(async () => {
 		try {
+			if (props.initialLink) {
+				await openLinkedFile(props.initialLink);
+				return;
+			}
 			const worktreePath = props.initialRepo?.worktreePath?.trim();
 			if (worktreePath) {
 				await openDirectory(worktreePath, "");
@@ -46,13 +63,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
 			const registered = Object.keys(config.repos ?? {});
 			if (cwd) {
-				const normalizedCwd = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
-				const matching = registered
-					.filter((path) => {
-						const root = path.replaceAll("\\", "/").replace(/\/+$/, "");
-						return normalizedCwd === root || normalizedCwd.startsWith(`${root}/`);
-					})
-					.sort((a, b) => b.length - a.length);
+				const matching = registered.filter((path) => withinRoot(cwd, path)).sort((a, b) => b.length - a.length);
 				if (matching.length === 0) {
 					setError("No registered repository contains this session directory.");
 					return;
@@ -65,6 +76,58 @@ export function FilesScreen(props: FilesScreenProps) {
 			setError(`Could not load repositories: ${String(err)}`);
 		}
 	});
+
+	async function openLinkedFile(link: { candidate: string; line?: number }) {
+		const cwd = props.initialRepo?.cwd?.trim() || props.initialRepo?.worktreePath?.trim();
+		if (!cwd) {
+			setError("Repository path is unavailable for this session.");
+			return;
+		}
+		const resolved = await rpc<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
+			cwd,
+			candidate: link.candidate,
+		});
+		if (!resolved || resolved.is_directory) {
+			setError("Markdown file is unavailable.");
+			return;
+		}
+		const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
+		const roots = [props.initialRepo?.worktreePath, ...Object.keys(config.repos ?? {})].filter(
+			(path): path is string => !!path,
+		);
+		const root = roots
+			.filter((path) => withinRoot(resolved.absolute_path, path))
+			.sort((a, b) => b.length - a.length)[0];
+		if (!root) {
+			setError("File is outside an allowed registered repository.");
+			toastsStore.add(
+				"Cannot open Markdown file",
+				resolved.absolute_path,
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+			return;
+		}
+		const stat = await rpc<{ exists: boolean; is_dir: boolean; size: number }>("stat_path", {
+			path: resolved.absolute_path,
+		});
+		if (!stat.exists || stat.is_dir) {
+			setError("Markdown file is unavailable.");
+			return;
+		}
+		const relative = normalizedPath(resolved.absolute_path).slice(normalizedPath(root).length + 1);
+		setRepo(root);
+		setDir(relative.split("/").slice(0, -1).join("/"));
+		await openFile(
+			{ name: relative.split("/").pop() ?? relative, path: relative, is_dir: false, size: stat.size },
+			link.line,
+		);
+	}
 
 	async function openDirectory(repoPath: string, subdir: string) {
 		const currentRequest = ++requestId;
@@ -84,7 +147,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		}
 	}
 
-	async function openFile(entry: FileEntry) {
+	async function openFile(entry: FileEntry, line?: number) {
 		const currentRequest = ++requestId;
 		setFile(entry.path);
 		setContent("");
@@ -102,6 +165,18 @@ export function FilesScreen(props: FilesScreenProps) {
 				setError("This is a binary or non-text file.");
 			} else {
 				setContent(result);
+				if (line) {
+					setDraft(result);
+					setEditing(true);
+					queueMicrotask(() => {
+						if (currentRequest !== requestId || !editorEl) return;
+						const lines = result.split("\n");
+						const target = Math.min(line - 1, lines.length - 1);
+						const offset = lines.slice(0, target).reduce((sum, text) => sum + text.length + 1, 0);
+						editorEl.focus();
+						editorEl.setSelectionRange(offset, offset);
+					});
+				}
 			}
 		} catch (err) {
 			if (currentRequest !== requestId) return;
@@ -116,6 +191,10 @@ export function FilesScreen(props: FilesScreenProps) {
 		requestId++;
 		setBusy(false);
 		setError("");
+		if (props.initialLink && props.onExit) {
+			props.onExit();
+			return;
+		}
 		if (file() !== null) {
 			setFile(null);
 			setEditing(false);
@@ -236,6 +315,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					}
 				>
 					<textarea
+						ref={editorEl}
 						class={styles.editor}
 						aria-label="File content"
 						value={draft()}

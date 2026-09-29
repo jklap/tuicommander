@@ -97,6 +97,7 @@ export default function MobileApp() {
 	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
+	const [sessionFileLink, setSessionFileLink] = createSignal<{ candidate: string; line?: number } | null>(null);
 	const { sessions, loading, refreshing, error, refresh, questionCount, markSeen } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
@@ -134,6 +135,7 @@ export default function MobileApp() {
 
 	function handleBack() {
 		setSessionFilesOpen(false);
+		setSessionFileLink(null);
 		setSelectedSessionId(null);
 		setLastKnownSession(null);
 	}
@@ -207,17 +209,28 @@ export default function MobileApp() {
 						session={lastKnownSession()!}
 						sessionExists={sessionExists()}
 						onBack={handleBack}
-						onOpenFiles={() => setSessionFilesOpen(true)}
+						onOpenFiles={() => {
+							setSessionFileLink(null);
+							setSessionFilesOpen(true);
+						}}
+						onOpenFileLink={(candidate, line) => {
+							setSessionFileLink({ candidate, line });
+							setSessionFilesOpen(true);
+						}}
 					/>
 				</div>
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
 								worktreePath: lastKnownSession()!.worktree_path,
 								cwd: lastKnownSession()!.cwd,
 							}}
-							onExit={() => setSessionFilesOpen(false)}
+							onExit={() => {
+								setSessionFilesOpen(false);
+								setSessionFileLink(null);
+							}}
 						/>
 					</main>
 				</Show>

@@ -1913,6 +1913,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
 - From a session header, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
+- Markdown paths in session output open here through the desktop terminal-path resolver. Absolute, relative, `file://`, and `tuic://open//` references are supported, including line numbers. Files outside registered repositories are refused with a toast naming the path.
 - Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
 - Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
 - Switch from View to Edit for source changes, then save through the existing file commands and return to View
@@ -1921,6 +1922,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.3 Session Detail Screen
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
 - Search/filter in output: text search bar filters visible log lines in real time
