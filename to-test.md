@@ -29,6 +29,10 @@
 
 # To Test
 
+## Dictation Metal release link (story 1198-535b) — Rust rebuild required
+
+- [ ] After rebuilding `make dev`, verify macOS dictation starts with a downloaded Whisper model and still uses Metal. The build script change cannot affect Boss's running backend until a rebuild and restart; the targeted release test covers linking and loudness timing.
+
 ## PTY close reason logging (story 1194-31e8) — Rust restart required
 
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, close a disposable shell session and confirm the app log records `reason=close_requested` with its session ID. Kill a second disposable shell session through MCP and confirm `reason=kill_requested`. The running backend does not load this Rust change until restart.
