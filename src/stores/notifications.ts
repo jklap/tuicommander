@@ -6,6 +6,7 @@ import {
 	type NotificationSound,
 	notificationManager,
 } from "../notifications";
+import { showNativeNotice } from "../services/nativeNotifications";
 import { isTauri } from "../transport";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
@@ -38,26 +39,6 @@ async function ensureNotificationPermission(): Promise<boolean> {
 	return osNotificationPermission === "granted";
 }
 
-function sendOsNotification(sound: NotificationSound, terminalId: string, tabName: string): void {
-	const n = new Notification(OS_NOTIFICATION_TITLES[sound], {
-		body: tabName,
-		silent: true,
-	});
-	n.onclick = () => {
-		n.close();
-		if (isTauri()) {
-			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-				getCurrentWindow().setFocus();
-			});
-		} else {
-			window.focus();
-		}
-		import("../utils/navigateToTerminal").then(({ navigateToTerminal }) => {
-			navigateToTerminal(terminalId);
-		});
-	};
-}
-
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
 const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
 
@@ -72,9 +53,7 @@ function copyDefaults(): NotificationConfig {
 
 /** Persist config to Rust backend (fire-and-forget) */
 function saveConfig(config: NotificationConfig): void {
-	notificationWriter.save(config).catch((err) =>
-		appLogger.debug("config", "Failed to save notification config", err),
-	);
+	notificationWriter.save(config).catch((err) => appLogger.debug("config", "Failed to save notification config", err));
 }
 
 /** Notifications store state */
@@ -209,14 +188,18 @@ function createNotificationsStore() {
 			if (!document.hasFocus()) {
 				actions.incrementBadge();
 				if (opts?.terminalId) {
-					ensureNotificationPermission().then((ok) => {
-						if (!ok) return;
-						import("./terminals").then(({ terminalsStore }) => {
+					void import("./terminals")
+						.then(({ terminalsStore }) => {
 							const term = terminalsStore.get(opts.terminalId!);
 							const tabName = term?.name ?? opts.terminalId!;
-							sendOsNotification(sound, opts.terminalId!, tabName);
-						});
-					});
+							return showNativeNotice({
+								title: OS_NOTIFICATION_TITLES[sound],
+								body: tabName,
+								key: `${sound}:${opts.terminalId}`,
+								target: { kind: "terminal", id: opts.terminalId! },
+							});
+						})
+						.catch((error: unknown) => appLogger.warn("app", "Could not show terminal notification", error));
 				}
 			}
 		},

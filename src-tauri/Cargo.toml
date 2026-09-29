@@ -219,6 +219,8 @@ hex = "0.4"
 ring = "0.17"
 dirs = "6"
 tauri-plugin-dialog = { version = "2.7", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+notify-rust = { version = "4.18", optional = true }
 # Direct, because the file pickers must run inside OUR main-thread closure — see
 # native_dialog.rs. Version and features are copied from tauri-plugin-dialog's own
 # rfd dependency on purpose: a mismatch forks the lockfile into two rfd builds.
@@ -308,6 +310,8 @@ desktop = [
     "dep:tauri-build",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-notification",
+    "dep:notify-rust",
     "dep:rfd",
     "dep:tauri-plugin-single-instance",
     "dep:tauri-plugin-window-state",

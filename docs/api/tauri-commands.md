@@ -234,6 +234,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `save_app_config` | `base, config` | `()` | Save app settings |
 | `load_notification_config` | -- | `NotificationConfig` | Load notifications |
 | `save_notification_config` | `base, config` | `()` | Save notifications |
+| `show_native_notification` | `title, body, target` | `()` | macOS desktop-only alert that retains the Notification Center click and emits `native-notification-click` for a terminal or Progress target; browser/remote clients cannot call it |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
 | `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
