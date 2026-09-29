@@ -510,7 +510,6 @@ mod tests {
                 "transport",
                 "auth_username",
                 "enabled",
-                "auto_update",
                 "deploy",
                 "survive_secs"
             ],
