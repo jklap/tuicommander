@@ -29,6 +29,7 @@ function fileGroup(overrides: Partial<FileReview> = {}): FileReview {
 		drifted_from_disk: false,
 		backup_available: true,
 		is_binary: false,
+		revision: "rev1",
 		...overrides,
 	};
 }

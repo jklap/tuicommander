@@ -1266,6 +1266,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/session-review/revert-file",
             post(session_review_routes::revert_file_http),
         )
+        .route(
+            "/repo/session-review/watch",
+            post(session_review_routes::watch_session_review_http),
+        )
+        .route(
+            "/repo/session-review/unwatch",
+            post(session_review_routes::unwatch_session_review_http),
+        )
         // Branch operations
         .route(
             "/repo/local-branches",

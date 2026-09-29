@@ -1,27 +1,100 @@
+use std::sync::Arc;
+
 use axum::Json;
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 
 use super::types::*;
 use super::{json_result, validate_repo_path};
+use crate::AppState;
 
-pub(super) async fn list_sessions_http(Query(q): Query<SessionListQuery>) -> Response {
-    if let Err(e) = validate_repo_path(&q.path) {
+pub(super) async fn watch_session_review_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SessionReviewWatchRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.path) {
         return e.into_response();
     }
-    json_result(
-        crate::session_review::list_review_sessions(q.path, q.limit, q.include_counts, None).await,
-    )
+    let result = (|| {
+        crate::session_review::validate_session_id(&body.session_id)?;
+        let project_dir = crate::session_review::project_dir_for(&body.path, None)
+            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+        crate::session_review_watcher::watch_session_review_internal(
+            &project_dir,
+            &body.session_id,
+            &body.path,
+            &state,
+        )
+    })();
+    json_result(result)
 }
 
-pub(super) async fn get_review_http(Query(q): Query<SessionReviewQuery>) -> Response {
+pub(super) async fn unwatch_session_review_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SessionReviewWatchRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.path) {
+        return e.into_response();
+    }
+    let result: Result<(), String> = (|| {
+        crate::session_review::validate_session_id(&body.session_id)?;
+        let project_dir = crate::session_review::project_dir_for(&body.path, None)
+            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+        crate::session_review_watcher::unwatch_session_review_internal(
+            &project_dir,
+            &body.session_id,
+            &state,
+        );
+        Ok(())
+    })();
+    json_result(result)
+}
+
+pub(super) async fn list_sessions_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SessionListQuery>,
+) -> Response {
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
-    json_result(
-        crate::session_review::get_session_review(q.path, q.session_id, q.include_subagents, None)
-            .await,
+    let result = crate::session_review::list_review_sessions(q.path, q.limit, q.include_counts, None)
+        .await
+        .map(|mut sessions| {
+            // Populated here, not inside `session_review.rs`: that module is a
+            // pure disk reader with no `AppState` access — see
+            // `SessionSummary::tuic_session_id`'s doc comment. The desktop
+            // Tauri command path does not yet get this treatment (a known,
+            // documented gap — see that same doc comment).
+            for s in &mut sessions {
+                s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
+            }
+            sessions
+        });
+    json_result(result)
+}
+
+pub(super) async fn get_review_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SessionReviewQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.path) {
+        return e.into_response();
+    }
+    let options = q.diff_options();
+    let claude_session_id = q.session_id.clone();
+    let result = crate::session_review::get_session_review(
+        q.path,
+        q.session_id,
+        q.include_subagents,
+        None,
+        Some(options),
     )
+    .await
+    .map(|mut review| {
+        review.tuic_session_id = state.tuic_session_for_claude_session(&claude_session_id);
+        review
+    });
+    json_result(result)
 }
 
 pub(super) async fn revert_step_http(Json(body): Json<RevertStepRequest>) -> Response {
@@ -68,6 +141,10 @@ pub(super) async fn revert_file_http(Json(body): Json<RevertFileRequest>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_state() -> Arc<AppState> {
+        Arc::new(crate::state::tests_support::make_test_app_state())
+    }
 
     async fn json_body(response: Response) -> serde_json::Value {
         let (_, body) = response.into_parts();
@@ -147,7 +224,7 @@ mod tests {
         std::fs::write(&abs_file, "a\n").unwrap();
         let session_id = seed_transcript_under_home(home.path(), &repo_path, &abs_file);
 
-        let list_response = list_sessions_http(Query(SessionListQuery {
+        let list_response = list_sessions_http(State(test_state()), Query(SessionListQuery {
             path: repo_path.clone(),
             limit: None,
             include_counts: None,
@@ -164,10 +241,14 @@ mod tests {
              $HOME fallback, got: {list_json}"
         );
 
-        let review_response = get_review_http(Query(SessionReviewQuery {
+        let review_response = get_review_http(State(test_state()), Query(SessionReviewQuery {
             path: repo_path,
             session_id,
             include_subagents: None,
+            ignore_leading_ws: false,
+            ignore_trailing_ws: false,
+            ignore_ws_amount: false,
+            ignore_case: false,
         }))
         .await;
         assert_eq!(review_response.status(), axum::http::StatusCode::OK);
@@ -177,11 +258,64 @@ mod tests {
             Some(1),
             "get_review_http should parse the one seeded edit, got: {review_json}"
         );
+        // Not mapped to any live TUIC session in this test, so the HTTP
+        // layer's post-processing must leave it null rather than error.
+        assert_eq!(review_json["tuic_session_id"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn list_and_review_http_populate_tuic_session_id_from_the_claude_session_map() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeOverride::set(home.path());
+
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let abs_file = repo.path().join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs_file, "a\n").unwrap();
+        let session_id = seed_transcript_under_home(home.path(), &repo_path, &abs_file);
+
+        let state = test_state();
+        state
+            .claude_session_map
+            .insert(session_id.clone(), "tuic-42".to_string());
+
+        let list_response = list_sessions_http(
+            State(state.clone()),
+            Query(SessionListQuery {
+                path: repo_path.clone(),
+                limit: None,
+                include_counts: None,
+            }),
+        )
+        .await;
+        let list_json = json_body(list_response).await;
+        let sessions = list_json.as_array().expect("array body");
+        let seeded = sessions
+            .iter()
+            .find(|s| s["session_id"] == serde_json::Value::String(session_id.clone()))
+            .expect("seeded session in list");
+        assert_eq!(seeded["tuic_session_id"], serde_json::Value::String("tuic-42".to_string()));
+
+        let review_response = get_review_http(
+            State(state),
+            Query(SessionReviewQuery {
+                path: repo_path,
+                session_id,
+                include_subagents: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
+            }),
+        )
+        .await;
+        let review_json = json_body(review_response).await;
+        assert_eq!(review_json["tuic_session_id"], serde_json::Value::String("tuic-42".to_string()));
     }
 
     #[tokio::test]
     async fn list_sessions_http_rejects_a_relative_path() {
-        let response = list_sessions_http(Query(SessionListQuery {
+        let response = list_sessions_http(State(test_state()), Query(SessionListQuery {
             path: "relative/path".to_string(),
             limit: None,
             include_counts: None,
@@ -192,10 +326,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_review_http_rejects_a_relative_path() {
-        let response = get_review_http(Query(SessionReviewQuery {
+        let response = get_review_http(State(test_state()), Query(SessionReviewQuery {
             path: "relative/path".to_string(),
             session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
             include_subagents: None,
+            ignore_leading_ws: false,
+            ignore_trailing_ws: false,
+            ignore_ws_amount: false,
+            ignore_case: false,
         }))
         .await;
         assert_ne!(response.status(), axum::http::StatusCode::OK);

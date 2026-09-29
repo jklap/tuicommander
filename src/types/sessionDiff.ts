@@ -47,6 +47,18 @@ export interface EditStep {
 	agent_name: string | null;
 	user_modified: boolean;
 	replace_all: boolean;
+	/** Which turn (one user prompt, or the subagent-call equivalent) this
+	 *  step belongs to. Monotonically non-decreasing in chronological order. */
+	turn_index: number;
+	/** ISO-8601, when known. */
+	turn_started_at: string | null;
+	/** First line of the turn's prompt text, truncated to 160 chars. `null`
+	 *  when the turn's prompt record couldn't be resolved. */
+	prompt_preview: string | null;
+	/** The raw hex subagent id (same value as `agent_name`). `null` for a main-session step. */
+	agent_id: string | null;
+	/** A human-readable name for whichever agent made this edit — never the bare UUID. */
+	agent_display_name: string | null;
 }
 
 /** Where a file's session-start content came from — a confidence signal for the UI. */
@@ -74,6 +86,23 @@ export interface FileReview {
 	/** True when a `@v1` backup exists on disk right now (enables byte-exact revert). */
 	backup_available: boolean;
 	is_binary: boolean;
+	/** Short, stable fingerprint of this file's current review state — changes
+	 *  iff `cumulative_patch`/the last touching step actually changed. */
+	revision: string;
+}
+
+/** One user prompt's worth of edits. */
+export interface TurnSummary {
+	turn_index: number;
+	/** ISO-8601, when known. */
+	started_at: string | null;
+	prompt_preview: string | null;
+	/** Indices into `SessionReview.steps`. */
+	step_indices: number[];
+	additions: number;
+	deletions: number;
+	/** Display/rel path of every file touched in this turn, first-touch order. */
+	files: string[];
 }
 
 export interface SessionReview {
@@ -90,6 +119,8 @@ export interface SessionReview {
 	/** Non-fatal parse problems — render as a dismissible banner, never drop. */
 	warnings: string[];
 	included_subagents: boolean;
+	/** One entry per distinct turn, in turn_index order. */
+	turns: TurnSummary[];
 }
 
 export type RevertMethod =
