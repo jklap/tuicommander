@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Queued Codex confirmation** — A stop hook can delay the Working screen for several seconds. Queued submissions now wait long enough for that confirmation before showing an uncertain-delivery error.
+
 - **Claude questions on mobile** — The session shows every AskUserQuestion option and offers those choices instead of generic Yes/No. Tapping a choice navigates Claude's menu and submits it with Enter.
 
 - **Mobile Codex questions** — Open queued questions from the session header, see their choices, and answer with one tap or typed notes. The question overlay does not reduce terminal space.
