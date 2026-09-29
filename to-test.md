@@ -29,6 +29,10 @@
 
 # To Test
 
+## AI Chat prompt parking (story 1228-becb)
+
+- [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.
+
 ## Mobile global AI Chat (story 1208-b371)
 
 - [ ] On the phone PWA after `make dev` serves this frontend, tap Chat with multiple repositories registered. Confirm there is no repository picker, the same titled conversations as desktop appear, and a push link opens its conversation without changing the chat root. Switch to a session and confirm the terminal keeps the same visible row count as before this change.

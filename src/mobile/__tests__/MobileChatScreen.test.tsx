@@ -13,6 +13,7 @@ vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
 import { MobileChatScreen } from "../screens/MobileChatScreen";
+import { aiChatDraft } from "../../components/AIChatPanel/draft";
 
 function chat() {
 	return {
@@ -61,6 +62,7 @@ function chat() {
 }
 
 beforeEach(() => {
+	aiChatDraft.reset();
 	history.replaceState(null, "", "/mobile");
 	invoke.mockReset();
 	createAcpChat.mockReset().mockReturnValue(chat());
@@ -156,5 +158,16 @@ describe("mobile ego chat", () => {
 		expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel queued prompt Follow up from desktop" }));
 		expect(shared.cancelQueued).toHaveBeenCalledWith("phone-turn");
+	});
+
+	it("parks and restores a phone draft using the composer control", async () => {
+		const { container } = render(() => <MobileChatScreen />);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		fireEvent.input(textarea, { target: { value: "Phone draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		expect(textarea.value).toBe("");
+		expect(screen.getByText("Parked draft")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		expect(textarea.value).toBe("Phone draft");
 	});
 });

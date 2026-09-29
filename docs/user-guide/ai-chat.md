@@ -101,6 +101,18 @@ in total. Text paste works as usual.
 Pastes longer than 200 words appear as a numbered `[Pasted text #… +N words]`
 marker while you compose; the full text is sent when you press Send. The
 composer grows with shorter text up to its height limit, then scrolls.
+Press `Ctrl+S` in the composer, or tap **Park** on a phone, to set aside the
+current text and image previews. The **Parked draft** control shows that a
+draft is waiting. Press `Ctrl+S` or tap it again while the composer is empty to
+restore the draft; when the composer contains another draft, the two swap.
+Sending the intervening prompt also restores the parked draft automatically.
+Parking survives closing and reopening the panel or reloading its window, and
+stays with its chat tab. If browser storage is unavailable, the composer warns
+that a reload may lose the parked draft.
+Claude Code's [documented `Ctrl+S` behavior](https://code.claude.com/docs/en/interactive-mode)
+is the reference for stashing and
+restoring an empty prompt; automatic restoration after Send and swapping two
+nonempty drafts are TUICommander behaviors requested for this composer.
 The transcript follows new output while you are at the bottom and keeps your
 position when you scroll up. Tool activity rows show names; expand a call to
 read its full command and output.
