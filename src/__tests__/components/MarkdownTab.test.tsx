@@ -159,6 +159,24 @@ describe("MarkdownTab agent review actions", () => {
 		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
 	});
 
+	it("queues an absolute Markdown file without prefixing its repository path", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const path = "/Users/boss/Gits/.tmp/review.md";
+		const tabId = mdTabsStore.addMcpFile("external-review", "/repo", path, false, false);
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		fireEvent.click(send);
+
+		await waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("enqueue_agent_command", {
+				sessionId: "session-one",
+				text: `Open ${path}, apply the 1 embedded tweak review comment, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+			}),
+		);
+	});
+
 	/** Open the block-comment popover on a Markdown file's first paragraph and type a comment. */
 	async function startBlockComment(name: string) {
 		const tabId = name.startsWith("/")
