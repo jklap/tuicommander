@@ -94,6 +94,10 @@ Blocked entries are red. `intent` entries are muted, because they are what an
 agent set out to do rather than a result. A checkbox narrows the list to blocked
 entries only. A row can be deleted, and deletion is permanent.
 
+On a phone, the Progress tab shows the same controls. The header wraps across
+rows so the project and terminal selectors, **List | Flow**, and **Blocked only**
+remain available at narrow widths.
+
 ### The Flow view
 
 **List | Flow** in the dialog header switches to a sequence diagram of the same
