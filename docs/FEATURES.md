@@ -2079,7 +2079,7 @@ See `examples/plugins/` for reference implementations:
 - `repo-dashboard` — Read-only state and dynamic markdown
 - `report-watcher` — Generic report file watcher with markdown viewer
 - `claude-status` — Agent-scoped plugin (`agentTypes: ["claude"]`) tracking usage and rate limits
-- `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop
+- `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop — see [Wiz Kanban](user-guide/wiz-kanban.md) for the file/frontmatter conventions it expects
 - `md-kanban` — Kanban board over checkbox tasks (`- [ ]`) in a single markdown file: inline `[field:: value]`/`(field:: value)` metadata (priority, dependsOn, id), `#tags`, heading-path labels, a small upstream/downstream dependency graph with hover-highlight, and multi-board support via a native file picker
 
 ### 17.7 Claude Wakeup Plugin
