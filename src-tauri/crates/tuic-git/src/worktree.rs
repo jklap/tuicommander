@@ -8494,14 +8494,9 @@ branch refs/heads/feat
         commit_file(&worktree, "feature.txt", "local only\n");
         let main = base_branch_of(&repo);
 
-        let error = remove_worktree_by_workspace_id(
-            &repo.to_string_lossy(),
-            "unshared",
-            true,
-            None,
-            false,
-        )
-        .unwrap_err();
+        let error =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "unshared", true, None, false)
+                .unwrap_err();
 
         assert!(error.contains(&format!("origin/{main}")), "{error}");
         assert!(error.contains(&format!("and {main}")), "{error}");
