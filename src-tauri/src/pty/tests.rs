@@ -12995,8 +12995,10 @@ fn flush_keeps_pending_while_question_confident() {
 
     try_shell_transition(&state, "sess", SHELL_BUSY, SHELL_IDLE, false);
     emit_shell_state(&state, "sess", "idle");
-    flush_pending_injections(&state, "sess");
-    wait_for_injection_queue();
+    flush_pending_injections(&state, "sess")
+        .expect("pending flush starts a session worker")
+        .join()
+        .expect("session worker finishes before question clears");
     assert_eq!(
         state.pending_injections.get("sess").map(|q| q.len()),
         Some(1),
