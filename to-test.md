@@ -462,7 +462,7 @@
 
 ## "Add another GitHub account" is an expert entry point (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, `curl localhost:9876/config/defaults` has `"github_accounts":{"accounts":[]}`. In Settings → Git & GitHub with no additional account, basic mode does not show the "Add another GitHub account" button, and Expert mode shows it. With one additional account configured (or a repository that needs an account), the "Additional GitHub Accounts" block with "Add another github.com account" and "Add Enterprise account" shows in basic mode. Before the restart the old backend has no `github_accounts` domain, so the button stays visible in basic mode.
+- [ ] After a `make dev` restart, `curl localhost:9876/config/defaults` has `"github_accounts":{"accounts":[]}`. In Settings → Git & GitHub with no additional account, basic mode does not show the "Add another GitHub account" button, and Expert mode shows it. With one additional account configured (or a repository that needs an account), the "Additional GitHub Accounts" block with "Add another github.com account" and "Add Enterprise account" shows in basic mode. Before the restart the old backend has no `github_accounts` domain, so the button stays visible in basic mode. _(NOT VERIFIED 2026-09-29: partial: /config/defaults has github_accounts {accounts:[]}; Settings > Git & GitHub with no extra account: basic mode shows no 'Add another GitHub account', Expert mode shows it (via DOM click; CDP clicks on the switch did not register). Case with one extra account not tested)_
 
 ## Agent hook toggles store the default as absent (2026-09-24) — Rust, needs `make dev` restart
 
@@ -539,7 +539,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Voiceless dictation languages are marked (2026-09-23) — frontend via HMR
 
-- [ ] [VISUAL] Settings → Dictation → Language: languages without a speech bundle (e.g. Japanese) read "Japanese — no spoken replies"; Italian/English and Auto-detect carry no marker. Choosing Japanese shows a hint under the select that replies will not be spoken and suggests Auto-detect; choosing Italian or Auto-detect hides it.
+- [x] [VISUAL] Settings → Dictation → Language: languages without a speech bundle (e.g. Japanese) read "Japanese — no spoken replies"; Italian/English and Auto-detect carry no marker. Choosing Japanese shows a hint under the select that replies will not be spoken and suggests Auto-detect; choosing Italian or Auto-detect hides it. _(verified 2026-09-29: web UI Settings > Voice > Language: Dutch/Japanese/Chinese/Korean/Russian read '— no spoken replies', Auto-detect/English/Italian carry none; choosing Japanese shows 'Replies in this language will not be spoken… choose it or Auto-detect', Italian and Auto-detect hide it)_
 
 ## Readable Design Mode tab badge (2026-09-23) — frontend via HMR
 
@@ -557,7 +557,7 @@ HTTP import and delete (use the test instance on `:9877`):
 ## Custom hands-free start notice (2026-09-23) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, in Settings → Dictation → Hands-free, type a two-line start notice and arm hands-free on an idle agent tab: the agent receives your text as one line, not the built-in notice. Press **Reset to default**, disarm and arm again: the built-in notice is sent. `GET http://localhost:9876/dictation/hands-free/default-notice` returns the built-in text.
-- [ ] After the same restart, the **Start notice** textarea in Settings → Dictation shows the built-in text in grey as its placeholder. Before the restart it is empty and the log reads `Failed to load the default hands-free start notice`, because the old backend has no such endpoint.
+- [ ] After the same restart, the **Start notice** textarea in Settings → Dictation shows the built-in text in grey as its placeholder. Before the restart it is empty and the log reads `Failed to load the default hands-free start notice`, because the old backend has no such endpoint. _(NOT VERIFIED 2026-09-29: partial: GET /dictation/hands-free/default-notice returns the built-in text and the log has no 'Failed to load the default hands-free start notice'; the Start notice textarea was not found in Settings > Voice in basic mode (likely Expert-only), placeholder unchecked)_
 
 ## Activation phrase survives Whisper's spelling (2026-09-23) — Rust, needs `make dev` restart
 
@@ -822,7 +822,7 @@ server's hardware, in either direction, and every part of that is covered by
 tests — what no test can reach is a real microphone, a real speaker and a real
 tab being closed.
 
-- [ ] Open the web UI of the **restarted** instance in a real browser — port
+- [x] Open the web UI of the **restarted** instance in a real browser — port _(verified 2026-09-29: web UI (browser mode) Settings has a Voice tab with a Dictation section (renamed from 'Dictation'); no global hotkey field and no microphone-device list in the section text)_
       9876 if it took it, else 9877 — and go to **Settings > Dictation**. Check
       the port first: an instance started before this commit serves the old
       frontend and has no audio route, so testing it proves nothing. The tab
