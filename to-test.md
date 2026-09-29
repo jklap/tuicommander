@@ -229,7 +229,7 @@
 
 ## Progress journal paging — Rust restart required
 
-- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, call `repo action=progress_list` on a journal with more than 10 entries. The first page returns 10 entries, `total`, and `nextCursor`; follow the cursor to the end without duplicates. Open Progress and confirm the dialog still shows the complete journal. The current live backend cannot load this Rust change until restart.
+- [x] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, call `repo action=progress_list` on a journal with more than 10 entries. The first page returns 10 entries, `total`, and `nextCursor`; follow the cursor to the end without duplicates. Open Progress and confirm the dialog still shows the complete journal. The current live backend cannot load this Rust change until restart. _(verified 2026-09-29: 13-entry journal: first page 10 entries, total 13, nextCursor 4; following input.cursor gave the remaining 3, 13 unique ids, then null; Progress dialog (browser mode) lists all 13 entries)_
 
 ## Headless MCP voice binding (story 1006-2729) — remote daemon rebuild required
 
@@ -511,13 +511,13 @@ HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] Set `speech_volume_db` to -24 in `dictation-config.json` through the settings save (`set_dictation_config`) while a reply is queued. The queued reply is not cut off, and the next reply is quieter. The same change is also available from the Voice volume slider in Settings > Voice > Spoken replies. _(NOT VERIFIED 2026-09-29: Needs audible comparison of reply loudness on real audio output.)_
-- [ ] An existing `dictation-config.json` with neither field loads with -18 dB and 0.67 levelling (`GET /dictation/config` or `get_dictation_config`).
+- [x] An existing `dictation-config.json` with neither field loads with -18 dB and 0.67 levelling (`GET /dictation/config` or `get_dictation_config`). _(verified 2026-09-29: wrote dictation-config.json {enabled,hotkey} only in the instance dir, GET /dictation/config -> speech_volume_db -18.0, speech_levelling 0.67 (file removed after))_
 
 ## MCP `session action=rename` and leaner output/spawn responses (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately.
+- [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately. _(NOT VERIFIED 2026-09-29: backend verified (MCP rename -> GET /sessions display_name=Foo, display_name_is_custom=true); sidebar/tab-bar rendering not observed)_
 - [ ] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename.
-- [ ] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched.
+- [x] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched. _(verified 2026-09-29: session rename with missing/blank name -> {'error':'name (non-empty string) is required for action=rename'}, GET /sessions display_name stays 'Foo')_
 - [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there. _(NOT VERIFIED 2026-09-29: Needs real Claude tab (idle prompt chrome and permission dialog) for session action=output.)_
 - [ ] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`.
 
@@ -2839,7 +2839,7 @@ HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
 
 ## Project Progress ownership self-edge (story `752-8492`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] Register any repository and open Progress. Every project must list its
+- [x] Register any repository and open Progress. Every project must list its _(verified 2026-09-29: registered fx/repo (its own main workspace): repo progress_list and POST /progress/list answer entries, no project_unavailable; dialog lists them)_
       events. Before the fix, `resolve_owning_project_in` read the repository's
       own main workspace (`worktreePath` == repo root, no `parentRepoPath`) as an
       ownership cycle, so `progress_status` and `progress_list` failed for every
@@ -3065,7 +3065,7 @@ The whole Progress feature was re-implemented against the 2026-09-14 revision of
 cut, and no Markdown export. Rust and frontend both changed, so the running
 build has the old behaviour until restart.
 
-- [ ] After restart, `progress.sqlite3` must exist in the config directory, and
+- [x] After restart, `progress.sqlite3` must exist in the config directory, and _(verified 2026-09-29: progress.sqlite3 exists in instances/validate; ls -a fx/repo shows no .tuic dir after progress writes)_
       no *new* `.tuic/` directory may appear in any repository. The 42 existing
       ones are stale leftovers of the old design — see the cleanup item below.
 - [ ] Ask an agent to report: the entry must appear in the dialog with its agent
