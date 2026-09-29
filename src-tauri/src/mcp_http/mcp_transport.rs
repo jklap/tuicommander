@@ -3219,7 +3219,6 @@ fn handle_session(
                 return serde_json::json!({"error": "Cannot kill own session. Use exit to terminate yourself."});
             }
             if crate::pty::kill_pty_core(state, session_id) {
-                tracing::info!(source = "session", session_id = %session_id, "Session killed: SIGKILL");
                 state.emit_pty_event(crate::state::AppEvent::SessionClosed {
                     session_id: session_id.to_string(),
                     reason: "killed".to_string(),

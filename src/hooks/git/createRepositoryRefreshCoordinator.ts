@@ -231,21 +231,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		const toRemove: string[] = [];
 		const terminalsToClose: string[] = [];
 
-		// If activeBranch is no longer a worktree, find its replacement:
-		// the worktree branch that occupies the same path (HEAD moved).
-		let activeBranchReplacement: string | null = null;
 		const active = currentRepo.activeWorkspaceId;
-		if (active && !(active in worktreePaths)) {
-			const activePath = currentRepo.workspaces[active]?.worktreePath;
-			if (activePath) {
-				for (const [wtId, wt] of Object.entries(worktreePaths)) {
-					if (wt.path === activePath) {
-						activeBranchReplacement = wtId;
-						break;
-					}
-				}
-			}
-		}
+		// A branch switch changes the workspace id, not the checkout directory.
+		// Re-home sessions for every changed worktree, including inactive rows.
+		const replacementByPath = new Map(Object.entries(worktreePaths).map(([id, wt]) => [wt.path, id]));
+		const replacements = new Map<string, string>();
 
 		for (const branchName of Object.keys(currentRepo.workspaces)) {
 			if (!(branchName in worktreePaths)) {
@@ -261,12 +251,13 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					});
 					continue;
 				}
-				// If this is the stale activeBranch and we found a replacement, allow removal
-				if (branchName === active && activeBranchReplacement) {
+				const replacement = replacementByPath.get(currentRepo.workspaces[branchName]?.worktreePath ?? "");
+				if (replacement) {
 					appLogger.info(
 						"terminal",
-						`refreshAllBranchStats: activeBranch "${branchName}" replaced by "${activeBranchReplacement}"`,
+						`refreshAllBranchStats: workspace "${branchName}" replaced by "${replacement}" at the same path`,
 					);
+					replacements.set(branchName, replacement);
 					toRemove.push(branchName);
 					markProcessed(repoPath, branchName);
 					continue;
@@ -353,10 +344,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					};
 					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}
-				// Migrate terminal state from stale activeBranch to its replacement
-				if (active && activeBranchReplacement && toRemove.includes(active)) {
-					repositoriesStore.mergeWorkspaceState(repoPath, active, activeBranchReplacement);
-					repositoriesStore.setActiveWorkspace(repoPath, activeBranchReplacement);
+				for (const [source, target] of replacements) {
+					repositoriesStore.mergeWorkspaceState(repoPath, source, target);
+					if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
 				}
 				for (const branchName of toRemove) {
 					repositoriesStore.removeWorkspace(repoPath, branchName);
