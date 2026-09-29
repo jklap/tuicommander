@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { render } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // @git-diff-view/solid requires a real Canvas for text measurement, which
 // jsdom/happy-dom don't provide (see DiffViewer.test.tsx's own note), and its
