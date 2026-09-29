@@ -336,7 +336,7 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+	it("reserves a copy row under assistant messages only, and keeps the tool count on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -364,10 +364,12 @@ describe("AIChatPanel: transcript actions", () => {
 				},
 			});
 			await settle();
-			for (const label of ["Copy user message", "Copy assistant message"]) {
-				const button = container.querySelector(`button[aria-label="${label}"]`)!;
-				expect(getComputedStyle(button).minHeight, label).toBe("18px");
-			}
+			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
+			expect(getComputedStyle(assistantCopy).minHeight).toBe("18px");
+			// A user bubble hugs its text: its Copy sits outside the bubble instead of
+			// holding an invisible row that made "che model usi?" look two lines tall.
+			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
+			expect(getComputedStyle(userCopy).position).toBe("absolute");
 			const count = container.querySelector(".toolCallCount")!;
 			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
 		} finally {
