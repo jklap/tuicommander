@@ -3361,13 +3361,13 @@ mod tests {
         };
         let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), false, true);
+        let app = build_router(test_state(), true, true);
         let denied = app
             .clone()
             .oneshot(request(uri("docs/images/chart.png"), remote))
             .await
             .unwrap();
-        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
         let accepted = app
             .clone()
@@ -3377,25 +3377,27 @@ mod tests {
         assert_eq!(accepted.status(), StatusCode::OK);
         assert_eq!(accepted.headers()[header::CONTENT_TYPE], "image/png");
         assert_eq!(
-            axum::body::to_bytes(accepted.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-            [137, 80, 78, 71]
+            accepted.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
         );
-        for path in [
-            "docs/images/../../../outside.png",
-            "docs/images/not-image.txt",
+        let bytes = axum::body::to_bytes(accepted.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), &[137, 80, 78, 71]);
+        for (path, expected) in [
+            ("docs/images/../../../outside.png", StatusCode::FORBIDDEN),
+            (
+                "docs/images/not-image.txt",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            ("docs/images/missing.png", StatusCode::NOT_FOUND),
         ] {
             let response = app
                 .clone()
                 .oneshot(request(uri(path), local))
                 .await
                 .unwrap();
-            assert_ne!(
-                response.status(),
-                StatusCode::OK,
-                "unexpectedly served {path}"
-            );
+            assert_eq!(response.status(), expected, "wrong response for {path}");
         }
         let huge = app
             .clone()
