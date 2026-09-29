@@ -778,12 +778,20 @@ mod warm_tests {
 
     #[cfg(unix)]
     async fn wait_for_setup_exit(pid_file: &std::path::Path) {
-        wait_for_file(pid_file, "setup script did not record its PID").await;
-        let pid: i32 = std::fs::read_to_string(pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // `echo $$ > pid_file` truncates the file before writing the PID, so
+        // polling on existence alone can read it mid-truncate.
+        let content = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let content = std::fs::read_to_string(pid_file).unwrap_or_default();
+                if !content.trim().is_empty() {
+                    return content;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("setup script did not record its PID"));
+        let pid: i32 = content.trim().parse().unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while unsafe { libc::kill(pid, 0) } == 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
