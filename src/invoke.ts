@@ -261,25 +261,35 @@ export function emitLocalEvent(event: string, payload: unknown): void {
 	for (const handler of listeners) handler(payload);
 }
 
+/**
+ * Wrap a Tauri UnlistenFn (from `@tauri-apps/api/event` `listen`/`once`, or any
+ * Window/Webview method built on it — `.listen()`, `.onCloseRequested()`, etc.)
+ * so repeat calls are a safe no-op.
+ *
+ * Tauri's UnlistenFn is `async () => _unlisten(...)`. A second call — a duplicate
+ * dispose, or one racing a webview reload that already cleared the backend
+ * registry — throws *inside* that async fn and surfaces as a rejected promise,
+ * not a sync throw, hence the wrap + `.catch()`. The outer try/catch covers the
+ * (defensive) sync-throw path. The listener is already gone either way; swallow.
+ * Every caller of a Tauri listen-returning API must dispose through this guard
+ * instead of calling the raw UnlistenFn directly.
+ */
+export function guardTauriUnlisten(unlisten: () => unknown): () => void {
+	let disposed = false;
+	return () => {
+		if (disposed) return;
+		disposed = true;
+		try {
+			void Promise.resolve(unlisten()).catch(() => {});
+		} catch {
+			// listener already gone
+		}
+	};
+}
+
 export function listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
 	if (isTauri()) {
-		return tauriListen<T>(event, handler).then((unlisten) => {
-			let disposed = false;
-			return () => {
-				if (disposed) return;
-				disposed = true;
-				try {
-					// Tauri's UnlistenFn is `async () => _unlisten(...)`, so a double-unregister
-					// (listeners[eventId] is undefined) throws *inside* the async fn and surfaces
-					// as a rejected promise, not a sync throw — hence the wrap + .catch(). The
-					// outer try/catch covers the (defensive) sync-throw path. The listener is
-					// already gone either way; swallow.
-					void Promise.resolve(unlisten()).catch(() => {});
-				} catch {
-					// listener already gone
-				}
-			};
-		});
+		return tauriListen<T>(event, handler).then((unlisten) => guardTauriUnlisten(unlisten));
 	}
 
 	// Browser mode: SSE via shared EventSource
