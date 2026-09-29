@@ -60,10 +60,11 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// cards and have no static scroll target. Workspace trust appears only in the
 	// expanded Claude and Codex cards, so a global search result could not open
 	// the right card or scroll to its control.
-	// The orphan is the machine selector's "Configure agents on" label. It is not
-	// a setting — it scopes every setting below it to one machine — so it sits
-	// above the first heading on purpose and has nothing to scroll to.
-	agents: { dynamic: 10, orphans: 1 },
+	// The machine selector's "Configure agents on" label scopes the page. The
+	// idle-close control sits inside a collapsed, per-agent card: search cannot
+	// identify which card to expand or scroll to its hidden control. Neither has
+	// a stable search target.
+	agents: { dynamic: 10, orphans: 2 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -149,6 +150,14 @@ describe("settings search index — drift guard", () => {
 			dynamic: extracted.dynamic,
 			orphans: extracted.settings.filter((s) => !s.section).length,
 		}).toEqual(UNINDEXABLE[tab]);
+	});
+
+	it("classifies only the machine selector and per-agent idle close as Agents orphans", () => {
+		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
+		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Close idle managed child after",
+			"Configure agents on",
+		]);
 	});
 
 	it("indexes no tab the panel cannot open", () => {
