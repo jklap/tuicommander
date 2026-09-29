@@ -503,6 +503,54 @@ function existingCommentSpans(source: string): Array<{ start: number; end: numbe
 	return spans;
 }
 
+/** Source range of tweak syntax that is not part of the reader's text. */
+export interface TweakSyntaxRegion {
+	from: number;
+	to: number;
+}
+
+/** One inline comment: its hidden begin/end syntax and the visible highlighted text between them. */
+export interface TweakInlineSpan {
+	id: string;
+	comment: string;
+	begin: TweakSyntaxRegion;
+	highlight: TweakSyntaxRegion;
+	end: TweakSyntaxRegion;
+}
+
+/**
+ * Locate every piece of tweak syntax in `source` so an editor can hide it:
+ * inline spans, and standalone regions (convention header, block and item
+ * comments). Uses the same patterns as the parser, so what the editor hides is
+ * exactly what the viewer strips.
+ */
+export function findTweakSyntax(source: string): { spans: TweakInlineSpan[]; standalone: TweakSyntaxRegion[] } {
+	const spans: TweakInlineSpan[] = [];
+	const standalone: TweakSyntaxRegion[] = [];
+	const headerLength = conventionHeaderPrefixLength(source);
+	if (headerLength > 0) standalone.push({ from: 0, to: headerLength });
+	FULL_RE.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = FULL_RE.exec(source)) !== null) {
+		const [whole, id, highlighted, , body] = match;
+		const beginEnd = match.index + `<!--tweak:begin:${id}-->`.length;
+		const highlightEnd = beginEnd + highlighted.length;
+		spans.push({
+			id,
+			comment: unescapeBody(body),
+			begin: { from: match.index, to: beginEnd },
+			highlight: { from: beginEnd, to: highlightEnd },
+			end: { from: highlightEnd, to: match.index + whole.length },
+		});
+	}
+	for (const re of [BLOCK_RE, ITEM_RE]) {
+		re.lastIndex = 0;
+		while ((match = re.exec(source)) !== null) standalone.push({ from: match.index, to: match.index + match[0].length });
+	}
+	standalone.sort((a, b) => a.from - b.from);
+	return { spans, standalone };
+}
+
 /**
  * Thrown by `insertTweakComment` when the selection overlaps an existing
  * comment. Nesting one `<!--tweak-->` span inside another is unrepresentable:
