@@ -360,6 +360,8 @@ export interface AgentRunConfig {
 /** Per-agent settings (matches Rust AgentSettings) */
 export interface AgentSettingsConfig {
 	run_configs: AgentRunConfig[];
+	/** Minutes before an idle managed child closes; zero disables it. */
+	idle_close_minutes?: number;
 	auto_retry_on_error?: boolean;
 	headless_template?: string;
 	/** Environment feature flags — key→value pairs injected into every spawn of this agent */

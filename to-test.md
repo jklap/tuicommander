@@ -29,6 +29,10 @@
 
 # To Test
 
+## Managed child idle close (story 1209-cc47) — Rust restart required
+
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. The current live backend has not loaded this Rust change.
+
 ## AI Chat prompt parking (story 1228-becb)
 
 - [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.

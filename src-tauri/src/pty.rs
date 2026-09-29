@@ -3162,6 +3162,17 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     )
 }
 
+/// Fresh process inventory for the idle-close guard. Detached `tuic bg`
+/// runners are outside the agent's PTY process tree.
+pub(crate) fn live_bg_runner_commands() -> Option<Vec<String>> {
+    process_tree_snapshot().map(|processes| {
+        processes
+            .into_iter()
+            .map(|process| process.command)
+            .collect()
+    })
+}
+
 #[cfg(not(windows))]
 fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessTreeEntry>> {
     if !success {
@@ -7667,6 +7678,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // periodic sweep over ALL peers with a mail-retention rule, which is a policy
     // decision, not a cleanup tweak.
     state.session_maps.session_parent.remove(session_id);
+    state.keep_open_sessions.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.

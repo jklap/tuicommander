@@ -2074,6 +2074,8 @@ pub struct AppState {
     pub(crate) relay: RelayState,
     /// Registered peer agents for inter-agent messaging (tuic_session → PeerAgent)
     pub peer_agents: DashMap<String, PeerAgent>,
+    /// Explicit opt-out for managed children; removed with the PTY.
+    pub(crate) keep_open_sessions: DashSet<String>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
     /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
     /// notices coalesce; other messages evict FIFO at capacity.
@@ -3286,6 +3288,7 @@ impl AppState {
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
+            keep_open_sessions: DashSet::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
