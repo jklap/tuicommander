@@ -117,7 +117,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 			// since `loadReview`'s loading state only shows when `!review()`.
 			setReview(null);
 			setReviewError(null);
-			setOpenStepFiles(new Set());
+			setOpenStepFiles(new Set<string>());
 			setWarningsDismissed(false);
 			scrollEl()?.scrollTo({ top: 0 });
 		}
