@@ -1215,6 +1215,39 @@ test can reach is the live process: these are the checks that need one.
 - [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there. _(NOT VERIFIED 2026-09-29: Needs real ego processes (ps ax | grep ego) per repo root.)_
 - [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_
 
+## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
+
+- [x] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of
+  output/events in one of them (e.g. `yes | head -c 5000000` or spawn several nested test agents
+  the way the original incident did). Watch `GET /logs?source=diagnostics` (or the app log) for a
+  `SESSION OVERLOAD` warning naming the hot session specifically, even if total process CPU never
+  crosses 80% — this is the new independent trigger and can't be exercised by a unit test since it
+  needs a real busy session under real load. _(verified 2026-09-30 against a standalone instance:
+  `yes hello | head -c 10000000` into a plain shell session produced
+  `SESSION OVERLOAD: <session_id> crossed output_bytes_per_tick = 5834608 in one tick` in the
+  diagnostics log, naming the session specifically.)_
+- [x] [HUMAN] While that burst is running, `curl http://localhost:9876/diagnostics/sessions` and
+  confirm the hot session shows a nonzero `events_since_last_tick`/`output_bytes_since_last_tick`,
+  and that a second immediate call shows the SAME numbers (the read must not reset what the
+  watchdog's own next tick needs). _(verified 2026-09-30: two immediate back-to-back calls both
+  returned `output_bytes_since_last_tick: 3500930` for the hot session; a later poll after the
+  watchdog's own tick correctly showed it reset to 0 — peek vs. drain both behave as designed.)_
+- [ ] [HUMAN] Open a session's grid WebSocket in a browser tab (`?format=grid`), then artificially
+  starve it (e.g. background the browser tab or pause its JS) while generating a large burst of
+  output on that same session — confirm the tab's connection actually drops/reconnects rather than
+  the grid silently going stale forever. This is the real-world shape the `0b421c3a` incident had;
+  the automated tests prove the mechanism in isolation but not against a real browser client.
+  **Genuinely needs a real browser** (2026-09-30: confirmed the underlying mechanism itself is
+  solid — `mcp_http::session::tests::a_grid_ws_that_lags_past_the_cumulative_bound_disconnects`,
+  `::a_session_ws_that_lags_past_the_cumulative_bound_disconnects`, and
+  `mcp_http::sse_routes::tests::a_stream_that_lags_past_the_cumulative_bound_closes_instead_of_looping_forever`
+  all pass against a real network socket — but faithfully reproducing an OS-level backgrounded/
+  throttled tab, rather than a scripted approximation, is exactly the timing-sensitive case the
+  escalation ladder reserves for a real human check.)
+- [ ] Delete this section once verified — the underlying mechanism has full unit + real-network
+  test coverage (`cpu_watchdog.rs`, `mcp_http/session.rs`, `mcp_http/sse_routes.rs`); only the
+  real-browser-backgrounding bullet above still needs a human.
+
 ## Consent prompt for wrapping your own claude/codex/goose function (2026-09-25) — **Rust + frontend, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, open a new terminal tab in a repo whose `.zshrc.d` defines a `claude()` (or `codex()`/`goose()`) function, with that agent's "wrap-user-function" setting still undecided. Confirm the dialog appears exactly once (not once per tab if you open several), explains the flag purpose and the duplicate-flag caveat, and that the three buttons ("Wrap my function" / "Leave it alone" / "Not now") do what they say: Wrap makes the next new tab's `claude` invocation get the flag (and nothing is wrapped before you click it); Leave alone persists and never re-prompts for that function; Not now dismisses but re-prompts on the next app restart (not on the next tab, within the same run). Then EDIT the function body and open a new tab: the prompt must come back and the edited function must not be wrapped until you answer.
