@@ -1,5 +1,6 @@
 use super::{
     NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStore,
+    StoryTransition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,9 @@ pub enum StoryAction {
     GetStory {
         story_id: String,
     },
+    TransitionHistory {
+        story_id: String,
+    },
     AddDependency {
         story_id: String,
         dependency_id: String,
@@ -64,6 +68,7 @@ pub enum StoryReply {
     PlanView(PlanView),
     Story(Story),
     Stories(Vec<Story>),
+    Transitions(Vec<StoryTransition>),
 }
 
 /// All transports use this boundary, so an identifier alone never grants cross-project access.
@@ -71,6 +76,15 @@ pub fn story_action(
     project: &str,
     action: StoryAction,
     actor_session: Option<&str>,
+) -> Result<StoryReply, String> {
+    story_action_with_source(project, action, actor_session, false)
+}
+
+fn story_action_with_source(
+    project: &str,
+    action: StoryAction,
+    actor_session: Option<&str>,
+    unauthenticated_http: bool,
 ) -> Result<StoryReply, String> {
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
@@ -136,6 +150,12 @@ pub fn story_action(
             Ok(StoryReply::Stories(store.list_stories(&plan_id)?))
         }
         StoryAction::GetStory { story_id } => Ok(StoryReply::Story(story_in_project(&story_id)?)),
+        StoryAction::TransitionHistory { story_id } => {
+            story_in_project(&story_id)?;
+            Ok(StoryReply::Transitions(
+                store.transition_history(&story_id)?,
+            ))
+        }
         StoryAction::AddDependency {
             story_id,
             dependency_id,
@@ -181,12 +201,12 @@ pub fn story_action(
             command,
         } => {
             story_in_project(&story_id)?;
-            Ok(StoryReply::Story(store.transition_for_actor(
-                &story_id,
-                expected_revision,
-                command,
-                actor_session,
-            )?))
+            let changed = if unauthenticated_http && actor_session.is_none() {
+                store.transition_from_local_api(&story_id, expected_revision, command)?
+            } else {
+                store.transition_for_actor(&story_id, expected_revision, command, actor_session)?
+            };
+            Ok(StoryReply::Story(changed))
         }
     }
 }
@@ -197,6 +217,27 @@ pub fn story_action_for_session(
     project: &str,
     action: StoryAction,
     session_id: Option<&str>,
+) -> Result<StoryReply, String> {
+    story_action_for_session_with_source(state, project, action, session_id, false)
+}
+
+/// Sessionless HTTP transitions record LocalApi provenance. A managed session
+/// may approve only a story claimed by a different session.
+pub fn story_action_for_http(
+    state: &crate::AppState,
+    project: &str,
+    action: StoryAction,
+    session_id: Option<&str>,
+) -> Result<StoryReply, String> {
+    story_action_for_session_with_source(state, project, action, session_id, true)
+}
+
+fn story_action_for_session_with_source(
+    state: &crate::AppState,
+    project: &str,
+    action: StoryAction,
+    session_id: Option<&str>,
+    unauthenticated_http: bool,
 ) -> Result<StoryReply, String> {
     if let Some(session) = session_id {
         let session_project = crate::progress::project_for_session(state, session)
@@ -210,7 +251,7 @@ pub fn story_action_for_session(
     if matches!(action, StoryAction::Claim { .. }) && session_id.is_none() {
         return Err("claim requires a live session".into());
     }
-    story_action(project, action, session_id)
+    story_action_with_source(project, action, session_id, unauthenticated_http)
 }
 
 #[cfg(test)]

@@ -1,0 +1,283 @@
+use super::model::*;
+
+/// Pure projection of a committed event. Replaying the event stream must rebuild
+/// the exact snapshot stored by the writer transaction.
+pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<RunSnapshot, String> {
+    if let RunEventKind::Started { initial } = &event.kind {
+        if previous.is_some() || event.sequence != 1 || initial.sequence != 0 {
+            return Err("invalid workflow start event".into());
+        }
+        let mut snapshot = (**initial).clone();
+        snapshot.sequence = event.sequence;
+        return Ok(snapshot);
+    }
+    let mut snapshot = previous.ok_or("workflow event has no start")?;
+    if event.sequence != snapshot.sequence + 1 {
+        return Err("workflow event sequence gap".into());
+    }
+    if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled)
+        && !matches!(&event.kind, RunEventKind::CanonicalRecertified { .. })
+    {
+        return Err("terminal workflow cannot advance".into());
+    }
+    match &event.kind {
+        RunEventKind::Started { .. } => unreachable!(),
+        RunEventKind::PlanningClosed { fingerprint } => {
+            snapshot.planning_fingerprint = Some(fingerprint.clone());
+            snapshot.verification_fingerprint = None;
+        }
+        RunEventKind::PlanningReopened => {
+            snapshot.planning_fingerprint = None;
+            snapshot.verification_fingerprint = None;
+        }
+        RunEventKind::AttemptStarted { attempt } => {
+            if snapshot
+                .attempts
+                .iter()
+                .any(|existing| existing.id == attempt.id)
+            {
+                return Err("duplicate node attempt".into());
+            }
+            if attempt.story_id != snapshot.plan_id {
+                let story = snapshot
+                    .stories
+                    .iter_mut()
+                    .find(|story| story.story_id == attempt.story_id);
+                if let Some(story) = story {
+                    story.attempt_ids.push(attempt.id.clone());
+                } else {
+                    snapshot.stories.push(StoryExecution {
+                        story_id: attempt.story_id.clone(),
+                        accepted: false,
+                        accepted_revision: None,
+                        worktree_path: None,
+                        attempt_ids: vec![attempt.id.clone()],
+                        check_receipts: vec![],
+                        integration_receipt: None,
+                    });
+                }
+            }
+            snapshot.attempts.push(attempt.clone());
+        }
+        RunEventKind::WorktreeAssigned { story_id, path } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if story.worktree_path.is_some() {
+                return Err("story worktree already assigned".into());
+            }
+            story.worktree_path = Some(path.clone());
+        }
+        RunEventKind::AttemptReported {
+            attempt_id,
+            generation,
+            outcome,
+            report,
+        } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.generation != *generation || attempt.state != AttemptState::Running {
+                return Err("attempt report is no longer current".into());
+            }
+            attempt.state = AttemptState::Reported;
+            attempt.outcome = Some(*outcome);
+            attempt.report = report.clone();
+            if *outcome == AttemptOutcome::NeedsInput {
+                snapshot.status = RunStatus::Paused;
+            }
+        }
+        RunEventKind::InputAnswered { attempt_id, answer } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.outcome != Some(AttemptOutcome::NeedsInput) || attempt.input_answer.is_some()
+            {
+                return Err("attempt has no pending input request".into());
+            }
+            attempt.input_answer = Some(answer.clone());
+        }
+        RunEventKind::AgentBound {
+            attempt_id,
+            binding,
+        } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.state != AttemptState::Running || attempt.agent.is_some() {
+                return Err("node attempt cannot bind an agent".into());
+            }
+            let effect = snapshot
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == binding.effect_id)
+                .ok_or("spawn effect not found")?;
+            if effect.kind != EffectKind::SpawnAgent
+                || effect.state != EffectState::Intended
+                || effect.key != format!("spawn:{attempt_id}")
+            {
+                return Err("spawn effect is not intended".into());
+            }
+            effect.state = EffectState::Succeeded;
+            attempt.agent = Some(binding.clone());
+        }
+        RunEventKind::LateReportIgnored { .. } => {}
+        RunEventKind::AttemptInterrupted { attempt_id } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.state != AttemptState::Running {
+                return Err("attempt is no longer running".into());
+            }
+            attempt.state = AttemptState::Interrupted;
+            attempt.outcome = Some(AttemptOutcome::Interrupted);
+            snapshot.status = RunStatus::Paused;
+        }
+        RunEventKind::EffectReserved { effect } => {
+            if snapshot
+                .effects
+                .iter()
+                .any(|existing| existing.id == effect.id || existing.key == effect.key)
+            {
+                return Err("effect key already reserved".into());
+            }
+            match effect.kind {
+                EffectKind::SpawnAgent => {
+                    snapshot.spawns = snapshot
+                        .spawns
+                        .checked_add(1)
+                        .ok_or("spawn counter overflow")?
+                }
+                EffectKind::CreateStory => {
+                    snapshot.story_creations = snapshot
+                        .story_creations
+                        .checked_add(1)
+                        .ok_or("story creation counter overflow")?
+                }
+                _ => {}
+            }
+            if snapshot.spawns > snapshot.limits.max_spawns
+                || snapshot.story_creations > snapshot.limits.max_story_creations
+            {
+                return Err("workflow effect budget exhausted".into());
+            }
+            snapshot.effects.push(effect.clone());
+        }
+        RunEventKind::EffectChanged { effect_id, state } => {
+            let effect = snapshot
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == *effect_id)
+                .ok_or("effect intent not found")?;
+            if !matches!(
+                (effect.state, *state),
+                (
+                    EffectState::Intended,
+                    EffectState::Succeeded | EffectState::Failed | EffectState::Uncertain
+                ) | (
+                    EffectState::Uncertain,
+                    EffectState::Succeeded | EffectState::Failed
+                )
+            ) {
+                return Err("effect state cannot change this way".into());
+            }
+            effect.state = *state;
+            if *state == EffectState::Uncertain {
+                snapshot.status = RunStatus::Paused;
+            }
+        }
+        RunEventKind::LoopAdvanced => {
+            snapshot.loops = snapshot
+                .loops
+                .checked_add(1)
+                .ok_or("loop counter overflow")?;
+            if snapshot.loops > snapshot.limits.max_loops {
+                return Err("workflow loop budget exhausted".into());
+            }
+        }
+        RunEventKind::StoryAccepted { story_id, revision } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id);
+            if let Some(story) = story {
+                story.accepted = true;
+                story.accepted_revision = Some(*revision);
+            } else {
+                snapshot.stories.push(StoryExecution {
+                    story_id: story_id.clone(),
+                    accepted: true,
+                    accepted_revision: Some(*revision),
+                    worktree_path: None,
+                    attempt_ids: vec![],
+                    check_receipts: vec![],
+                    integration_receipt: None,
+                });
+            }
+        }
+        RunEventKind::CheckRecorded { story_id, receipt } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if !story.accepted {
+                return Err("story has not been accepted".into());
+            }
+            story.check_receipts.push(receipt.clone());
+        }
+        RunEventKind::StoryIntegrated { story_id, receipt } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if !story.accepted || story.accepted_revision != Some(receipt.story_revision) {
+                return Err("integration receipt has a stale story revision".into());
+            }
+            if story.integration_receipt.is_some() {
+                return Err("story has already been integrated".into());
+            }
+            story.integration_receipt = Some(receipt.clone());
+        }
+        RunEventKind::CanonicalRecertified { receipt } => {
+            snapshot.canonical_recertification = Some(receipt.clone());
+            snapshot.verification_fingerprint = None;
+        }
+        RunEventKind::VerificationPassed { fingerprint } => {
+            snapshot.verification_fingerprint = Some(fingerprint.clone())
+        }
+        RunEventKind::Paused => snapshot.status = RunStatus::Paused,
+        RunEventKind::Resumed => snapshot.status = RunStatus::Running,
+        RunEventKind::Cancelled => {
+            // A spawn may already be in flight outside this transaction. Keep
+            // its outcome explicit even though terminal runs cannot accept a
+            // later binding or reconciliation event.
+            for effect in &mut snapshot.effects {
+                if effect.state == EffectState::Intended {
+                    effect.state = EffectState::Uncertain;
+                }
+            }
+            for attempt in &mut snapshot.attempts {
+                if attempt.state == AttemptState::Running {
+                    attempt.state = AttemptState::Interrupted;
+                    attempt.outcome = Some(AttemptOutcome::Interrupted);
+                }
+            }
+            snapshot.status = RunStatus::Cancelled;
+        }
+        RunEventKind::Completed => snapshot.status = RunStatus::Completed,
+    }
+    snapshot.sequence = event.sequence;
+    Ok(snapshot)
+}

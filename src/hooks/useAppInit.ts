@@ -11,6 +11,7 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
+import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
@@ -387,11 +388,15 @@ export async function initApp(deps: AppInitDeps) {
 	// historical notifications. Boot reads nothing: the journal is queried when
 	// the dialog opens, for the one project it shows.
 	subscribeEvents(
-		{ "progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload) },
+		{
+			"progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload),
+			"workflow-run-changed": (payload) => workflowRunSignals.accept(payload),
+		},
 		{
 			onResync: () => {
 				const project = progressStore.requestedProject();
 				if (progressStore.dialogVisible() && project) void progressStore.refreshProject(project);
+				workflowRunSignals.resync();
 			},
 		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));

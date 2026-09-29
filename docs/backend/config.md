@@ -1077,6 +1077,18 @@ stored story statuses rather than stored separately or decoded a second time
 after a story list. A manual claim is released when its
 terminal closes.
 
+## Workflow Definition Storage (`workflows.sqlite3`)
+
+**Module:** `src-tauri/src/workflows/` (`definition.rs`, `store.rs`, `api.rs`)
+
+Project-scoped workflow drafts and immutable published revisions use `<config dir>/workflows.sqlite3` on the owning machine. Draft edits use an expected revision. Publication validates graph structure and pinned story-template references in an immediate SQLite transaction. The two built-in templates are seeded atomically once per project. This database holds definitions only; run events and attempts belong to the workflow runtime.
+
+## Workflow Run Storage (`workflow_runs.sqlite3`)
+
+**Module:** `src-tauri/src/workflows/run/`
+
+Plan runs, their sequenced event history, idempotent command receipts, node attempts, story executions, and external effect intents use `<config dir>/workflow_runs.sqlite3` on the owning machine. WAL and immediate write transactions keep each event and its projections together. The database is independent of terminal sessions and draft definitions; active runs pin published definition revisions.
+
 ## Additional Commands
 
 | Command | Module | Description |

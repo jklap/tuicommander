@@ -838,6 +838,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	story_capabilities: {
 		map: () => ({ method: "GET", path: "/stories/capabilities" }),
 	},
+	workflow_definition_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/workflows/definition/action?path=${p("project")}`,
+			body: args.action,
+		}),
+	},
+	workflow_run_action: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/workflows/run/action?path=${p("project")}`,
+			body: args.action,
+		}),
+	},
 	progress_delete: {
 		map: (args, p) => ({ method: "POST", path: `/progress/delete?path=${p("project")}`, body: args.input }),
 	},
