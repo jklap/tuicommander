@@ -496,7 +496,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		if (tab.type !== "file") return undefined;
 		const ft = tab as FileTab;
 		const root = ft.fsRoot || ft.repoPath;
-		if (!root && isAbsolutePath(ft.filePath)) {
+		if (isAbsolutePath(ft.filePath)) {
 			return pathDirname(ft.filePath) || "/";
 		}
 		const dir = pathDirname(ft.filePath);
@@ -508,7 +508,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		if (tab.type !== "file") return null;
 		const ft = tab as FileTab;
 		const root = ft.fsRoot || ft.repoPath;
-		return root ? `${root}/${ft.filePath}` : ft.filePath;
+		return isAbsolutePath(ft.filePath) || !root ? ft.filePath : joinPath(root, ft.filePath);
 	};
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));

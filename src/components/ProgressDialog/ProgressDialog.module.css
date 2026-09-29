@@ -21,6 +21,14 @@
 .terminalSelect:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .filter { display: flex; align-items: center; gap: 6px; color: var(--fg-secondary); font-size: var(--font-xs); cursor: pointer; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .embedded .header { flex-wrap: wrap; }
+  .embedded .title { flex: 1 1 100%; }
+  .embedded .terminalSelect { flex: 1 1 110px; min-width: 0; }
+  .embedded .viewToggle, .embedded .filter { flex: 0 0 auto; }
+}
+
 .iconButton { display: flex; align-items: center; border: 0; background: transparent; color: var(--fg-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); }
 .iconButton:hover { background: var(--bg-highlight); color: var(--fg-primary); }
 

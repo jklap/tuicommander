@@ -148,8 +148,18 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+Files, Progress, and Activity; Settings opens from the app-bar overflow.
+
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
+Waiting sessions sort above idle agents and shells without changing order within each
+group. The new-session sheet chooses an agent and repository, then opens the new
+session after `spawn_agent` succeeds. The question counter opens the first waiting
+session; each banner shows its session name and repository.
+Each session card uses separate buttons to open or kill the session. Both have
+accessible names, and the kill button has a 44 px hit area. The list reserves
+space below its last card so the floating new-session button cannot cover it.
 
 `SessionDetailScreen` uses one 56 px header row with the agent logo and state dot,
 display name, repository/branch and elapsed state, tasks count, and overflow.
@@ -164,6 +174,12 @@ the regular Files bottom tab still starts at the repository picker.
 Markdown references in output use the desktop path resolver and open the Files
 viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
+
+The detail keybar and composer each keep their previous total height while their
+controls use 44 px touch targets. The keybar slash button opens a local
+agent-specific command menu without writing to the PTY; picking a command
+updates the input, while the close button restores the prior draft. A vanished
+session keeps its output visible but disables both input controls.
 
 ## Core Components
 
@@ -479,7 +495,9 @@ component only renders what `progress_flow` returns.
 
 `embedded` drops the overlay and the floating box so the mobile PWA's Progress
 tab can host the same component full-bleed; a whole bottom tab is already the
-modal surface a dialog would create.
+modal surface a dialog would create. On phone widths, its header wraps the
+title, project and terminal selectors, view toggle, and blocked filter so each
+control remains visible without horizontal scrolling.
 
 ### ConfirmDialog (`ConfirmDialog/`)
 
