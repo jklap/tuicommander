@@ -24,8 +24,9 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
-On the mobile PWA, **Chat** is the first tab and opens without choosing a
-repository. It uses the same workspace root and saved sessions as desktop.
+On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
+tab, and opens without choosing a repository. It uses the same workspace root
+and saved sessions as desktop.
 A repository in a push link is sent with a message as context, not used as the
 chat root. The conversation picker shows the titles of saved sessions;
 choose one to load its history, or tap **New**. Messages, collapsed tool
