@@ -54,7 +54,6 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--fg-primary);
-  text-transform: capitalize;
 }
 
 .meta {

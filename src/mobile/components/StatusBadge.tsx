@@ -8,7 +8,7 @@ interface StatusBadgeProps {
 
 const STATUS_LABELS: Record<SessionStatus, string> = {
 	idle: "Idle",
-	busy: "Activity",
+	busy: "Working",
 	"sub-tasks": "Sub-tasks",
 	question: "Input",
 	error: "Error",

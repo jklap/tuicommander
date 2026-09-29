@@ -150,6 +150,10 @@ events, so another window or a phone sees the same order and cancellations.
 
 `SessionsScreen` filters its existing session snapshot locally while search is open;
 the backend list and card order remain unchanged. Closing search clears the query.
+Waiting sessions sort above idle agents and shells without changing order within each
+group. The new-session sheet chooses an agent and repository, then opens the new
+session after `spawn_agent` succeeds. The question counter opens the first waiting
+session; each banner shows its session name and repository.
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
