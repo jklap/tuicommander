@@ -1937,7 +1937,7 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "create" | "input" | "kill" | "close")
+    matches!(action, "create" | "input" | "kill" | "close" | "resize")
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
@@ -3165,17 +3165,14 @@ fn handle_session(
             if let Err(msg) = super::validate_terminal_size(rows, cols) {
                 return serde_json::json!({"error": msg});
             }
-            let entry = match state.session_maps.sessions.get(session_id) {
-                Some(e) => e,
-                None => return serde_json::json!({"error": "Session not found"}),
-            };
-            if let Err(e) = entry.lock().master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }) {
-                return serde_json::json!({"error": format!("Resize failed: {}", e)});
+            // Same core as HTTP resize_session: grid before SIGWINCH, same-dims no-op.
+            match crate::pty::resize_session_core(state, session_id, rows, cols) {
+                Ok(Some(frame)) => crate::pty::send_grid_frame(state, session_id, frame),
+                Ok(None) => {}
+                Err(e) if e.starts_with("Session not found") => {
+                    return serde_json::json!({"error": "Session not found"});
+                }
+                Err(e) => return serde_json::json!({"error": format!("Resize failed: {}", e)}),
             }
             serde_json::json!({"ok": true})
         }
@@ -17702,6 +17699,33 @@ mod tests {
 
     fn non_loopback_addr() -> SocketAddr {
         "192.168.1.42:12345".parse().unwrap()
+    }
+
+    /// Story 1285-df56: the MCP arm resized only the PTY master, so the grid
+    /// (and terminal/scroll-info) kept the old geometry.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_updates_grid_dimensions() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_A, TEST_SPAWN_CWD);
+        state.grid.vt_log_buffers.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 500)),
+        );
+
+        let response = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "resize", "session_id": TEST_UUID_A, "rows": 30, "cols": 100}),
+            None,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        let vt = state.grid.vt_log_buffers.get(TEST_UUID_A).unwrap();
+        let vt = vt.lock();
+        assert_eq!((vt.grid_screen_lines(), vt.grid_columns()), (30, 100));
     }
 
     // search_tools
