@@ -48,7 +48,11 @@ fn read_request(stream: &mut std::os::unix::net::UnixStream) -> (Vec<String>, se
     )
 }
 
-fn respond(stream: &mut std::os::unix::net::UnixStream, body: &str, init: bool) {
+fn respond(
+    stream: &mut std::os::unix::net::UnixStream,
+    body: &str,
+    init: bool,
+) -> std::io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
@@ -59,7 +63,6 @@ fn respond(stream: &mut std::os::unix::net::UnixStream, body: &str, init: bool) 
             ""
         }
     )
-    .unwrap();
 }
 
 fn tool_response(text: &str, is_error: bool) -> String {
@@ -108,7 +111,12 @@ fn run_with_stub_delay(
                 std::thread::sleep(delay);
                 response.clone()
             };
-            respond(&mut stream, &body, index == usize::from(with_health));
+            let reply = respond(&mut stream, &body, index == usize::from(with_health));
+            if delay.is_zero() || body != response {
+                reply.unwrap();
+            } else if let Err(error) = reply {
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+            }
         }
         requests
     });
@@ -159,14 +167,15 @@ fn agent_stats_uses_the_equivalent_single_request_http_route() {
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let health = read_request(&mut stream);
-        respond(&mut stream, r#"{"ok":true}"#, false);
+        respond(&mut stream, r#"{"ok":true}"#, false).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
         let stats = read_request(&mut stream);
         respond(
             &mut stream,
             r#"{"active_sessions":2,"max_sessions":4,"available_slots":2}"#,
             false,
-        );
+        )
+        .unwrap();
         (health, stats)
     });
     let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
@@ -254,6 +263,101 @@ fn mcp_agent_wait_keeps_the_socket_open_for_eight_seconds() {
     );
     assert!(start.elapsed() >= Duration::from_secs(8));
     assert_eq!(requests[1].1["params"]["arguments"]["timeout_ms"], 8000);
+}
+
+#[test]
+fn mcp_worktree_remove_accepts_a_reply_after_four_seconds() {
+    let (output, requests) = run_with_stub_delay(
+        &[
+            "mcp",
+            "repo",
+            r#"{"action":"worktree_remove","path":"/repo","branch":"feature"}"#,
+        ],
+        None,
+        Some("peer-1"),
+        r#"{"ok":true}"#,
+        false,
+        Duration::from_secs(4),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{\"ok\":true}\n");
+    assert_eq!(
+        requests[1].1["params"]["arguments"]["action"],
+        "worktree_remove"
+    );
+}
+
+#[test]
+fn mcp_worktree_create_accepts_a_reply_after_four_seconds() {
+    let (output, requests) = run_with_stub_delay(
+        &[
+            "mcp",
+            "repo",
+            r#"{"action":"worktree_create","path":"/repo","branch":"feature"}"#,
+        ],
+        None,
+        Some("peer-1"),
+        r#"{"ok":true}"#,
+        false,
+        Duration::from_secs(4),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{\"ok\":true}\n");
+    assert_eq!(
+        requests[1].1["params"]["arguments"]["action"],
+        "worktree_create"
+    );
+}
+
+#[test]
+fn mcp_short_read_timeout_warns_that_the_action_may_finish() {
+    let (output, _) = run_with_stub_delay(
+        &["mcp", "session", r#"{"action":"list"}"#],
+        None,
+        Some("peer-1"),
+        r#"{"sessions":[]}"#,
+        false,
+        Duration::from_secs(4),
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("may still complete"), "{error}");
+    assert!(
+        !error.contains("Resource temporarily unavailable"),
+        "{error}"
+    );
+}
+
+#[test]
+fn ls_still_times_out_against_a_server_that_never_replies() {
+    let (path, listener) = socket();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        std::thread::sleep(Duration::from_secs(4));
+        request
+    });
+    let start = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+        .args(["ls", "--json"])
+        .env("TUIC_SOCKET", &path)
+        .output()
+        .unwrap();
+    let elapsed = start.elapsed();
+    let request = server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(request.0[0].starts_with("GET /sessions HTTP/1.1"));
+    assert!(!output.status.success());
+    assert!(elapsed >= Duration::from_millis(2500), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(4500), "{elapsed:?}");
 }
 
 #[test]
