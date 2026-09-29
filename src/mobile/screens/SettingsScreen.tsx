@@ -24,6 +24,8 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	const [serverUrl, setServerUrl] = createSignal("");
 	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
 	const [theme, setTheme] = createSignal(mobileTheme());
+	const [themeReady, setThemeReady] = createSignal(false);
+	const [themeError, setThemeError] = createSignal<string | null>(null);
 	const [pushState, setPushState] = createSignal<PushState>("unsupported");
 	const [pushLoading, setPushLoading] = createSignal(false);
 	const [pushError, setPushError] = createSignal<string | null>(null);
@@ -31,7 +33,13 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	onMount(() => {
 		setServerUrl(window.location.origin);
 		void detectPushState().then(setPushState);
-		void loadMobileTheme();
+		void loadMobileTheme()
+			.then(setTheme)
+			.catch((error: unknown) => {
+				appLogger.warn("app", "Could not load mobile theme", error);
+				setThemeError("Could not load theme preference");
+			})
+			.finally(() => setThemeReady(true));
 		void fetch("/api/version")
 			.then(async (response) => {
 				if (response.ok) {
@@ -220,16 +228,31 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						class={styles.select}
 						aria-label="Theme"
 						value={theme()}
+						disabled={!themeReady()}
 						onChange={(event) => {
 							const next = event.currentTarget.value === "vscode-light" ? "vscode-light" : "commander";
+							const previous = theme();
 							setTheme(next);
-							setMobileTheme(next);
+							setThemeReady(false);
+							setThemeError(null);
+							void setMobileTheme(next)
+								.catch((error: unknown) => {
+									setTheme(previous);
+									appLogger.warn("app", "Could not save mobile theme", error);
+									setThemeError("Could not save theme preference");
+								})
+								.finally(() => setThemeReady(true));
 						}}
 					>
 						<option value="commander">Dark</option>
 						<option value="vscode-light">Light</option>
 					</select>
 				</label>
+				<Show when={themeError()}>
+					<div class={styles.hint} role="alert" style={{ color: "var(--error)" }}>
+						{themeError()}
+					</div>
+				</Show>
 			</section>
 
 			<section class={styles.section}>

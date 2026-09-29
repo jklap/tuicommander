@@ -184,7 +184,8 @@ load through the authenticated `/fs/markdown-image` route.
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
 block counts. Mobile Settings shows app/server versions and a persistent Dark
-or Light choice using the desktop theme tokens.
+or Light choice using the desktop theme tokens. Its server-side `mobile_theme`
+preference is independent of the desktop terminal theme.
 
 The detail keybar and composer each keep their previous total height while their
 controls use 44 px touch targets. The keybar slash button opens a local

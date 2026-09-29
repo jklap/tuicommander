@@ -55,10 +55,17 @@ const themes = [
 		app_chrome: appChrome("#ffffff"),
 	},
 ];
+let serverPrefs: Record<string, unknown>;
 
 beforeEach(() => {
 	localStorage.clear();
-	invoke.mockImplementation(async (command: string) => (command === "list_themes" ? themes : undefined));
+	serverPrefs = { mobile_theme: "commander", sidebar_visible: true };
+	invoke.mockImplementation(async (command: string, args?: { config?: Record<string, unknown> }) => {
+		if (command === "list_themes") return themes;
+		if (command === "load_ui_prefs") return { ...serverPrefs };
+		if (command === "save_ui_prefs") serverPrefs = { ...serverPrefs, ...args?.config };
+		return undefined;
+	});
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async () => ({ ok: true, json: async () => ({ version: "2.4.1", git_hash: "abc" }) })),
@@ -74,8 +81,10 @@ describe("mobile Settings", () => {
 	it("applies the desktop Paper theme and restores it after Settings remounts", async () => {
 		const first = render(() => <SettingsScreen isConnected />);
 		const theme = await screen.findByRole("combobox", { name: "Theme" });
+		await waitFor(() => expect((theme as HTMLSelectElement).disabled).toBe(false));
 		fireEvent.change(theme, { target: { value: "vscode-light" } });
 		await waitFor(() => expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#ffffff"));
+		await waitFor(() => expect(serverPrefs.mobile_theme).toBe("vscode-light"));
 		first.unmount();
 		document.documentElement.style.removeProperty("--bg-primary");
 		render(() => <MobileApp />);
@@ -89,11 +98,37 @@ describe("mobile Settings", () => {
 		await waitFor(() => expect(screen.getByText("2.4.1")).toBeTruthy());
 	});
 
+	it("keeps a selected theme out of browser localStorage", async () => {
+		render(() => <SettingsScreen isConnected />);
+		const theme = await screen.findByRole("combobox", { name: "Theme" });
+		await waitFor(() => expect((theme as HTMLSelectElement).disabled).toBe(false));
+		fireEvent.change(theme, { target: { value: "vscode-light" } });
+		await waitFor(() => expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#ffffff"));
+		await waitFor(() => expect(serverPrefs.mobile_theme).toBe("vscode-light"));
+		expect(localStorage.getItem("tuic-mobile-theme")).toBeNull();
+	});
+
 	it("falls back to the dark theme for an unknown saved theme", async () => {
-		localStorage.setItem("tuic-mobile-theme", "missing-theme");
+		serverPrefs.mobile_theme = "missing-theme";
 		render(() => <SettingsScreen isConnected />);
 		await waitFor(() => expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#1e1e1e"));
 		expect((screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement).value).toBe("commander");
+	});
+
+	it("keeps the dark selection when the server refuses a theme change", async () => {
+		invoke.mockImplementation(async (command: string) => {
+			if (command === "list_themes") return themes;
+			if (command === "load_ui_prefs") return { ...serverPrefs };
+			if (command === "save_ui_prefs") throw new Error("disk full");
+		});
+		render(() => <SettingsScreen isConnected />);
+		const theme = (await screen.findByRole("combobox", { name: "Theme" })) as HTMLSelectElement;
+		await waitFor(() => expect(theme.disabled).toBe(false));
+		fireEvent.change(theme, { target: { value: "vscode-light" } });
+		await screen.findByRole("alert");
+		expect(theme.value).toBe("commander");
+		expect(serverPrefs.mobile_theme).toBe("commander");
+		expect(document.documentElement.style.getPropertyValue("--bg-primary")).toBe("#1e1e1e");
 	});
 
 	it("keeps the app version visible when the server version is unavailable", async () => {

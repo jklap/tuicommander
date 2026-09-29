@@ -1215,6 +1215,9 @@ pub(crate) struct UIPrefsConfig {
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
     pub(crate) file_browser_view_mode: String,
+    /// Appearance used by the mobile PWA; independent of the desktop terminal theme.
+    #[serde(default = "default_mobile_theme")]
+    pub(crate) mobile_theme: String,
     #[serde(default = "default_panel_width")]
     pub(crate) diff_panel_width: u32,
     #[serde(default = "default_panel_width")]
@@ -1251,6 +1254,10 @@ fn default_file_browser_view_mode() -> String {
     "tree".to_string()
 }
 
+fn default_mobile_theme() -> String {
+    "commander".to_string()
+}
+
 impl Default for UIPrefsConfig {
     fn default() -> Self {
         Self {
@@ -1266,6 +1273,7 @@ impl Default for UIPrefsConfig {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: default_file_browser_view_mode(),
+            mobile_theme: default_mobile_theme(),
             diff_panel_width: default_panel_width(),
             markdown_panel_width: default_panel_width(),
             notes_panel_width: default_notes_panel_width(),
@@ -4971,6 +4979,7 @@ mod tests {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: "tree".to_string(),
+            mobile_theme: "vscode-light".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
             notes_panel_width: 320,
@@ -4991,6 +5000,7 @@ mod tests {
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
         assert_eq!(loaded.sidebar_width, 300);
+        assert_eq!(loaded.mobile_theme, "vscode-light");
         assert_eq!(loaded.diff_panel_width, 500);
         assert_eq!(loaded.markdown_panel_width, 450);
         assert_eq!(
@@ -5057,6 +5067,14 @@ mod tests {
             Some(&serde_json::json!("tree")),
             "file_browser_view_mode was dropped on the way through UIPrefsConfig"
         );
+    }
+
+    #[test]
+    fn ui_prefs_preserve_mobile_theme_across_json_round_trip() {
+        let saved: UIPrefsConfig =
+            serde_json::from_str(r#"{"mobile_theme":"vscode-light"}"#).unwrap();
+        let reloaded = serde_json::to_value(saved).unwrap();
+        assert_eq!(reloaded["mobile_theme"], "vscode-light");
     }
 
     /// A prefs file written before these fields existed must still load, with
