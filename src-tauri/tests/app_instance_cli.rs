@@ -147,7 +147,10 @@ fn tuic_remote_blank_env_instance_behaves_as_unset() {
     );
     assert!(output.status.success(), "{output:?}");
     assert!(env.default_config().is_file());
-    assert!(!env.named_config_dir("").exists(), "no instances/ dir may be created");
+    assert!(
+        !env.named_config_dir("").exists(),
+        "no instances/ dir may be created"
+    );
 }
 
 #[test]
