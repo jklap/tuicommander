@@ -1960,6 +1960,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.5 Activity Feed
 - Chronological event feed grouped by time (NOW, EARLIER, TODAY, OLDER)
+- Local 24-hour timestamps, minute-scale run durations, and singular block counts
 - Hydrates persisted activity from the server when the mobile tab opens; dismissed items stay hidden and current live items remain visible
 - Throttled grouping: items snapshot every 10s to prevent constant reordering with multiple active sessions; new items/removals trigger immediate refresh
 - Sticky section headers, tap to navigate to session
@@ -1968,10 +1969,12 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - **Session kill:** swipe or long-press a session card to kill/close the PTY session
 - **New session:** create a new PTY session from the sessions screen (optional shell/cwd selection)
 - **Progress:** lists projects with journal entries by recent activity, then shows and switches their saved entries without a desktop repository selection
+- Long Progress messages collapse to four lines with a More/Less control on mobile
 
 ### 18.7 Settings
 - Connection status: connectivity indicator with real-time Connected/Disconnected state
 - Server URL display
+- App and server versions, plus a persistent Dark/Light choice using desktop theme colors
 - Notification sound toggle (localStorage-persisted)
 - Open Desktop UI link
 

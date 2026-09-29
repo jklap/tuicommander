@@ -178,6 +178,13 @@ the title row; the editor fills the remaining height and wraps source lines.
 Markdown references in output use the desktop path resolver and open the Files
 viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
+Markdown images in the Files viewer resolve relative to their source file and
+load through the authenticated `/fs/markdown-image` route.
+
+The embedded Progress list clamps long messages to four lines until More is
+pressed. Activity presents local 24-hour times, minute durations, and singular
+block counts. Mobile Settings shows app/server versions and a persistent Dark
+or Light choice using the desktop theme tokens.
 
 The detail keybar and composer each keep their previous total height while their
 controls use 44 px touch targets. The keybar slash button opens a local
