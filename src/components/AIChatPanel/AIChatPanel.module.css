@@ -39,6 +39,16 @@
   color: var(--fg-primary);
 }
 
+.headerBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.headerBtn:disabled:hover {
+  background: none;
+  color: var(--fg-secondary);
+}
+
 .headerBtnActive {
   color: var(--accent);
 }
