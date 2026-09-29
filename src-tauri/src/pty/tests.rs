@@ -9773,11 +9773,44 @@ fn pending_initial_prompt_names_a_startup_dialog_as_the_cause() {
 #[cfg(unix)]
 #[test]
 fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
+    struct RespondingWriter(std::sync::mpsc::Sender<Vec<u8>>);
+
+    impl std::io::Write for RespondingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "child-prompt-late";
     let parent_id = "parent-prompt-late";
     agent_session(&state, child_id, SHELL_IDLE);
-    insert_recording_session(&state, child_id);
+    state
+        .session_maps
+        .session_states
+        .get_mut(child_id)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(child_id.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(child_id.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(
+        &state,
+        child_id,
+        Box::new(RespondingWriter(writes)),
+        TtyMode::Raw,
+    );
     state
         .session_maps
         .session_parent
@@ -9798,7 +9831,36 @@ fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
             "review the draft",
         ));
 
-    flush_pending_injections_blocking(&state, child_id);
+    std::thread::scope(|scope| {
+        scope.spawn(|| flush_pending_injections_blocking(&state, child_id));
+        for expected in [b"\x15".as_slice(), b"review the draft", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        assert!(
+            state.pending_initial_prompts.contains_key(child_id),
+            "Enter write alone must not clear the warning"
+        );
+        let response = b"\xe2\x80\xa2 Working (1s \xe2\x80\xa2 esc to interrupt)\r\n\xe2\x80\xba Ask Codex to do anything";
+        state
+            .grid
+            .vt_log_buffers
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .process(response);
+        state
+            .session_maps
+            .output_buffers
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .write(response);
+    });
 
     assert!(
         !state.pending_initial_prompts.contains_key(child_id),
@@ -11187,6 +11249,292 @@ fn enqueue_refuses_shells_and_dead_sessions() {
         "Command text is empty"
     );
     assert_eq!(queued_command_count(&state, "blank"), 0);
+}
+
+/// A completed PTY write is not evidence that the child accepted Enter. A
+/// silent raw-mode composer can retain the entire prompt after that write.
+#[cfg(unix)]
+#[test]
+fn queued_wake_without_agent_response_reports_uncertain_delivery() {
+    for agent_type in [
+        "codex", "claude", "gemini", "opencode", "aider", "amp", "cursor", "goose", "grok",
+        "droid", "pi", "unknown",
+    ] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = format!("silent-{agent_type}");
+        agent_session(&state, &sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(&sid)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let bytes = insert_recording_session(&state, &sid);
+        let mut alerts = state.event_bus.subscribe();
+
+        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+
+        assert!(
+            state
+                .session_maps
+                .silence_states
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain,
+            "{agent_type} must not count a silent Enter as a confirmed submission"
+        );
+        assert!(bytes.lock().unwrap().ends_with(b"\r"));
+        let alert = std::iter::from_fn(|| alerts.try_recv().ok())
+            .find(|event| matches!(event, crate::state::AppEvent::McpToast { .. }))
+            .expect("report uncertain delivery to clients");
+        match alert {
+            crate::state::AppEvent::McpToast {
+                title,
+                level,
+                origin_session_id,
+                ..
+            } => {
+                assert_eq!(title, "Agent input was not confirmed");
+                assert_eq!(level, "error");
+                assert_eq!(origin_session_id.as_deref(), Some(sid.as_str()));
+            }
+            other => panic!("expected delivery failure notification, got {other:?}"),
+        }
+    }
+}
+
+/// The OSC idle marker is parsed on the PTY reader. It must finish publishing
+/// that chunk before a queued write waits for the child's next output chunk.
+#[cfg(unix)]
+#[test]
+fn queued_idle_on_reader_defers_delivery_until_chunk_is_published() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "reader-queued-idle";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let bytes = insert_recording_session(&state, sid);
+    state
+        .pending_injections
+        .entry(sid.into())
+        .or_default()
+        .push_back(crate::state::PendingInjection::notice("wake the agent"));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut reader = ChunkProcessor::new(None, None);
+
+    reader.process_chunk("\x1b]7770;state=idle\x07", &silence, sid, &state);
+
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "queued write must wait for reader publication"
+    );
+    assert_eq!(queued_command_count(&state, sid), 1);
+}
+
+/// rb-tool stayed in a stale Working/Busy state with a queued wake in its
+/// composer. Its PTY emitted only cursor updates until a manual CR arrived;
+/// that CR finally produced the BG DONE turn. Replaying those real cursor
+/// chunks must not turn a pre-existing Working screen into a new receipt.
+#[cfg(unix)]
+#[test]
+fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
+    struct RecordingChannel(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for RecordingChannel {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-queued-wake-stuck-20260929.tcap",
+    ))
+    .expect("authentic rb-tool capture");
+    let first_input = capture
+        .records
+        .iter()
+        .position(|record| record.direction == crate::pty_capture::CaptureDirection::Input)
+        .expect("manual Enter in capture");
+    assert_eq!(first_input, 4);
+    assert_eq!(capture.records[first_input].data, b"\r");
+    assert!(
+        capture.records[first_input].elapsed_us - capture.records[0].elapsed_us
+            > 30 * 60 * 1_000_000,
+        "the composer persisted through a long quiet interval"
+    );
+    assert!(capture.records[first_input + 1..].iter().any(|record| {
+        record.direction == crate::pty_capture::CaptureDirection::Output
+            && record
+                .data
+                .windows(b"BG DONE".len())
+                .any(|window| window == b"BG DONE")
+    }));
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "captured-codex-stale-working";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(48, 110, 1000);
+    vt.process(b"\x1b[2J\x1b[45;1H\xe2\x80\xa2 Working (1s \xe2\x80\xa2 esc to interrupt)\x1b[46;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "working_screen");
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(
+        &state,
+        sid,
+        Box::new(RecordingChannel(writes)),
+        TtyMode::Raw,
+    );
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        for record in &capture.records[..first_input] {
+            state
+                .grid
+                .vt_log_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .process(&record.data);
+            state
+                .session_maps
+                .output_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .write(&record.data);
+        }
+    });
+
+    assert!(
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "cursor movement beneath a stale Working screen must not acknowledge Enter"
+    );
+}
+
+/// Gemini and Aider remove their bottom prompt while a turn runs. The child
+/// repaint after Enter, rather than the master's successful write, settles it.
+#[cfg(unix)]
+#[test]
+fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
+    struct RecordingChannel(std::sync::mpsc::Sender<Vec<u8>>);
+
+    impl std::io::Write for RecordingChannel {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    for agent_type in ["gemini", "aider"] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = format!("prompt-gone-{agent_type}");
+        agent_session(&state, &sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(&sid)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let mut vt = VtLogBuffer::new(24, 80, 1000);
+        vt.process(b"\x1b[24;1H> ");
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), Mutex::new(vt));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1024)));
+        let (writes, received) = std::sync::mpsc::channel();
+        insert_session_with_writer(
+            &state,
+            &sid,
+            Box::new(RecordingChannel(writes)),
+            TtyMode::Raw,
+        );
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| enqueue_user_command(&state, &sid, "check status").unwrap());
+            for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
+                assert_eq!(
+                    received
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap(),
+                    expected
+                );
+            }
+            let repaint = b"\x1b[2J\x1b[HProcessing request";
+            state
+                .grid
+                .vt_log_buffers
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .process(repaint);
+            state
+                .session_maps
+                .output_buffers
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .write(repaint);
+        });
+
+        assert!(
+            !state
+                .session_maps
+                .silence_states
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain,
+            "{agent_type} accepted the queued command after its prompt disappeared"
+        );
+    }
 }
 
 #[cfg(feature = "desktop")]

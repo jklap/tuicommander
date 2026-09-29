@@ -4185,7 +4185,15 @@ fn transition_explicit_shell_state(
     label: &str,
     hook_state: bool,
 ) {
-    transition_explicit_shell_state_with_hook(state, session_id, target, label, hook_state, || {});
+    transition_explicit_shell_state_impl(
+        state,
+        session_id,
+        target,
+        label,
+        hook_state,
+        || {},
+        false,
+    );
 }
 
 fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
@@ -4195,6 +4203,26 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     label: &str,
     hook_state: bool,
     before_transaction: F,
+) {
+    transition_explicit_shell_state_impl(
+        state,
+        session_id,
+        target,
+        label,
+        hook_state,
+        before_transaction,
+        true,
+    );
+}
+
+fn transition_explicit_shell_state_impl<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    target: u8,
+    label: &str,
+    hook_state: bool,
+    before_transaction: F,
+    flush_on_idle: bool,
 ) {
     // A hook busy/idle transition proves the agent is no longer blocked on a
     // question, so it retracts the awaiting badge. Emit ONLY when a badge is
@@ -4283,11 +4311,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         // the stale IDLE emitted by this caller.
         if target == SHELL_IDLE {
             reevaluate_orchestrator_mail_wake(state, session_id);
-            // The session's own reader thread, not a tokio worker: it must not
-            // race ahead of the bytes it is about to publish. Accepted cost: a
-            // queued message stops this thread reading PTY output for two
-            // `INJECT_ENTER_GAP`s (~100ms) on the idle transition that types it.
-            flush_pending_injections_blocking(state, session_id);
+            if flush_on_idle {
+                flush_pending_injections_blocking(state, session_id);
+            }
         }
     }
 }
@@ -5498,6 +5524,8 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
+    /// An explicit idle marker asks the reader to flush after publishing this chunk.
+    queued_idle_flush: bool,
     parser: OutputParser,
     intent_break_parser: vte::Parser,
     /// Dedup: only emit StatusLine when task_name actually changes *within a
@@ -5597,6 +5625,7 @@ impl ChunkProcessor {
 
     fn new(session_cwd: Option<String>, tuic_session: Option<String>) -> Self {
         Self {
+            queued_idle_flush: false,
             parser: OutputParser::new(),
             intent_break_parser: vte::Parser::new(),
             last_status_task: None,
@@ -7382,6 +7411,7 @@ impl ChunkProcessor {
         }
 
         self.screen_buf = screen_buf;
+        self.queued_idle_flush |= explicit_idle_in_chunk;
         true
     }
 }
@@ -8473,14 +8503,41 @@ pub(crate) fn prefill_agent_input(
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 
-fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
-    match agent_type {
-        Some(
-            "claude" | "gemini" | "opencode" | "aider" | "amp" | "cursor" | "goose" | "grok"
-            | "droid" | "pi",
-        ) => INJECT_ENTER_GAP,
-        _ => CODEX_ENTER_GAP,
+/// The same framed multiline payload works for every supported agent; only the
+/// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
+/// keeps the Enter-delay mapping in step for user-originated PTY writes.
+#[derive(Clone, Copy)]
+struct AgentSubmitProfile {
+    payload: fn(&str) -> String,
+    enter_gap: std::time::Duration,
+    confirmation: SubmitConfirmation,
+}
+
+#[derive(Clone, Copy)]
+enum SubmitConfirmation {
+    WorkingScreen,
+    PromptGone,
+    HookOnly,
+}
+
+fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfile {
+    use SubmitConfirmation::{HookOnly, PromptGone, WorkingScreen};
+    let (enter_gap, confirmation) = match agent_type {
+        Some("codex") => (CODEX_ENTER_GAP, WorkingScreen),
+        Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
+        Some("gemini" | "aider") => (INJECT_ENTER_GAP, PromptGone),
+        Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, HookOnly),
+        _ => (CODEX_ENTER_GAP, HookOnly),
+    };
+    AgentSubmitProfile {
+        payload: injection_payload,
+        enter_gap,
+        confirmation,
     }
+}
+
+fn injection_enter_gap(agent_type: Option<&str>) -> std::time::Duration {
+    agent_submit_profile(agent_type).enter_gap
 }
 
 pub(crate) fn sleep_agent_enter_gap(agent_type: Option<&str>) {
@@ -8598,7 +8655,13 @@ fn write_agent_command_with_boundary(
     session_id: &str,
     text: &str,
 ) -> (InjectionOutcome, u64) {
-    let payload = injection_payload(text);
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let profile = agent_submit_profile(agent_type.as_deref());
+    let payload = (profile.payload)(text);
     let writer = match state.pty_writer(session_id) {
         Some(writer) => writer,
         None => {
@@ -8650,12 +8713,7 @@ fn write_agent_command_with_boundary(
     // sequence this guard protects. A caller that must not block therefore does
     // not shorten the gap — it stops being the thread that waits, by handing the
     // whole sequence to `INJECTION_QUEUE`.
-    let agent_type = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|session| session.agent_type.clone());
-    sleep_agent_enter_gap(agent_type.as_deref());
+    std::thread::sleep(profile.enter_gap);
 
     // Exclude payload echo already observable before Enter. The async handler
     // checks this boundary only after the complete Enter write returns; movement
@@ -9224,12 +9282,72 @@ pub(crate) fn deliver_notice_to_managed_pty(
 /// mutex, so waiting for it here would park a worker for ~100ms per queued message.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
-/// reads the queue to tell `Typed` from `Queued`, and the OSC handler already
-/// runs on the session's own reader thread — call the blocking form directly.
+/// reads the queue to tell `Typed` from `Queued` — call the blocking form directly.
+/// The OSC reader schedules this only after it publishes the current chunk;
+/// confirmation needs that reader to remain free for the child's next chunk.
 pub(crate) fn flush_pending_injections(state: &Arc<AppState>, session_id: &str) {
     let state = Arc::clone(state);
     let session_id = session_id.to_string();
     spawn_injection_job(move || flush_pending_injections_blocking(&state, &session_id));
+}
+
+/// A PTY write only proves that Enter reached the master. Wait for output from
+/// the child and a working-screen or agent-hook signal before settling a queued
+/// command. A silent or unrecognised composer remains uncertain, so its text
+/// cannot be automatically replayed into a possibly active turn.
+fn wait_for_queued_submission(
+    state: &AppState,
+    session_id: &str,
+    offset: u64,
+    initial_screen: &'static str,
+) -> bool {
+    if !state.grid.vt_log_buffers.contains_key(session_id)
+        || !state.session_maps.output_buffers.contains_key(session_id)
+    {
+        return false;
+    }
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let profile = agent_submit_profile(agent_type.as_deref());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let output_advanced = state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .is_some_and(|buffer| buffer.lock().total_written > offset);
+        if output_advanced {
+            let hook_busy = state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| silence.lock().busy_source_is("hook-busy"));
+            let screen_state = agent_submission_ack_kind(state, session_id);
+            let screen_confirms = match profile.confirmation {
+                SubmitConfirmation::WorkingScreen => {
+                    initial_screen != "working_screen" && screen_state == "working_screen"
+                }
+                SubmitConfirmation::PromptGone => {
+                    initial_screen == "ready_screen" && screen_state == "terminal_output"
+                }
+                SubmitConfirmation::HookOnly => false,
+            };
+            if hook_busy || screen_confirms {
+                return true;
+            }
+        }
+        if !state.session_maps.sessions.contains_key(session_id) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep((deadline - now).min(std::time::Duration::from_millis(25)));
+    }
 }
 
 /// Drain and inject any messages queued for a session that can receive them now.
@@ -9305,11 +9423,24 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         );
         return;
     };
-    let outcome = run_claimed_injection(
+    let initial_screen = agent_submission_ack_kind(state, session_id);
+    let (write_outcome, acknowledgement_offset) =
+        write_agent_command_with_boundary(state, session_id, injection.text());
+    let outcome = if write_outcome == InjectionOutcome::Submitted
+        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
+    {
+        InjectionOutcome::Uncertain(
+            "Enter was written, but agent submission was not confirmed".into(),
+        )
+    } else {
+        write_outcome
+    };
+    let outcome = apply_claimed_injection_outcome(
         state,
         session_id,
         injection.text(),
         claim,
+        outcome,
         ClaimedInjectionKind::Message,
     );
     let (typed, submitted, enter_separate) = match outcome {
@@ -9319,6 +9450,33 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     };
     if matches!(outcome, InjectionOutcome::NotStarted(_)) {
         requeue_injection_front(state, session_id, injection);
+    }
+    if let InjectionOutcome::Uncertain(ref reason) = outcome {
+        let title = "Agent input was not confirmed";
+        let message = format!(
+            "Queued input may still be in the composer. Check the agent before retrying. {reason}"
+        );
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *state.app_handle.read() {
+            let _ = app.emit(
+                "mcp-toast",
+                serde_json::json!({
+                    "title": title,
+                    "message": message,
+                    "level": "error",
+                    "sound": null,
+                    "origin_session_id": session_id,
+                }),
+            );
+        }
+        let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
+            title: title.into(),
+            message: Some(message),
+            level: "error".into(),
+            sound: None,
+            origin_repo_path: None,
+            origin_session_id: Some(session_id.into()),
+        });
     }
     tracing::info!(
         session_id,
@@ -10464,6 +10622,15 @@ pub(crate) fn spawn_reader_thread(
                             // exactly the chunks that one did — a chunk the
                             // processor swallowed whole was never activity.
                             activity_pulse.pulse(&state, &session_id);
+                        }
+
+                        if std::mem::take(&mut processor.queued_idle_flush)
+                            && state
+                                .pending_injections
+                                .get(&session_id)
+                                .is_some_and(|queue| !queue.is_empty())
+                        {
+                            flush_pending_injections(&state, &session_id);
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);
