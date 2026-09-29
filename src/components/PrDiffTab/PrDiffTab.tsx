@@ -167,6 +167,7 @@ export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
 						<Show when={session}>{(active) => <ReviewSubmitBar session={active()} />}</Show>
 					</>
 				}
+				headerHeight={35}
 				collapsedByDefault={collapsedByDefault}
 				viewerProps={viewerProps}
 				fileExtras={fileExtras}

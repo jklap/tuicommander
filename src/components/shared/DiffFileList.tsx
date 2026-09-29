@@ -1,5 +1,5 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, createSignal, For, type JSX, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
@@ -11,13 +11,32 @@ export function sectionToRawDiff(section: DiffFileSection): string {
 	return section.lines.map((l) => l.content).join("\n");
 }
 
+/**
+ * Stable per-row keys for a `DiffFileSection[]` list. Keying by `path` alone
+ * collides when the same path appears twice (a partially-staged file shows
+ * up once from the staged diff and once from the unstaged diff in
+ * `BranchDiffScrollView`) — this disambiguates same-path duplicates by their
+ * occurrence order, which is stable as long as relative ordering among
+ * same-path entries doesn't change (it doesn't: staged is always listed
+ * before unstaged).
+ */
+export function fileRowKeys(files: DiffFileSection[]): string[] {
+	const counts = new Map<string, number>();
+	return files.map((f) => {
+		const path = f.path ?? "";
+		const n = counts.get(path) ?? 0;
+		counts.set(path, n + 1);
+		return `${path}#${n}`;
+	});
+}
+
 /** A single collapsible file diff. The chevron and header toggle collapse; the
  *  file path opens the file when `onOpen` is provided (working-tree view). */
 const FileSection: Component<{
 	file: DiffFileSection;
 	mode: DiffViewMode;
 	collapsed: boolean;
-	onToggle: () => void;
+	onToggleCollapsed: () => void;
 	onOpen?: () => void;
 	viewerProps?: Omit<DiffViewerProps, "diff" | "mode">;
 	extras?: JSX.Element;
@@ -28,8 +47,8 @@ const FileSection: Component<{
 				class={s.fileHeader}
 				role="button"
 				tabIndex={0}
-				onClick={() => props.onToggle()}
-				onKeyDown={onClickKeyDown(() => props.onToggle())}
+				onClick={props.onToggleCollapsed}
+				onKeyDown={onClickKeyDown(props.onToggleCollapsed)}
 			>
 				<svg
 					class={cx(s.chevron, props.collapsed && s.chevronCollapsed)}
@@ -85,6 +104,19 @@ export interface DiffFileListProps {
 	viewerProps?: (file: DiffFileSection) => Omit<DiffViewerProps, "diff" | "mode">;
 	/** Content rendered above a file's diff (e.g. outdated review threads). */
 	fileExtras?: (file: DiffFileSection) => JSX.Element;
+	/**
+	 * Height in px of `header`, so per-file sticky headers stick right below
+	 * it instead of at (or overlapping) the true top. Omit (or 0) when there
+	 * is no header.
+	 */
+	headerHeight?: number;
+	/**
+	 * Collapse state keyed by `fileRowKeys()`, owned by the parent. When
+	 * omitted, `DiffFileList` keeps its own internal set (still keyed by row
+	 * key, not by list position) so simple callers don't need to wire this up.
+	 */
+	collapsedKeys?: ReadonlySet<string>;
+	onToggleCollapsed?: (key: string) => void;
 }
 
 /**
@@ -100,16 +132,30 @@ export interface DiffFileListProps {
  */
 export const DiffFileList: Component<DiffFileListProps> = (props) => {
 	let scrollEl: HTMLDivElement | undefined;
-	// The virtualizer unmounts off-screen sections, so collapse state lives here, not in FileSection.
-	const [toggled, setToggled] = createSignal<ReadonlySet<string>>(new Set());
-	const isCollapsed = (file: DiffFileSection) =>
-		(props.collapsedByDefault?.(file) ?? false) !== toggled().has(file.path);
-	const toggle = (path: string) =>
-		setToggled((prev) => {
+
+	const keys = createMemo(() => fileRowKeys(props.files));
+
+	// Fallback collapse state, used only when the parent doesn't own it —
+	// keyed the same way as the parent-owned path, never by list position.
+	const [ownCollapsed, setOwnCollapsed] = createSignal<Set<string>>(new Set());
+	const collapsedKeys = () => props.collapsedKeys ?? ownCollapsed();
+	// The virtualizer unmounts off-screen sections, so collapse state lives here
+	// (or in the parent), not in FileSection. A key in the set flips the file's
+	// default: collapsed for `collapsedByDefault` files, expanded otherwise.
+	const isCollapsed = (file: DiffFileSection, key: string) =>
+		(props.collapsedByDefault?.(file) ?? false) !== collapsedKeys().has(key);
+	const toggleCollapsed = (key: string) => {
+		if (props.onToggleCollapsed) {
+			props.onToggleCollapsed(key);
+			return;
+		}
+		setOwnCollapsed((prev) => {
 			const next = new Set(prev);
-			if (!next.delete(path)) next.add(path);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
 			return next;
 		});
+	};
 
 	const virtualizer = createVirtualizer({
 		get count() {
@@ -118,12 +164,13 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 		getScrollElement: () => scrollEl ?? null,
 		estimateSize: () => 320,
 		overscan: 3,
-		getItemKey: (i) => props.files[i]?.path ?? i,
+		getItemKey: (i) => keys()[i] ?? i,
 	});
 
 	return (
 		<div
 			class={s.container}
+			style={{ "--diff-header-height": `${props.headerHeight ?? 0}px` }}
 			ref={(el) => {
 				scrollEl = el;
 				props.scrollRef?.(el);
@@ -132,27 +179,34 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 			{props.header}
 			<div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
 				<For each={virtualizer.getVirtualItems()}>
-					{(vi) => (
-						<div
-							data-index={vi.index}
-							ref={(el) => {
-								// Solid assigns `data-index` after `ref` runs, and measureElement reads it at once.
-								el.dataset.index = String(vi.index);
-								virtualizer.measureElement(el);
-							}}
-							style={{ position: "absolute", top: `${vi.start}px`, left: "0", width: "100%" }}
-						>
-							<FileSection
-								file={props.files[vi.index]}
-								mode={props.mode}
-								collapsed={isCollapsed(props.files[vi.index])}
-								onToggle={() => toggle(props.files[vi.index].path)}
-								viewerProps={props.viewerProps?.(props.files[vi.index])}
-								extras={props.fileExtras?.(props.files[vi.index])}
-								onOpen={props.onOpenFile ? () => props.onOpenFile?.(props.files[vi.index].path) : undefined}
-							/>
-						</div>
-					)}
+					{(vi) => {
+						const key = () => keys()[vi.index];
+						return (
+							<div
+								data-index={vi.index}
+								ref={(el) => {
+									// Solid assigns `data-index` after `ref` runs, and measureElement reads it at once.
+									el.dataset.index = String(vi.index);
+									virtualizer.measureElement(el);
+								}}
+								style={{ position: "absolute", top: `${vi.start}px`, left: "0", width: "100%" }}
+							>
+								<Show when={key()} keyed>
+									{() => (
+										<FileSection
+											file={props.files[vi.index]}
+											mode={props.mode}
+											collapsed={isCollapsed(props.files[vi.index], key())}
+											onToggleCollapsed={() => toggleCollapsed(key())}
+											viewerProps={props.viewerProps?.(props.files[vi.index])}
+											extras={props.fileExtras?.(props.files[vi.index])}
+											onOpen={props.onOpenFile ? () => props.onOpenFile?.(props.files[vi.index].path) : undefined}
+										/>
+									)}
+								</Show>
+							</div>
+						);
+					}}
 				</For>
 			</div>
 		</div>

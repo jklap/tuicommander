@@ -40,8 +40,14 @@ const SAVE_DEBOUNCE_MS = 500;
 /** Git panel tab names */
 export type GitPanelTab = "changes" | "log" | "stashes" | "branches";
 
-/** Diff viewer display mode */
-export type DiffViewMode = "split" | "unified" | "scroll";
+/**
+ * Diff viewer display mode. Does NOT include the all-files scroll view — that
+ * is now a distinct tab (`DiffTabData.filePath === ""`), not a mode a regular
+ * per-file diff tab can be switched into, so opening it can no longer hijack
+ * every other open diff tab into scroll mode at once. See `DiffTab.tsx` and
+ * `useAppShortcutHandlers.ts`'s `toggleDiffScroll`.
+ */
+export type DiffViewMode = "split" | "unified";
 
 /** UI store state */
 interface UIStoreState {
@@ -241,7 +247,10 @@ function createUIStore() {
 		uiPrefsWriter.save(uiPrefsSnapshot()).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
 
-	function applyPrefs(loaded: UIPrefs | null): void {
+	/** Apply loaded prefs. Returns true when a legacy value was normalized and
+	 *  the caller should re-persist. */
+	function applyPrefs(loaded: UIPrefs | null): boolean {
+		let migrated = false;
 		const taskPreferences: Record<string, TaskViewPreference> = {};
 		for (const [key, value] of Object.entries(loaded?.tasks_view_preferences ?? {})) {
 			try {
@@ -277,12 +286,15 @@ function createUIStore() {
 			if (loaded.settings_expert_mode !== undefined) {
 				setState("settingsExpertMode", loaded.settings_expert_mode);
 			}
-			if (
-				loaded.diff_view_mode === "split" ||
-				loaded.diff_view_mode === "unified" ||
-				loaded.diff_view_mode === "scroll"
-			) {
+			if (loaded.diff_view_mode === "split" || loaded.diff_view_mode === "unified") {
 				setState("diffViewMode", loaded.diff_view_mode);
+			} else if (loaded.diff_view_mode === "scroll") {
+				// One-time migration: "scroll" used to be a real mode value
+				// (persisted from an older build) that hijacked every open
+				// per-file diff tab into the all-files view. It's no longer a
+				// valid DiffViewMode — normalize to "split" and re-persist.
+				setState("diffViewMode", "split");
+				migrated = true;
 			}
 			if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
 				setState("fileBrowserViewMode", loaded.file_browser_view_mode);
@@ -294,6 +306,7 @@ function createUIStore() {
 				setState("githubSectionCollapsed", loaded.github_section_collapsed);
 			}
 		}
+		return migrated;
 	}
 
 	/** Open one exclusive panel and close the others, or close all if `key` is already open (toggle). */
@@ -350,7 +363,7 @@ function createUIStore() {
 
 				const loaded = await invoke<UIPrefs>("load_ui_prefs");
 				uiPrefsWriter.loaded(loaded ?? {});
-				applyPrefs(loaded);
+				if (applyPrefs(loaded)) saveUIPrefs();
 			} catch (err) {
 				appLogger.debug("store", "Failed to hydrate UI prefs", err);
 			}

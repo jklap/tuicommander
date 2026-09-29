@@ -832,11 +832,15 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	get_git_diff: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/repo/diff?path=${p("path")}`,
-			transform: (data) => (data as { diff: string }).diff,
-		}),
+		map: (args, p) => {
+			let diffUrl = `/repo/diff?path=${p("path")}`;
+			if (args?.scope) diffUrl += `&scope=${encodeURIComponent(String(args.scope))}`;
+			return {
+				method: "GET",
+				path: diffUrl,
+				transform: (data) => (data as { diff: string }).diff,
+			};
+		},
 	},
 	get_diff_stats: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/diff-stats?path=${p("path")}` }),

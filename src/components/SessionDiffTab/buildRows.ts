@@ -7,6 +7,17 @@ export type SessionRow =
 	| { kind: "step"; step: EditStep };
 
 /**
+ * Stable identity for a row, independent of its position in the array.
+ * Used both by the virtualizer's `getItemKey` (which slot gets reused) and by
+ * `SessionDiffList`'s per-row `<Show keyed>` (when to remount vs. update in
+ * place) — the two MUST agree, or a slot can be "reused" by the virtualizer
+ * while the row content thinks it's a different item, or vice versa.
+ */
+export function rowKey(row: SessionRow): string {
+	return row.kind === "file" ? `f:${row.group.abs_path}` : `s:${row.step.tool_use_id}`;
+}
+
+/**
  * PURE row-model builder for `SessionDiffList` — kept separate from the
  * virtualized rendering so the interesting logic (grouped vs chronological,
  * resolving a file's steps) is unit-testable without mounting anything.
