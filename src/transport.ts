@@ -2179,6 +2179,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
+	// the equivalent /attachments/upload route instead of JSON rpc mapping.
+	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
 	"open_panel_window",

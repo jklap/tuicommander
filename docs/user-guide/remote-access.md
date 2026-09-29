@@ -93,6 +93,15 @@ The mobile UI supports PWA (Progressive Web App) installation:
 
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
+In a mobile terminal, tap the paperclip to choose a photo or file. The upload
+inserts its `@path` into the draft; review the draft and tap Send when ready.
+In mobile AI Chat, images join the image draft and other files appear as file
+chips until Send. Android Chrome can also share a file into the installed PWA;
+the shared file opens as an AI Chat draft. iOS Safari currently requires the
+paperclip because it does not support Web Share Target.
+See [Chrome's Share Target guide](https://developer.chrome.com/docs/capabilities/web-apis/web-share-target)
+and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593).
+
 ### Receive and answer an agent's question away from the desk
 
 1. On the Mac, enable **Remote Access** and **Tailscale HTTPS** in TUICommander

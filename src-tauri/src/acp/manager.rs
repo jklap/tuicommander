@@ -478,12 +478,25 @@ impl AcpClientManager {
         kind: AcpDetachKind,
         session_id: v1::SessionId,
     ) -> Result<(), AcpClientError> {
+        let cwd = self
+            .snapshot(connection_id)?
+            .attachments
+            .into_iter()
+            .find(|attachment| attachment.session_id == session_id)
+            .map(|attachment| attachment.cwd);
         self.dispatch(connection_id, |reply| Command::Detach {
             kind,
             session_id,
             reply,
         })
-        .await
+        .await?;
+        if let Some(cwd) = cwd {
+            crate::attachments::cleanup_old(
+                Path::new(&cwd),
+                crate::config::load_app_config().attachment_retention_days,
+            );
+        }
+        Ok(())
     }
 
     pub async fn list_sessions(
@@ -824,6 +837,14 @@ impl AcpClientManager {
             .map(|connection| connection.root.clone())
     }
 
+    pub fn connection_root(&self, connection_id: AcpConnectionId) -> Option<PathBuf> {
+        self.connections
+            .lock()
+            .get(&connection_id)
+            .filter(|connection| connection.snapshot.settlement.is_none())
+            .map(|connection| connection.root.clone())
+    }
+
     /// End every connection, for the app quitting.
     ///
     /// The process exits without running the destructors that kill each ego's
@@ -844,6 +865,12 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
+        let attachment_cwds: Vec<PathBuf> = self
+            .snapshot(connection_id)?
+            .attachments
+            .into_iter()
+            .map(|attachment| attachment.cwd)
+            .collect();
         let (shutdown, supervisor, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -871,6 +898,11 @@ impl AcpClientManager {
             let _ = supervisor.await;
         }
 
+        let retention = crate::config::load_app_config().attachment_retention_days;
+        for cwd in attachment_cwds {
+            crate::attachments::cleanup_old(Path::new(&cwd), retention);
+        }
+
         self.snapshot(connection_id)?.settlement.ok_or_else(|| {
             AcpClientError::initialization_failed(
                 connection_id,
@@ -883,6 +915,12 @@ impl AcpClientManager {
         &self,
         connection_id: AcpConnectionId,
     ) -> Result<AcpConnectionSettlement, AcpClientError> {
+        let attachment_cwds: Vec<PathBuf> = self
+            .snapshot(connection_id)?
+            .attachments
+            .into_iter()
+            .map(|attachment| attachment.cwd)
+            .collect();
         let (shutdown, supervisor, generation, settled) = {
             let mut connections = self.connections.lock();
             let connection = connections
@@ -902,6 +940,10 @@ impl AcpClientManager {
         if let Some(supervisor) = supervisor {
             supervisor.abort();
             let _ = supervisor.await;
+        }
+        let retention = crate::config::load_app_config().attachment_retention_days;
+        for cwd in attachment_cwds {
+            crate::attachments::cleanup_old(Path::new(&cwd), retention);
         }
         drop(shutdown);
         settle_connection(

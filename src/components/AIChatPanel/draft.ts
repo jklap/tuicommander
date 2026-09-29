@@ -11,6 +11,11 @@ export interface StagedImage {
 	block: Extract<AcpContentBlock, { type: "image" }>;
 }
 
+export interface StagedFile {
+	name: string;
+	path: string;
+}
+
 /**
  * What the person has typed but not sent yet.
  *
@@ -20,7 +25,8 @@ export interface StagedImage {
  */
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
-const drafts = new Map<string, { text: string; images: StagedImage[] }>();
+const [files, setFiles] = createSignal<StagedFile[]>([]);
+const drafts = new Map<string, { text: string; images: StagedImage[]; files: StagedFile[] }>();
 const pastedText = new Map<string, string>();
 let activeSession = "";
 let revision = 0;
@@ -51,14 +57,16 @@ export const aiChatDraft = {
 		return start + marker.length;
 	},
 	images,
+	files,
 	activate(session: string): void {
 		if (session === activeSession) return;
-		const previous = { text: text(), images: images() };
+		const previous = { text: text(), images: images(), files: files() };
 		if (activeSession) drafts.set(activeSession, previous);
 		const next = drafts.get(session) ?? (activeSession === "" && session ? previous : undefined);
 		activeSession = session;
 		setText(next?.text ?? "");
 		setImages(next?.images ?? []);
+		setFiles(next?.files ?? []);
 		revision += 1;
 	},
 
@@ -94,6 +102,14 @@ export const aiChatDraft = {
 		setImages((current) => current.filter((item) => item !== image));
 	},
 
+	stageFile(file: StagedFile): void {
+		setFiles((current) => [...current, file]);
+	},
+
+	removeFile(file: StagedFile): void {
+		setFiles((current) => current.filter((item) => item !== file));
+	},
+
 	/** Add text to the draft and leave the cursor after it. */
 	append(addition: string): void {
 		const current = text();
@@ -105,6 +121,7 @@ export const aiChatDraft = {
 		for (const marker of text().match(/\[Pasted text #\d+ \+\d+ words\]/g) ?? []) pastedText.delete(marker);
 		setText("");
 		setImages([]);
+		setFiles([]);
 		drafts.delete(activeSession);
 	},
 
@@ -116,5 +133,6 @@ export const aiChatDraft = {
 		revision += 1;
 		setText("");
 		setImages([]);
+		setFiles([]);
 	},
 };

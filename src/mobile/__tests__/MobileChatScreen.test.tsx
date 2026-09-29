@@ -53,6 +53,7 @@ function chat() {
 		answerElicitation: vi.fn(),
 		cancelPermission: vi.fn(),
 		startSession: vi.fn(),
+		ensureStarted: vi.fn(async () => {}),
 		send: vi.fn(),
 		cancel: vi.fn(),
 		cancelQueued: vi.fn(),
@@ -73,6 +74,7 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	history.replaceState(null, "", "/mobile");
+	vi.unstubAllGlobals();
 });
 
 describe("mobile ego chat", () => {
@@ -118,6 +120,42 @@ describe("mobile ego chat", () => {
 		expect(activity?.open).toBe(false);
 		expect(activity?.textContent).toContain("Run tests");
 		expect(container.querySelector("textarea")).toBeTruthy();
+	});
+
+	it("offers one picker for photos and files without forcing camera capture", () => {
+		const { container } = render(() => <MobileChatScreen />);
+		const pickers = container.querySelectorAll('input[type="file"]');
+		expect(pickers).toHaveLength(1);
+		expect(pickers[0]).toBeInstanceOf(HTMLInputElement);
+		expect(pickers[0].hasAttribute("capture")).toBe(false);
+		expect(pickers[0].getAttribute("accept")).toContain("image/*");
+	});
+
+	it("keeps a shared document in the draft until Send", async () => {
+		const current = chat();
+		createAcpChat.mockReturnValue(current);
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 5 }), { status: 200 })));
+		const { container } = render(() => <MobileChatScreen />);
+		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
+		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
+		expect(current.send).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		expect(current.send).toHaveBeenCalledWith("", [], [{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }]);
+	});
+
+	it("recovers an Android share into the chat draft and removes its cached copy", async () => {
+		history.replaceState(null, "", "/mobile?shared=shared-1");
+		const remove = vi.fn(async () => true);
+		vi.stubGlobal("caches", { open: async () => ({
+			match: async () => new Response("report", { headers: { "x-file-name": "report.pdf", "content-type": "application/pdf" } }),
+			delete: remove,
+		}) });
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/2-report.pdf", size: 6 }), { status: 200 })));
+		render(() => <MobileChatScreen />);
+		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
+		expect(remove).toHaveBeenCalledWith("/_shared/shared-1");
+		expect(location.search).toBe("");
 	});
 
 	it("sends one answer when the permission button is tapped twice", async () => {

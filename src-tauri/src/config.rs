@@ -803,6 +803,12 @@ pub(crate) struct AppConfig {
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
+    /// Maximum binary attachment upload, in bytes (must be positive).
+    #[serde(default = "default_attachment_max_bytes")]
+    pub(crate) attachment_max_bytes: u64,
+    /// Remove uploaded files older than this many days when their session closes.
+    #[serde(default = "default_attachment_retention_days")]
+    pub(crate) attachment_retention_days: u32,
     #[serde(default)]
     pub(crate) services: ServicesConfig,
     /// Show confirmation dialog when quitting with active terminals
@@ -1033,6 +1039,14 @@ fn default_font_size() -> u16 {
     13
 }
 
+fn default_attachment_max_bytes() -> u64 {
+    25 * 1024 * 1024
+}
+
+fn default_attachment_retention_days() -> u32 {
+    7
+}
+
 fn default_font_weight() -> u16 {
     400
 }
@@ -1062,6 +1076,8 @@ impl Default for AppConfig {
             ai_chat_sessions: HashMap::new(),
             ai_chat_peer_ids: HashMap::new(),
             default_font_size: 13,
+            attachment_max_bytes: default_attachment_max_bytes(),
+            attachment_retention_days: default_attachment_retention_days(),
             services: ServicesConfig::default(),
             confirm_before_quit: true,
             confirm_before_closing_tab: true,
@@ -4428,6 +4444,8 @@ mod tests {
                 "550e8400-e29b-41d4-a716-446655440a01".to_string(),
             )]),
             default_font_size: 18,
+            attachment_max_bytes: default_attachment_max_bytes(),
+            attachment_retention_days: default_attachment_retention_days(),
             services: ServicesConfig {
                 server: ServerConfig {
                     enabled: true,
