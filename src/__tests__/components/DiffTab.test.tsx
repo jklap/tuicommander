@@ -17,9 +17,17 @@ vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../components/ui/DiffViewer", () => ({
 	DiffViewer: (props: { diff: string }) => <div data-testid="diff-stub">{props.diff}</div>,
 }));
+// BranchDiffScrollView fetches its own diffs via useRepository/getDiff and
+// renders through the (also mocked) shared DiffFileList — stubbed here so
+// these tests exercise only DiffTab's own scroll-mode branch, not the
+// all-files view's own rendering (covered by BranchDiffScrollView.test.tsx).
+vi.mock("../../components/DiffTab/BranchDiffScrollView", () => ({
+	BranchDiffScrollView: () => <div data-testid="scroll-view-stub" />,
+}));
 
 import { DiffTab } from "../../components/DiffTab/DiffTab";
 import { repositoriesStore } from "../../stores/repositories";
+import { uiStore } from "../../stores/ui";
 
 const REPO = "/repo";
 const FILE = "src/main.rs";
@@ -83,15 +91,18 @@ describe("DiffTab data loading", () => {
 		expect(callsTo("get_file_diff").length).toBe(initial + 1);
 	});
 
-	it("forces unified mode and disables split/scroll for a one-sided (new file) diff", async () => {
+	it("forces unified mode and disables split for a one-sided (new file) diff", async () => {
 		h.invoke.mockResolvedValue("diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n");
 		const { container } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />);
 		await settle();
 
 		const splitBtn = container.querySelector('[title="Side-by-side"]') as HTMLButtonElement | null;
+		// "All files" opens a separate, file-independent Diff Scroll tab (identified
+		// structurally by filePath === "") — it's unaffected by whether THIS file's
+		// diff is one-sided, so it must stay enabled.
 		const scrollBtn = container.querySelector('[title="All files"]') as HTMLButtonElement | null;
 		expect(splitBtn?.disabled).toBe(true);
-		expect(scrollBtn?.disabled).toBe(true);
+		expect(scrollBtn?.disabled).toBe(false);
 	});
 
 	it("does not force unified mode / disable other views for a normal two-sided diff", async () => {
@@ -115,6 +126,52 @@ describe("DiffTab data loading", () => {
 		getByText("Render anyway").click();
 		await settle();
 		expect(queryByTestId("diff-stub")).not.toBeNull();
+	});
+});
+
+describe("DiffTab scroll mode", () => {
+	beforeEach(() => {
+		h.invoke.mockReset();
+		h.invoke.mockResolvedValue("diff --git a/f.ts b/f.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n");
+		uiStore.setDiffViewMode("split");
+	});
+	afterEach(() => {
+		uiStore.setDiffViewMode("split");
+		// setDiffViewMode() schedules a debounced save(); cancel it so it
+		// doesn't fire (and leak a timer) after the test has already ended.
+		uiStore._testCancelPendingSave();
+	});
+
+	it("renders the all-files scroll view instead of the single-file diff when filePath is ''", async () => {
+		// The Diff Scroll tab is identified structurally by filePath === ""
+		// (diffTabsStore.add()'s all-files call site) — not by the shared
+		// split/unified `diffViewMode`, which no longer has a "scroll" value at all.
+		const { queryByTestId } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath="" />);
+		await settle();
+
+		expect(queryByTestId("scroll-view-stub")).not.toBeNull();
+		expect(queryByTestId("diff-stub")).toBeNull();
+	});
+
+	it("clicking 'All files' in one DiffTab must not switch a DIFFERENT open DiffTab into scroll mode too", async () => {
+		const { queryByTestId: queryA, container: containerA } = render(() => (
+			<DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />
+		));
+		const { queryByTestId: queryB } = render(() => <DiffTab tabId="t2" repoPath={REPO} filePath="src/other.rs" />);
+		await settle();
+		expect(queryA("diff-stub")).not.toBeNull();
+		expect(queryB("diff-stub")).not.toBeNull();
+
+		(containerA.querySelector('[title="All files"]') as HTMLButtonElement).click();
+		await settle();
+
+		// Tab A (where the click happened) may switch to scroll mode — but tab
+		// B, a separate open diff tab for a different file, must keep showing
+		// its own single-file diff. `diffViewMode` is one global store value
+		// today, so clicking "All files" anywhere currently switches every
+		// open per-file DiffTab into scroll mode at once.
+		expect(queryB("diff-stub")).not.toBeNull();
+		expect(queryB("scroll-view-stub")).toBeNull();
 	});
 });
 

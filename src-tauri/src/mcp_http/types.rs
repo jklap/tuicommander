@@ -137,6 +137,11 @@ pub(super) struct OutputQuery {
 #[derive(Deserialize)]
 pub(super) struct PathQuery {
     pub path: String,
+    /// `"staged"` or absent/unstaged — only consumed by `repo_diff`. Other
+    /// `PathQuery` handlers ignore it. See `FileQuery::scope` for the
+    /// per-file equivalent.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

@@ -61,7 +61,7 @@ export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
 				</div>
 			}
 		>
-			<DiffFileList files={files()} mode={mode()} header={header()} />
+			<DiffFileList files={files()} mode={mode()} header={header()} headerHeight={35} />
 		</Show>
 	);
 };

@@ -111,6 +111,16 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	}
 
 	function selectSession(sessionId: string, persist = true) {
+		if (sessionId !== selectedSessionId()) {
+			// Clear the previous session's content synchronously — otherwise it
+			// stays on screen (stale) until the new session's review resolves,
+			// since `loadReview`'s loading state only shows when `!review()`.
+			setReview(null);
+			setReviewError(null);
+			setOpenStepFiles(new Set());
+			setWarningsDismissed(false);
+			scrollEl()?.scrollTo({ top: 0 });
+		}
 		setSelectedSessionId(sessionId);
 		if (persist) diffTabsStore.setSessionId(props.tabId, sessionId);
 		void loadReview(sessionId);
@@ -120,6 +130,20 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	createEffect(() => {
 		void loadSessions(false);
 	});
+	// An already-open tab can be re-targeted at a different session (e.g. a
+	// second `addSessionReview` call for the same repo/tab) — `sessionId` was
+	// previously read only once, at signal-init time, so the tab never
+	// followed a later change. `{defer: true}` skips the redundant fire at
+	// mount, which `loadSessions`' own initial-selection logic already covers.
+	createEffect(
+		on(
+			() => props.sessionId,
+			(id) => {
+				if (id && id !== selectedSessionId()) selectSession(id);
+			},
+			{ defer: true },
+		),
+	);
 	// Reloading the review when the subagent filter changes — `{ defer: true }`
 	// so this doesn't ALSO fire on first mount (selectSession()'s own initial
 	// load already covers that; without `defer` this ran a redundant second
@@ -157,6 +181,14 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 		if (!r) return [];
 		return buildRows(r, viewMode(), expandedFiles(), openStepFiles());
 	});
+
+	function changeViewMode(next: SessionReviewMode) {
+		if (next === viewMode()) return;
+		setViewMode(next);
+		// Switching mode swaps every row's kind (file rows <-> step rows) — the
+		// old scroll offset means nothing against the new row set.
+		scrollEl()?.scrollTo({ top: 0 });
+	}
 
 	function toggleExpanded(absPath: string) {
 		setExpandedFiles((prev) => {
@@ -376,7 +408,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 				<button
 					type="button"
 					class={cx(s.modeBtn, viewMode() === "file" && s.modeBtnActive)}
-					onClick={() => setViewMode("file")}
+					onClick={() => changeViewMode("file")}
 					title="Group by file"
 				>
 					By file
@@ -384,7 +416,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 				<button
 					type="button"
 					class={cx(s.modeBtn, viewMode() === "chronological" && s.modeBtnActive)}
-					onClick={() => setViewMode("chronological")}
+					onClick={() => changeViewMode("chronological")}
 					title="Flat chronological order"
 				>
 					Chronological
