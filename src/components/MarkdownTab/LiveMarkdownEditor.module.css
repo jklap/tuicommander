@@ -43,3 +43,17 @@
   border-radius: 4px;
   cursor: pointer;
 }
+
+.conflict {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 24px;
+  color: var(--fg-primary);
+  background: color-mix(in srgb, var(--tweak-highlight) 20%, var(--bg-tertiary));
+  border-bottom: 1px solid var(--border);
+}
+
+.conflict span {
+  flex: 1;
+}

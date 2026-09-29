@@ -2,7 +2,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
-import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
@@ -15,6 +15,8 @@ export interface LiveMarkdownEditorProps {
 	/** Document as stored on disk. The editor saves exactly what is typed, nothing normalised. */
 	content: string;
 	onSave: (text: string) => Promise<boolean>;
+	/** Current on-disk text; a save is refused when it differs from what this editor loaded. */
+	readDisk: () => Promise<string>;
 	onDirtyChange?: (dirty: boolean) => void;
 }
 
@@ -33,11 +35,41 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 		props.onDirtyChange?.(value);
 	};
 
-	const save = async () => {
+	/** Disk text that differs from `baseline`: someone else wrote the file while this buffer was open. */
+	const [conflict, setConflict] = createSignal<string | null>(null);
+
+	const commit = async () => {
 		if (!view) return;
 		const text = view.state.sliceDoc();
 		if (!(await props.onSave(text))) return;
 		baseline = text;
+		setConflict(null);
+		markDirty(false);
+	};
+
+	const save = async () => {
+		if (!view) return;
+		let disk: string;
+		try {
+			disk = await props.readDisk();
+		} catch (err) {
+			appLogger.error("app", "live save: cannot read the file to check for external changes", err);
+			toastsStore.add(t("markdownTab.liveReadFailed", "Couldn't save"), String(err), "error");
+			return;
+		}
+		if (disk !== baseline) {
+			setConflict(disk);
+			return;
+		}
+		await commit();
+	};
+
+	const reloadFromDisk = () => {
+		const disk = conflict();
+		if (!view || disk === null) return;
+		baseline = disk;
+		view.setState(createState(disk));
+		setConflict(null);
 		markDirty(false);
 	};
 
@@ -78,13 +110,18 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 		onCleanup(() => view?.destroy());
 	});
 
-	// A disk change lands in a clean buffer; a dirty buffer keeps the user's text (the next save wins).
-	createEffect(() => {
-		const incoming = props.content;
-		if (!view || incoming === baseline || view.state.sliceDoc() !== baseline) return;
-		baseline = incoming;
-		view.setState(createState(incoming));
-	});
+	// A disk change lands in a clean buffer; a dirty buffer keeps the user's text and the save guard handles it.
+	createEffect(
+		on(
+			() => props.content,
+			(incoming) => {
+				if (!view || incoming === baseline || view.state.sliceDoc() !== baseline) return;
+				baseline = incoming;
+				view.setState(createState(incoming));
+			},
+			{ defer: true },
+		),
+	);
 
 	const addComment = () => {
 		const body = draft().trim();
@@ -150,6 +187,22 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 					</button>
 				</Show>
 			</div>
+			<Show when={conflict() !== null}>
+				<div class={s.conflict} role="alert">
+					<span>
+						{t(
+							"markdownTab.liveConflict",
+							"This file changed on disk while you were editing. Saving would overwrite those changes.",
+						)}
+					</span>
+					<button type="button" class={s.btn} onClick={reloadFromDisk}>
+						{t("markdownTab.liveReload", "Reload")}
+					</button>
+					<button type="button" class={s.btn} onClick={() => void commit()}>
+						{t("markdownTab.liveOverwrite", "Overwrite")}
+					</button>
+				</div>
+			</Show>
 			<div ref={host} class={s.host} />
 		</div>
 	);
