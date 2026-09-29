@@ -301,7 +301,9 @@ describe("acpClient: talking to a session", () => {
 
 	it("gives ego a file resource link and readable path for a mobile document", async () => {
 		await client.connect(ROOT);
-		await client.prompt(CONNECTION, SESSION, "Summarize this", [], null, [{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }]);
+		await client.prompt(CONNECTION, SESSION, "Summarize this", [], null, [
+			{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" },
+		]);
 		expect(mockInvoke).toHaveBeenCalledWith("acp_session_prompt", {
 			connectionId: CONNECTION,
 			sessionId: SESSION,
@@ -315,12 +317,17 @@ describe("acpClient: talking to a session", () => {
 
 	it("encodes a Windows attachment path as a file resource URI", async () => {
 		await client.connect(ROOT);
-		await client.prompt(CONNECTION, SESSION, "", [], null, [{ name: "a #1.txt", path: "C:\\repo\\.tuic\\attachments\\1-a #1.txt" }]);
-		expect(mockInvoke).toHaveBeenCalledWith("acp_session_prompt", expect.objectContaining({
-			prompt: expect.arrayContaining([
-				{ type: "resource_link", uri: "file:///C:/repo/.tuic/attachments/1-a%20%231.txt", name: "a #1.txt" },
-			]),
-		}));
+		await client.prompt(CONNECTION, SESSION, "", [], null, [
+			{ name: "a #1.txt", path: "C:\\repo\\.tuic\\attachments\\1-a #1.txt" },
+		]);
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"acp_session_prompt",
+			expect.objectContaining({
+				prompt: expect.arrayContaining([
+					{ type: "resource_link", uri: "file:///C:/repo/.tuic/attachments/1-a%20%231.txt", name: "a #1.txt" },
+				]),
+			}),
+		);
 	});
 
 	// A refused request never emits promptSent, so no view can display it as sent.

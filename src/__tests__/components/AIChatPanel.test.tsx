@@ -891,7 +891,13 @@ describe("AIChatPanel: parallel tabs", () => {
 		expect(shortcut.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("");
 		expect(container.textContent).toContain("Parked draft");
-		const repeated = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, repeat: true, bubbles: true, cancelable: true });
+		const repeated = new KeyboardEvent("keydown", {
+			key: "s",
+			ctrlKey: true,
+			repeat: true,
+			bubbles: true,
+			cancelable: true,
+		});
 		textarea.dispatchEvent(repeated);
 		expect(repeated.defaultPrevented).toBe(true);
 		expect(textarea.value).toBe("");
@@ -916,7 +922,10 @@ describe("AIChatPanel: parallel tabs", () => {
 		const textarea = first.container.querySelector("textarea") as HTMLTextAreaElement;
 		textarea.value = "Describe this image";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
-		pasteFile(textarea, new File([Uint8Array.from(atob(PNG_1X1), (char) => char.charCodeAt(0))], "pixel.png", { type: "image/png" }));
+		pasteFile(
+			textarea,
+			new File([Uint8Array.from(atob(PNG_1X1), (char) => char.charCodeAt(0))], "pixel.png", { type: "image/png" }),
+		);
 		await vi.waitFor(() => expect(first.container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(1));
 		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
 		expect(first.container.querySelectorAll('img[alt="Pasted image"]')).toHaveLength(0);
@@ -930,7 +939,13 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		expect(second.container.textContent).toContain("Parked draft");
 		await typeAndSend(second.container, "Describe this image");
-		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "Describe this image", [{ type: "image", mimeType: "image/png", data: PNG_1X1 }], ROOT);
+		expect(client.prompt).toHaveBeenCalledWith(
+			CONNECTION,
+			SESSION,
+			"Describe this image",
+			[{ type: "image", mimeType: "image/png", data: PNG_1X1 }],
+			ROOT,
+		);
 		expect((second.container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Different draft");
 	});
 	it("keeps parked drafts with their chat tabs and expands parked long paste after restoration", async () => {
@@ -952,7 +967,9 @@ describe("AIChatPanel: parallel tabs", () => {
 		await typeAndSend(container, "Short detour");
 		const restored = container.querySelector("textarea") as HTMLTextAreaElement;
 		expect(restored.value).toContain("[Pasted text #");
-		([...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement).click();
+		(
+			[...container.querySelectorAll("button")].find((button) => button.textContent === "Send") as HTMLButtonElement
+		).click();
 		await settle();
 		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, longPaste, [], ROOT);
 	});
@@ -1131,9 +1148,41 @@ describe("AIChatPanel: a turn", () => {
 		await settle();
 		// Recorded AssistantDelta text from ego session 2080b5ad, events 13-47.
 		const chunks = [
-			"T", "UI", "Commander", " v", "1", ".", "7", ".", "7", " is", " connected", ".\n",
-			"intent", ":", " Ver", "ifico", " gli", " agent", "i", " att", "ivi", " e", " ti", " ri",
-			"porto", " lo", " stato", " att", "uale", " (", "Ag", "enti", " att", "ivi", ")",
+			"T",
+			"UI",
+			"Commander",
+			" v",
+			"1",
+			".",
+			"7",
+			".",
+			"7",
+			" is",
+			" connected",
+			".\n",
+			"intent",
+			":",
+			" Ver",
+			"ifico",
+			" gli",
+			" agent",
+			"i",
+			" att",
+			"ivi",
+			" e",
+			" ti",
+			" ri",
+			"porto",
+			" lo",
+			" stato",
+			" att",
+			"uale",
+			" (",
+			"Ag",
+			"enti",
+			" att",
+			"ivi",
+			")",
 		];
 		for (const chunk of chunks) {
 			feed({
@@ -2141,7 +2190,10 @@ describe("AIChatPanel: permission", () => {
 		await settle();
 		expect(client.answerPermission).toHaveBeenCalledWith(CONNECTION, "req-persistent", "persist-rule");
 
-		const stylesheet = readFileSync(resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"), "utf8");
+		const stylesheet = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
 		const alwaysStyle = /\.alwaysAllowBtn\s*\{([^}]*)\}/.exec(stylesheet)?.[1];
 		expect(alwaysStyle, "persistent approval must use the enabled success color").toContain("var(--success)");
 		expect(alwaysStyle).not.toContain("var(--fg-muted)");

@@ -285,7 +285,9 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 				...files.map((file) => {
 					const path = file.path.replaceAll("\\", "/");
 					const windowsDrive = /^[A-Za-z]:\//.test(path);
-					const parts = path.split("/").map((part, index) => windowsDrive && index === 0 ? part : encodeURIComponent(part));
+					const parts = path
+						.split("/")
+						.map((part, index) => (windowsDrive && index === 0 ? part : encodeURIComponent(part)));
 					return {
 						type: "resource_link" as const,
 						uri: `file://${windowsDrive ? "/" : ""}${parts.join("/")}`,
