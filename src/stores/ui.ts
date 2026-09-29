@@ -67,7 +67,7 @@ interface UIStoreState {
 	referencesPanelVisible: boolean;
 	aiChatPanelVisible: boolean;
 	/** Rendered width of the docked AI Chat panel; 0 when closed or detached. Not persisted. */
-	aiChatPanelWidth: number;
+	aiChatPanelMeasuredWidth: number;
 	detachedPanels: Record<string, string>;
 
 	/** Collapsed state of the GitHub panel sections, keyed by section id
@@ -132,7 +132,7 @@ function createUIStore() {
 		outlinePanelVisible: false,
 		referencesPanelVisible: false,
 		aiChatPanelVisible: false,
-		aiChatPanelWidth: 0,
+		aiChatPanelMeasuredWidth: 0,
 		detachedPanels: {} as Record<string, string>,
 		githubSectionCollapsed: {} as Record<string, boolean>,
 		gitPanelRequestedTab: null,
@@ -399,8 +399,8 @@ function createUIStore() {
 			setExclusivePanel("aiChatPanelVisible", !state.aiChatPanelVisible);
 		},
 
-		setAiChatPanelWidth(width: number): void {
-			setState("aiChatPanelWidth", width);
+		setAiChatPanelMeasuredWidth(width: number): void {
+			setState("aiChatPanelMeasuredWidth", width);
 		},
 
 		setAiChatPanelVisible(visible: boolean): void {

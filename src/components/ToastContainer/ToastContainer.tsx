@@ -72,7 +72,7 @@ export const ToastContainer: Component = () => {
 			onDismiss={dismiss}
 			repoName={toastRepoName}
 			repoAction={toastRepoAction}
-			rightInset={uiStore.state.aiChatPanelWidth}
+			rightInset={uiStore.state.aiChatPanelMeasuredWidth}
 		/>
 	);
 };

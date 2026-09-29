@@ -14,11 +14,11 @@ import { uiStore } from "../../stores/ui";
 describe("toast inset for the docked AI Chat panel", () => {
 	beforeEach(() => {
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
-		uiStore.setAiChatPanelWidth(0);
+		uiStore.setAiChatPanelMeasuredWidth(0);
 	});
 	afterEach(() => {
 		cleanup();
-		uiStore.setAiChatPanelWidth(0);
+		uiStore.setAiChatPanelMeasuredWidth(0);
 	});
 
 	function container(): HTMLElement {
@@ -28,7 +28,7 @@ describe("toast inset for the docked AI Chat panel", () => {
 	}
 
 	it("offsets the container by the panel width", () => {
-		uiStore.setAiChatPanelWidth(500);
+		uiStore.setAiChatPanelMeasuredWidth(500);
 		expect(container().style.getPropertyValue("--toast-right-inset")).toBe("500px");
 	});
 
@@ -38,9 +38,9 @@ describe("toast inset for the docked AI Chat panel", () => {
 
 	it("follows the width when the panel is resized or closed", () => {
 		const el = container();
-		uiStore.setAiChatPanelWidth(620);
+		uiStore.setAiChatPanelMeasuredWidth(620);
 		expect(el.style.getPropertyValue("--toast-right-inset")).toBe("620px");
-		uiStore.setAiChatPanelWidth(0);
+		uiStore.setAiChatPanelMeasuredWidth(0);
 		expect(el.style.getPropertyValue("--toast-right-inset")).toBe("");
 	});
 });

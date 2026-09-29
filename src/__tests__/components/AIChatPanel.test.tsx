@@ -57,7 +57,7 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
-		setAiChatPanelWidth: vi.fn(),
+		setAiChatPanelMeasuredWidth: vi.fn(),
 		setFileBrowserExternalRoot: mockSetFolderRoot,
 		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
