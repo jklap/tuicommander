@@ -545,7 +545,10 @@ mod tests {
                 "prompt": "work",
             });
             request[key] = serde_json::json!(true);
-            assert!(serde_json::from_value::<SpawnAgentRequest>(request).is_err(), "{key}");
+            assert!(
+                serde_json::from_value::<SpawnAgentRequest>(request).is_err(),
+                "{key}"
+            );
         }
     }
 
