@@ -277,6 +277,8 @@
 /repo/session-review/revert-file
 /repo/session-review/revert-step
 /repo/session-review/sessions
+/repo/session-review/unwatch
+/repo/session-review/watch
 /repo/stage
 /repo/stash
 /repo/stash/apply
