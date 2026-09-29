@@ -1190,6 +1190,30 @@ pub(crate) struct AppConfig {
     /// opens that repo. Ships empty — no default entries.
     #[serde(default)]
     pub(crate) custom_pty_env: Vec<CustomEnvVarEntry>,
+    /// Diff comparison: ignore leading whitespace on each line (Session Diff
+    /// Review and Branch Diff Scroll, via the shared `diff_options` engine —
+    /// `git diff` has no native equivalent for leading-only whitespace).
+    #[serde(default)]
+    pub(crate) diff_ignore_leading_whitespace: bool,
+    /// Diff comparison: ignore trailing whitespace on each line.
+    #[serde(default)]
+    pub(crate) diff_ignore_trailing_whitespace: bool,
+    /// Diff comparison: collapse runs of whitespace to a single space before
+    /// comparing (catches reindentation/retabbing with no other content change).
+    #[serde(default)]
+    pub(crate) diff_ignore_whitespace_amount: bool,
+    /// Diff comparison: case-insensitive line comparison.
+    #[serde(default)]
+    pub(crate) diff_ignore_case: bool,
+    /// When TUIC detects an agent has edited files in a session: "off" (never
+    /// open Session Diff Review automatically), "ask" (toast with an "Open"
+    /// action), or "auto" (open the tab in the background, no activation).
+    #[serde(default = "default_session_diff_auto_open")]
+    pub(crate) session_diff_auto_open: String,
+    /// Truncate a single change's displayed diff above this many lines, with a
+    /// "Show all N lines" expander. `0` disables truncation entirely.
+    #[serde(default = "default_session_diff_truncate_lines")]
+    pub(crate) session_diff_truncate_lines: u32,
 }
 
 /// One user-authored `KEY=value` pair for `AppConfig::custom_pty_env`. A `Vec`,
@@ -1526,8 +1550,23 @@ impl Default for AppConfig {
             additional_readable_dirs: default_additional_readable_dirs(),
             inline_blame_enabled: true,
             custom_pty_env: Vec::new(),
+            diff_ignore_leading_whitespace: false,
+            diff_ignore_trailing_whitespace: false,
+            diff_ignore_whitespace_amount: false,
+            diff_ignore_case: false,
+            session_diff_auto_open: default_session_diff_auto_open(),
+            session_diff_truncate_lines: default_session_diff_truncate_lines(),
         }
     }
+}
+
+fn default_session_diff_auto_open() -> String {
+    "ask".to_string()
+}
+
+/// `0` means "never truncate" — see the field's own doc comment.
+fn default_session_diff_truncate_lines() -> u32 {
+    300
 }
 
 // ---------------------------------------------------------------------------
@@ -1722,6 +1761,9 @@ pub(crate) struct UIPrefsConfig {
     /// Diff viewer mode: "split" (side-by-side) or "unified" (inline).
     #[serde(default = "default_diff_view_mode")]
     pub(crate) diff_view_mode: String,
+    /// Soft-wrap long lines in the diff viewer instead of horizontal scroll.
+    #[serde(default)]
+    pub(crate) diff_soft_wrap: bool,
     #[serde(default)]
     pub(crate) detached_panels: std::collections::HashMap<String, String>,
     /// Collapsed state of the GitHub panel sections, keyed by section id
@@ -1771,6 +1813,7 @@ impl Default for UIPrefsConfig {
             settings_nav_width: default_settings_nav_width(),
             settings_expert_mode: false,
             diff_view_mode: default_diff_view_mode(),
+            diff_soft_wrap: false,
             detached_panels: std::collections::HashMap::new(),
             github_section_collapsed: std::collections::HashMap::new(),
         }
@@ -5647,6 +5690,12 @@ mod tests {
                 key: "FOO".to_string(),
                 value: "bar".to_string(),
             }],
+            diff_ignore_leading_whitespace: true,
+            diff_ignore_trailing_whitespace: true,
+            diff_ignore_whitespace_amount: true,
+            diff_ignore_case: true,
+            session_diff_auto_open: "auto".to_string(),
+            session_diff_truncate_lines: 500,
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
         assert_eq!(loaded.shell.as_deref(), Some("/bin/zsh"));
@@ -5753,6 +5802,12 @@ mod tests {
                 value: "bar".to_string(),
             }]
         );
+        assert!(loaded.diff_ignore_leading_whitespace);
+        assert!(loaded.diff_ignore_trailing_whitespace);
+        assert!(loaded.diff_ignore_whitespace_amount);
+        assert!(loaded.diff_ignore_case);
+        assert_eq!(loaded.session_diff_auto_open, "auto");
+        assert_eq!(loaded.session_diff_truncate_lines, 500);
     }
 
     #[test]
@@ -5854,6 +5909,36 @@ mod tests {
             loaded.custom_pty_env.is_empty(),
             "a config.json predating this field must land on an empty Vec, not error"
         );
+        assert!(!loaded.diff_ignore_leading_whitespace);
+        assert!(!loaded.diff_ignore_trailing_whitespace);
+        assert!(!loaded.diff_ignore_whitespace_amount);
+        assert!(!loaded.diff_ignore_case);
+        assert_eq!(loaded.session_diff_auto_open, "ask");
+        assert_eq!(loaded.session_diff_truncate_lines, 300);
+    }
+
+    #[test]
+    fn session_diff_auto_open_is_an_unvalidated_string_like_diff_view_mode() {
+        // Matches diff_view_mode's own established convention in this file: a
+        // small closed set of string values with no serde-level enum, so an
+        // unrecognized value on disk (hand-edited config.json, or a future
+        // rename) does not fail config load — the frontend radio group is the
+        // validation boundary, defaulting to "ask" for anything it doesn't
+        // recognize.
+        let dir = TempDir::new().unwrap();
+        let bad_json = r#"{"shell":null,"font_family":"JetBrains Mono","font_size":14,"theme":"tokyo-night","session_diff_auto_open":"sometimes"}"#;
+        let path = dir.path().join("config.json");
+        fs::write(&path, bad_json).unwrap();
+        let loaded: Result<AppConfig, _> =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap());
+        assert!(
+            loaded.is_ok(),
+            "session_diff_auto_open is a plain String (matching diff_view_mode's own \
+             convention) — deserialization succeeds regardless of value; validation \
+             happens where it's consumed (frontend radio group, UI defaulting to \"ask\" \
+             for any unrecognized value), not at the config-load boundary"
+        );
+        assert_eq!(loaded.unwrap().session_diff_auto_open, "sometimes");
     }
 
     #[test]
@@ -6494,6 +6579,7 @@ mod tests {
             settings_nav_width: 200,
             settings_expert_mode: true,
             diff_view_mode: "split".to_string(),
+            diff_soft_wrap: true,
             detached_panels: std::collections::HashMap::from([(
                 "activity".to_string(),
                 "panel-activity".to_string(),
@@ -6524,6 +6610,13 @@ mod tests {
         assert!(!loaded.references_panel_visible);
         assert!(!loaded.ai_chat_panel_visible);
         assert_eq!(loaded.file_browser_view_mode, "tree");
+        assert!(loaded.diff_soft_wrap);
+    }
+
+    #[test]
+    fn ui_prefs_diff_soft_wrap_defaults_to_false_for_a_prefs_file_predating_it() {
+        let loaded: UIPrefsConfig = serde_json::from_str(r#"{"diff_view_mode":"unified"}"#).unwrap();
+        assert!(!loaded.diff_soft_wrap);
     }
 
     /// A prefs file written before the field existed must still load, with the

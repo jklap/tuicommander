@@ -165,6 +165,26 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("diffSoftWrap", () => {
+		it("defaults to false", () => {
+			testInScope(() => {
+				expect(store.state.diffSoftWrap).toBe(false);
+			});
+		});
+
+		it("setDiffSoftWrap sets and persists", () => {
+			testInScope(() => {
+				store.setDiffSoftWrap(true);
+				expect(store.state.diffSoftWrap).toBe(true);
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
+					config: expect.objectContaining({ diff_soft_wrap: true }),
+				});
+			});
+		});
+	});
+
 	describe("focusMode", () => {
 		it("defaults to false", () => {
 			testInScope(() => {
@@ -278,6 +298,29 @@ describe("uiStore", () => {
 				expect(store.state.sidebarVisible).toBe(false);
 				expect(store.state.sidebarWidth).toBe(280);
 				expect(mockInvoke).toHaveBeenCalledWith("load_ui_prefs");
+			});
+		});
+
+		it("loads diff_soft_wrap from Rust backend", async () => {
+			mockInvoke.mockResolvedValueOnce({ diff_soft_wrap: true });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.diffSoftWrap).toBe(true);
+			});
+		});
+
+		it("a legacy 'scroll' diff_view_mode migrates to split and re-persists", async () => {
+			mockInvoke.mockResolvedValueOnce({ diff_view_mode: "scroll" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.diffViewMode).toBe("split");
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
+					config: expect.objectContaining({ diff_view_mode: "split" }),
+				});
 			});
 		});
 
