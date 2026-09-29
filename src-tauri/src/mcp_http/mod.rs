@@ -3357,11 +3357,14 @@ mod tests {
         )
         .unwrap();
 
-        let uri = |file: &str| {
+        let uri = |file: &str, token: Option<&str>| {
             let mut params = url::form_urlencoded::Serializer::new(String::new());
             params
                 .append_pair("repoPath", root.to_str().unwrap())
                 .append_pair("file", file);
+            if let Some(token) = token {
+                params.append_pair("token", token);
+            }
             format!("/fs/markdown-image?{}", params.finish())
         };
         let request = |path: String, addr: std::net::SocketAddr| {
@@ -3371,17 +3374,48 @@ mod tests {
         };
         let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), true, true);
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, true, true);
         let denied = app
             .clone()
-            .oneshot(request(uri("docs/images/chart.png"), remote))
+            .oneshot(request(uri("docs/images/chart.png", None), remote))
             .await
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
+        #[cfg(feature = "desktop")]
+        {
+            let accepted_local = app
+                .clone()
+                .oneshot(request(uri("docs/images/chart.png", None), local))
+                .await
+                .unwrap();
+            assert_eq!(accepted_local.status(), StatusCode::OK);
+        }
+
+        // Headless serves remote clients and requires auth even over loopback.
+        // The desktop-only webview bypass is intentionally unavailable there.
+        #[cfg(not(feature = "desktop"))]
+        {
+            let denied_local = app
+                .clone()
+                .oneshot(request(uri("docs/images/chart.png", None), local))
+                .await
+                .unwrap();
+            assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let accepted_remote = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png", Some(&token)), remote))
+            .await
+            .unwrap();
+        assert_eq!(accepted_remote.status(), StatusCode::OK);
+
         let accepted = app
             .clone()
-            .oneshot(request(uri("docs/images/chart.png"), local))
+            .oneshot(request(uri("docs/images/chart.png", Some(&token)), local))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::OK);
@@ -3404,21 +3438,21 @@ mod tests {
         ] {
             let response = app
                 .clone()
-                .oneshot(request(uri(path), local))
+                .oneshot(request(uri(path, Some(&token)), local))
                 .await
                 .unwrap();
             assert_eq!(response.status(), expected, "wrong response for {path}");
         }
         let huge = app
             .clone()
-            .oneshot(request(uri("docs/images/huge.png"), local))
+            .oneshot(request(uri("docs/images/huge.png", Some(&token)), local))
             .await
             .unwrap();
         assert_eq!(huge.status(), StatusCode::PAYLOAD_TOO_LARGE);
         #[cfg(unix)]
         {
             let response = app
-                .oneshot(request(uri("docs/images/link.png"), local))
+                .oneshot(request(uri("docs/images/link.png", Some(&token)), local))
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
