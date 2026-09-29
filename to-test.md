@@ -1,3 +1,7 @@
+## Worktree removal recovery (1258-e9ba) — Rust restart required
+
+- [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE=<id>`, remove a disposable clean landed worktree with ignored build artifacts through `repo worktree_remove`. Confirm the directory is gone before the branch disappears. The running backend does not hot-reload this Rust change.
+
 ## Named debug vault test (1181-2f80)
 
 - [x] Rebuild the headless test binary and confirm a named instance writes its seeded session token to its own credentials file without changing the default file. _(verified: `app_instance_cli` whole-module run passed 11/11 after rebuilding; `named_debug_vault_ignores_and_does_not_mutate_default_legacy_entries` asserts both files.)_
