@@ -148,6 +148,9 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`SessionsScreen` filters its existing session snapshot locally while search is open;
+the backend list and card order remain unchanged. Closing search clears the query.
+
 `MobileApp` keeps `SessionDetailScreen` mounted while its header opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;

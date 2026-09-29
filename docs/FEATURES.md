@@ -1901,6 +1901,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2 Sessions Screen
 - Hero metrics header: active session count + awaiting input count with large tabular-nums display
+- Search button at the top right filters the live session list by name, repository path, worktree path, branch, or agent type; closing search restores the full list
 - Elevated session cards with agent icon, status badge, project/branch, relative time
 - Rich sub-rows per card: agent intent (crosshair icon) or last prompt (speech bubble), current task (gear icon) with inline progress bar, usage limit percentage
 - Question state highlighted via inset gold box-shadow
