@@ -60,11 +60,14 @@ const MAX_OFFSCREEN_HEIGHT = 32768;
 
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
-function drawConnection(ctx: Ctx2D, conn: Connection): void {
+/** Vertical centre of a row's collapsed header, in CSS pixels */
+type RowY = (row: number) => number;
+
+function drawConnection(ctx: Ctx2D, conn: Connection, rowY: RowY): void {
 	const x1 = conn.from_col * LANE_WIDTH + LANE_WIDTH / 2;
-	const y1 = conn.from_row * ROW_HEIGHT + ROW_HEIGHT / 2;
+	const y1 = rowY(conn.from_row);
 	const x2 = conn.to_col * LANE_WIDTH + LANE_WIDTH / 2;
-	const y2 = conn.to_row * ROW_HEIGHT + ROW_HEIGHT / 2;
+	const y2 = rowY(conn.to_row);
 
 	ctx.strokeStyle = COLORS[conn.color_index % COLORS.length];
 	ctx.lineWidth = 2;
@@ -88,9 +91,8 @@ function drawConnection(ctx: Ctx2D, conn: Connection): void {
  * lane below (a cell no commit occupies). A short crossbar perpendicular to the
  * lane, visually distinct from the vertical line.
  */
-function drawLaneStartCap(ctx: Ctx2D, col: number, row: number, colorIndex: number): void {
+function drawLaneStartCap(ctx: Ctx2D, col: number, y: number, colorIndex: number): void {
 	const x = col * LANE_WIDTH + LANE_WIDTH / 2;
-	const y = row * ROW_HEIGHT + ROW_HEIGHT / 2;
 
 	ctx.strokeStyle = COLORS[colorIndex % COLORS.length];
 	ctx.lineWidth = 2;
@@ -100,9 +102,8 @@ function drawLaneStartCap(ctx: Ctx2D, col: number, row: number, colorIndex: numb
 	ctx.stroke();
 }
 
-function drawDot(ctx: Ctx2D, node: GraphNode): void {
+function drawDot(ctx: Ctx2D, node: GraphNode, y: number): void {
 	const x = node.column * LANE_WIDTH + LANE_WIDTH / 2;
-	const y = node.row * ROW_HEIGHT + ROW_HEIGHT / 2;
 	const color = COLORS[node.color_index % COLORS.length];
 
 	ctx.fillStyle = color;
@@ -120,6 +121,10 @@ export interface CommitGraphProps {
 	scrollTop: number;
 	viewportHeight: number;
 	totalHeight: number;
+	/** Row whose commit is expanded, or -1 */
+	expandedRow: number;
+	/** Height the expanded row adds below its collapsed header */
+	expandedExtra: number;
 }
 
 export const CommitGraph: Component<CommitGraphProps> = (props) => {
@@ -137,9 +142,15 @@ export const CommitGraph: Component<CommitGraphProps> = (props) => {
 	// --- Effect 1: rebuild offscreen canvas when nodes change ---
 	createEffect(
 		on(
-			() => [props.nodes, props.totalHeight] as const,
+			() => [props.nodes, props.totalHeight, props.expandedRow, props.expandedExtra] as const,
 			() => {
 				const nodes = props.nodes;
+				// Rows below the expanded one move down by its extra height.
+				const { expandedRow, expandedExtra } = props;
+				const rowY: RowY = (row) => {
+					const shift = expandedRow >= 0 && row > expandedRow ? expandedExtra : 0;
+					return row * ROW_HEIGHT + ROW_HEIGHT / 2 + shift;
+				};
 				const dpr = window.devicePixelRatio || 1;
 				const w = width();
 				// Cap height to browser maximum; graphs taller than this are rare
@@ -170,7 +181,7 @@ export const CommitGraph: Component<CommitGraphProps> = (props) => {
 				const laneStarts = new Map<string, number>();
 				for (const node of nodes) {
 					for (const conn of node.connections) {
-						drawConnection(ctx, conn);
+						drawConnection(ctx, conn, rowY);
 						// A line's visual bottom is (to_col, to_row). When no commit
 						// occupies that cell, the line dangles there — that's a lane
 						// foot, where the lane starts. Holds for straight first-parent
@@ -188,12 +199,12 @@ export const CommitGraph: Component<CommitGraphProps> = (props) => {
 				// visible case needs it.
 				for (const [foot, colorIndex] of laneStarts) {
 					const [col, row] = foot.split(":").map(Number);
-					drawLaneStartCap(ctx, col, row, colorIndex);
+					drawLaneStartCap(ctx, col, rowY(row), colorIndex);
 				}
 
 				// Draw commit dots on top
 				for (const node of nodes) {
-					drawDot(ctx, node);
+					drawDot(ctx, node, rowY(node.row));
 				}
 
 				setOffscreen(oc);
@@ -256,11 +267,26 @@ export const CommitGraph: Component<CommitGraphProps> = (props) => {
 	);
 };
 
-/** Width of the graph overlay in pixels, for use as left padding in the commit list */
-export function graphWidth(nodes: GraphNode[]): number {
-	if (nodes.length === 0) return 0;
-	const maxCol = nodes.reduce((max, n) => Math.max(max, n.column), 0);
-	return (maxCol + 1) * LANE_WIDTH;
+/**
+ * Width of the lanes drawn in each row, indexed by row, for use as that row's
+ * left padding in the commit list. A connection counts in every row it spans,
+ * at its wider end: a curve bends somewhere between its rows.
+ */
+export function laneWidthsByRow(nodes: GraphNode[]): number[] {
+	const maxCol: number[] = [];
+	const widen = (row: number, col: number) => {
+		maxCol[row] = Math.max(maxCol[row] ?? 0, col);
+	};
+	for (const node of nodes) {
+		widen(node.row, node.column);
+		for (const conn of node.connections) {
+			const col = Math.max(conn.from_col, conn.to_col);
+			for (let row = Math.min(conn.from_row, conn.to_row); row <= Math.max(conn.from_row, conn.to_row); row++) {
+				widen(row, col);
+			}
+		}
+	}
+	return Array.from(maxCol, (col) => (col === undefined ? 0 : (col + 1) * LANE_WIDTH));
 }
 
 export default CommitGraph;
