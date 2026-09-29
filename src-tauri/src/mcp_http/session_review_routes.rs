@@ -105,10 +105,13 @@ mod tests {
 
     /// Writes a single-edit transcript under `<home>/.claude/projects/<slug>/`
     /// and returns its session id.
-    fn seed_transcript_under_home(home: &std::path::Path, repo_path: &str, abs_file: &str) -> String {
-        let project_dir_str =
-            crate::agent_session::claude_project_dir(repo_path.to_string(), None)
-                .expect("claude_project_dir");
+    fn seed_transcript_under_home(
+        home: &std::path::Path,
+        repo_path: &str,
+        abs_file: &str,
+    ) -> String {
+        let project_dir_str = crate::agent_session::claude_project_dir(repo_path.to_string(), None)
+            .expect("claude_project_dir");
         let project_dir = std::path::PathBuf::from(project_dir_str);
         std::fs::create_dir_all(&project_dir).unwrap();
         let session_id = uuid::Uuid::new_v4().to_string();

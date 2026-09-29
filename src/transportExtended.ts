@@ -28,7 +28,7 @@
  * docs/api/http-api.md -> "Route Parity Gate".
  */
 
-import { type CommandTableEntry, isRecord, registerCommandTableEntries } from "./transport";
+import { type CommandTableEntry, diffOptionsQueryString, isRecord, registerCommandTableEntries } from "./transport";
 
 const EXTENDED_COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Dictation ---
@@ -542,6 +542,7 @@ const EXTENDED_COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			let diffUrl = `/repo/file-diff?path=${p("path")}&file=${p("file")}`;
 			if (args?.scope) diffUrl += `&scope=${encodeURIComponent(String(args.scope))}`;
 			if (args?.untracked) diffUrl += `&untracked=true`;
+			diffUrl += diffOptionsQueryString(args?.options);
 			return { method: "GET", path: diffUrl };
 		},
 	},

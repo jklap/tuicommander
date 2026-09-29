@@ -34,6 +34,7 @@ pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
 #[cfg(feature = "desktop")]
 mod dictation;
+pub(crate) mod diff_options;
 pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
 pub(crate) mod direct_proxy;

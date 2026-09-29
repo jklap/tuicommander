@@ -89,6 +89,20 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Builds the `&ignoreLeadingWs=true&...` query-string suffix `mcp_http/types.rs`'s
+ *  `PathQuery::diff_options`/`FileQuery::diff_options` expect, from a `DiffOptions`
+ *  object (or nothing, when every option is absent/false — the default diff). Shared
+ *  by `get_git_diff` (this file) and `get_file_diff` (transportExtended.ts). */
+export function diffOptionsQueryString(options: unknown): string {
+	if (!isRecord(options)) return "";
+	const flags = ["ignoreLeadingWs", "ignoreTrailingWs", "ignoreWsAmount", "ignoreCase"];
+	let suffix = "";
+	for (const flag of flags) {
+		if (options[flag]) suffix += `&${flag}=true`;
+	}
+	return suffix;
+}
+
 /** Args accessor + URL encoder, bound to a specific command invocation */
 type ArgEncoder = (key: string) => string;
 
@@ -541,6 +555,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => {
 			let diffUrl = `/repo/diff?path=${p("path")}`;
 			if (args?.scope) diffUrl += `&scope=${encodeURIComponent(String(args.scope))}`;
+			diffUrl += diffOptionsQueryString(args?.options);
 			return {
 				method: "GET",
 				path: diffUrl,

@@ -25,9 +25,10 @@ pub(super) async fn repo_diff(Query(q): Query<PathQuery>) -> Response {
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
+    let options = q.diff_options();
     let path = q.path;
     let scope = q.scope;
-    match crate::git::get_git_diff(path, scope).await {
+    match crate::git::get_git_diff(path, scope, Some(options)).await {
         Ok(diff) => (StatusCode::OK, Json(serde_json::json!({"diff": diff}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -64,11 +65,12 @@ pub(super) async fn get_file_diff_http(Query(q): Query<FileQuery>) -> Response {
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
+    let options = q.diff_options();
     let path = q.path;
     let file = q.file;
     let scope = q.scope;
     let untracked = q.untracked;
-    json_result(crate::git::get_file_diff(path, file, scope, untracked).await)
+    json_result(crate::git::get_file_diff(path, file, scope, untracked, Some(options)).await)
 }
 
 pub(super) async fn list_markdown_files_http(Query(q): Query<PathQuery>) -> Response {
@@ -899,10 +901,12 @@ mod tests {
 
         // Sanity check: the two scopes genuinely differ for this repo state,
         // or this test would prove nothing regardless of the route's logic.
-        let staged_diff = crate::git::get_git_diff(path.clone(), Some("staged".to_string()))
+        let staged_diff = crate::git::get_git_diff(path.clone(), Some("staged".to_string()), None)
             .await
             .unwrap();
-        let unstaged_diff = crate::git::get_git_diff(path.clone(), None).await.unwrap();
+        let unstaged_diff = crate::git::get_git_diff(path.clone(), None, None)
+            .await
+            .unwrap();
         assert!(
             staged_diff.contains("a-staged-change") && !staged_diff.contains("b-unstaged-change"),
             "setup should have produced a staged-only diff of a.txt, got:\n{staged_diff}"
@@ -920,9 +924,11 @@ mod tests {
         let mut req = axum::http::Request::get(format!("/repo/diff?path={path}&scope=staged"))
             .body(axum::body::Body::empty())
             .unwrap();
-        req.extensions_mut().insert(axum::extract::ConnectInfo(
-            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
-        ));
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let json = json_body(response).await;
