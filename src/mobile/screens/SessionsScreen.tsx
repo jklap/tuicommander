@@ -23,11 +23,26 @@ export function SessionsScreen(props: SessionsScreenProps) {
 	const [pulling, setPulling] = createSignal(false);
 	const [pullY, setPullY] = createSignal(0);
 	const [showNewSession, setShowNewSession] = createSignal(false);
+	const [searchOpen, setSearchOpen] = createSignal(false);
+	const [searchQuery, setSearchQuery] = createSignal("");
 	const [repos, setRepos] = createSignal<string[]>([]);
 	// Memoized so the sort runs on a real list change, not on every render.
 	// `reconcileSessions` hands back the same array reference for an idle poll,
 	// which keeps this inert — and keeps `<For>` from rebuilding every card.
 	const ordered = createMemo(() => ptysLast(props.sessions));
+	const visibleSessions = createMemo(() => {
+		const query = searchQuery().trim().toLowerCase();
+		if (!query) return ordered();
+		return ordered().filter((session) =>
+			[
+				session.display_name,
+				session.cwd,
+				session.worktree_path,
+				session.worktree_branch,
+				session.state?.agent_type,
+			].some((value) => value?.toLowerCase().includes(query)),
+		);
+	});
 	let startY = 0;
 	let listEl: HTMLDivElement | undefined;
 
@@ -72,8 +87,70 @@ export function SessionsScreen(props: SessionsScreenProps) {
 		setPulling(false);
 	}
 
+	function toggleSearch() {
+		if (searchOpen()) setSearchQuery("");
+		setSearchOpen(!searchOpen());
+	}
+
 	return (
 		<div ref={listEl} class={styles.list} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+			<div class={styles.searchHeader}>
+				<div class={styles.searchRow}>
+					<span class={styles.sectionTitle}>Sessions</span>
+					<button
+						type="button"
+						class={styles.searchToggle}
+						aria-label={searchOpen() ? "Close session search" : "Search sessions"}
+						aria-expanded={searchOpen()}
+						onClick={toggleSearch}
+					>
+						<Show
+							when={searchOpen()}
+							fallback={
+								<svg
+									width="20"
+									height="20"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									aria-hidden="true"
+								>
+									<circle cx="11" cy="11" r="7" />
+									<path d="m16 16 5 5" />
+								</svg>
+							}
+						>
+							<svg
+								width="20"
+								height="20"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								aria-hidden="true"
+							>
+								<path d="M18 6 6 18M6 6l12 12" />
+							</svg>
+						</Show>
+					</button>
+				</div>
+				<Show when={searchOpen()}>
+					<div class={styles.searchField}>
+						<input
+							ref={(element) => queueMicrotask(() => element.focus())}
+							type="search"
+							aria-label="Filter sessions"
+							placeholder="Name, repository, branch or agent"
+							value={searchQuery()}
+							onInput={(event) => setSearchQuery(event.currentTarget.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Escape") toggleSearch();
+							}}
+						/>
+					</div>
+				</Show>
+			</div>
 			<Show when={pullY() > 0}>
 				<div class={styles.pullIndicator} style={{ height: `${pullY()}px` }}>
 					<span classList={{ [styles.pullReady]: pullY() >= PULL_THRESHOLD }}>
@@ -128,11 +205,18 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				</div>
 			</Show>
 
-			<For each={ordered()}>
+			<Show when={searchQuery().trim() && visibleSessions().length === 0 && props.sessions.length > 0}>
+				<div class={styles.noMatch}>
+					<span class={styles.emptyTitle}>No matching sessions</span>
+					<span class={styles.emptyHint}>Try another name, repository, branch or agent</span>
+				</div>
+			</Show>
+
+			<For each={visibleSessions()}>
 				{(session) => <SessionCard session={session} onSelect={props.onSelectSession} onKill={handleKill} />}
 			</For>
 
-			<button class={styles.fab} onClick={openNewSessionSheet} data-testid="new-session-fab">
+			<button class={styles.fab} aria-label="New session" onClick={openNewSessionSheet} data-testid="new-session-fab">
 				<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 					<line x1="12" y1="5" x2="12" y2="19" />
 					<line x1="5" y1="12" x2="19" y2="12" />
@@ -140,7 +224,14 @@ export function SessionsScreen(props: SessionsScreenProps) {
 			</button>
 
 			<Show when={showNewSession()}>
-				<NewSessionSheet repos={repos()} onDismiss={() => setShowNewSession(false)} />
+				<NewSessionSheet
+					repos={repos()}
+					onDismiss={() => setShowNewSession(false)}
+					onCreated={(sessionId) => {
+						props.onSelectSession(sessionId);
+						props.onRefresh();
+					}}
+				/>
 			</Show>
 		</div>
 	);
