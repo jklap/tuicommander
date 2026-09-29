@@ -3,15 +3,23 @@ import "../mocks/tauri";
 import { createRoot } from "solid-js";
 import { mockInvoke } from "../mocks/tauri";
 
-const { mockSetOnPrTerminal, mockGetEffective, mockGet, mockBumpRevision, mockBumpGitRevision, mockConfirm } =
-	vi.hoisted(() => ({
-		mockSetOnPrTerminal: vi.fn(),
-		mockGetEffective: vi.fn(),
-		mockGet: vi.fn(),
-		mockBumpRevision: vi.fn(),
-		mockBumpGitRevision: vi.fn(),
-		mockConfirm: vi.fn(),
-	}));
+const {
+	mockSetOnPrTerminal,
+	mockGetEffective,
+	mockGet,
+	mockBumpRevision,
+	mockBumpGitRevision,
+	mockConfirm,
+	mockSetStatusInfo,
+} = vi.hoisted(() => ({
+	mockSetOnPrTerminal: vi.fn(),
+	mockGetEffective: vi.fn(),
+	mockGet: vi.fn(),
+	mockBumpRevision: vi.fn(),
+	mockBumpGitRevision: vi.fn(),
+	mockConfirm: vi.fn(),
+	mockSetStatusInfo: vi.fn(),
+}));
 
 vi.mock("../../stores/github", () => ({
 	githubStore: {
@@ -66,7 +74,11 @@ function getCapturedCallback(): (
 describe("useAutoDeleteBranch", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockInvoke.mockResolvedValue(undefined);
+		mockInvoke.mockImplementation((cmd: string) =>
+			Promise.resolve(
+				cmd === "get_workspace_lifecycle" ? { dirty_files: 0, live_sessions: [], warnings: [] } : undefined,
+			),
+		);
 		mockConfirm.mockResolvedValue(true);
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "off" });
 		mockGet.mockReturnValue({
@@ -84,7 +96,7 @@ describe("useAutoDeleteBranch", () => {
 		let dispose: (() => void) | undefined;
 		createRoot((d) => {
 			dispose = d;
-			useAutoDeleteBranch({ confirm: mockConfirm });
+			useAutoDeleteBranch({ confirm: mockConfirm, setStatusInfo: mockSetStatusInfo });
 		});
 		return dispose;
 	}
@@ -119,7 +131,8 @@ describe("useAutoDeleteBranch", () => {
 	it("auto-deletes silently when setting is auto and worktree is clean", async () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockInvoke.mockImplementation((cmd: string) => {
-			if (cmd === "check_worktree_dirty") return Promise.resolve(false);
+			if (cmd === "get_workspace_lifecycle")
+				return Promise.resolve({ dirty_files: 0, live_sessions: [], warnings: [] });
 			return Promise.resolve(undefined);
 		});
 		const dispose = setup();
@@ -140,31 +153,66 @@ describe("useAutoDeleteBranch", () => {
 		dispose?.();
 	});
 
-	it("falls back to ask when auto mode and worktree is dirty", async () => {
+	it("uses the checkout id when the PR branch has an opaque workspace id", async () => {
+		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
+		mockGet.mockReturnValue({ workspaces: { "workspace-42": { branchName: "feature/x", isMain: false } } });
+		const dispose = setup();
+		getCapturedCallback()("/repo1", "feature/x", 42, "merged");
+		await vi.waitFor(() => {
+			expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
+				repoPath: "/repo1",
+				branchName: "feature/x",
+				workspaceId: "workspace-42",
+			});
+		});
+		dispose?.();
+	});
+
+	it("unattended PR cleanup keeps a checkout used by a live agent and reports why", async () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockInvoke.mockImplementation((cmd: string) => {
-			if (cmd === "check_worktree_dirty") return Promise.resolve(true);
+			if (cmd === "get_workspace_lifecycle") {
+				return Promise.resolve({
+					dirty_files: 0,
+					live_sessions: [{ session_id: "pty-1", name: "Codex: gate work" }],
+					warnings: ["Live session: Codex: gate work"],
+				});
+			}
 			return Promise.resolve(undefined);
 		});
-		mockConfirm.mockResolvedValue(true);
+		const dispose = setup();
+		getCapturedCallback()("/repo1", "feature/x", 42, "merged");
+		await vi.waitFor(() => {
+			expect(mockInvoke).toHaveBeenCalledWith("get_workspace_lifecycle", {
+				repoPath: "/repo1",
+				workspaceId: "feature/x",
+			});
+		});
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+		dispose?.();
+	});
+
+	it("skips unattended removal when the worktree is dirty", async () => {
+		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "get_workspace_lifecycle")
+				return Promise.resolve({ dirty_files: 1, live_sessions: [], warnings: ["1 uncommitted file"] });
+			return Promise.resolve(undefined);
+		});
 		const dispose = setup();
 		const cb = getCapturedCallback();
 
 		cb("/repo1", "feature/x", 42, "merged");
 
 		await vi.waitFor(() => {
-			expect(mockConfirm).toHaveBeenCalledWith(
-				expect.objectContaining({
-					title: "Delete local branch?",
-				}),
-			);
+			expect(mockInvoke).toHaveBeenCalledWith("get_workspace_lifecycle", {
+				repoPath: "/repo1",
+				workspaceId: "feature/x",
+			});
 		});
-
-		expect(mockInvoke).toHaveBeenCalledWith("delete_local_branch", {
-			repoPath: "/repo1",
-			branchName: "feature/x",
-			workspaceId: "feature/x",
-		});
+		expect(mockConfirm).not.toHaveBeenCalled();
+		expect(mockInvoke).not.toHaveBeenCalledWith("delete_local_branch", expect.anything());
+		expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("1 uncommitted file"));
 		dispose?.();
 	});
 
@@ -246,7 +294,8 @@ describe("useAutoDeleteBranch", () => {
 	it("deduplicates same PR transition", async () => {
 		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
 		mockInvoke.mockImplementation((cmd: string) => {
-			if (cmd === "check_worktree_dirty") return Promise.resolve(false);
+			if (cmd === "get_workspace_lifecycle")
+				return Promise.resolve({ dirty_files: 0, live_sessions: [], warnings: [] });
 			return Promise.resolve(undefined);
 		});
 		const dispose = setup();
