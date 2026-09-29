@@ -201,6 +201,12 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		setOverviewFractions([]);
 	};
 
+	/** The dedicated "Diff Scroll" (all-files) tab has no single file to diff —
+	 *  identified structurally by `filePath === ""` (`diffTabsStore.add()`'s
+	 *  all-files call site), not by a shared global view mode, so opening it
+	 *  can never hijack any other open per-file DiffTab. */
+	const isScrollTab = () => props.filePath === "";
+
 	/** One-sided diffs (new/deleted files) only support unified view */
 	const isOneSided = (): boolean => {
 		const d = diff();
@@ -359,10 +365,10 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					</svg>
 				</button>
 				<button
-					class={cx(s.modeBtn, mode() === "scroll" && s.modeBtnActive)}
-					onClick={() => uiStore.setDiffViewMode("scroll")}
+					class={cx(s.modeBtn, isScrollTab() && s.modeBtnActive)}
+					onClick={() => diffTabsStore.add(props.repoPath, "", "M")}
 					title={t("diffScroll.scrollView", "All files")}
-					disabled={isOneSided()}
+					disabled={isScrollTab()}
 				>
 					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M2 2h12v1H2zm0 3h12v1H2zm0 3h10v1H2zm0 3h8v1H2z" />
@@ -390,16 +396,17 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 				matchIndex={matchIndex()}
 				matchCount={matchCount()}
 			/>
-			{/* Scroll mode: show all-files view instead of single-file diff */}
-			<Show when={mode() === "scroll"}>
+			{/* The dedicated Diff Scroll tab: all-files view instead of a single-file diff */}
+			<Show when={isScrollTab()}>
 				<BranchDiffScrollView
 					repoPath={props.repoPath}
+					mode={mode()}
 					contentRef={(el) => {
 						contentRef = el;
 					}}
 				/>
 			</Show>
-			<Show when={mode() !== "scroll"}>
+			<Show when={!isScrollTab()}>
 				<div
 					class={s.diffWrapper}
 					ref={(el) => setScrollEl(el)}

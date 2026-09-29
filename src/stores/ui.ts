@@ -18,8 +18,14 @@ const SAVE_DEBOUNCE_MS = 500;
 /** Git panel tab names */
 export type GitPanelTab = "changes" | "log" | "stashes" | "branches";
 
-/** Diff viewer display mode */
-export type DiffViewMode = "split" | "unified" | "scroll";
+/**
+ * Diff viewer display mode. Does NOT include the all-files scroll view — that
+ * is now a distinct tab (`DiffTabData.filePath === ""`), not a mode a regular
+ * per-file diff tab can be switched into, so opening it can no longer hijack
+ * every other open diff tab into scroll mode at once. See `DiffTab.tsx` and
+ * `useAppShortcutHandlers.ts`'s `toggleDiffScroll`.
+ */
+export type DiffViewMode = "split" | "unified";
 
 /** UI store state */
 interface UIStoreState {
@@ -243,12 +249,15 @@ function createUIStore() {
 					if (loaded.settings_nav_width !== undefined) {
 						setState("settingsNavWidth", loaded.settings_nav_width);
 					}
-					if (
-						loaded.diff_view_mode === "split" ||
-						loaded.diff_view_mode === "unified" ||
-						loaded.diff_view_mode === "scroll"
-					) {
+					if (loaded.diff_view_mode === "split" || loaded.diff_view_mode === "unified") {
 						setState("diffViewMode", loaded.diff_view_mode);
+					} else if (loaded.diff_view_mode === "scroll") {
+						// One-time migration: "scroll" used to be a real mode value
+						// (persisted from an older build) that hijacked every open
+						// per-file diff tab into the all-files view. It's no longer a
+						// valid DiffViewMode — normalize to "split" and re-persist.
+						setState("diffViewMode", "split");
+						saveUIPrefs();
 					}
 					if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
 						setState("fileBrowserViewMode", loaded.file_browser_view_mode);
