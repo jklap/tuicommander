@@ -11436,6 +11436,13 @@ pub(crate) fn close_pty_core(
         .fetch_sub(1, Ordering::Relaxed);
     let mut session = session_mutex.into_inner();
 
+    tracing::info!(
+        source = "session",
+        session_id = %session_id,
+        reason = "close_requested",
+        "Closing session: sending Ctrl-C"
+    );
+
     // Send Ctrl-C (0x03) to give the process a chance to clean up
     let mut writer = session.writer.lock();
     let _ = writer.write_all(&[0x03]);
@@ -11457,6 +11464,12 @@ pub(crate) fn close_pty_core(
     // the cloned reader fd keeps the pty master alive, the slave never sees
     // EOF, and the reader thread spins forever.
     if matches!(session._child.try_wait(), Ok(None)) {
+        tracing::info!(
+            source = "session",
+            session_id = %session_id,
+            reason = "close_timeout",
+            "Closing session: sending SIGKILL after Ctrl-C grace period"
+        );
         // Nuke the agent's foreground process group first; SIGKILL on the shell
         // alone leaves the agent (a grandchild) orphaned. See
         // kill_foreground_process_group.
@@ -11515,6 +11528,13 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
         .active_sessions
         .fetch_sub(1, Ordering::Relaxed);
     let mut session = session_mutex.into_inner();
+
+    tracing::info!(
+        source = "session",
+        session_id = %session_id,
+        reason = "kill_requested",
+        "Killing session: sending SIGKILL"
+    );
 
     // Nuke the agent's foreground process group first; SIGKILL on the shell
     // alone leaves the agent (a grandchild) orphaned. See
