@@ -4,6 +4,7 @@ import { appLogger } from "../stores/appLogger";
 import type { GitOpKind } from "../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
+import type { DiffOptions } from "../types/diffOptions";
 import type { RevertResult, SessionReview, SessionSummary } from "../types/sessionDiff";
 import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
@@ -89,9 +90,11 @@ export function useRepository() {
 		return await invoke<RepoInfo>("get_repo_info", { path });
 	}
 
-	/** Get git diff for a repository */
-	async function getDiff(path: string, scope?: string): Promise<string> {
-		return await invoke<string>("get_git_diff", { path, scope });
+	/** Get git diff for a repository. `options` defaults to the ordinary
+	 *  byte-exact diff when omitted — every existing call site keeps compiling
+	 *  and behaving unchanged. */
+	async function getDiff(path: string, scope?: string, options?: DiffOptions): Promise<string> {
+		return await invoke<string>("get_git_diff", { path, scope, options });
 	}
 
 	/** Open a path in an application, optionally at a specific line/col */
@@ -211,10 +214,24 @@ export function useRepository() {
 		}
 	}
 
-	/** Get diff for a single file */
-	async function getFileDiff(path: string, file: string, scope?: string, untracked?: boolean): Promise<string> {
+	/** Get diff for a single file. `options` defaults to the ordinary byte-exact
+	 *  diff when omitted — every existing call site keeps compiling and
+	 *  behaving unchanged. */
+	async function getFileDiff(
+		path: string,
+		file: string,
+		scope?: string,
+		untracked?: boolean,
+		options?: DiffOptions,
+	): Promise<string> {
 		try {
-			return await invoke<string>("get_file_diff", { path, file, scope, untracked: untracked || undefined });
+			return await invoke<string>("get_file_diff", {
+				path,
+				file,
+				scope,
+				untracked: untracked || undefined,
+				options,
+			});
 		} catch (err) {
 			appLogger.error("git", "Failed to get file diff", err);
 			return "";

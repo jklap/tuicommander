@@ -304,7 +304,9 @@ struct StructuredHunk {
 /// An absent or empty array (the normal case for Create/Overwrite, and for
 /// any Edit whose hunks were resolvable through the disk-fold-based patch)
 /// is treated as "no structured patch," not as a zero-hunk one.
-fn parse_structured_patch(tur: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<StructuredHunk>> {
+fn parse_structured_patch(
+    tur: &serde_json::Map<String, serde_json::Value>,
+) -> Option<Vec<StructuredHunk>> {
     let arr = tur.get("structuredPatch")?.as_array()?;
     if arr.is_empty() {
         return None;
@@ -714,12 +716,19 @@ fn is_binary_bytes(data: &[u8]) -> bool {
 /// Build a `git apply`-able unified diff between `old` and `new`, plus
 /// (additions, deletions). Returns an empty patch (and zero counts) when the
 /// two are identical.
+///
+/// `options` is threaded through as an internal building block — every
+/// current call site passes `DiffOptions::default()` (the ordinary
+/// byte-exact diff, unchanged behavior); a future caller that exposes the
+/// whitespace/case settings through `get_session_review` will pass real
+/// options through here without needing to touch this function again.
 fn unified_patch(
     old: &str,
     new: &str,
     old_exists: bool,
     new_exists: bool,
     display_path: &str,
+    options: crate::diff_options::DiffOptions,
 ) -> (String, u32, u32) {
     if old == new {
         return (String::new(), 0, 0);
@@ -732,24 +741,10 @@ fn unified_patch(
         );
     }
 
-    use gix::diff::blob::{
-        Algorithm, BasicLineDiffPrinter, InternedInput, UnifiedDiffConfig,
-        diff_with_slider_heuristics,
-    };
-    let input = InternedInput::new(old, new);
-    let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
-    let additions = diff.count_additions();
-    let deletions = diff.count_removals();
+    let (body, additions, deletions) = crate::diff_options::unified_diff(old, new, 3, options);
     if additions == 0 && deletions == 0 {
         return (String::new(), 0, 0);
     }
-    let body = diff
-        .unified_diff(
-            &BasicLineDiffPrinter(&input.interner),
-            UnifiedDiffConfig::default(),
-            &input,
-        )
-        .to_string();
 
     let mut patch = String::new();
     patch.push_str(&format!("diff --git a/{display_path} b/{display_path}\n"));
@@ -987,7 +982,14 @@ fn build_session_review_full(
             let (patch, additions, deletions) = match (&sf.before, &sf.after) {
                 (Some(b), Some(a)) => {
                     let old_exists = !matches!(e.kind, StepKind::Create);
-                    unified_patch(b, a, old_exists, true, &display_path)
+                    unified_patch(
+                        b,
+                        a,
+                        old_exists,
+                        true,
+                        &display_path,
+                        crate::diff_options::DiffOptions::default(),
+                    )
                 }
                 _ => match e.kind {
                     StepKind::Edit => match e.structured_patch.as_ref() {
@@ -995,12 +997,26 @@ fn build_session_review_full(
                         None => {
                             let old = e.old_string.as_deref().unwrap_or("");
                             let new = e.new_string.as_deref().unwrap_or("");
-                            unified_patch(old, new, true, true, &display_path)
+                            unified_patch(
+                                old,
+                                new,
+                                true,
+                                true,
+                                &display_path,
+                                crate::diff_options::DiffOptions::default(),
+                            )
                         }
                     },
                     StepKind::Create | StepKind::Overwrite => {
                         let content = e.content.as_deref().unwrap_or("");
-                        unified_patch("", content, false, true, &display_path)
+                        unified_patch(
+                            "",
+                            content,
+                            false,
+                            true,
+                            &display_path,
+                            crate::diff_options::DiffOptions::default(),
+                        )
                     }
                 },
             };
@@ -1032,7 +1048,14 @@ fn build_session_review_full(
         let (cumulative_patch, additions, deletions) = match (&fold.base, &final_content) {
             (Some(b), Some(f)) => {
                 let old_exists = fold.base_source != BaseSource::CreatedInSession;
-                unified_patch(b, f, old_exists, disk_exists, &display_path)
+                unified_patch(
+                    b,
+                    f,
+                    old_exists,
+                    disk_exists,
+                    &display_path,
+                    crate::diff_options::DiffOptions::default(),
+                )
             }
             _ => (String::new(), 0, 0),
         };
@@ -3336,7 +3359,10 @@ mod tests {
         // content — never routed through the structuredPatch-aware fallback
         // meant for unresolvable Edits.
         let (_dir, repo) = fixture_repo();
-        let abs = repo.join("create_with_patch.txt").to_string_lossy().to_string();
+        let abs = repo
+            .join("create_with_patch.txt")
+            .to_string_lossy()
+            .to_string();
         let tb = TranscriptBuilder::new(&repo.to_string_lossy());
         let record = serde_json::json!({
             "type": "user",
