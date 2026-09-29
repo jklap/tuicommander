@@ -29,6 +29,18 @@
 
 # To Test
 
+## Mobile Files and editor (story 1225-60e7)
+
+- [ ] On a 360×800 phone PWA, open Files and long-press a repository path: the full path should appear without opening the repository. Open a repository and check that ordinary folders precede hidden folders; search for a file in a nested folder and open it. In View and Edit, Back, file name, and actions should share one row with touch-sized buttons; the editor should fill the space above the bottom tabs and wrap long lines. Return to a session with an unsent draft and confirm Browse Files did not submit or change the draft.
+
+## Claude dismissed question (story 1213-82e1) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable Claude session and trigger `AskUserQuestion`. Dismiss it with Esc, wait for Claude's ready composer, and confirm the awaiting badge disappears and `session action=submit` accepts a command. The running backend does not hot-reload this Rust change; the recorded PTY capture test covers the state transition and submit write after idle settlement.
+
+## Mobile session header (story 1203-fe36)
+
+- [ ] [HUMAN] After the frontend reloads, open Codex and Claude sessions on a 360×800 phone. Confirm each shows the correct 24 px logo and state dot, the display name remains readable, and the 56 px header leaves the terminal starting near y58 with no lost rows. Tap the name, Tasks, and overflow Progress to inspect the temporary sheets; check Files, Search, Ideas, Commands, and terminate remain reachable from overflow. Automated component tests cover the button actions and session binding; a real phone check remains.
+
 ## AI Chat prompt parking (story 1228-becb)
 
 - [ ] On a 360×800 phone PWA, type a draft in AI Chat and tap Park. Send a different prompt and confirm the draft returns; repeat with an image preview and after a page reload. Check that switching to Sessions retains the same visible terminal row count.
@@ -4300,6 +4312,10 @@ or credential is touched.
 ## Mobile five-tab navigation (story 1224-d21c) — real phone
 
 - [ ] **[HUMAN]** Launch the mobile PWA on a phone and confirm Sessions opens first, Chat is the second bottom tab, and only five tabs remain. Tap the app-bar overflow, open Settings, then use a bottom tab to return. Check the overflow does not clip and the tap targets remain comfortable at 360 px. Component tests cover order, initial selection and Settings navigation; real touch and phone layout remain to be checked.
+
+## Mobile terminal hanging indent (story 1222-912d) — real phone
+
+- [ ] [HUMAN] At 360 px, open a session with a long space-indented list item and a long tab-indented code line. Confirm every visual continuation starts under the first line's text, while an unindented line stays flush left and a box-drawing table still scrolls horizontally. Browser character-rectangle checks cover the same output shapes; this item checks real device rendering and touch scrolling.
 
 ## Mobile session detail task text (story 1216-a482) — real phone
 

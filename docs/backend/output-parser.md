@@ -166,6 +166,14 @@ re-checks `question_confident` before clearing. Confident questions stay sticky
 on purpose: grok repaints while it waits, so absence from the current screen is
 not proof that it was answered.
 
+Claude can dismiss `AskUserQuestion` with a bare Esc, which produces no typed
+line. When the new output contains `User declined to answer questions` and the
+full screen has returned to the ready composer without an open Ink dialog,
+`pty.rs` emits `protocol-question-cleared` with the expected question text and
+turn epoch. A still-open dialog or a new question in that output chunk remains
+awaiting; the reducer checks the expected text and epoch before applying the
+clear.
+
 ### Raw Capture Regression Fixtures
 
 Agent-state failures must be captured from the raw PTY stream before analysis.

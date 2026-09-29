@@ -1921,7 +1921,10 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
-- From a session header, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
+- Repository paths truncate from the left and reveal the complete path on long press; normal folders precede hidden folders
+- Search recursively for files by name or repository-relative path from the tree
+- File view and editor keep Back, file name, and Edit or Cancel/Save on one row with 44 px buttons; the editor fills the remaining height and soft-wraps lines
+- From a session header's overflow menu, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
 - Markdown paths in session output open here through the desktop terminal-path resolver. Absolute, relative, `file://`, and `tuic://open//` references are supported, including line numbers. Files outside registered repositories are refused with a toast naming the path.
 - Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
 - Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
@@ -1933,9 +1936,10 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
+- When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
 - Search/filter in output: text search bar filters visible log lines in real time
-- Rich header: agent intent line (italic), current task line, progress bar, usage percentage (red above 80%)
+- Compact 56 px header: desktop agent logo with a state dot, session display name, repository/branch, state, elapsed activity time, tasks count, and an overflow menu. Tapping the name reveals intent and current task in a transient sheet. Tasks opens current work and intent history; overflow Progress opens this session's filtered journal in a bottom sheet. Files, output search, Ideas, quick commands, usage, copy ID, and terminate remain in overflow. The terminal keeps its height because these panels overlay it.
 - Error bar (red tint) when `last_error` is set
 - Rate-limit bar (orange tint) with live countdown timer (`formatRetryCountdown`)
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send

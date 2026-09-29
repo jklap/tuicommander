@@ -9,6 +9,10 @@ when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically
 normalized into each other.
 
+In the mobile session output, long text wraps to the phone width. A continuation
+keeps the original line's leading spaces or tabs, so indented lists and code
+remain readable. Box-drawing output keeps its horizontal scrolling layout.
+
 ### Creating Terminals
 
 - **Cmd+T** — New terminal for the active branch

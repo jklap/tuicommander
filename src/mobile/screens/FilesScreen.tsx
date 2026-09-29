@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
@@ -35,6 +35,10 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [repo, setRepo] = createSignal<string | null>(null);
 	const [dir, setDir] = createSignal("");
 	const [entries, setEntries] = createSignal<FileEntry[]>([]);
+	const [searchQuery, setSearchQuery] = createSignal("");
+	const [searchResults, setSearchResults] = createSignal<FileEntry[]>([]);
+	const [searching, setSearching] = createSignal(false);
+	const [previewPath, setPreviewPath] = createSignal<string | null>(null);
 	const [file, setFile] = createSignal<string | null>(null);
 	const [content, setContent] = createSignal("");
 	const [draft, setDraft] = createSignal("");
@@ -42,7 +46,13 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
 	let requestId = 0;
+	let searchRequestId = 0;
+	let pathPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+	let suppressRepoOpen = false;
 	let editorEl: HTMLTextAreaElement | undefined;
+	onCleanup(() => {
+		if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
+	});
 
 	onMount(async () => {
 		try {
@@ -131,6 +141,10 @@ export function FilesScreen(props: FilesScreenProps) {
 
 	async function openDirectory(repoPath: string, subdir: string) {
 		const currentRequest = ++requestId;
+		++searchRequestId;
+		setSearchQuery("");
+		setSearchResults([]);
+		setSearching(false);
 		setBusy(true);
 		setError("");
 		try {
@@ -144,6 +158,27 @@ export function FilesScreen(props: FilesScreenProps) {
 			setError(`Could not open directory: ${String(err)}`);
 		} finally {
 			if (currentRequest === requestId) setBusy(false);
+		}
+	}
+
+	async function searchFiles(query: string) {
+		setSearchQuery(query);
+		const currentRequest = ++searchRequestId;
+		if (!query.trim() || !repo()) {
+			setSearchResults([]);
+			setSearching(false);
+			setError("");
+			return;
+		}
+		setSearching(true);
+		setError("");
+		try {
+			const result = await rpc<FileEntry[]>("search_files", { repoPath: repo(), query: query.trim(), limit: 100 });
+			if (currentRequest === searchRequestId) setSearchResults(result);
+		} catch (err) {
+			if (currentRequest === searchRequestId) setError(`Could not search files: ${String(err)}`);
+		} finally {
+			if (currentRequest === searchRequestId) setSearching(false);
 		}
 	}
 
@@ -227,6 +262,28 @@ export function FilesScreen(props: FilesScreenProps) {
 	}
 
 	const repoName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+	function stopPathPreviewTimer() {
+		if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
+		pathPreviewTimer = undefined;
+	}
+
+	function showPathPreview(path: string) {
+		stopPathPreviewTimer();
+		suppressRepoOpen = true;
+		setPreviewPath(path);
+	}
+
+	function startPathPreview(path: string) {
+		stopPathPreviewTimer();
+		pathPreviewTimer = setTimeout(() => showPathPreview(path), 450);
+	}
+	const visibleEntries = () =>
+		searchQuery().trim()
+			? searchResults()
+			: [...entries()].sort((a, b) => {
+					const hidden = Number(a.name.startsWith(".")) - Number(b.name.startsWith("."));
+					return hidden || Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name);
+				});
 
 	return (
 		<div class={styles.screen}>
@@ -236,8 +293,55 @@ export function FilesScreen(props: FilesScreenProps) {
 						‹ Back
 					</button>
 				</Show>
-				<strong class={styles.title}>{file() || dir() || repoName(repo() ?? "") || "Files"}</strong>
+				<strong class={styles.title} title={file() || dir() || repo() || "Files"}>
+					{file() ? repoName(file()!) : dir() || repoName(repo() ?? "") || "Files"}
+				</strong>
+				<Show when={file() !== null && (editing() || (!error() && !busy()))}>
+					<Show
+						when={editing()}
+						fallback={
+							<button
+								class={styles.action}
+								onClick={() => {
+									setDraft(content());
+									setEditing(true);
+								}}
+							>
+								Edit
+							</button>
+						}
+					>
+						<button
+							class={styles.action}
+							onClick={() => {
+								setEditing(false);
+								setError("");
+							}}
+						>
+							Cancel
+						</button>
+						<button class={styles.action} disabled={busy()} onClick={() => void save()}>
+							Save
+						</button>
+					</Show>
+				</Show>
 			</header>
+			<Show when={previewPath()}>
+				<div class={styles.pathPreviewBackdrop}>
+					<div class={styles.pathPreview} role="dialog" aria-label="Repository path">
+						<p>{previewPath()}</p>
+						<button
+							class={styles.action}
+							onClick={() => {
+								suppressRepoOpen = false;
+								setPreviewPath(null);
+							}}
+						>
+							Close
+						</button>
+					</div>
+				</div>
+			</Show>
 			<Show when={error()}>
 				<p class={styles.error} role="alert">
 					{error()}
@@ -250,7 +354,24 @@ export function FilesScreen(props: FilesScreenProps) {
 				<Show when={repos().length > 0} fallback={<p class={styles.status}>No repositories configured</p>}>
 					<For each={repos()}>
 						{(path) => (
-							<button class={styles.row} onClick={() => void openDirectory(path, "")}>
+							<button
+								class={styles.row}
+								title={path}
+								onTouchStart={() => startPathPreview(path)}
+								onTouchEnd={stopPathPreviewTimer}
+								onTouchCancel={stopPathPreviewTimer}
+								onContextMenu={(event) => {
+									event.preventDefault();
+									showPathPreview(path);
+								}}
+								onClick={() => {
+									if (suppressRepoOpen) {
+										suppressRepoOpen = false;
+										return;
+									}
+									void openDirectory(path, "");
+								}}
+							>
 								<span class={styles.name}>{repoName(path)}</span>
 								<span class={styles.path}>{path}</span>
 							</button>
@@ -259,7 +380,19 @@ export function FilesScreen(props: FilesScreenProps) {
 				</Show>
 			</Show>
 			<Show when={repo() !== null && file() === null}>
-				<For each={entries()}>
+				<label class={styles.search}>
+					<input
+						type="search"
+						aria-label="Search files"
+						placeholder="Search files"
+						value={searchQuery()}
+						onInput={(event) => void searchFiles(event.currentTarget.value)}
+					/>
+				</label>
+				<Show when={searching()}>
+					<p class={styles.status}>Searching…</p>
+				</Show>
+				<For each={visibleEntries()}>
 					{(entry) => (
 						<button
 							class={styles.row}
@@ -267,41 +400,16 @@ export function FilesScreen(props: FilesScreenProps) {
 						>
 							<span class={styles.name}>
 								{entry.is_dir ? "▸ " : ""}
-								{entry.name}
+								{searchQuery().trim() ? entry.path : entry.name}
 							</span>
 						</button>
 					)}
 				</For>
-				<Show when={entries().length === 0 && !busy() && !error()}>
-					<p class={styles.status}>Empty directory</p>
+				<Show when={visibleEntries().length === 0 && !busy() && !searching() && !error()}>
+					<p class={styles.status}>{searchQuery().trim() ? "No matching files" : "Empty directory"}</p>
 				</Show>
 			</Show>
 			<Show when={file() !== null && (editing() || (!error() && !busy()))}>
-				<div class={styles.actions}>
-					<Show
-						when={editing()}
-						fallback={
-							<button
-								onClick={() => {
-									setDraft(content());
-									setEditing(true);
-								}}
-							>
-								Edit
-							</button>
-						}
-					>
-						<button
-							onClick={() => {
-								setEditing(false);
-								setError("");
-							}}
-						>
-							Cancel
-						</button>
-						<button onClick={() => void save()}>Save</button>
-					</Show>
-				</div>
 				<Show
 					when={editing()}
 					fallback={
@@ -318,6 +426,7 @@ export function FilesScreen(props: FilesScreenProps) {
 						ref={editorEl}
 						class={styles.editor}
 						aria-label="File content"
+						wrap="soft"
 						value={draft()}
 						onInput={(event) => setDraft(event.currentTarget.value)}
 						spellcheck={false}
