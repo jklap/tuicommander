@@ -17157,7 +17157,11 @@ async fn hooked_dialog_capture_preserves_question_until_the_dialog_is_answered()
             .expect("busy after notification");
     processor.process_chunk(&capture[..split], &silence, sid, &state);
     assert!(await_session(&state, sid, |s| s.awaiting_input).await);
-    processor.process_chunk(&capture[split..], &silence, sid, &state);
+    // Exact contiguous suffix of the retained live stream, starting at the
+    // first busy hook after notify. The original PTY read boundaries are lost.
+    let busy_tail = agent_prompt_fixture("claude-hooked-busy-choice-redraw-20260921.raw");
+    assert_eq!(busy_tail, capture.as_bytes()[split..]);
+    processor.process_chunk(std::str::from_utf8(&busy_tail).unwrap(), &silence, sid, &state);
     let screen = state
         .grid
         .vt_log_buffers
@@ -17165,14 +17169,17 @@ async fn hooked_dialog_capture_preserves_question_until_the_dialog_is_answered()
         .unwrap()
         .lock()
         .screen_rows();
-    let footer = crate::output_parser::ink_dialog_footer(&screen)
+    crate::output_parser::ink_dialog_footer(&screen)
         .expect("the captured dialog must be visible at the observed geometry");
     assert!(silence.lock().hook_state_seen);
     assert!(
         await_session(&state, sid, |s| s.awaiting_input
-            && s.question_text.as_deref() == Some(footer))
+            && s.question_text
+                .as_deref()
+                .is_some_and(|text| text.ends_with("procedo?"))
+            && s.choice_prompt.is_some())
         .await,
-        "a hooked session with an open dialog must report question after all queued hooks"
+        "a hooked session with an open dialog must report its visible question after all queued hooks"
     );
 
     let mut events = state.event_bus.subscribe();
@@ -17183,16 +17190,50 @@ async fn hooked_dialog_capture_preserves_question_until_the_dialog_is_answered()
         "an already-badged dialog must not emit a question on each repaint"
     );
 
+    // A hook alone cannot prove the cached dialog is still live. Clear first;
+    // only an actual repaint of a choice row may restore the same choice.
+    processor.process_chunk("\x1b]7770;state=busy\x07", &silence, sid, &state);
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.to_string(),
+        parsed: serde_json::json!({ "type": "active-subtasks", "count": 6 }).into(),
+    });
+    assert!(
+        await_session(&state, sid, |s| s.active_sub_tasks == 6
+            && !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await,
+        "a pure busy hook must not resurrect a stale dialog"
+    );
+
+    let option_row = screen
+        .iter()
+        .position(|row| row.contains("Tengo la riscrittura"))
+        .expect("captured choice option");
+    let repainted_option = screen[option_row].replacen('❯', " ", 1);
+    assert_ne!(repainted_option, screen[option_row]);
+    // Repaint a real option row without changing the option set. A busy hook
+    // clears the old choice, so signature dedup must admit this fresh screen evidence.
     processor.process_chunk(
-        "\x1b]7770;state=awaiting\x07\x1b]7770;state=busy\x07\x1b[1;1HUpdated dialog",
+        &format!("\x1b[{};1H\x1b[2K{}", option_row + 1, repainted_option),
         &silence,
         sid,
         &state,
     );
-    // Wait for this chunk's footer event, rather than accepting the old true bit.
+    // A queued marker makes the accumulator drain every event from this chunk
+    // before the assertion observes the state; the previous true bit is not proof.
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: sid.to_string(),
+        parsed: serde_json::json!({ "type": "active-subtasks", "count": 7 }).into(),
+    });
     assert!(
-        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event,
-        crate::state::AppEvent::PtyParsed { parsed, .. } if parsed["type"] == "question"))
+        await_session(&state, sid, |s| s.active_sub_tasks == 7
+            && s.awaiting_input
+            && s.question_text
+                .as_deref()
+                .is_some_and(|text| text.ends_with("procedo?"))
+            && s.choice_prompt.is_some())
+        .await,
+        "the open choice dialog must retain its question after queued hook transitions"
     );
     processor.process_chunk(
         "\x1b[2J\x1b[H\x1b]7770;state=busy\x07",

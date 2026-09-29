@@ -5571,6 +5571,9 @@ struct ChunkProcessor {
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
     /// Prevents re-emit on repaint while the dialog stays on screen.
     last_choice_prompt_sig: Option<String>,
+    /// A busy hook cleared the choice; wait for a dialog-row repaint before
+    /// admitting the same signature again, so stale screen cells cannot re-arm it.
+    choice_prompt_needs_repaint: bool,
     /// Session CWD for resolving relative plan-file paths
     session_cwd: Option<String>,
     /// Plan files awaiting creation on disk (agent announces before writing).
@@ -5653,6 +5656,7 @@ impl ChunkProcessor {
             last_question_text: None,
             raw_carry: String::new(),
             last_choice_prompt_sig: None,
+            choice_prompt_needs_repaint: false,
             session_cwd,
             pending_planfiles: Vec::new(),
             emitted_planfiles: std::collections::HashSet::new(),
@@ -6001,6 +6005,7 @@ impl ChunkProcessor {
         // dedup markers) borrow-checkable; it is put back at the end.
         let mut screen_buf = std::mem::take(&mut self.screen_buf);
         let mut unexpected_alt_screen = false;
+        let mut choice_changed_rows = Vec::new();
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // `total_lines` comes back with it: a chunk that grew the buffer produced
@@ -6069,6 +6074,9 @@ impl ChunkProcessor {
             // from `["slash-menu"]` into `[]`. Any future attempt needs a
             // per-consumer gate, not one shared flag.
             let any_row_changed = !changed.is_empty();
+            if self.last_choice_prompt_sig.is_some() {
+                choice_changed_rows.extend(changed.iter().map(|row| row.row_index));
+            }
 
             // ONE borrow of the rendered screen, shared by all three consumers
             // below (chrome cutoff, screen classification, snapshot refill).
@@ -6806,6 +6814,12 @@ impl ChunkProcessor {
         // Parser uses a strict shape (title with ?/verb + ≥2 numbered options)
         // so false-positive cost is low. Dedup via last_choice_prompt_sig
         // guards against repaint re-emission.
+        if events
+            .iter()
+            .any(|event| matches!(event, ParsedEvent::UserInput { .. }))
+        {
+            self.choice_prompt_needs_repaint = true;
+        }
         if let Some(screen) = screen_cache {
             let choice = if agent_type.as_deref() == Some("claude") {
                 crate::output_parser::parse_claude_ask_user_question(screen)
@@ -6819,6 +6833,7 @@ impl ChunkProcessor {
                 // same dialog is detected again the next time it appears, instead of
                 // being swallowed for the rest of the session.
                 None => {
+                    self.choice_prompt_needs_repaint = false;
                     if self.last_choice_prompt_sig.take().is_some() {
                         events.push(ParsedEvent::ChoiceCleared);
                     }
@@ -6868,11 +6883,11 @@ impl ChunkProcessor {
                 .map(|s| (s.awaiting_input, s.choice_prompt.is_some()))
                 .unwrap_or((false, false));
             // The accumulator has not seen this chunk yet. Respect its LAST
-            // awaiting mutation: an earlier Question followed by hook-busy's
-            // UserInput no longer protects the badge from being cleared.
+            // awaiting mutation: an earlier Question or ChoicePrompt followed
+            // by hook-busy's UserInput no longer protects the badge from being cleared.
             let pending_awaiting = events.iter().rev().find_map(|event| match event {
-                ParsedEvent::Question { .. } => Some(true),
-                ParsedEvent::UserInput { .. } => Some(false),
+                ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. } => Some(true),
+                ParsedEvent::UserInput { .. } | ParsedEvent::ChoiceCleared => Some(false),
                 _ => None,
             });
             if let Some(evt) = rearm_awaiting_for_open_dialog(
@@ -6991,10 +7006,21 @@ impl ChunkProcessor {
                         .collect::<Vec<_>>()
                         .join(","),
                 );
-                if self.last_choice_prompt_sig.as_deref() == Some(sig.as_str()) {
+                let dialog_row_repainted = choice_changed_rows.iter().any(|&row_index| {
+                    screen_cache
+                        .and_then(|screen| screen.get(row_index))
+                        .is_some_and(|row| {
+                            row.contains(title)
+                                || options.iter().any(|option| row.contains(&option.label))
+                        })
+                });
+                if self.last_choice_prompt_sig.as_deref() == Some(sig.as_str())
+                    && !(self.choice_prompt_needs_repaint && dialog_row_repainted)
+                {
                     continue;
                 }
                 self.last_choice_prompt_sig = Some(sig);
+                self.choice_prompt_needs_repaint = false;
             }
 
             // Resolve relative plan-file paths to absolute using session CWD.
