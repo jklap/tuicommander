@@ -1696,10 +1696,29 @@ fn count_edits_and_files(transcript: &Path, subagents: &[PathBuf]) -> (u32, u32)
     (scan.edits.len() as u32, paths.len() as u32)
 }
 
+/// Desktop IPC wrapper: identical HTTP/IPC parity treatment as `list_sessions_http`
+/// (`mcp_http/session_review_routes.rs`) — `list_review_sessions_impl` is a pure
+/// disk reader with no `AppState` access (see `SessionSummary::tuic_session_id`'s
+/// doc comment), so each transport populates that one field itself afterward.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn list_review_sessions(
+    repo_path: String,
+    limit: Option<u32>,
+    include_counts: Option<bool>,
+    claude_config_dir: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Vec<SessionSummary>, String> {
+    let mut sessions = list_review_sessions_impl(repo_path, limit, include_counts, claude_config_dir).await?;
+    for s in &mut sessions {
+        s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
+    }
+    Ok(sessions)
+}
+
 /// List recent Claude Code sessions whose transcripts live under the
 /// project slug for `repo_path`. Newest first.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn list_review_sessions(
+pub(crate) async fn list_review_sessions_impl(
     repo_path: String,
     limit: Option<u32>,
     include_counts: Option<bool>,
@@ -1956,9 +1975,27 @@ pub(crate) fn invalidate_cached_review(transcript: &Path) {
 
 // ─────────────────────────── Commands ───────────────────────────────────────
 
-/// Parse a session transcript into the full step timeline + per-file rollups.
-#[cfg_attr(feature = "desktop", tauri::command)]
+/// Desktop IPC wrapper — see `list_review_sessions`'s doc comment for why this
+/// override lives at the transport boundary rather than inside `_impl`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) async fn get_session_review(
+    repo_path: String,
+    session_id: String,
+    include_subagents: Option<bool>,
+    claude_config_dir: Option<String>,
+    options: Option<DiffOptions>,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<SessionReview, String> {
+    let claude_session_id = session_id.clone();
+    let mut review =
+        get_session_review_impl(repo_path, session_id, include_subagents, claude_config_dir, options).await?;
+    review.tuic_session_id = state.tuic_session_for_claude_session(&claude_session_id);
+    Ok(review)
+}
+
+/// Parse a session transcript into the full step timeline + per-file rollups.
+pub(crate) async fn get_session_review_impl(
     repo_path: String,
     session_id: String,
     include_subagents: Option<bool>,
@@ -3072,7 +3109,7 @@ mod tests {
         let (cfg1, _t1) = tb1.edit(&abs, "a1\n", "a1b\n", false).build();
         let cfg_path = cfg1.path().to_string_lossy().to_string();
 
-        let sessions = list_review_sessions(cwd, None, Some(true), Some(cfg_path))
+        let sessions = list_review_sessions_impl(cwd, None, Some(true), Some(cfg_path))
             .await
             .unwrap();
         assert_eq!(sessions.len(), 1);
@@ -3132,7 +3169,7 @@ mod tests {
             std::fs::copy(&transcript_path, &dest).unwrap();
         }
 
-        let sessions = list_review_sessions(cwd, None, Some(true), Some(cfg_path))
+        let sessions = list_review_sessions_impl(cwd, None, Some(true), Some(cfg_path))
             .await
             .unwrap();
         assert_eq!(sessions.len(), 3);
@@ -3158,7 +3195,7 @@ mod tests {
         std::fs::write(&abs, "a1\n").unwrap();
         let tb = TranscriptBuilder::new(&cwd);
         let (cfg, _t) = tb.edit(&abs, "a1\n", "a1b\n", false).build();
-        let sessions = list_review_sessions(
+        let sessions = list_review_sessions_impl(
             cwd,
             None,
             Some(false),
@@ -3175,7 +3212,7 @@ mod tests {
     async fn missing_project_dir_returns_empty_not_error() {
         let cwd = "/tmp/definitely-not-a-real-project-dir-for-this-test".to_string();
         let cfg = tempfile::tempdir().unwrap();
-        let sessions = list_review_sessions(
+        let sessions = list_review_sessions_impl(
             cwd,
             None,
             None,
@@ -3197,7 +3234,7 @@ mod tests {
         let (cfg, transcript) = tb.edit(&abs, "a1\n", "a1b\n", false).build();
         let session_id = transcript.file_stem().unwrap().to_str().unwrap();
 
-        let r1 = get_session_review(
+        let r1 = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             session_id.to_string(),
             Some(false),
@@ -3206,7 +3243,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let r2 = get_session_review(
+        let r2 = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             session_id.to_string(),
             Some(false),
@@ -3568,7 +3605,7 @@ mod tests {
             .to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let before = get_session_review(
+        let before = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(false),
@@ -3592,7 +3629,7 @@ mod tests {
         assert!(result.applied, "revert failed: {:?}", result.message);
         assert_eq!(std::fs::read_to_string(&abs).unwrap(), "a1\na2\na3\n");
 
-        let after = get_session_review(repo_str, session_id, Some(false), Some(cfg_str), None)
+        let after = get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         let file_after = after.files.iter().find(|f| f.abs_path == abs).unwrap();
@@ -3628,7 +3665,7 @@ mod tests {
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let with_subs = get_session_review(
+        let with_subs = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(true),
@@ -3639,7 +3676,7 @@ mod tests {
         .unwrap();
         assert_eq!(with_subs.steps.len(), 1);
 
-        let without_subs = get_session_review(repo_str, session_id, Some(false), Some(cfg_str), None)
+        let without_subs = get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -3711,7 +3748,7 @@ mod tests {
     async fn get_session_review_rejects_a_traversal_session_id_before_touching_disk() {
         let (_dir, repo) = fixture_repo();
         let cfg = tempfile::tempdir().unwrap();
-        let err = get_session_review(
+        let err = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             "../../../../etc/passwd".to_string(),
             None,
@@ -3925,7 +3962,7 @@ mod tests {
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let r1 = get_session_review(
+        let r1 = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(true),
@@ -3959,7 +3996,7 @@ mod tests {
         )
         .unwrap();
 
-        let r2 = get_session_review(repo_str, session_id, Some(true), Some(cfg_str), None)
+        let r2 = get_session_review_impl(repo_str, session_id, Some(true), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -4328,7 +4365,7 @@ mod tests {
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let default_review = get_session_review(
+        let default_review = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(false),
@@ -4345,7 +4382,7 @@ mod tests {
             ignore_leading_ws: true,
             ..DiffOptions::default()
         };
-        let options_review = get_session_review(
+        let options_review = get_session_review_impl(
             repo_str,
             session_id,
             Some(false),

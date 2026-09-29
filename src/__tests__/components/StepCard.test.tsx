@@ -62,4 +62,70 @@ describe("StepCard", () => {
 		setMode("split");
 		expect(h.invalidate).toHaveBeenCalledTimes(1);
 	});
+
+	describe("subagent badge / jump-to-agent", () => {
+		const SUBAGENT_STEP: EditStep = {
+			...STEP,
+			is_sidechain: true,
+			agent_name: "a19570f6f",
+			agent_display_name: "scan-vsstack-a",
+		};
+
+		it("renders a plain span (no button) when onJumpToAgent is not supplied", () => {
+			const { container, getByText } = render(() => (
+				<StepCard
+					step={SUBAGENT_STEP}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+				/>
+			));
+			expect(getByText("subagent: scan-vsstack-a")).toBeTruthy();
+			expect(container.querySelector("button.badgeLink, button[class*='badgeLink']")).toBeNull();
+		});
+
+		it("renders the badge as a clickable button when onJumpToAgent is supplied, and clicking it calls the handler", () => {
+			const onJumpToAgent = vi.fn();
+			const { getByRole } = render(() => (
+				<StepCard
+					step={SUBAGENT_STEP}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+					onJumpToAgent={onJumpToAgent}
+				/>
+			));
+			const btn = getByRole("button", { name: "subagent: scan-vsstack-a" });
+			btn.click();
+			expect(onJumpToAgent).toHaveBeenCalledOnce();
+		});
+
+		it("falls back to agent_name when agent_display_name is absent", () => {
+			const { getByText } = render(() => (
+				<StepCard
+					step={{ ...SUBAGENT_STEP, agent_display_name: null }}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+				/>
+			));
+			expect(getByText("subagent: a19570f6f")).toBeTruthy();
+		});
+
+		it("shows a bare 'subagent' label with no name when neither is present", () => {
+			const { getByText } = render(() => (
+				<StepCard
+					step={{ ...SUBAGENT_STEP, agent_name: null, agent_display_name: null }}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+				/>
+			));
+			expect(getByText("subagent")).toBeTruthy();
+		});
+	});
 });

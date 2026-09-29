@@ -8,6 +8,7 @@ import { appLogger } from "../../stores/appLogger";
 import { terminalsStore } from "../../stores/terminals";
 import type { DiffViewMode } from "../../stores/ui";
 import type { EditStep } from "../../types/sessionDiff";
+import { cx } from "../../utils";
 import { DiffViewer } from "../ui/DiffViewer";
 import s from "./SessionDiffTab.module.css";
 
@@ -20,6 +21,11 @@ export interface StepCardProps {
 	onOpenAtLine: (step: EditStep, line: number) => void;
 	onRevertStep: (step: EditStep) => void;
 	onCopyStep: (step: EditStep) => void;
+	/** Present only when the session's `tuic_session_id` resolves to a live
+	 *  terminal tab — a subagent step jumps to its PARENT session's tab (it
+	 *  has no PTY of its own), so this is the same handler for every step in
+	 *  a review, computed once by `SessionDiffTab`, not derived per-step. */
+	onJumpToAgent?: () => void;
 }
 
 const KIND_LABEL: Record<EditStep["kind"], string> = { create: "created", overwrite: "overwrote", edit: "edited" };
@@ -88,9 +94,31 @@ export const StepCard: Component<StepCardProps> = (props) => {
 					<span class={s.stepPath}>{props.step.rel_path ?? props.step.abs_path}</span>
 				</Show>
 				<Show when={props.step.is_sidechain}>
-					<span class={s.badge} title={props.step.agent_name ? `Subagent: ${props.step.agent_name}` : "Subagent edit"}>
-						subagent{props.step.agent_name ? `: ${props.step.agent_name}` : ""}
-					</span>
+					{(() => {
+						const displayName = () => props.step.agent_display_name ?? props.step.agent_name;
+						const label = () => `subagent${displayName() ? `: ${displayName()}` : ""}`;
+						return (
+							<Show
+								when={props.onJumpToAgent}
+								fallback={
+									<span class={s.badge} title={displayName() ? `Subagent: ${displayName()}` : "Subagent edit"}>
+										{label()}
+									</span>
+								}
+							>
+								{(onJumpToAgent) => (
+									<button
+										type="button"
+										class={cx(s.badge, s.badgeLink)}
+										title={`Jump to ${displayName() ?? "this agent"}'s tab`}
+										onClick={onJumpToAgent()}
+									>
+										{label()}
+									</button>
+								)}
+							</Show>
+						);
+					})()}
 				</Show>
 				<Show when={timeLabel()}>
 					<span class={s.stepTime}>{timeLabel()}</span>

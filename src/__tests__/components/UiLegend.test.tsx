@@ -103,6 +103,7 @@ describe("UiLegend", () => {
 		expect(headings).toEqual([
 			"Terminal Status Dots",
 			"Tab Types",
+			"Tab Activity Dots",
 			"Sidebar Symbols",
 			"Branch Markers",
 			"PR Status Badges",

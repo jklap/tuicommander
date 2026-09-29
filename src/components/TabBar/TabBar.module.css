@@ -370,6 +370,14 @@
   vertical-align: middle;
 }
 
+.diffUnseenBadge {
+  color: var(--ind-diff-unseen);
+  animation: var(--ind-anim-diff-unseen);
+  margin-left: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 /* Awaiting input — override tabIcon to show state via left dot.
  * `.awaitingInput` only ever pairs with `.awaitingQuestion` or
  * `.awaitingError` (AwaitingInputType has no other non-null value), so

@@ -306,6 +306,10 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 				{registryGroup("tabType")}
 			</Group>
 
+			<Group label={GROUP_LABELS.tabActivity} hint={GROUP_HINTS.tabActivity}>
+				{registryGroup("tabActivity")}
+			</Group>
+
 			{/* Sidebar branch icons — the real BranchIcon, then the registry's
 			    remaining sidebar entries (merged / remote badges) */}
 			<Group label={GROUP_LABELS.sidebarSymbol} hint="The icon at the start of each sidebar row">

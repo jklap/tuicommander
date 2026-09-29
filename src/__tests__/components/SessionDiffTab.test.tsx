@@ -35,8 +35,14 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 		onCopyStep: (step: never) => void;
 		onCopyFile: (group: never) => void;
 		onToggleExpanded: (absPath: string) => void;
+		onJumpToAgent?: () => void;
 	}) => (
 		<div data-testid="stub-list">
+			{props.onJumpToAgent && (
+				<button type="button" data-testid="jump-to-agent" onClick={() => props.onJumpToAgent?.()}>
+					jump to agent
+				</button>
+			)}
 			{props.rows.map((row) =>
 				row.kind === "file" ? (
 					<div>
@@ -120,6 +126,7 @@ function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
 		edit_count: 1,
 		file_count: 1,
 		has_subagents: false,
+		tuic_session_id: null,
 		...overrides,
 	};
 }
@@ -181,6 +188,7 @@ function review(overrides: Partial<SessionReview> = {}): SessionReview {
 		files: [fileGroup()],
 		warnings: [],
 		included_subagents: true,
+		tuic_session_id: null,
 		turns: [],
 		...overrides,
 	};
@@ -487,5 +495,32 @@ describe("SessionDiffTab", () => {
 		action?.onClick();
 		await settle();
 		expect(h.revertFileToSessionStart).toHaveBeenCalledWith(REPO, "sess-1", "/repo/a.ts", true);
+	});
+
+	describe("jump to agent (review().tuic_session_id -> terminal tab)", () => {
+		it("passes onJumpToAgent to the list when tuic_session_id resolves to a live terminal, and clicking it activates that terminal", async () => {
+			const termId = terminalsStore.add(makeTerminal({ sessionId: "tuic-sess-1" }));
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: "tuic-sess-1" }));
+
+			const { getByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTestId("jump-to-agent").click();
+			expect(terminalsStore.state.activeId).toBe(termId);
+		});
+
+		it("does not pass onJumpToAgent when tuic_session_id is null or matches no live terminal", async () => {
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: null }));
+			const { queryByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByTestId("jump-to-agent")).toBeNull();
+		});
+
+		it("does not pass onJumpToAgent when tuic_session_id points at a terminal that no longer exists", async () => {
+			h.getSessionReview.mockResolvedValue(review({ tuic_session_id: "tuic-sess-gone" }));
+			const { queryByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByTestId("jump-to-agent")).toBeNull();
+		});
 	});
 });
