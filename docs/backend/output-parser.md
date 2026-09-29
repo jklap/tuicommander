@@ -429,6 +429,15 @@ ParsedEvent::ChoicePrompt {
 
 The mobile session header opens a queued Codex question with `Alt+Up`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
 
+Observed Codex prompt forms and evidence:
+
+| Form | Live evidence | TUIC path |
+|------|---------------|-----------|
+| `request_user_input` choices and `Other` | `codex-request-user-input-20260929.tcap`; `captured_codex_request_user_input_reaches_choice_prompt` replays its rendered screen | A queued waiting signal appears first. `Alt+Up` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `ctrl+]` footer. |
+| Command approval | `codex-0.157.1-approval-cancel.tcap`; `codex_canceled_approval_capture_clears_the_waiting_badge` replays an `Action Required` approval and Esc cancellation | The approval title sets the waiting question; the current screen and cancellation logic in `pty.rs` clear it when Codex returns to its composer. This capture does not establish that the approval uses the queued follow-up panel. |
+
+A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.
+
 ### SlashMenu
 
 Slash command menu detected from VT100 screen rows:
