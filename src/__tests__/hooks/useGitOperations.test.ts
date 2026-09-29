@@ -1744,6 +1744,56 @@ describe("useGitOperations", () => {
 			expect(repo?.activeWorkspaceId).toBe("feature/acme");
 		});
 
+		it("keeps a background worktree terminal when its branch changes", async () => {
+			const worktreePath = "/repo/.worktrees/agent-abc";
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "old-branch", { worktreePath });
+			repositoriesStore.setActiveWorkspace("/repo", "main");
+			const tid = terminalsStore.add(makeTerminal({ name: "Agent", sessionId: "agent-session", cwd: worktreePath }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "old-branch", tid);
+
+			mockSummary({
+				worktree_paths: wtPaths({ main: "/repo", "new-branch": worktreePath }),
+				merged_branches: [],
+				diff_stats: {},
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			const repo = repositoriesStore.get("/repo");
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(terminalsStore.get(tid)).toBeDefined();
+			expect(repo?.workspaces["old-branch"]).toBeUndefined();
+			expect(repo?.workspaces["new-branch"]?.terminals).toContain(tid);
+			expect(repo?.workspaces["new-branch"]?.branchName).toBe("new-branch");
+			expect(repo?.activeWorkspaceId).toBe("main");
+		});
+
+		it("keeps an active worktree terminal when its branch changes", async () => {
+			const worktreePath = "/repo/.worktrees/agent-abc";
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "old-branch", { worktreePath });
+			repositoriesStore.setActiveWorkspace("/repo", "old-branch");
+			const tid = terminalsStore.add(makeTerminal({ name: "Agent", sessionId: "agent-session", cwd: worktreePath }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "old-branch", tid);
+			mockSummary({
+				worktree_paths: wtPaths({ main: "/repo", "new-branch": worktreePath }),
+				merged_branches: [],
+				diff_stats: {},
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			const repo = repositoriesStore.get("/repo");
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(repo?.activeWorkspaceId).toBe("new-branch");
+			expect(repo?.workspaces["new-branch"]?.terminals).toContain(tid);
+		});
+
 		it("handles missing diff stats gracefully (no throw)", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

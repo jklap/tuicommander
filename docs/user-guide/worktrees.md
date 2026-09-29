@@ -262,6 +262,8 @@ If a session starts in a new sibling worktree before that refresh, TUICommander 
 
 Switching branches in TUICommander does not change the working directory of existing terminals. Each branch's terminals stay in their worktree path.
 
+If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing the worktree directory closes its terminal sessions.
+
 When you switch branches:
 - Previous branch's terminals are hidden (but remain alive)
 - New branch's terminals are shown
