@@ -1921,6 +1921,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.2.1 Files Screen
 - Select a configured repository and browse its directories one level at a time
+- Repository paths truncate from the left and reveal the complete path on long press; normal folders precede hidden folders
+- Search recursively for files by name or repository-relative path from the tree
+- File view and editor keep Back, file name, and Edit or Cancel/Save on one row with 44 px buttons; the editor fills the remaining height and soft-wraps lines
 - From a session header's overflow menu, open Files at that session's worktree root, or at the registered repository containing its working directory; Back returns to the still-mounted session and preserves its output and draft
 - Markdown paths in session output open here through the desktop terminal-path resolver. Absolute, relative, `file://`, and `tuic://open//` references are supported, including line numbers. Files outside registered repositories are refused with a toast naming the path.
 - Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
