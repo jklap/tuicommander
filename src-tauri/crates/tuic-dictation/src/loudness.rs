@@ -577,6 +577,8 @@ mod tests {
         );
     }
 
+    // Instrumentation changes the work being timed; this budget is for normal builds.
+    #[cfg(not(coverage))]
     #[test]
     fn a_thirty_second_reply_is_processed_within_budget() {
         // The stage runs between synthesis and playback, so its time is heard

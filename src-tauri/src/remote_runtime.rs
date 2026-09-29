@@ -1667,6 +1667,7 @@ pub async fn remote_connection_statuses(
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+    use std::future::Future;
 
     /// A client for the probe tests, which have no `AppState` to borrow one
     /// from. The same builder the runtime uses, so a test cannot pass against a
@@ -3170,49 +3171,76 @@ mod tests {
     /// returned `Ok(())` without doing anything, and the machine could not be
     /// brought up again short of restarting the app.
     ///
-    /// **The budget is zero on purpose, and that makes the drop deterministic.**
-    /// `timeout` polls the inner future before it polls its own sleep, so
-    /// `connect` always runs far enough to spawn; a deadline already in the past
-    /// is then unconditionally ready, so the caller is dropped at its first
-    /// await every time. A 1 ms budget read the same on an idle machine and did
-    /// not under load — the spawned handshake answered a local mock before the
-    /// timer wheel was next inspected, `timeout` found the inner future ready,
-    /// and the test failed claiming a caller had not been dropped when what had
-    /// really happened is that it succeeded.
+    /// Hold the daemon's health reply to choose whether the caller disappears
+    /// before or after the spawned handshake finishes. No scheduler deadline
+    /// decides that order: a zero-duration timeout can return `Ok` if the
+    /// handshake wins its race with the timer.
     #[tokio::test]
     async fn a_dropped_connect_does_not_strand_a_connection_in_connecting() {
-        let mut server = mockito::Server::new_async().await;
-        let _health = server
-            .mock("GET", "/health")
-            .with_body("{}")
-            .create_async()
+        for drop_before_handshake in [true, false] {
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let router = axum::Router::new()
+                .route(
+                    "/health",
+                    axum::routing::get({
+                        let entered = Arc::clone(&entered);
+                        let release = Arc::clone(&release);
+                        move || {
+                            let entered = Arc::clone(&entered);
+                            let release = Arc::clone(&release);
+                            async move {
+                                entered.notify_one();
+                                release.notified().await;
+                                axum::Json(serde_json::json!({}))
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/api/version",
+                    axum::routing::get(|| async { axum::Json(serde_json::json!({})) }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+            let state = test_state();
+            let id = direct_connection(&state, &url);
+            let mut events = state.event_bus.subscribe();
+            let mut caller = Some(Box::pin(connect(&state, &id)));
+            std::future::poll_fn(|cx| match caller.as_mut().unwrap().as_mut().poll(cx) {
+                std::task::Poll::Pending => std::task::Poll::Ready(()),
+                std::task::Poll::Ready(outcome) => {
+                    panic!("the held handshake completed before its health reply: {outcome:?}")
+                }
+            })
             .await;
-        let _probe = server
-            .mock("GET", "/api/version")
-            .with_body("{}")
-            .create_async()
-            .await;
+            tokio::time::timeout(Duration::from_secs(5), entered.notified())
+                .await
+                .expect("the handshake did not reach /health");
+            assert_eq!(state.remote.status_of(&id), RemoteStatus::Connecting);
 
-        let state = test_state();
-        let id = direct_connection(&state, &server.url());
-
-        tokio::time::timeout(Duration::ZERO, connect(&state, &id))
-            .await
-            .expect_err("the handshake must still be in flight when the caller is dropped");
-
-        // 5s is a hang bound: a handshake against a local mock takes
-        // milliseconds. What is asserted is that it finished at all.
-        for _ in 0..500 {
-            if state.remote.status_of(&id) == RemoteStatus::Connected {
-                teardown(&state, &id);
-                return;
+            if drop_before_handshake {
+                drop(caller.take());
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            release.notify_one();
+            // The deadline only detects a hang; event delivery, not elapsed
+            // time, establishes that the handshake has completed.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while state.remote.status_of(&id) != RemoteStatus::Connected {
+                    events.recv().await.unwrap();
+                }
+            })
+            .await
+            .expect("the spawned handshake left the connection in Connecting");
+            if !drop_before_handshake {
+                drop(caller.take());
+                assert_eq!(state.remote.status_of(&id), RemoteStatus::Connected);
+            }
+            teardown(&state, &id);
+            server.abort();
         }
-        panic!(
-            "the dropped caller left the connection at {:?}",
-            state.remote.status_of(&id)
-        );
     }
 
     #[tokio::test]

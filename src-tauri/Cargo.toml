@@ -60,6 +60,11 @@ strip = "debuginfo"
 [profile.release.package."*"]
 codegen-units = 16
 
+[workspace.lints.rust]
+# cargo-llvm-cov sets this cfg for instrumented builds. Wall-clock budget
+# tests use it to stay out of coverage runs.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 missing_errors_doc = "allow"

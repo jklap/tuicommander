@@ -1,3 +1,7 @@
+## Named debug vault test (1181-2f80)
+
+- [x] Rebuild the headless test binary and confirm a named instance writes its seeded session token to its own credentials file without changing the default file. _(verified: `app_instance_cli` whole-module run passed 11/11 after rebuilding; `named_debug_vault_ignores_and_does_not_mutate_default_legacy_entries` asserts both files.)_
+
 ## Global AI Chat (1157-1e54)
 
 - [ ] After a `make dev` restart, open AI Chat and switch between three repositories: `ps` shows no new `ego acp` process and the tabs stay. Send a message: exactly one `ego acp -C ~/Gits` starts, and ego's answer knows which repository was on screen. Reload the webview and send again: still one process. Quit TUICommander: no `ego acp` survives.
