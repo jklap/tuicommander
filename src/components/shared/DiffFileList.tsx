@@ -174,7 +174,7 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 								style={{ position: "absolute", top: `${vi.start}px`, left: "0", width: "100%" }}
 							>
 								<Show when={key()} keyed>
-									{() => (
+									{(_key) => (
 										<FileSection
 											file={props.files[vi.index]}
 											mode={props.mode}
