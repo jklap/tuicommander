@@ -4195,6 +4195,28 @@ mod tests {
         assert_eq!(grid.display_offset(), 0);
     }
 
+    // #1264-89c8: the grid is not the layer that loses rows while the user is
+    // scrolled back. Output grows history and the offset by the same amount, so
+    // the viewport keeps showing the same lines; the frontend has to follow it.
+    #[test]
+    fn output_while_scrolled_back_keeps_the_viewport_lines() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        let _ = grid.process(b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6");
+        grid.scroll_to_offset(2);
+        let before: Vec<String> = (0..3).map(|r| grid.get_row_text(r)).collect();
+        assert_eq!(before, ["l2", "l3", "l4"]);
+
+        let _ = grid.process(b"\r\nl7\r\nl8\r\nl9\r\nl10\r\nl11");
+
+        assert_eq!(
+            grid.display_offset(),
+            7,
+            "offset grows by the 5 lines of output"
+        );
+        let after: Vec<String> = (0..3).map(|r| grid.get_row_text(r)).collect();
+        assert_eq!(after, before);
+    }
+
     #[test]
     fn scroll_to_offset_clamps_and_is_exact() {
         let mut grid = TerminalGrid::new(3, 20, 100);
