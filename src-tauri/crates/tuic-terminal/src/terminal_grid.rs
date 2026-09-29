@@ -895,6 +895,11 @@ impl TerminalGrid {
             .collect()
     }
 
+    /// True when the newest history row soft-wraps into the row below it.
+    pub fn newest_history_row_wraps(&self) -> bool {
+        self.term.grid().history_size() > 0 && self.row_wrapped(Line(-1))
+    }
+
     /// Text of the history rows that soft-wrap into screen row 0: the head of a
     /// logical line that is partly out of view. Empty when row 0 starts a line.
     pub fn screen_head_context(&self) -> String {
@@ -1301,6 +1306,7 @@ impl TerminalGrid {
             cols: num_cols as u16,
             chrome: false,
             wrapped: self.row_wrapped(line),
+            partial: false,
         }
     }
 
