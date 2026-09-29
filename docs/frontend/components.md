@@ -156,6 +156,12 @@ the backend list and card order remain unchanged. Closing search clears the quer
 The session's output stream and command draft stay alive while Files is shown;
 the regular Files bottom tab still starts at the repository picker.
 
+The detail keybar and composer each keep their previous total height while their
+controls use 44 px touch targets. The keybar slash button opens a local
+agent-specific command menu without writing to the PTY; picking a command
+updates the input, while the close button restores the prior draft. A vanished
+session keeps its output visible but disables both input controls.
+
 ## Core Components
 
 ### PluginPanel (`PluginPanel/`)
