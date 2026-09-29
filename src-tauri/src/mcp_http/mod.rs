@@ -8023,6 +8023,54 @@ mod tests {
         );
     }
 
+    /// Catches: a request after a completed reap recreates metadata but
+    /// leaves its addressable peer without a delivery route.
+    #[test]
+    fn refresh_after_completed_reap_restores_peer_route() {
+        const TUIC: &str = "550e8400-e29b-41d4-a716-446655440003";
+        const SID: &str = "mcp-reconnect-after-reap";
+        let state = crate::state::tests_support::make_test_app_state();
+        state.mcp.sessions.insert(
+            SID.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now() - std::time::Duration::from_secs(7200),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        register_reaper_peer(&state, TUIC, SID);
+        state
+            .mcp
+            .to_session
+            .insert(SID.to_string(), TUIC.to_string());
+        state
+            .mcp
+            .session_to_mcp
+            .insert(TUIC.to_string(), vec![SID.to_string()]);
+        state
+            .session_maps
+            .session_parent
+            .insert("live-child".to_string(), TUIC.to_string());
+
+        assert!(
+            reap_selected_mcp_session(&state, SID, std::time::Duration::from_secs(3600))
+                .is_some()
+        );
+        assert!(!state.mcp.sessions.contains_key(SID));
+        assert!(!state.mcp.to_session.contains_key(SID));
+        assert!(state.peer_agents.contains_key(TUIC));
+
+        mcp_transport::refresh_mcp_session(&state, SID, true, Some(TUIC));
+
+        assert!(state.mcp.sessions.contains_key(SID));
+        assert_eq!(state.mcp.to_session.get(SID).unwrap().value(), TUIC);
+        assert_eq!(state.mcp.session_to_mcp.get(TUIC).unwrap().as_slice(), [SID]);
+        assert_eq!(state.peer_agents.get(TUIC).unwrap().mcp_session_id, SID);
+    }
+
     /// Catches: refresh re-creates metadata while the reaper is still dropping
     /// its routes, leaving the peer alive but unable to receive sibling mail.
     #[test]
