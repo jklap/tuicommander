@@ -1,15 +1,21 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { displayTask } from "../../utils/activitySnapshot";
+import { AGENT_DISPLAY, type AgentType } from "../../agents";
+import { AgentIcon } from "../../components/ui/AgentIcon";
+import { appLogger } from "../../stores/appLogger";
+import { toastsStore } from "../../stores/toasts";
+import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
 import { OutputView } from "../components/OutputView";
-import { StatusBadge } from "../components/StatusBadge";
+import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
 import { SuggestChips } from "../components/SuggestChips";
 import { TerminalKeybar } from "../components/TerminalKeybar";
 
+import { getAgentCommands } from "../config/agentCommands";
 import type { SessionInfo } from "../useSessions";
 import { formatRetryCountdown } from "../utils/formatRetryCountdown";
+import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
 import styles from "./SessionDetailScreen.module.css";
 
@@ -23,8 +29,16 @@ interface SessionDetailScreenProps {
 
 function projectName(cwd: string | null): string {
 	if (!cwd) return "unknown";
-	const parts = cwd.split("/");
+	const parts = cwd.replaceAll("\\", "/").split("/");
 	return parts[parts.length - 1] || "unknown";
+}
+
+function elapsedTime(ms: number): string {
+	const minutes = Math.max(0, Math.floor((Date.now() - ms) / 60_000));
+	if (minutes < 1) return "now";
+	if (minutes < 60) return `${minutes}m`;
+	if (minutes < 1_440) return `${Math.floor(minutes / 60)}h`;
+	return `${Math.floor(minutes / 1_440)}d`;
 }
 
 export function SessionDetailScreen(props: SessionDetailScreenProps) {
@@ -39,7 +53,74 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		return { ...poll, ...ws } as typeof poll;
 	};
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
-	const task = () => displayTask(sessionState()?.current_task, sessionState()?.agent_type);
+	const [moreOpen, setMoreOpen] = createSignal(false);
+	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
+	const agentType = () => sessionState()?.agent_type;
+	const statusText = () =>
+		({
+			idle: "Idle",
+			busy: "Working",
+			"sub-tasks": "Sub-tasks",
+			question: "Input",
+			error: "Error",
+			"rate-limited": "Rate limited",
+			unseen: "Finished",
+		})[status()];
+	const hasCommands = () => {
+		const commands = getAgentCommands(agentType());
+		return commands.commands.length > 0 || !!commands.models?.length || !!commands.permissionToggleSeq;
+	};
+
+	async function copySessionId() {
+		setMoreOpen(false);
+		try {
+			await navigator.clipboard.writeText(props.session.session_id);
+			toastsStore.add(
+				"Session ID copied",
+				props.session.session_id,
+				"info",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		} catch (error) {
+			toastsStore.add(
+				"Could not copy session ID",
+				String(error),
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		}
+	}
+
+	async function terminateSession() {
+		setMoreOpen(false);
+		if (!window.confirm("Kill this session?")) return;
+		try {
+			await rpc("close_pty", { sessionId: props.session.session_id });
+		} catch (error) {
+			appLogger.warn("network", `Failed to kill session: ${String(error)}`);
+			toastsStore.add(
+				"Could not terminate session",
+				String(error),
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		}
+	}
 
 	// Search filter
 	const [searchOpen, setSearchOpen] = createSignal(false);
@@ -86,57 +167,140 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	return (
 		<div class={styles.screen}>
 			<header class={styles.header}>
-				<button class={styles.backBtn} onClick={props.onBack}>
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<button class={styles.backBtn} onClick={props.onBack} aria-label="Back to sessions">
+					<svg
+						width="20"
+						height="20"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						aria-hidden="true"
+					>
 						<path d="M15 18l-6-6 6-6" />
 					</svg>
 				</button>
-				<div class={styles.headerInfo}>
-					<span class={styles.agentName}>{sessionState()?.agent_type ?? "Terminal"}</span>
-					<span class={styles.project}>{projectName(props.session.cwd)}</span>
-				</div>
-				<button class={styles.searchToggle} onClick={props.onOpenFiles} aria-label="Browse session files">
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-					</svg>
-				</button>
-				<Show when={sessionState()?.usage_limit_pct != null}>
-					<span class={styles.usageLabel} classList={{ [styles.danger]: (sessionState()!.usage_limit_pct ?? 0) > 80 }}>
-						{sessionState()!.usage_limit_pct}%
-					</span>
-				</Show>
-				<button
-					class={styles.searchToggle}
-					classList={{ [styles.searchToggleActive]: ideasOpen() }}
-					onClick={() => setIdeasOpen((v) => !v)}
-				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M9 18h6" />
-						<path d="M10 22h4" />
-						<path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" />
-					</svg>
-				</button>
-				<button
-					class={styles.searchToggle}
-					classList={{ [styles.searchToggleActive]: searchOpen() }}
-					onClick={() => {
-						if (searchOpen()) {
-							setSearchOpen(false);
-							setSearchQuery("");
-						} else {
-							setSearchOpen(true);
-						}
+				<span
+					class={styles.logo}
+					role="img"
+					aria-label={`${agentType() ? agentType()![0].toUpperCase() + agentType()!.slice(1) : "Terminal"} logo`}
+					style={{
+						color: isKnownAgentType(agentType()) ? AGENT_DISPLAY[agentType() as AgentType].color : "var(--fg-muted)",
 					}}
 				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<circle cx="11" cy="11" r="8" />
-						<line x1="21" y1="21" x2="16.65" y2="16.65" />
+					<Show when={isKnownAgentType(agentType())} fallback={<span aria-hidden="true">›_</span>}>
+						<AgentIcon agent={agentType() as AgentType} size={24} />
+					</Show>
+					<span class={styles.stateDot} data-state={status()} />
+				</span>
+				<button
+					type="button"
+					class={styles.headerInfo}
+					aria-label={props.session.display_name || agentType() || "Terminal"}
+					onClick={() => setHeaderPanel("details")}
+				>
+					<span class={styles.agentName}>{props.session.display_name || agentType() || "Terminal"}</span>
+					<span class={styles.project}>
+						{projectName(props.session.worktree_path ?? props.session.cwd)}
+						<Show when={props.session.worktree_branch}> · {props.session.worktree_branch}</Show> · {statusText()}{" "}
+						{sessionState()?.last_activity_ms ? elapsedTime(sessionState()!.last_activity_ms) : ""}
+					</span>
+				</button>
+				<button
+					type="button"
+					class={styles.headerAction}
+					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
+					onClick={() => setHeaderPanel("tasks")}
+				>
+					<svg
+						width="20"
+						height="20"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						aria-hidden="true"
+					>
+						<path d="M5 6h14M5 12h14M5 18h14" />
+					</svg>
+					<Show when={(sessionState()?.active_sub_tasks ?? 0) > 0}>
+						<span class={styles.taskCount}>{sessionState()!.active_sub_tasks}</span>
+					</Show>
+				</button>
+				<button
+					type="button"
+					class={styles.headerAction}
+					aria-label="More session actions"
+					aria-expanded={moreOpen()}
+					onClick={() => setMoreOpen((open) => !open)}
+				>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<circle cx="12" cy="5" r="1.8" />
+						<circle cx="12" cy="12" r="1.8" />
+						<circle cx="12" cy="19" r="1.8" />
 					</svg>
 				</button>
-				<Show when={props.sessionExists}>
-					<StatusBadge status={status()} />
-				</Show>
 			</header>
+			<Show when={moreOpen()}>
+				<div class={styles.overflow}>
+					<button
+						type="button"
+						onClick={() => {
+							setMoreOpen(false);
+							setHeaderPanel("progress");
+						}}
+					>
+						Progress <span>{sessionState()?.progress == null ? "—" : `${sessionState()!.progress}%`}</span>
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setMoreOpen(false);
+							props.onOpenFiles();
+						}}
+					>
+						Files
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setMoreOpen(false);
+							setSearchOpen(true);
+						}}
+					>
+						Search output
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setMoreOpen(false);
+							setIdeasOpen(true);
+						}}
+					>
+						Ideas
+					</button>
+					<Show when={hasCommands()}>
+						<button
+							type="button"
+							onClick={() => {
+								setMoreOpen(false);
+								setCommandWidgetOpen(true);
+							}}
+						>
+							Commands
+						</button>
+					</Show>
+					<Show when={sessionState()?.usage_limit_pct != null}>
+						<div class={styles.overflowInfo}>Usage {sessionState()!.usage_limit_pct}%</div>
+					</Show>
+					<button type="button" onClick={() => void copySessionId()}>
+						Copy session ID
+					</button>
+					<button type="button" class={styles.dangerAction} onClick={() => void terminateSession()}>
+						Terminate session
+					</button>
+				</div>
+			</Show>
 
 			<Show when={searchOpen()}>
 				<div class={styles.searchBar}>
@@ -156,47 +320,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							</svg>
 						</button>
 					</Show>
-				</div>
-			</Show>
-
-			<Show when={sessionState()?.agent_intent}>
-				<div class={styles.intentLine}>
-					<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<circle cx="12" cy="12" r="10" />
-						<line x1="22" y1="12" x2="18" y2="12" />
-						<line x1="6" y1="12" x2="2" y2="12" />
-						<line x1="12" y1="6" x2="12" y2="2" />
-						<line x1="12" y1="22" x2="12" y2="18" />
-					</svg>
-					<span class={styles.subText}>{sessionState()!.agent_intent}</span>
-				</div>
-			</Show>
-
-			<Show when={task()}>
-				<div class={styles.taskLine}>
-					<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<circle cx="12" cy="12" r="3" />
-						<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-					</svg>
-					<span class={styles.subText}>{task()}</span>
-				</div>
-			</Show>
-
-			<Show when={(sessionState()?.active_sub_tasks ?? 0) > 0}>
-				<div class={styles.taskLine}>
-					<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-						<circle cx="9" cy="7" r="4" />
-						<path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-						<path d="M16 3.13a4 4 0 0 1 0 7.75" />
-					</svg>
-					<span class={styles.subText}>{sessionState()!.active_sub_tasks} sub-tasks running</span>
-				</div>
-			</Show>
-
-			<Show when={sessionState()?.progress != null}>
-				<div class={styles.headerProgressBar}>
-					<div class={styles.headerProgressFill} style={{ transform: `scaleX(${sessionState()!.progress! / 100})` }} />
 				</div>
 			</Show>
 
@@ -273,6 +396,16 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					repoPath={props.session.cwd}
 					onDismiss={() => setIdeasOpen(false)}
 				/>
+			</Show>
+			<Show when={headerPanel()}>
+				{(panel) => (
+					<SessionHeaderOverlay
+						mode={panel()}
+						session={props.session}
+						state={sessionState()}
+						onClose={() => setHeaderPanel(null)}
+					/>
+				)}
 			</Show>
 		</div>
 	);
