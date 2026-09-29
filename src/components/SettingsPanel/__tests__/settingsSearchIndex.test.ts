@@ -26,6 +26,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	mcp: ["tabs/services/LocalMcpPanel.tsx", "tabs/services/UpstreamMcpPanel.tsx"],
 	"remote-access": ["tabs/services/RemoteAccessPanel.tsx"],
 	"remote-machines": ["tabs/RemoteMachinesTab.tsx", "tabs/services/RemoteMachinesPanel.tsx"],
+	streamdock: ["tabs/StreamDockTab.tsx"],
 	plugins: ["tabs/PluginsTab.tsx"],
 	// The runtime-selected editor has no static scroll target. Read it first so
 	// its fields cannot inherit the library heading from the tab source.
@@ -67,6 +68,8 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
 	// daemon alive" labels, whose text sits in a nested `<span>`.
 	"remote-machines": { dynamic: 1, orphans: 0 },
+	// StreamDockTab: the per-key role grid's labels come from a runtime <For>.
+	streamdock: { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	// Shared editor: runtime title and placement captions, plus eleven per-prompt fields.
 	"smart-prompts": { dynamic: 3, orphans: 11 },

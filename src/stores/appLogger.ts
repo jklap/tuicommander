@@ -51,6 +51,7 @@ export type AppLogSource =
 	| "ci-heal"
 	| "dictation"
 	| "mobile-send"
+	| "streamdock"
 	| "store"
 	| "config"
 	| "settings"
