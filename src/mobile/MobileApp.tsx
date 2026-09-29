@@ -74,7 +74,7 @@ export default function MobileApp() {
 		});
 	});
 
-	const [activeTab, setActiveTab] = createSignal<TabId>("chat");
+	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
 	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
 	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
 	createEffect(() => {
@@ -168,6 +168,7 @@ export default function MobileApp() {
 						<TopBar
 							notificationCount={questionCount()}
 							isConnected={error() === null}
+							onOpenSettings={() => setActiveTab("settings")}
 							onNotificationsClick={() => {
 								const waiting = sessions().find((session) => session.state?.awaiting_input);
 								if (waiting) navigateToSession(waiting.session_id);
