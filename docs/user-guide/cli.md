@@ -198,8 +198,11 @@ tuic repo worktree-remove /path/to/repo <branch> --json
 ```
 
 `agent wait` and `session wait` size their IPC read timeout from `--timeout-ms`
-(60 seconds by default) with a five-second transport margin. Other CLI
-requests retain a short read timeout, so a stalled app fails promptly.
+(60 seconds by default) with a five-second transport margin. MCP worktree
+creation and removal allow 305 seconds on Unix, four seconds beyond the server's
+301-second request limit. Other Unix CLI requests retain a three-second read
+timeout, so a stalled app fails promptly. A timed-out MCP action may still
+complete on the server; inspect its state before retrying.
 
 The orchestration commands above call the same MCP tools as an agent. They use
 the local `mcp.sock` transport and send `$TUIC_SESSION` as `x-tuic-session`, so
