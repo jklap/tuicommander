@@ -41,6 +41,7 @@ interface AgentConfigsState {
 		string,
 		{
 			run_configs: AgentRunConfig[];
+			idle_close_minutes?: number;
 			auto_retry_on_error?: boolean;
 			headless_template?: string;
 			env_flags?: Record<string, string>;
@@ -210,6 +211,20 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 			} catch (_err) {
 				// saveToDisk already logged the error
 			}
+		},
+
+		/** Delay before a finished managed child is closed. */
+		getIdleCloseMinutes(type: AgentType): number {
+			return state.agents[type]?.idle_close_minutes ?? 15;
+		},
+
+		async setIdleCloseMinutes(type: AgentType, minutes: number): Promise<void> {
+			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error("Idle close must be 0–1440 minutes");
+			setState(produce((s) => {
+				if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+				s.agents[type].idle_close_minutes = minutes;
+			}));
+			await saveToDisk();
 		},
 
 		/** Check if auto-retry on error is enabled for an agent */

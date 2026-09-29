@@ -973,6 +973,11 @@ text it treats as a paste and then refuses the Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
 
+`session action=keep_open session_id=<id> enabled=<bool>` controls automatic
+idle closure for a managed child. `agent action=spawn keep_open=true` sets the
+same mark at creation, and `agent action=send keep_open=<bool>` changes it while
+delivering a message. These actions reject a user-created session.
+
 The handler then waits internally for child output beyond the offset captured
 immediately before Enter. One response returns:
 
