@@ -30,7 +30,7 @@ const CLAUDE_CODE: AgentCommandSet = {
 };
 
 const CODEX: AgentCommandSet = {
-	commands: [{ label: "/help", command: "/help", category: "info" }],
+	commands: [{ label: "/status", command: "/status", category: "info" }],
 };
 
 const GEMINI: AgentCommandSet = {

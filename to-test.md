@@ -29,6 +29,10 @@
 
 # To Test
 
+## Mobile slash commands (story 1199-7b8d)
+
+- [ ] On the phone PWA, open disposable Claude Code and Codex sessions. Type a supported slash command (`/help` in Claude, `/status` in Codex) and press Send; confirm it opens once. In each session, type a slash prefix, choose that command from the suggested slash menu, then press Send; confirm it opens once. In Claude, submit `/model` with an argument and confirm the argument reaches the command. Confirm the Codex quick-command widget offers `/status` and that it opens Status. The current `make dev` frontend must reload the new bundle before this check.
+
 ## PTY close reason logging (story 1194-31e8) — Rust restart required
 
 - [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, close a disposable shell session and confirm the app log records `reason=close_requested` with its session ID. Kill a second disposable shell session through MCP and confirm `reason=kill_requested`. The running backend does not load this Rust change until restart.
