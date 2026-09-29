@@ -29,6 +29,14 @@
 
 # To Test
 
+## Mobile global AI Chat (story 1208-b371)
+
+- [ ] On the phone PWA after `make dev` serves this frontend, tap Chat with multiple repositories registered. Confirm there is no repository picker, the same titled conversations as desktop appear, and a push link opens its conversation without changing the chat root. Switch to a session and confirm the terminal keeps the same visible row count as before this change.
+
+## Mobile terminal states (story 1211-e1f4)
+
+- [ ] On a 360×800 phone PWA, check a working, idle, awaiting-input and completed-unseen terminal in the session list. Verify the corresponding blue, green, orange and purple status colors. Open the completed session: the header should show Idle and the terminal should retain the same visible row count as before this change.
+
 ## Dictation Metal release link (story 1198-535b) — Rust rebuild required
 
 - [ ] After rebuilding `make dev`, verify macOS dictation starts with a downloaded Whisper model and still uses Metal. The build script change cannot affect Boss's running backend until a rebuild and restart; the targeted release test covers linking and loudness timing.

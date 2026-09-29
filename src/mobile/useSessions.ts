@@ -12,6 +12,7 @@ export interface SessionState {
 	retry_after_ms?: number;
 	usage_limit_pct?: number;
 	shell_state?: string;
+	agent_state?: string;
 	last_activity_ms: number;
 	agent_type?: string;
 	last_error?: string;
@@ -53,6 +54,8 @@ export interface ChoiceOption {
 /** Session info returned by GET /sessions (matches Rust SessionInfo) */
 export interface SessionInfo {
 	session_id: string;
+	/** A completion this phone has not opened yet; derived from agent_state. */
+	unseen?: boolean;
 	cwd: string | null;
 	worktree_path: string | null;
 	worktree_branch: string | null;
@@ -106,12 +109,17 @@ export function useSessions() {
 	const [loading, setLoading] = createSignal(true);
 	const [refreshing, setRefreshing] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
+	const seenCompletions = new Set<string>();
 
 	let refreshToken = 0;
 
 	async function fetchSessions() {
 		try {
 			const result = await rpc<SessionInfo[]>("list_active_sessions");
+			for (const session of result) {
+				if (session.state?.agent_state !== "completed") seenCompletions.delete(session.session_id);
+				session.unseen = session.state?.agent_state === "completed" && !seenCompletions.has(session.session_id);
+			}
 			setSessions((prev) => reconcileSessions(prev, result));
 			setError(null);
 		} catch (err) {
@@ -160,6 +168,13 @@ export function useSessions() {
 		unsubscribe.then((fn) => fn()).catch(() => {});
 	});
 
+	/** A working session can be opened before its completion; do not pre-mark that turn. */
+	function markSeen(sessionId: string) {
+		if (sessions().find((session) => session.session_id === sessionId)?.state?.agent_state !== "completed") return;
+		seenCompletions.add(sessionId);
+		setSessions((prev) => prev.map((session) => session.session_id === sessionId ? { ...session, unseen: false } : session));
+	}
+
 	/** Force an immediate refresh (sets refreshing=true while in-flight) */
 	function refresh() {
 		const token = ++refreshToken;
@@ -174,5 +189,5 @@ export function useSessions() {
 		return sessions().filter((s) => s.state?.awaiting_input).length;
 	}
 
-	return { sessions, loading, refreshing, error, refresh, questionCount };
+	return { sessions, loading, refreshing, error, refresh, questionCount, markSeen };
 }
