@@ -4,10 +4,59 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::{ipc, mcp};
+
+const WAKE_ATTEMPTS: u64 = 6;
+const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(200);
+
+struct WakeError {
+    message: String,
+    retryable: bool,
+}
+
+impl WakeError {
+    fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    fn from_io(error: std::io::Error) -> Self {
+        let retryable = matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::NotFound
+        );
+        Self {
+            message: error.to_string(),
+            retryable,
+        }
+    }
+
+    fn from_http(operation: &str, status: u16, body: &str) -> Self {
+        Self {
+            message: format!("{operation} answered HTTP {status}: {body}"),
+            retryable: status >= 500,
+        }
+    }
+}
+
+fn write_wake_status(path: &str, status: &Value) -> Result<(), String> {
+    let temp = format!("{path}.tmp");
+    fs::write(&temp, format!("{status}\n"))
+        .and_then(|()| fs::rename(&temp, path))
+        .map_err(|error| format!("Cannot write wake status file {path}: {error}"))
+}
 
 pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
     let caller = std::env::var("TUIC_SESSION").unwrap_or_default();
@@ -101,78 +150,107 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
     fs::write(&exit_file, format!("{code}\n"))
         .map_err(|e| format!("Cannot write exit file {exit_file}: {e}"))?;
     let wake = format!("BG DONE exit={code} log={log} cmd={}", command.join(" "));
-    let wake_status = match queue_wake(caller, &wake) {
-        Ok(()) => serde_json::json!({"status": "queued"}),
-        Err(queue_error) => {
-            let _ = writeln!(output, "tuic bg: queue wake failed: {queue_error}");
-            let message = format!("{wake}\ntuic bg: queue wake failed: {queue_error}");
-            let mail_result = mcp::McpClient::connect()
-                .and_then(|client| mcp::agent_send(&client, caller, &message))
-                .and_then(|report| {
-                    if report["delivered"] == true {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "Mail stayed inbox-only ({})",
-                            report["delivery_path"]
-                        ))
+    let wake_file = format!("{log}.wake");
+    for attempt in 1..=WAKE_ATTEMPTS {
+        let wake_status = match queue_wake(caller, &wake) {
+            Ok(()) => {
+                serde_json::json!({"status": "queued", "tuic_session": caller, "attempts": attempt})
+            }
+            Err(queue_error) => {
+                let _ = writeln!(
+                    output,
+                    "tuic bg: queue wake attempt {attempt} failed: {}",
+                    queue_error.message
+                );
+                let message = format!(
+                    "{wake}\ntuic bg: queue wake failed: {}",
+                    queue_error.message
+                );
+                let mail_result = mcp::McpClient::connect()
+                    .and_then(|client| mcp::agent_send(&client, caller, &message))
+                    .and_then(|report| {
+                        if report["delivered"] == true {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "Mail stayed inbox-only ({})",
+                                report["delivery_path"]
+                            ))
+                        }
+                    });
+                match mail_result {
+                    Ok(()) => {
+                        serde_json::json!({"status": "mailed", "tuic_session": caller, "attempts": attempt, "queue_error": queue_error.message})
                     }
-                });
-            match mail_result {
-                Ok(()) => serde_json::json!({"status": "mailed", "queue_error": queue_error}),
-                Err(mail_error) => {
-                    let _ = writeln!(output, "tuic bg: mail wake failed: {mail_error}");
-                    serde_json::json!({
-                        "status": "failed",
-                        "error": format!("queue: {queue_error}; mail: {mail_error}")
-                    })
+                    Err(mail_error) => {
+                        let _ = writeln!(
+                            output,
+                            "tuic bg: mail wake attempt {attempt} failed: {mail_error}"
+                        );
+                        let error = format!("queue: {}; mail: {mail_error}", queue_error.message);
+                        if queue_error.retryable && attempt < WAKE_ATTEMPTS {
+                            let status = serde_json::json!({"status": "retrying", "tuic_session": caller, "attempts": attempt, "error": error});
+                            write_wake_status(&wake_file, &status)?;
+                            std::thread::sleep(INITIAL_RETRY_DELAY * (1 << (attempt - 1)));
+                            continue;
+                        }
+                        serde_json::json!({"status": "failed", "tuic_session": caller, "attempts": attempt, "error": error})
+                    }
                 }
             }
-        }
-    };
-    let wake_file = format!("{log}.wake");
-    let wake_temp = format!("{wake_file}.tmp");
-    fs::write(&wake_temp, format!("{wake_status}\n"))
-        .and_then(|()| fs::rename(&wake_temp, &wake_file))
-        .map_err(|e| {
-            let message = format!("Cannot write wake status file {wake_file}: {e}");
+        };
+        write_wake_status(&wake_file, &wake_status).map_err(|message| {
             let _ = writeln!(output, "tuic bg: {message}");
             message
         })?;
+        break;
+    }
     Ok(())
 }
 
-fn queue_wake(caller: &str, wake: &str) -> Result<(), String> {
-    let sessions = ipc::get("/sessions").map_err(|e| e.to_string())?;
+fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
+    let sessions = ipc::get("/sessions").map_err(WakeError::from_io)?;
     if !sessions.is_success() {
-        return Err(format!("Session lookup answered HTTP {}", sessions.status));
+        return Err(WakeError::from_http(
+            "Session lookup",
+            sessions.status,
+            &sessions.body,
+        ));
     }
-    let rows: Value = sessions.json().map_err(|e| e.to_string())?;
+    let rows: Value = sessions
+        .json()
+        .map_err(|e| WakeError::permanent(e.to_string()))?;
     let matches: Vec<&str> = rows
         .as_array()
-        .ok_or("Session lookup did not return a list")?
+        .ok_or_else(|| WakeError::permanent("Session lookup did not return a list"))?
         .iter()
         .filter(|row| row["tuic_session"].as_str() == Some(caller))
         .filter_map(|row| row["session_id"].as_str())
         .collect();
     let [session_id] = matches.as_slice() else {
-        return Err(format!(
+        return Err(WakeError::permanent(format!(
             "Expected one live session for {caller}, found {}",
             matches.len()
-        ));
+        )));
     };
     let body = serde_json::json!({"text": wake}).to_string();
     let response =
-        ipc::post(&format!("/sessions/{session_id}/queue"), &body).map_err(|e| e.to_string())?;
+        ipc::post(&format!("/sessions/{session_id}/queue"), &body).map_err(WakeError::from_io)?;
     if !response.is_success() {
-        return Err(format!(
-            "Queue answered HTTP {}: {}",
-            response.status, response.body
+        return Err(WakeError::from_http(
+            "Queue",
+            response.status,
+            &response.body,
         ));
     }
-    let receipt: Value = response.json().map_err(|e| e.to_string())?;
+    let receipt: Value = response
+        .json()
+        .map_err(|e| WakeError::permanent(e.to_string()))?;
     if receipt["typed"] != true && receipt["queued"].as_u64().is_none_or(|count| count == 0) {
-        return Err(format!("Queue did not accept wake: {}", response.body));
+        return Err(WakeError::permanent(format!(
+            "Queue did not accept wake: {}",
+            response.body
+        )));
     }
     Ok(())
 }

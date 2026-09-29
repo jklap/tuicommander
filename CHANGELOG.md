@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
+
 - **Claude questions on mobile** — The session shows every AskUserQuestion option and offers those choices instead of generic Yes/No. Tapping a choice navigates Claude's menu and submits it with Enter.
 
 - **Mobile Codex questions** — Open queued questions from the session header, see their choices, and answer with one tap or typed notes. The question overlay does not reduce terminal space.
