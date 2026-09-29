@@ -98,6 +98,9 @@ and Claude produces no response, the indicator returns to idle after five minute
 without output, provided the last lifecycle hook reported idle.
 Grok keeps its composer visible while responding, so TUICommander waits for the
 animated status row to disappear before treating that composer as ready.
+Queued notices to Claude and Codex may take several seconds to confirm while
+their hooks or internal prompt queues run. If TUIC reports that agent input was
+not confirmed, inspect the transcript and composer before pressing Enter again.
 
 A ready prompt means the terminal can accept input; it does not necessarily
 mean the agent's turn is finished. If the agent still owns a background command,

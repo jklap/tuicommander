@@ -8598,8 +8598,10 @@ pub(crate) fn prefill_agent_input(
 /// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
-// A Codex stop hook delayed the accepted turn's Working repaint by four seconds.
-const CODEX_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
+// A Codex stop hook delayed Working by four seconds. A live Claude notice took
+// 3.8 seconds to leave its internal queue after Enter. Allow both delayed
+// agents to publish a positive signal before reporting uncertain delivery.
+const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
     std::time::Duration::from_secs(6);
 
 /// The same framed multiline payload works for every supported agent; only the
@@ -9435,8 +9437,8 @@ fn wait_for_queued_submission(
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
     let profile = agent_submit_profile(agent_type.as_deref());
-    let confirmation_window = if agent_type.as_deref() == Some("codex") {
-        CODEX_QUEUED_SUBMISSION_CONFIRMATION
+    let confirmation_window = if matches!(agent_type.as_deref(), Some("codex" | "claude")) {
+        DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION
     } else {
         std::time::Duration::from_secs(1)
     };
