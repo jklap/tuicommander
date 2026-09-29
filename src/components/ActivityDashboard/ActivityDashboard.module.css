@@ -97,9 +97,16 @@
 
 .rowMain {
   display: grid;
-  grid-template-columns: 1fr 80px 120px 80px 28px;
+  grid-template-columns: 1fr 80px 120px 80px 48px;
   align-items: center;
   gap: 12px;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* Terminal name + optional project badge — both in the 1fr column */
