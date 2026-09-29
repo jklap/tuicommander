@@ -316,7 +316,7 @@ mod tests {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
         // Sleep-forever script so the tunnel stays alive for the assertion.
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
 
         let id = start_with_fake_ssh(&manager, test_profile("t1"), script.path().to_path_buf())
             .await
@@ -335,7 +335,7 @@ mod tests {
     async fn stop_removes_from_map() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
 
         let id = start_with_fake_ssh(&manager, test_profile("t2"), script.path().to_path_buf())
             .await
@@ -346,11 +346,48 @@ mod tests {
         assert!(manager.list().is_empty(), "map should be empty after stop");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_does_not_leave_fake_ssh_sleep_running() {
+        use crate::test_support::{assert_fake_ssh_stopped, fake_ssh_processes, test_temp_root};
+
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        let marker = test_temp_root().join("manager_stop_ssh.pid");
+        let _ = std::fs::remove_file(&marker);
+        let script = crate::test_support::fake_ssh_script(
+            "manager_stop_sleep",
+            &format!("echo $$ > '{}'; exec sleep 3600", marker.display()),
+            "exit /b 0",
+        );
+
+        let id = start_with_fake_ssh(&manager, test_profile("stop-child"), script)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !marker.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake SSH started");
+        let pids = fake_ssh_processes(&marker);
+
+        manager.stop(&id).unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(6), async {
+            while pids.iter().any(|pid| unsafe { libc::kill(*pid, 0) == 0 }) {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert_fake_ssh_stopped(pids);
+    }
+
     #[tokio::test]
     async fn get_status_returns_correct_status() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
 
         let id = start_with_fake_ssh(&manager, test_profile("t3"), script.path().to_path_buf())
             .await
@@ -373,7 +410,7 @@ mod tests {
     async fn shutdown_all_clears_everything() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
 
         for i in 0..3 {
             start_with_fake_ssh(
@@ -399,7 +436,7 @@ mod tests {
     async fn start_rejects_duplicate_id_without_orphaning() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
 
         // Seed a live handle for id `dup` via the fake-ssh helper.
         let profile = test_profile("dup");
@@ -512,7 +549,7 @@ mod tests {
     async fn stop_during_spawn_prevents_publication_and_started_audit() {
         let (audit, _dir) = temp_audit();
         let manager = Arc::new(TunnelManager::new(audit));
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
         let ssh_path = script.path().to_path_buf();
         let profile = test_profile("stopped-during-spawn");
         let id = profile.id.clone();
@@ -600,7 +637,7 @@ mod tests {
     async fn concurrent_starts_no_panic() {
         let (audit, _dir) = temp_audit();
         let manager = Arc::new(TunnelManager::new(audit));
-        let script = fake_ssh_script("sleep 3600");
+        let script = fake_ssh_script("exec sleep 3600");
         let ssh_path = script.path().to_path_buf();
 
         // Spawn 10 tasks concurrently via tokio::spawn. Arc<Mutex<AuditLog>> and
