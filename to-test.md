@@ -598,6 +598,10 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split.
 - [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer.
 
+## Mobile Progress header (story 1214-2b95)
+
+- [ ] [HUMAN] On a 360 px and a 390 px phone, open the Progress tab with a project available. Confirm the title, project and terminal selectors, **List | Flow**, and **Blocked only** are visible without horizontal scrolling; tap both view choices and the filter. Browser geometry at those widths is checked separately; this item covers real touch and device rendering.
+
 ## Progress Flow view (2026-09-23) — **Rust, needs a `make dev` restart**
 
 The List | Flow toggle is frontend and appears through HMR at once, but the running backend has no `progress_flow` until it restarts, so Flow shows an error line until then. The first open after the restart migrates `progress.sqlite3` (table rebuild for the new kinds).
