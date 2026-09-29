@@ -97,6 +97,10 @@ TUICommander ships with example plugins in `examples/plugins/`:
 
 See the [Plugin Authoring Guide](../plugins.md) for the full API reference, manifest format, capability details, structured event types, and testing patterns.
 
+## Notable Community Plugins
+
+- [Wiz Kanban](./wiz-kanban.md) — kanban board for a `stories`/`plans`/`reviews` directory workflow, with drag-and-drop status changes.
+
 ## Troubleshooting
 
 | Problem | Fix |
