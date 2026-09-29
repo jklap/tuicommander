@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **CLI MCP worktree timeouts** — On Unix, `tuic mcp` and `tuic repo` wait up to 305 seconds for worktree creation and removal. Other commands retain their short timeout. A timed-out MCP request now warns that the server may still complete it, so callers can inspect state before retrying.
+
 - **Mobile Files** — Repository paths keep their end visible and reveal the full path on long press. The tree puts hidden folders after normal ones and searches nested files. File actions share the title row; the editor fills the available height and wraps lines.
 - **Compact mobile session header** — A 56 px row shows the agent logo, state, session name, and tasks count. Intent, tasks, and session progress open temporary sheets; Files, output search, Ideas, and quick commands remain reachable from overflow without reducing terminal space.
 
