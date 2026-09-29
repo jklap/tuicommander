@@ -172,8 +172,27 @@ describe("MarkdownTab agent review actions", () => {
 		await waitFor(() =>
 			expect(mockRpc).toHaveBeenCalledWith("enqueue_agent_command", {
 				sessionId: "session-one",
-				text: `Open ${path}, apply the 1 embedded tweak review comment, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+				text: `Open ${path}, re-read the whole file: apply the 1 embedded tweak review comment, treat every other change since your last write (checkbox toggles, edited text) as the user's answer, remove each resolved tweak marker, and leave unrelated files unchanged.`,
 			}),
+		);
+	});
+
+	it("tells the agent to treat edits outside tweak comments as the user's answer, not just the tweaks", async () => {
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		fireEvent.click(send);
+
+		await waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith(
+				"enqueue_agent_command",
+				expect.objectContaining({
+					text: expect.stringMatching(/re-read the whole file.*checkbox.*user's answer/s),
+				}),
+			),
 		);
 	});
 
