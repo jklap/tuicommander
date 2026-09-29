@@ -85,10 +85,21 @@ mod dictation_config {
         /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
         #[serde(default = "default_speech_levelling")]
         pub speech_levelling: f32,
+        /// Minutes without any transcription before the Whisper model is
+        /// released from memory (it holds ~1.5 GiB for large-v3-turbo). The next
+        /// dictation reloads it lazily (~0.5 s). 0 keeps it loaded for the life
+        /// of the process. No UI control.
+        #[serde(default = "default_model_idle_unload_minutes")]
+        pub model_idle_unload_minutes: u32,
         /// Set only on a read response when malformed fields were replaced by
         /// defaults. It is cleared before persistence.
         #[serde(default)]
         pub recovered_from_corruption: bool,
+    }
+
+    /// See [`DictationConfig::model_idle_unload_minutes`].
+    pub(crate) fn default_model_idle_unload_minutes() -> u32 {
+        5
     }
 
     pub(crate) fn default_model() -> String {
@@ -189,6 +200,7 @@ mod dictation_config {
                 speech_voice: String::new(),
                 speech_volume_db: default_speech_volume_db(),
                 speech_levelling: default_speech_levelling(),
+                model_idle_unload_minutes: default_model_idle_unload_minutes(),
                 recovered_from_corruption: false,
             }
         }
