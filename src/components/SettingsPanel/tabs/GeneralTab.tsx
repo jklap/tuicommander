@@ -5,6 +5,7 @@ import { isMacOS } from "../../../platform";
 import { appLogger } from "../../../stores/appLogger";
 import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
+import { uiStore } from "../../../stores/ui";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
 import { randomId } from "../../../utils/randomId";
@@ -409,6 +410,81 @@ export const GeneralTab: Component = () => {
 					{ value: "all_sequential", label: "All repos at boot" },
 				]}
 				hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
+			/>
+
+			<h3>{t("general.heading.diffs", "Diffs")}</h3>
+
+			<SettingToggle
+				checked={settingsStore.state.diffIgnoreLeadingWhitespace}
+				onChange={(v) => settingsStore.setDiffIgnoreLeadingWhitespace(v)}
+				label={t("general.toggle.diffIgnoreLeadingWhitespace", "Ignore leading whitespace")}
+				hint={t(
+					"general.hint.diffIgnoreLeadingWhitespace",
+					"Don't show a line as changed if it only differs in leading whitespace",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.diffIgnoreTrailingWhitespace}
+				onChange={(v) => settingsStore.setDiffIgnoreTrailingWhitespace(v)}
+				label={t("general.toggle.diffIgnoreTrailingWhitespace", "Ignore trailing whitespace")}
+				hint={t(
+					"general.hint.diffIgnoreTrailingWhitespace",
+					"Don't show a line as changed if it only differs in trailing whitespace",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.diffIgnoreWhitespaceAmount}
+				onChange={(v) => settingsStore.setDiffIgnoreWhitespaceAmount(v)}
+				label={t("general.toggle.diffIgnoreWhitespaceAmount", "Ignore whitespace amount")}
+				hint={t(
+					"general.hint.diffIgnoreWhitespaceAmount",
+					"Treat runs of whitespace as equal regardless of how many characters they contain",
+				)}
+			/>
+
+			<SettingToggle
+				checked={settingsStore.state.diffIgnoreCase}
+				onChange={(v) => settingsStore.setDiffIgnoreCase(v)}
+				label={t("general.toggle.diffIgnoreCase", "Ignore case")}
+				hint={t("general.hint.diffIgnoreCase", "Compare lines case-insensitively")}
+			/>
+
+			<SettingToggle
+				checked={uiStore.state.diffSoftWrap}
+				onChange={(v) => uiStore.setDiffSoftWrap(v)}
+				label={t("general.toggle.diffSoftWrap", "Soft-wrap long lines")}
+				hint={t("general.hint.diffSoftWrap", "Wrap long diff lines instead of scrolling horizontally")}
+			/>
+
+			<SettingSelect
+				label={t("general.label.sessionDiffAutoOpen", "Auto-open Session Diff Review")}
+				value={settingsStore.state.sessionDiffAutoOpen}
+				onChange={(v) => settingsStore.setSessionDiffAutoOpen(v as "off" | "ask" | "auto")}
+				options={[
+					{ value: "off", label: t("general.option.sessionDiffAutoOpen.off", "Off") },
+					{ value: "ask", label: t("general.option.sessionDiffAutoOpen.ask", "Ask") },
+					{ value: "auto", label: t("general.option.sessionDiffAutoOpen.auto", "Auto") },
+				]}
+				hint={t(
+					"general.hint.sessionDiffAutoOpen",
+					"When TUIC detects an agent editing files: never open Session Diff Review, ask first, or open it automatically",
+				)}
+			/>
+
+			<SettingSlider
+				label={t("general.label.sessionDiffTruncateLines", "Truncate long changes")}
+				value={settingsStore.state.sessionDiffTruncateLines}
+				onChange={(v) => settingsStore.setSessionDiffTruncateLines(v)}
+				min={0}
+				max={2000}
+				step={50}
+				formatValue={(v) => (v === 0 ? "Never" : `${v} lines`)}
+				hint={t(
+					"general.hint.sessionDiffTruncateLines",
+					"Collapse a single change above this many lines behind a 'Show all' button. 0 = never truncate.",
+				)}
 			/>
 
 			<h3>{t("general.heading.updates", "Updates")}</h3>

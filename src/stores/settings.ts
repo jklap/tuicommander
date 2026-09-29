@@ -139,6 +139,12 @@ interface RustAppConfig {
 	additional_readable_dirs?: string[];
 	inline_blame_enabled?: boolean;
 	custom_pty_env?: CustomEnvVarEntry[];
+	diff_ignore_leading_whitespace?: boolean;
+	diff_ignore_trailing_whitespace?: boolean;
+	diff_ignore_whitespace_amount?: boolean;
+	diff_ignore_case?: boolean;
+	session_diff_auto_open?: string;
+	session_diff_truncate_lines?: number;
 	indicator_overrides?: IndicatorOverride[];
 	show_diff_stats?: boolean;
 	show_pr_badges?: boolean;
@@ -448,6 +454,12 @@ interface SettingsStoreState {
 	additionalReadableDirs: string[];
 	customPtyEnv: CustomEnvVarEntry[];
 	inlineBlameEnabled: boolean;
+	diffIgnoreLeadingWhitespace: boolean;
+	diffIgnoreTrailingWhitespace: boolean;
+	diffIgnoreWhitespaceAmount: boolean;
+	diffIgnoreCase: boolean;
+	sessionDiffAutoOpen: "off" | "ask" | "auto";
+	sessionDiffTruncateLines: number;
 	indicatorOverrides: IndicatorOverride[];
 	showDiffStats: boolean;
 	showPrBadges: boolean;
@@ -519,6 +531,12 @@ function createSettingsStore() {
 		additionalReadableDirs: ["~/.claude/plans"],
 		customPtyEnv: [],
 		inlineBlameEnabled: true,
+		diffIgnoreLeadingWhitespace: false,
+		diffIgnoreTrailingWhitespace: false,
+		diffIgnoreWhitespaceAmount: false,
+		diffIgnoreCase: false,
+		sessionDiffAutoOpen: "ask",
+		sessionDiffTruncateLines: 300,
 		indicatorOverrides: [],
 		showDiffStats: true,
 		showPrBadges: true,
@@ -606,6 +624,12 @@ function createSettingsStore() {
 		config.additional_readable_dirs = [...state.additionalReadableDirs];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
 		config.custom_pty_env = state.customPtyEnv.map((e) => ({ ...e }));
+		config.diff_ignore_leading_whitespace = state.diffIgnoreLeadingWhitespace;
+		config.diff_ignore_trailing_whitespace = state.diffIgnoreTrailingWhitespace;
+		config.diff_ignore_whitespace_amount = state.diffIgnoreWhitespaceAmount;
+		config.diff_ignore_case = state.diffIgnoreCase;
+		config.session_diff_auto_open = state.sessionDiffAutoOpen;
+		config.session_diff_truncate_lines = state.sessionDiffTruncateLines;
 		config.indicator_overrides = state.indicatorOverrides.map((o) => ({ ...o }));
 		config.show_diff_stats = state.showDiffStats;
 		config.show_pr_badges = state.showPrBadges;
@@ -748,6 +772,20 @@ function createSettingsStore() {
 				setState("additionalReadableDirs", config.additional_readable_dirs ?? ["~/.claude/plans"]);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 				setState("customPtyEnv", sanitizeCustomPtyEnv(config.custom_pty_env ?? []));
+				setState("diffIgnoreLeadingWhitespace", config.diff_ignore_leading_whitespace ?? false);
+				setState("diffIgnoreTrailingWhitespace", config.diff_ignore_trailing_whitespace ?? false);
+				setState("diffIgnoreWhitespaceAmount", config.diff_ignore_whitespace_amount ?? false);
+				setState("diffIgnoreCase", config.diff_ignore_case ?? false);
+				// The Rust field is a plain unvalidated String (matches diff_view_mode's
+				// own convention) — an unrecognized value on disk falls back to "ask"
+				// here, at the frontend's rendering boundary, rather than at load time.
+				setState(
+					"sessionDiffAutoOpen",
+					config.session_diff_auto_open === "off" || config.session_diff_auto_open === "auto"
+						? config.session_diff_auto_open
+						: "ask",
+				);
+				setState("sessionDiffTruncateLines", config.session_diff_truncate_lines ?? 300);
 				// Revalidated here, not just on write — a hand-edited config.json is
 				// untrusted input reaching document.documentElement.style (apply.ts).
 				setState("indicatorOverrides", sanitizeIndicatorOverrides(config.indicator_overrides ?? []));
@@ -1035,6 +1073,36 @@ function createSettingsStore() {
 		/** Toggle GitLens-style inline git blame on the editor's active line */
 		setInlineBlameEnabled(enabled: boolean): void {
 			setState("inlineBlameEnabled", enabled);
+			save();
+		},
+
+		setDiffIgnoreLeadingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreLeadingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreTrailingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreTrailingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreWhitespaceAmount(enabled: boolean): void {
+			setState("diffIgnoreWhitespaceAmount", enabled);
+			save();
+		},
+
+		setDiffIgnoreCase(enabled: boolean): void {
+			setState("diffIgnoreCase", enabled);
+			save();
+		},
+
+		setSessionDiffAutoOpen(mode: "off" | "ask" | "auto"): void {
+			setState("sessionDiffAutoOpen", mode);
+			save();
+		},
+
+		setSessionDiffTruncateLines(lines: number): void {
+			setState("sessionDiffTruncateLines", Math.max(0, Math.trunc(lines)));
 			save();
 		},
 
