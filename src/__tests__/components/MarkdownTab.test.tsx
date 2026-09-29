@@ -120,6 +120,37 @@ describe("MarkdownTab agent review actions", () => {
 		);
 	});
 
+	// jsdom has no layout; CodeMirror's measure pass asks Range for client rects.
+	Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+	Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
+	it("Live mode saves the typed buffer byte for byte through write_file and leaves the viewer alone", async () => {
+		// catches: Live save going through a serializer, or replacing the read-only viewer
+		fileContent =
+			"# Title\r\n\r\ntext **bold** <!--tweak:begin:c1-->w<!--tweak:end:c1 @2026-01-01T00:00:00.000Z\nn-->\r\n";
+		const tabId = mdTabsStore.add("/repo", "docs/live.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		await waitFor(() => expect(container.textContent).toContain("Title"));
+		expect(container.querySelector(".cm-editor")).toBeNull();
+		fireEvent.click(screen.getByText("Live"));
+		await waitFor(() => {
+			if (!container.querySelector(".cm-content")) throw new Error("live editor not mounted");
+		});
+		const view = (await import("@codemirror/view")).EditorView.findFromDOM(
+			container.querySelector(".cm-editor") as HTMLElement,
+		);
+		expect(view).not.toBeNull();
+		view?.dispatch({ changes: { from: 0, insert: "X" } });
+		fireEvent.click(await screen.findByText("Save"));
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", {
+				repoPath: "/repo",
+				file: "docs/live.md",
+				content: `X${fileContent}`,
+			}),
+		);
+	});
+
 	function addAgent(name: string, sessionId: string, repoPath: string) {
 		const id = terminalsStore.add({ name, sessionId, fontSize: 14, cwd: repoPath, awaitingInput: null });
 		terminalsStore.update(id, { agentType: "claude", repoPath });
