@@ -149,6 +149,9 @@ pub(crate) fn inspect_worktree_removal(
         WorkspaceCommitStatus::Unmerged => {
             warnings.push("This branch has unmerged commits".to_string())
         }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            warnings.push("This branch is not merged, but all its commits are pushed".to_string())
+        }
         WorkspaceCommitStatus::Unknown => {
             warnings.push("Branch history could not be verified".to_string())
         }

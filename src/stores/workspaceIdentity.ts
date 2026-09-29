@@ -18,11 +18,13 @@ export type WorkspaceKind =
 	/** A linked git worktree: refs and objects shared with the parent. */
 	| "worktree";
 
-/** `in_sync` = HEAD is the default branch's tip, so the workspace has no commits
+/** `pushed_unmerged` = not merged, but every commit exists on the branch's own
+ *  remote-tracking ref, so deleting the local branch loses nothing.
+ *  `in_sync` = HEAD is the default branch's tip, so the workspace has no commits
  *  of its own and was never merged. Both it and `merged` satisfy the backend's
  *  `merge-base --is-ancestor` check; only `merged` describes commits that were
  *  actually integrated. */
-export type WorkspaceCommitStatus = "unmerged" | "in_sync" | "merged" | "unknown";
+export type WorkspaceCommitStatus = "unmerged" | "pushed_unmerged" | "in_sync" | "merged" | "unknown";
 export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
 
 /** Backend-authored Git lifecycle verdict for one exact workspace id. */
