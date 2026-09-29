@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
+import { getAgentCommands } from "../config/agentCommands";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
@@ -33,7 +34,9 @@ interface CommandInputProps {
 export function CommandInput(props: CommandInputProps) {
 	const [value, setValue] = createSignal("");
 	const [submitting, setSubmitting] = createSignal(false);
+	const [localSlashMenuOpen, setLocalSlashMenuOpen] = createSignal(false);
 	const atomicReply = () => props.managedSession && props.awaitingInput && !props.choicePrompt;
+	let slashDraft = "";
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// What we last sent to PTY — used to compute deltas and to gate which
 	// PTY echoes we accept (only strict extensions — see sync effect below).
@@ -67,6 +70,7 @@ export function CommandInput(props: CommandInputProps) {
 	// history-nav replacements) is ignored so the textarea can't be clobbered.
 	createEffect(() => {
 		if (atomicReply()) return;
+		if (localSlashMenuOpen()) return;
 		const text = props.ptyInputLine ?? "";
 		if (isPostSendGuardActive(Date.now(), lastSendAt)) return;
 		if (!isSupersetEcho(text, syncedText)) return;
@@ -105,6 +109,7 @@ export function CommandInput(props: CommandInputProps) {
 		const text = e.currentTarget.value;
 		setValue(text);
 		autoResize();
+		if (localSlashMenuOpen()) return;
 		syncDelta(text);
 	}
 
@@ -117,6 +122,7 @@ export function CommandInput(props: CommandInputProps) {
 		const prefix = slashIdx >= 0 ? current.slice(0, slashIdx) : "";
 		const text = prefix + command + " ";
 		setValue(text);
+		setLocalSlashMenuOpen(false);
 		syncDelta(text);
 		if (textareaEl) {
 			textareaEl.value = text;
@@ -127,14 +133,27 @@ export function CommandInput(props: CommandInputProps) {
 
 	/** Externally trigger slash mode (e.g. from TerminalKeybar "/" button). */
 	function triggerSlash() {
-		syncedText = "";
+		if (props.sessionExists === false || localSlashMenuOpen()) return;
+		slashDraft = textareaEl?.value ?? value();
+		setLocalSlashMenuOpen(true);
 		setValue("/");
 		if (textareaEl) {
 			textareaEl.value = "/";
 			textareaEl.focus();
 			autoResize();
 		}
-		syncDelta("/");
+	}
+
+	function closeSlashMenu() {
+		if (localSlashMenuOpen()) {
+			setLocalSlashMenuOpen(false);
+			setValue(slashDraft);
+			if (textareaEl) textareaEl.value = slashDraft;
+			return;
+		}
+		setValue("");
+		if (textareaEl) textareaEl.value = "";
+		syncDelta("");
 	}
 
 	// Register triggerSlash with parent via callback prop
@@ -146,7 +165,7 @@ export function CommandInput(props: CommandInputProps) {
 
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
-		if (!text || props.sessionExists === false || submitting()) return;
+		if (!text || props.sessionExists === false || localSlashMenuOpen() || submitting()) return;
 
 		if (atomicReply()) {
 			setSubmitting(true);
@@ -162,7 +181,12 @@ export function CommandInput(props: CommandInputProps) {
 					return;
 				}
 				if (!receipt.acknowledged) {
-					toastsStore.add("Reply sent", "The agent did not acknowledge it yet. Check the session before retrying.", "warn", true);
+					toastsStore.add(
+						"Reply sent",
+						"The agent did not acknowledge it yet. Check the session before retrying.",
+						"warn",
+						true,
+					);
 				}
 				setValue("");
 				if (textareaEl) textareaEl.value = "";
@@ -171,12 +195,16 @@ export function CommandInput(props: CommandInputProps) {
 				if (err instanceof HttpRpcError) {
 					try {
 						const result: unknown = JSON.parse(err.body);
-						const reason = typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
+						const reason =
+							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
 						if (reason === "session_not_found") msg = "This session has ended";
 						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
-						else if (reason === "partial_composer") msg = "The agent already has a draft. Check the session before retrying.";
+						else if (reason === "partial_composer")
+							msg = "The agent already has a draft. Check the session before retrying.";
 						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
-					} catch { /* Keep the server error for a malformed response. */ }
+					} catch {
+						/* Keep the server error for a malformed response. */
+					}
 				}
 				toastsStore.add("Reply not sent", msg, "error", true);
 			} finally {
@@ -210,6 +238,17 @@ export function CommandInput(props: CommandInputProps) {
 			e.preventDefault();
 			return;
 		}
+		if (localSlashMenuOpen()) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				closeSlashMenu();
+				return;
+			}
+			if (e.key === "Tab" || e.key === "Enter") {
+				e.preventDefault();
+				return;
+			}
+		}
 		if (atomicReply() && e.key === "Tab") return;
 		if (atomicReply() && e.key === "Escape") {
 			e.preventDefault();
@@ -236,7 +275,13 @@ export function CommandInput(props: CommandInputProps) {
 		}
 	}
 
-	const showDropup = () => value().includes("/") && (props.slashItems?.length ?? 0) > 0;
+	const localSlashItems = () =>
+		getAgentCommands(props.agentType)
+			.commands.filter(({ command }) => command.startsWith(value().trim()))
+			.map(({ command, label }) => ({ command, description: label === command ? "" : label, highlighted: false }));
+	const slashItems = () => (localSlashMenuOpen() ? localSlashItems() : (props.slashItems ?? []));
+	const showDropup = () =>
+		props.sessionExists !== false && (localSlashMenuOpen() || (value().includes("/") && slashItems().length > 0));
 	const showChoicePrompt = () => !!props.choicePrompt;
 
 	async function handleChoiceSelect(key: string) {
@@ -260,7 +305,13 @@ export function CommandInput(props: CommandInputProps) {
 				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
 			</Show>
 			<Show when={showDropup() && !showChoicePrompt()}>
-				<SlashMenuOverlay items={props.slashItems ?? []} sessionId={props.sessionId} onSelect={handleSlashSelect} />
+				<SlashMenuOverlay
+					items={slashItems()}
+					sessionId={props.sessionId}
+					local={localSlashMenuOpen()}
+					onSelect={handleSlashSelect}
+					onClose={closeSlashMenu}
+				/>
 			</Show>
 			<textarea
 				ref={textareaEl}
@@ -274,8 +325,15 @@ export function CommandInput(props: CommandInputProps) {
 				autocapitalize="off"
 				inputmode="text"
 				rows={1}
+				disabled={props.sessionExists === false}
 			/>
-			<button class={styles.send} type="button" onClick={send}>
+			<button
+				class={styles.send}
+				type="button"
+				aria-label="Send"
+				disabled={props.sessionExists === false || localSlashMenuOpen()}
+				onClick={send}
+			>
 				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>

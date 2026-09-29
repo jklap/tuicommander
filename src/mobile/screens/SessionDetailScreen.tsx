@@ -365,6 +365,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
 				questionConfident={sessionState()?.question_confident}
+				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
 				onSlashRequest={() => slashTrigger?.()}
 			/>

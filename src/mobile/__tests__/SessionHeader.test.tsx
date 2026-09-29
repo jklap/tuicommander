@@ -100,7 +100,7 @@ describe("mobile session header", () => {
 				input: expect.objectContaining({ ptyId: "claude-2" }),
 			}),
 		);
-		expect(view.getByText("Running focused tests")).toBeTruthy();
+		expect(view.queryByText("Running focused tests")).toBeNull();
 		await waitFor(() => expect(view.getByText("Earlier audit")).toBeTruthy());
 	});
 

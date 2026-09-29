@@ -2,6 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import type { ProgressEntry, ProgressList } from "../../stores/progress";
 import { rpc } from "../../transport";
+import { displayTask } from "../../utils/activitySnapshot";
 import type { SessionInfo, SessionState } from "../useSessions";
 import styles from "./SessionHeaderOverlay.module.css";
 
@@ -87,6 +88,7 @@ export function SessionHeaderOverlay(props: SessionHeaderOverlayProps) {
 
 	const title = () =>
 		props.mode === "details" ? "Session details" : props.mode === "tasks" ? "Session tasks" : "Session progress";
+	const task = () => displayTask(props.state?.current_task, props.state?.agent_type);
 	const shownEntries = () =>
 		props.mode === "tasks" ? entries().filter((entry) => entry.type === "intent") : entries();
 
@@ -107,11 +109,11 @@ export function SessionHeaderOverlay(props: SessionHeaderOverlayProps) {
 							{props.state?.agent_intent}
 						</p>
 					</Show>
-					<Show when={props.state?.current_task}>
+					<Show when={task()}>
 						<p>
 							<b>Current task</b>
 							<br />
-							{props.state?.current_task}
+							{task()}
 						</p>
 					</Show>
 					<Show when={(props.state?.active_sub_tasks ?? 0) > 0}>

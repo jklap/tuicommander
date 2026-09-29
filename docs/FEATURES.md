@@ -874,6 +874,9 @@ one configured ego binary and speaks ACP to it, per
   supported PNG, JPEG, GIF and WebP files are capped at 10 MiB per turn
 - The composer grows up to a bounded height. Pastes over 200 words are shown as
   numbered markers until Send restores the full text
+- `Ctrl+S` in the composer parks text and image previews with a visible chip;
+  pressing it again restores or swaps drafts. Sending an intervening prompt
+  restores the parked draft. The same control is tappable in mobile AI Chat.
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client
@@ -1641,6 +1644,7 @@ All data persisted to platform config directory via Rust:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Alt+A` | Toggle AI Chat panel (`toggle-ai-chat`) |
+| `Ctrl+S` (AI Chat composer) | Park, restore, or swap the current prompt draft |
 | `Cmd+Enter` (panel focused) | Send message |
 | `Esc` (panel focused) | Cancel in-flight stream |
 
@@ -1892,9 +1896,11 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.1 Architecture
 - Separate Vite entry point (`mobile.html` + `src/mobile/index.tsx`)
 - Shares transport layer, stores, and notification manager with desktop
-- Chat is the primary mobile tab: open the cross-repository chat directly, read ego's streamed ACP
+- Sessions opens by default; the five bottom tabs are Sessions, Chat, Files,
+  Progress, and Activity. Settings opens from the app-bar overflow.
+- Chat opens the cross-repository chat directly. Read ego's streamed ACP
   conversation with shared transcript cards and collapsed activity, answer
-  pending interactions, and switch among titled saved conversations
+  pending interactions, and switch among titled saved conversations.
 - Server-side routing: `/mobile/*` → `mobile.html`, everything else → `index.html`
 - Session state accumulator enriches `GET /sessions` with question/rate-limit/busy state
 - SSE endpoint (`/events`) and WebSocket JSON framing for real-time updates
@@ -1902,6 +1908,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.2 Sessions Screen
 - Hero metrics header: active session count + awaiting input count with large tabular-nums display
 - Search button at the top right filters the live session list by name, repository path, worktree path, branch, or agent type; closing search restores the full list
+- Waiting sessions appear first; the list preserves order within waiting, idle-agent, and shell groups. Session names keep their original casing, and busy state reads "Working".
+- The new-session sheet selects Claude Code, Codex, or Gemini, searches repositories, and opens the created agent session. Its close button and backdrop dismiss the sheet.
+- Question banners identify the session and repository; the header counter opens the first waiting session.
 - Elevated session cards with agent icon, status badge, project/branch, relative time
 - Rich sub-rows per card: agent intent (crosshair icon) or last prompt (speech bubble), current task (gear icon) with inline progress bar, usage limit percentage
 - Question state highlighted via inset gold box-shadow
@@ -1930,9 +1939,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Error bar (red tint) when `last_error` is set
 - Rate-limit bar (orange tint) with live countdown timer (`formatRetryCountdown`)
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
-- Slash menu overlay: frosted glass bottom sheet showing detected `/command` entries; tap to fill the input, then submit after the agent's Enter gap
+- Slash menu overlay: the keybar `/` opens local agent-specific choices without writing to the PTY; typed slash menus still show detected entries. Removed commands are hidden, and the close button dismisses the menu. Picking a command fills the input; submitting waits for the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
-- **TerminalKeybar:** context-aware row of special key buttons above the main input. Shows Ctrl+C, Ctrl+D, Tab, Esc, Enter, arrow keys for terminal operations. When the agent is awaiting input, adds Yes/No quick-reply buttons. Consolidated from the former separate QuickActions component
+- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl+C, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. When the agent is awaiting input, it adds Yes/No quick-reply buttons. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
 - **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes

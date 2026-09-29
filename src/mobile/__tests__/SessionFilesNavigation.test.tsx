@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { onMount } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "../MobileApp";
 import type { SessionInfo } from "../useSessions";
 
@@ -38,6 +38,7 @@ vi.mock("../components/OutputView", () => ({
 	},
 }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
+vi.mock("../screens/MobileChatScreen", () => ({ MobileChatScreen: () => <div /> }));
 vi.mock("../components/MobileToastContainer", () => ({ MobileToastContainer: () => <div /> }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
 
@@ -50,6 +51,12 @@ function session(cwd: string | null, worktreePath: string | null = null): Sessio
 		state: { awaiting_input: false, rate_limited: false, last_activity_ms: 1 },
 	};
 }
+
+beforeAll(async () => {
+	// MobileApp loads Files lazily after Browse. Finish its transform before
+	// behavior waits; the unrelated initial Chat route is mocked above.
+	await import("../screens/FilesScreen");
+});
 
 beforeEach(() => {
 	mockRepos.current = { "/repo": {}, "/repo/nested": {} };
@@ -76,6 +83,20 @@ async function openSessionFiles(view: ReturnType<typeof render>) {
 }
 
 describe("session Files navigation", () => {
+	it("starts on the Sessions tab", () => {
+		mockSessions.current = [];
+		const view = render(() => <MobileApp />);
+		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
+	});
+	it("opens Settings from the app bar and returns to Sessions", async () => {
+		mockSessions.current = [];
+		const view = render(() => <MobileApp />);
+		await fireEvent.click(view.getByRole("button", { name: "More options" }));
+		await fireEvent.click(view.getByRole("menuitem", { name: "Settings" }));
+		await waitFor(() => expect(view.getByRole("heading", { name: "CONNECTION" })).toBeTruthy());
+		await fireEvent.click(view.getByRole("button", { name: "Sessions" }));
+		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
+	});
 	// Catches: opening the registered parent instead of the session's worktree, or resetting the detail on return.
 	it("opens the worktree root and returns with the live output and draft intact", async () => {
 		mockSessions.current = [session("/repo/nested/src", "/worktrees/feature")];
