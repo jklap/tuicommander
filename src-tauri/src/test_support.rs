@@ -7,6 +7,44 @@ pub(crate) use tuic_test_support::{
     test_temp_root,
 };
 
+/// Snapshot the fake SSH PID and any direct children before tunnel teardown.
+#[cfg(unix)]
+pub(crate) fn fake_ssh_processes(marker: &std::path::Path) -> Vec<i32> {
+    let parent: i32 = std::fs::read_to_string(marker)
+        .expect("fake SSH wrote its PID")
+        .trim()
+        .parse()
+        .unwrap();
+    let output = std::process::Command::new("pgrep")
+        .args(["-P", &parent.to_string()])
+        .output()
+        .expect("list fake SSH child PIDs");
+    let mut pids = vec![parent];
+    pids.extend(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| line.parse::<i32>().unwrap()),
+    );
+    pids
+}
+
+/// Assert the OS no longer runs any process owned by this fake SSH instance.
+#[cfg(unix)]
+pub(crate) fn assert_fake_ssh_stopped(pids: Vec<i32>) {
+    let surviving: Vec<_> = pids
+        .into_iter()
+        .filter(|pid| unsafe { libc::kill(*pid, 0) == 0 })
+        .collect();
+    // A failed test must still clean up the processes it deliberately started.
+    for pid in &surviving {
+        unsafe { libc::kill(*pid, libc::SIGKILL) };
+    }
+    assert!(
+        surviving.is_empty(),
+        "fake SSH processes survived shutdown: {surviving:?}"
+    );
+}
+
 #[cfg(test)]
 mod temp_root_tests {
     #[test]
