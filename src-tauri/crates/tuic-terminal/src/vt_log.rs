@@ -104,6 +104,12 @@ pub struct LogLine {
     /// it. Never serialized — consumers receive the already-filtered view.
     #[serde(skip)]
     pub chrome: bool,
+    /// True when the row this line ends on soft-wraps: its text continues in
+    /// the next log line (or the first screen row). Lets a reader that works
+    /// on text (redaction) rejoin a logical line that scrolled into the log
+    /// across separate `process` calls. Never serialized.
+    #[serde(skip)]
+    pub wrapped: bool,
 }
 
 fn is_zero_u16(v: &u16) -> bool {
@@ -352,6 +358,30 @@ impl VtLogBuffer {
     /// when available — no re-parsing needed.
     pub fn screen_rows(&self) -> Vec<String> {
         self.grid.screen_text_rows()
+    }
+
+    /// Per screen row: true when the row soft-wraps into the next one.
+    pub fn screen_row_wraps(&self) -> Vec<bool> {
+        self.grid.screen_row_wraps()
+    }
+
+    /// Text of the history rows that soft-wrap into the first screen row.
+    pub fn screen_head_context(&self) -> String {
+        self.grid.screen_head_context()
+    }
+
+    /// Offset of the first line of the logical line that contains `offset`:
+    /// walks back while the previous retained line soft-wraps into it.
+    pub fn logical_line_start(&self, offset: usize) -> usize {
+        let oldest = self.oldest_offset();
+        if offset >= self.total_pushed {
+            return offset; // nothing new to read, so nothing to complete
+        }
+        let mut start = offset.max(oldest);
+        while start > oldest && self.log[start - 1 - oldest].wrapped {
+            start -= 1;
+        }
+        start
     }
 
     /// Borrowed view of cached screen rows — avoids cloning when caller holds the lock.
