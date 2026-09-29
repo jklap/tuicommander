@@ -385,10 +385,7 @@ mod idle_unload_tests {
 
         let second = loaded(&state);
         assert!(second.upgrade().is_some());
-        assert_eq!(
-            state.active_model.lock().as_deref(),
-            Some("large-v3-turbo")
-        );
+        assert_eq!(state.active_model.lock().as_deref(), Some("large-v3-turbo"));
     }
 
     #[test]
