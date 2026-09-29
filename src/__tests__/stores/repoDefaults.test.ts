@@ -151,7 +151,8 @@ describe("repoDefaultsStore", () => {
 		it("save includes full config with all fields", () => {
 			testInScope(() => {
 				store.setBaseBranch("develop");
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", {
+					base: expect.anything(),
 					config: {
 						base_branch: "develop",
 						copy_ignored_files: false,
@@ -164,6 +165,7 @@ describe("repoDefaultsStore", () => {
 						delete_branch_on_remove: true,
 						auto_archive_merged: false,
 						orphan_cleanup: "ask",
+						orphan_cleanup_countdown_seconds: 10,
 						pr_merge_strategy: "squash",
 						after_merge: "archive",
 						auto_fetch_interval_minutes: 0,

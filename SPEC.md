@@ -404,6 +404,13 @@ Any inspection failure is `Unknown` and cannot authorize removal. Destructive
 UI obtains a fresh verdict, and deletion repeats the safety checks so a stale
 confirmation cannot authorize changed state.
 
+For detached orphan worktrees, the Ask dialog automatically removes after a
+configurable countdown only when every checkout is clean (including untracked
+files) and its HEAD is reachable from a branch. Otherwise it lists the unsafe
+reasons without a countdown. Keep and Escape cancel. An agent can answer the
+open dialog through MCP; a remove answer and the final removal repeat the
+backend safety check.
+
 ## Project Progress
 
  Native plan and story records have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The desktop and browser UI exposes plan and story lists, criteria, dependencies, and manual transitions. WontFix is terminal for plan aggregation but does not satisfy a dependency or promote a dependent; a nonempty plan with only Done/WontFix stories is Done, while an empty plan is Draft. A human can remove a direct WontFix dependency only from a Backlog story with a current revision. That story becomes Ready only after every remaining dependency is Done, and an explicitly Blocked story is never auto-unblocked. Rust derives direct and transitive abandoned dependency indicators and the WontFix count on `plan_view` reads; the UI renders them. Import/export is excluded.

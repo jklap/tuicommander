@@ -109,7 +109,11 @@ export interface GitOperationsDeps {
 		getMergedBranches: (repoPath: string) => Promise<string[]>;
 		checkoutRemoteBranch: (repoPath: string, branchName: string) => Promise<void>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
+		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
+		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
+		clearOrphanCleanup: (repoPath: string) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
@@ -136,7 +140,12 @@ export interface GitOperationsDeps {
 		) => Promise<boolean>;
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
-		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
+		confirmOrphanCleanup?: (
+			repoPath: string,
+			assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+			countdownSeconds: number,
+		) => Promise<boolean>;
+		answerOrphanCleanup?: (repoPath: string, remove: boolean) => void;
 		/** Archiving or deleting this worktree would destroy uncommitted work — proceed anyway? */
 		confirmDirtyWorktreeCleanup?: (
 			branchName: string,

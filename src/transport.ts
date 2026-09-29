@@ -1548,11 +1548,27 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	detect_orphan_worktrees: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-worktrees?repoPath=${p("repoPath")}` }),
 	},
+	assess_orphan_cleanup: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup-assessment?repoPath=${p("repoPath")}` }),
+	},
+	begin_orphan_cleanup: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/orphan-cleanup/begin",
+			body: { repoPath: args.repoPath, paths: args.paths },
+		}),
+	},
+	pending_orphan_cleanup_answer: {
+		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup/pending?repoPath=${p("repoPath")}` }),
+	},
+	clear_orphan_cleanup: {
+		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath } }),
+	},
 	remove_orphan_worktree: {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/remove-orphan",
-			body: { repoPath: args.repoPath, worktreePath: args.worktreePath },
+			body: { repoPath: args.repoPath, worktreePath: args.worktreePath, safeOnly: args.safeOnly ?? false },
 		}),
 	},
 	run_setup_script: {

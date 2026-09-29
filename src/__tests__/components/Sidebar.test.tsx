@@ -1224,6 +1224,8 @@ describe("Sidebar", () => {
 			const marker = container.querySelector('[aria-label="Unmerged commits"]');
 			expect(marker).not.toBeNull();
 			expect(marker?.getAttribute("data-tooltip")).toContain("not merged into the default branch");
+			// An outlined square read as a glyph that failed to load (Boss, 2026-09-29).
+			expect(marker?.textContent).toBe("↑");
 			expect(container.querySelector(".lifecycleBadge")).toBeNull();
 			expect(container.querySelector(".branchStats")).not.toBeNull();
 		});

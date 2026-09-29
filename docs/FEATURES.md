@@ -879,6 +879,8 @@ one configured ego binary and speaks ACP to it, per
 - `Ctrl+S` in the composer parks text and image previews with a visible chip;
   pressing it again restores or swaps drafts. Sending an intervening prompt
   restores the parked draft. The same control is tappable in mobile AI Chat.
+- Mobile AI Chat transcript links open resolved files or directories in the
+  **Files** screen, using the chat workspace as the path base.
 - **Permission requests** are answered with one of the option ids ego published.
   Small single-choice **elicitations** use direct answer buttons; other elicitations
   are drawn as a form, and only in `form` mode — the client
@@ -947,7 +949,7 @@ re-derived later.
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
-- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
+- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup (safe orphan countdown defaults to 10 seconds), PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before an existing worktree is archived or deleted; non-zero exit blocks the operation. Cleanup of an already missing checkout skips it
 - Removal previews distinguish untouched branch history from merged commits, name live sessions, and count uncommitted and untracked files. Automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees.

@@ -11699,51 +11699,53 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
 #[cfg(unix)]
 #[test]
-fn queued_codex_without_child_response_remains_uncertain() {
-    let state = crate::state::tests_support::make_test_app_state();
-    let sid = "codex-silent-after-enter";
-    agent_session(&state, sid, SHELL_IDLE);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .agent_type = Some("codex".into());
-    state
-        .grid
-        .vt_log_buffers
-        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
-    state
-        .session_maps
-        .output_buffers
-        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
-    let bytes = insert_recording_session(&state, sid);
-    let mut alerts = state.event_bus.subscribe();
-
-    enqueue_user_command(&state, sid, "wake the agent").unwrap();
-
-    assert!(bytes.lock().unwrap().ends_with(b"\r"));
-    assert!(
+fn queued_agent_without_child_response_remains_uncertain() {
+    for agent_type in ["codex", "claude"] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = format!("{agent_type}-silent-after-enter");
+        agent_session(&state, &sid, SHELL_IDLE);
         state
             .session_maps
-            .silence_states
-            .get(sid)
+            .session_states
+            .get_mut(&sid)
             .unwrap()
-            .lock()
-            .injection_delivery_uncertain,
-        "a silent Codex child cannot confirm its own queued turn"
-    );
-    assert!(
-        std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
-            event,
-            crate::state::AppEvent::McpToast { level, .. } if level == "error"
-        ))
-    );
+            .agent_type = Some(agent_type.into());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1024)));
+        let bytes = insert_recording_session(&state, &sid);
+        let mut alerts = state.event_bus.subscribe();
+
+        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+
+        assert!(bytes.lock().unwrap().ends_with(b"\r"));
+        assert!(
+            state
+                .session_maps
+                .silence_states
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain,
+            "a silent {agent_type} child cannot confirm its own queued turn"
+        );
+        assert!(
+            std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
+                event,
+                crate::state::AppEvent::McpToast { level, .. } if level == "error"
+            ))
+        );
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn queued_claude_hook_busy_confirms_submission() {
+fn queued_claude_hook_busy_four_seconds_after_enter_confirms_submission() {
     struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
     impl std::io::Write for ChannelWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -11795,6 +11797,9 @@ fn queued_claude_hook_busy_confirms_submission() {
                 expected
             );
         }
+        // The affected live session took 3.8 seconds to move a queued notice
+        // from Enter into its transcript. Replay the real busy hook after that.
+        std::thread::sleep(std::time::Duration::from_secs(4));
         let mut reader = ChunkProcessor::new(None, None);
         reader.process_chunk(busy_hook, &silence, sid, &state);
     });
