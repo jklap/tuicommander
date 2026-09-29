@@ -2190,6 +2190,29 @@ fn evict_peers_for_reaped_mcp_session(
     state: &AppState,
     mcp_sid: &str,
 ) -> (Vec<String>, Vec<String>) {
+    // Reaping the protocol metadata must retire its other per-session state
+    // under the same lock as bridge registration and DELETE. A surviving
+    // sibling inherits delivery ownership; an addressable peer with no sibling
+    // keeps its identity but no route to the expired transport.
+    let _bind_guard = mcp_transport::PEER_IDENTITY_BIND_LOCK.lock();
+    state.session_maps.messaging_channels.remove(mcp_sid);
+    if let Some((_, tuic)) = state.mcp.to_session.remove(mcp_sid) {
+        let survivors = if let Some(mut reverse) = state.mcp.session_to_mcp.get_mut(&tuic) {
+            reverse.retain(|sid| sid != mcp_sid);
+            reverse.clone()
+        } else {
+            Vec::new()
+        };
+        if let Some(next_owner) = survivors.first() {
+            if let Some(mut peer) = state.peer_agents.get_mut(&tuic)
+                && peer.mcp_session_id == mcp_sid
+            {
+                peer.mcp_session_id = next_owner.clone();
+            }
+        } else {
+            state.mcp.session_to_mcp.remove(&tuic);
+        }
+    }
     let (removed, retained): (Vec<String>, Vec<String>) = state
         .peer_agents
         .iter()
@@ -7726,11 +7749,21 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         crate::state::tests_support::insert_dummy_session(&state, "pty-owner");
         register_reaper_peer(&state, "pty-owner", "mcp-1");
+        state
+            .mcp
+            .to_session
+            .insert("mcp-1".to_string(), "pty-owner".to_string());
+        state
+            .mcp
+            .session_to_mcp
+            .insert("pty-owner".to_string(), vec!["mcp-1".to_string()]);
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-1");
         assert!(removed.is_empty(), "a live PTY is still addressable");
         assert_eq!(retained, vec!["pty-owner".to_string()]);
         assert!(state.peer_agents.contains_key("pty-owner"));
+        assert!(state.mcp.to_session.is_empty());
+        assert!(state.mcp.session_to_mcp.is_empty());
     }
 
     /// The unrecoverable case. A headerless orchestrator owns no PTY, so nothing
@@ -7780,6 +7813,114 @@ mod tests {
         let (removed, _) = evict_peers_for_reaped_mcp_session(&state, "mcp-4");
         assert_eq!(removed, vec!["ghost".to_string()]);
         assert!(state.peer_agents.contains_key("bystander"));
+    }
+
+    #[test]
+    fn reaping_one_mcp_bridge_promotes_its_surviving_sibling() {
+        let state = crate::state::tests_support::make_test_app_state();
+        register_reaper_peer(&state, "shared", "mcp-old");
+        state
+            .mcp
+            .to_session
+            .insert("mcp-old".to_string(), "shared".to_string());
+        state
+            .mcp
+            .to_session
+            .insert("mcp-live".to_string(), "shared".to_string());
+        state.mcp.session_to_mcp.insert(
+            "shared".to_string(),
+            vec!["mcp-old".to_string(), "mcp-live".to_string()],
+        );
+        let (old_channel, _) = tokio::sync::broadcast::channel(8);
+        let (live_channel, _) = tokio::sync::broadcast::channel(8);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-old".to_string(), old_channel);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-live".to_string(), live_channel);
+
+        let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-old");
+        assert!(removed.is_empty());
+        assert!(retained.is_empty());
+        assert_eq!(
+            state.peer_agents.get("shared").unwrap().mcp_session_id,
+            "mcp-live"
+        );
+        assert_eq!(state.mcp.to_session.len(), 1);
+        assert_eq!(
+            state.mcp.session_to_mcp.get("shared").unwrap().as_slice(),
+            ["mcp-live"]
+        );
+        assert_eq!(state.session_maps.messaging_channels.len(), 1);
+        assert!(
+            state
+                .session_maps
+                .messaging_channels
+                .contains_key("mcp-live")
+        );
+    }
+
+    /// Catches: reaping protocol metadata leaves routing entries and broadcast
+    /// senders allocated for every fresh initialize in a reconnect storm.
+    #[tokio::test]
+    async fn reaping_fresh_mcp_sessions_releases_per_session_state() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut session_ids = Vec::new();
+        for _ in 0..12 {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                mcp_transport::TUIC_SESSION_HEADER,
+                "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
+            );
+            let response = mcp_transport::mcp_post(
+                State(state.clone()),
+                ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+                headers,
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"clientInfo": {"name": "tuic-bridge"}}
+                })),
+            )
+            .await
+            .into_response();
+            let sid = response
+                .headers()
+                .get(mcp_transport::MCP_SESSION_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let (channel, _) = tokio::sync::broadcast::channel(8);
+            state
+                .session_maps
+                .messaging_channels
+                .insert(sid.clone(), channel);
+            session_ids.push(sid);
+        }
+        assert_eq!(state.mcp.sessions.len(), session_ids.len());
+        assert_eq!(state.mcp.to_session.len(), session_ids.len());
+        assert_eq!(
+            state.session_maps.messaging_channels.len(),
+            session_ids.len()
+        );
+
+        for sid in &session_ids {
+            state.mcp.sessions.remove(sid);
+            evict_peers_for_reaped_mcp_session(&state, sid);
+        }
+        assert!(state.mcp.sessions.is_empty());
+        assert!(state.mcp.to_session.is_empty(), "reaped routes retained");
+        assert!(
+            state.mcp.session_to_mcp.is_empty(),
+            "reaped reverse routes retained"
+        );
+        assert!(
+            state.session_maps.messaging_channels.is_empty(),
+            "reaped broadcast senders retained"
+        );
     }
 
     /// The three routes below stand in for the shapes the real router serves: a
