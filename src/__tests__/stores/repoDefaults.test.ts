@@ -19,6 +19,8 @@ describe("repoDefaultsStore", () => {
 		}));
 
 		store = (await import("../../stores/repoDefaults")).repoDefaultsStore;
+		await store.hydrate();
+		mockInvoke.mockClear();
 	});
 
 	describe("initial state", () => {
@@ -149,7 +151,7 @@ describe("repoDefaultsStore", () => {
 		it("save includes full config with all fields", () => {
 			testInScope(() => {
 				store.setBaseBranch("develop");
-				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", {
+				expect(mockInvoke).toHaveBeenCalledWith("save_repo_defaults", { base: expect.anything(),
 					config: {
 						base_branch: "develop",
 						copy_ignored_files: false,

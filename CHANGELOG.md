@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
+
 - **ACP peer mail receipts** — Sending normal or urgent mail to an ego peer with a subscribed MCP-over-ACP inbox now reports the ACP delivery route, including when it is registered as an orchestrator; disconnected peers still report inbox-only.
 
 - **Worktree removal review** — Confirmations identify untouched branches, live sessions, and local file counts. One-click Merge & Archive asks before moving a live agent's checkout. MCP and HTTP removal report the same hazards; automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees and report why.

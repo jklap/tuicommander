@@ -407,6 +407,15 @@ interface Idea {
 
 ## Other Stores
 
+Config-backed stores retain the snapshot returned by their load command and
+send `{ base, config }` on save (`paneLayoutStore` uses `layout`, and
+`activityStore` uses `items` for the edited value). Their shared
+`configDeltaWriter` orders overlapping saves within one WebView and advances
+the base after each successful write. The backend merges only changed keys
+against the latest locked file; arrays such as keybindings and notes replace as
+a unit. A failed load disables saving rather than treating defaults as the
+user's prior document.
+
 ### repoSettingsStore (`repoSettings.ts`)
 Per-repository settings (base branch, scripts, worktree options).
 
@@ -499,12 +508,9 @@ specific reason reaches both; an empty successful pass shows `no speech detected
   (`get_hands_free_default_notice`) — the frontend keeps no copy of it. Its save
   falls back to the stored value, like the other one-panel fields.
 - `saveConfig` abandons the save when `get_dictation_config` cannot be read or
-  answers something that is not a config. `hands_free_hold_back_ms`,
-  `hands_free_activation_phrase`, `speech_voice`, `speech_volume_db` and
-  `speech_levelling` fall back to the **stored**
-  value, not to store state: their controls live in one panel, so a save from
-  anywhere else would otherwise write this session's default over a setting the
-  user had chosen.
+  answers something that is not a config. It sends the loaded document as
+  `base` and overrides only the requested fields in `config`, preserving
+  one-panel settings that other surfaces do not model.
 
 ### errorHandlingStore (`errorHandling.ts`)
 Error retry configuration and active retry tracking.

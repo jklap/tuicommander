@@ -591,13 +591,8 @@ function createDictationStore() {
 		/**
 		 * Save a single config field to disk via Rust.
 		 *
-		 * Load-modify-save, not build-from-scratch. `set_dictation_config`
-		 * writes the whole document and every hands-free field carries
-		 * `#[serde(default)]` so an older config still loads — which means a
-		 * payload that omits a field silently resets it instead of failing.
-		 * Rebuilding this object from store state therefore erased every
-		 * setting the UI has no control for. Spread the stored config first and
-		 * override only the fields this surface owns.
+		 * Load a base snapshot and override only the explicitly changed fields.
+		 * Rust applies that base-to-desired delta to the latest locked file.
 		 */
 		async saveConfig(partial: Partial<DictationConfig>): Promise<void> {
 			try {
@@ -611,38 +606,8 @@ function createDictationStore() {
 					appLogger.error("dictation", "Refusing to save: the stored config could not be read");
 					return;
 				}
-				const config: DictationConfig = {
-					...stored,
-					enabled: partial.enabled ?? state.enabled,
-					hotkey: partial.hotkey ?? state.hotkey,
-					language: partial.language ?? state.language,
-					model: partial.model ?? state.selectedModel,
-					device: partial.device !== undefined ? partial.device : state.selectedDevice,
-					long_press_ms: partial.long_press_ms ?? state.longPressMs,
-					auto_send: partial.auto_send ?? state.autoSend,
-					hands_free_notify_model: partial.hands_free_notify_model ?? state.notifyModelOnHandsFree,
-					// These three fall back to the *stored* value, not to store
-					// state. Their controls live in one panel, so a save from
-					// anywhere else runs with store state that was never loaded
-					// from disk — and the fallback would then write this
-					// session's default over a setting the user had chosen. The
-					// fields above are kept in sync by every surface that owns
-					// them, which is why they may read from state.
-					hands_free_hold_back_ms: partial.hands_free_hold_back_ms ?? stored.hands_free_hold_back_ms,
-					hands_free_activation_phrase: partial.hands_free_activation_phrase ?? stored.hands_free_activation_phrase,
-					hands_free_start_notice: partial.hands_free_start_notice ?? stored.hands_free_start_notice ?? "",
-					speech_voice: partial.speech_voice ?? stored.speech_voice,
-					// Stored fallback for the same reason: its control lives in
-					// the one panel, and a browser never loads it into state
-					// until it arms.
-					hands_free_earcons: partial.hands_free_earcons ?? stored.hands_free_earcons,
-					// Stored fallback: each slider saves only its own field.
-					speech_volume_db: partial.speech_volume_db ?? stored.speech_volume_db,
-					speech_levelling: partial.speech_levelling ?? stored.speech_levelling,
-					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
-					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
-				};
-				await invoke("set_dictation_config", { config });
+				const config: DictationConfig = { ...stored, ...partial };
+				await invoke("set_dictation_config", { base: stored, config });
 				// Map DictationConfig fields to DictationStoreState fields
 				const storeUpdate: Partial<DictationStoreState> = {};
 				if (partial.enabled !== undefined) storeUpdate.enabled = partial.enabled;

@@ -440,7 +440,7 @@ mod tests {
                 },
             );
         }
-        crate::config::save_agents_config(config).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
         let mut cmd = portable_pty::CommandBuilder::new("bash");
         cmd.env("TUIC_CODEX_SCREEN_FLAG", "stale");
         inject(dir.path(), "bash", &mut cmd);

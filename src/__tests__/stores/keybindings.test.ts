@@ -245,7 +245,6 @@ describe("keybindingsStore", () => {
 			expect(errorSpy).toHaveBeenCalledWith(
 				"[config]",
 				"Failed to load keybindings overrides — persistence disabled for this session",
-				expect.any(Error),
 			);
 			errorSpy.mockRestore();
 		});
@@ -290,7 +289,7 @@ describe("keybindingsStore", () => {
 			await store.hydrate();
 			await store.setOverride("toggle-git-ops", "Cmd+Y");
 
-			expect(mockInvoke).toHaveBeenCalledWith("save_keybindings", {
+			expect(mockInvoke).toHaveBeenCalledWith("save_keybindings", { base: expect.anything(),
 				config: [{ action: "toggle-git-ops", key: "Cmd+Y" }],
 			});
 		});
@@ -344,7 +343,7 @@ describe("keybindingsStore", () => {
 			await store.setOverride("toggle-git-ops", "Cmd+Y");
 			await store.resetAll();
 
-			expect(mockInvoke).toHaveBeenLastCalledWith("save_keybindings", {
+			expect(mockInvoke).toHaveBeenLastCalledWith("save_keybindings", { base: expect.anything(),
 				config: [],
 			});
 		});
@@ -360,7 +359,7 @@ describe("keybindingsStore", () => {
 			expect(store.getKeyForAction("toggle-git-ops")).toBeUndefined();
 			expect(store.getActionForCombo("cmd+shift+d")).toBeUndefined();
 			// Persisted as an explicit null override so hydrate restores it as unbound
-			expect(mockInvoke).toHaveBeenLastCalledWith("save_keybindings", {
+			expect(mockInvoke).toHaveBeenLastCalledWith("save_keybindings", { base: expect.anything(),
 				config: [{ action: "toggle-git-ops", key: null }],
 			});
 		});

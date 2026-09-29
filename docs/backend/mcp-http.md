@@ -227,10 +227,10 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` both advertise "config fields to save"
-and both accept a partial body: it is deep-merged onto the live config by
-`merge_partial_app_config`, so an omitted field keeps its current value instead of
-falling back to its serde default. Both also share `server_settings_changed` with
+`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`base` is the caller's loaded snapshot and `config` is its edited document.
+The backend applies only the base-to-config changes to the latest locked file;
+unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
 the IPC `save_config` and rebind the listener through
 `restart_after_server_settings_change`, so no transport can leave the process
 serving a configuration the disk disagrees with. See

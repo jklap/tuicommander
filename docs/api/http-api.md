@@ -1161,6 +1161,16 @@ Returns bcrypt hash string.
 
 ### Notification Config
 
+Interactive config `PUT` routes below (except `/config/repositories`, which has
+its own keyed mutation protocol) accept `{ "base": <last GET response>,
+"config": <edited document> }`. The server computes the changes from `base` to
+`config` and applies them to the latest file under its lock. Objects merge by
+key, arrays replace whole, and JSON null deletes a key. A field unchanged by
+this caller is never written. Clients should serialize their own overlapping
+saves so each later request has the preceding desired document as its base.
+`PUT /config` uses this same envelope. Its `GET` response omits secret values;
+unchanged omitted secrets remain on disk.
+
 ```
 GET /config/notifications
 PUT /config/notifications
@@ -1302,6 +1312,9 @@ only: it goes to the OS credential vault keyed by the connection's UUID and is
 never returned, never written to `connections.json` — `GET .../password` answers
 whether one is stored, not what it is. `POST .../token` trades it for the remote
 daemon's in-memory session token.
+`PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
+for a new machine, or the loaded connection as `base` when editing. The server
+merges only changed fields into that connection's latest locked record.
 
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists
@@ -1770,7 +1783,7 @@ PUT  /dictation/corrections      { "map": { ... } } -> null
 GET  /dictation/devices                             -> AudioDevice[]
 POST /dictation/inject           { "text": "..." }  -> "<corrected text>"
 GET  /dictation/config                              -> DictationConfig
-PUT  /dictation/config           DictationConfig    -> null
+PUT  /dictation/config           {base, config}     -> null
 GET  /dictation/hands-free                          -> HandsFreeStatus
 GET  /dictation/hands-free/default-notice           -> string
 POST /dictation/hands-free/arm   { "sessionId": "...", "owner": "..." }
@@ -1784,8 +1797,8 @@ GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 `skip_reason` is returned unchanged. A capture without 200 ms of activity at
 the configured transcription RMS floor returns `no sustained speech` before
 Whisper; an empty successful transcription uses
-`no speech detected`. `PUT /dictation/config` takes the config
-object as the whole body, not wrapped in a field.
+`no speech detected`. `PUT /dictation/config` takes the loaded `base` and
+edited `config`; unchanged keys survive a concurrent save.
 
 The speech-asset routes take `asset`, an id from the catalogue in
 `dictation::speech::assets`. That is an allowlist, not a hint: an unknown id is

@@ -279,7 +279,8 @@ function createRemoteConnectionsStore() {
 		/** Save a new connection to the backend and add it to state */
 		async addConnection(conn: RemoteConnection): Promise<void> {
 			try {
-				await invoke("save_remote_connection", { connection: conn });
+				const base = state.connections[conn.id]?.connection ?? null;
+				await invoke("save_remote_connection", { base, connection: conn });
 				setState("connections", conn.id, { connection: conn, status: "disconnected" });
 			} catch (err) {
 				appLogger.error("store", "Failed to save remote connection", err);
