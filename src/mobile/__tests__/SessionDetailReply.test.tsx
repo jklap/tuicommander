@@ -46,6 +46,61 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 	);
 });
 
+it("opens a waiting Codex question through the session's PTY", async () => {
+	const session: SessionInfo = {
+		session_id: "codex-question",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "codex",
+			awaiting_input: true,
+			question_confident: true,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const { getByRole } = render(() => (
+		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+	));
+	await fireEvent.click(getByRole("button", { name: "Open Codex question" }));
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", {
+		sessionId: "codex-question",
+		data: "\x1b[1;3A",
+	}));
+});
+
+it("types into an opened Codex free-form question through the PTY", async () => {
+	const session: SessionInfo = {
+		session_id: "codex-free-form",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "codex",
+			awaiting_input: true,
+			question_confident: true,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const { getByRole, container } = render(() => (
+		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
+	));
+	await fireEvent.click(getByRole("button", { name: "Open Codex question" }));
+	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Custom answer" } });
+	await fireEvent.click(getByRole("button", { name: "Send" }));
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", {
+		sessionId: "codex-free-form",
+		data: "Custom answer",
+	}));
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", {
+		sessionId: "codex-free-form",
+		data: "\r",
+	}));
+	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
+});
+
 it.each([
 	["idle", "Concocting", true, false],
 	["awaiting input", "Actioning", true, true],

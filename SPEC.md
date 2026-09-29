@@ -624,7 +624,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Self-contained SQLite Viewer plugin under `plugins/`: sql.js/WebAssembly browsing, native filtering/pagination, indexes, visual plans, CSV copy, and explicit atomic inline-edit saves, with the engine and database scoped to the viewer iframe lifecycle
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
-- [x] Mobile Companion PWA (searchable sessions, live output, question reply, activity feed)
+- [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
 - [~] Managed-agent blocked questions alert the mobile PWA through encrypted Web Push when the desktop is away; a phone reply returns through atomic session submission with a receipt (real-phone verification pending)
 - [~] Pending ego permissions and form requests alert a subscribed phone when the desktop is away, linking to the matching mobile Chat conversation with a 30-second limit per conversation (real-phone verification pending; ego card notices await a defined wire shape)
@@ -651,6 +651,7 @@ Some frontend-only stores persist to localStorage:
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
 - [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
 - [x] ChoicePrompt parser variant — numbered confirmation menu detection with destructive-label flagging, PWA overlay, `sendPtyKey()` helper
+- [~] Claude AskUserQuestion on mobile — captured Ink dialog supplies all choices and arrow-then-Enter selection; real-phone verification after backend restart pending
 - [x] MCP OAuth 2.1 — RFC 9728 + RFC 8414 PKCE flow for upstream MCP servers, `tuic://oauth-callback` deep link, shared `TokenManager` with thundering-herd-safe refresh
 - [x] GitHub Ops dashboard — live review findings, proposals, auto-fix sessions, conflict assists, and CI/merge readiness. Review, changelog, and improvement scans run as unattended ego turns (#795-320b)
 
