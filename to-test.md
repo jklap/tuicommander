@@ -28,6 +28,22 @@
 
 - [ ] After a manual `make dev` restart with an isolated `TUIC_APP_INSTANCE=<id>`, open two windows, change different agent and UI preferences from the same loaded state, and confirm both persist after reopening. The live Rust backend does not hot-reload; targeted Rust and frontend tests cover the merge and request shapes.
 
+## Current MCP tool results (story 1190-75eb) — Rust restart required
+
+- [ ] After a manual `make dev` restart and sidecar rebuild in an isolated `TUIC_APP_INSTANCE`, open a disposable ego PTY session and call `search_tools`. Confirm it lists TUIC tool names without a protocol error. Disconnect the test MCP endpoint and confirm a current-protocol `tools/call` reports the unavailable error without a result-shape error. Targeted HTTP and bridge tests cover the wire fields; the running backend and installed sidecar cannot load this Rust change until restart or rebuild.
+
+## Worktree removal with sealed build output (story 1179-50a8) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, remove a disposable worktree whose ignored target contains a read-only nested directory. Confirm the checkout and Git registration both disappear, while a symlink target outside the worktree keeps its contents and permissions. Targeted Rust tests cover this behavior; the running backend cannot load the Rust change until restart.
+
+## CLI install lint (story 1185-790d) — rebuild required
+
+- [x] After rebuilding `tuic`, the macOS elevated install path still uses the target's parent directory; the Linux path compiles without an unused binding. _(verified: `src-tauri/crates/tuic-cli/src/main.rs:1179` gates only the parent binding with `target_os = "macos"`; macOS and Linux-target Clippy both pass with `-D warnings`.)_
+
+## Remote manual update guard (story 1183-7154) — Rust restart required
+
+- [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, start an automatic update for a disposable remote daemon and try a manual update through IPC, HTTP, or MCP. Confirm the backend reports "remote update already in progress". Repeat with a manual update running first: another manual request is rejected and automatic update is skipped. Targeted Rust tests cover these races; the running backend cannot load this Rust change until restart.
+
 ## ACP peer mail receipt (1176-e82e) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE=<id>`, open a disposable ego conversation and subscribe it to `tuic://inbox`. Send ordinary and urgent peer mail to ego, including after `agent register orchestrator=true`, and confirm `agent send` returns `delivered:true` with `delivery_path:acp_inbox_resource` (and `urgent_delivered:true` for urgent mail); confirm ego receives the inbox updates. Disconnect ego and verify a separately registered offline peer still reports `inbox_only`. The live backend cannot load this Rust change until restart; targeted MCP tests cover the subscription and notification path.

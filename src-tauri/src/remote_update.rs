@@ -80,6 +80,16 @@ pub(crate) async fn update_and_restart(
     confirmed_sessions: usize,
     expected_sha256: &str,
 ) -> Result<UpdatePreview, String> {
+    let _claim = crate::remote_runtime::claim_update(state, id)?;
+    perform_update_and_restart(state, id, confirmed_sessions, expected_sha256).await
+}
+
+pub(crate) async fn perform_update_and_restart(
+    state: &Arc<crate::AppState>,
+    id: &str,
+    confirmed_sessions: usize,
+    expected_sha256: &str,
+) -> Result<UpdatePreview, String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
     let base_url = state
         .remote

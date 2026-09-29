@@ -322,7 +322,7 @@ fn warm_candidates(
 
 /// A clonefile preserves mode bits. Sealed build evidence is useful in the
 /// new checkout, but its copied directories must remain removable by Git.
-fn restore_owner_write(path: &Path) -> Result<(), String> {
+pub(crate) fn restore_owner_write(path: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() {
         return Ok(());
@@ -337,11 +337,20 @@ fn restore_owner_write(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let needs_write = permissions.mode() & 0o200 == 0;
         permissions.set_mode(permissions.mode() | 0o200);
+        if needs_write {
+            std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
+        }
     }
     #[cfg(not(unix))]
-    permissions.set_readonly(false);
-    std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())
+    {
+        if permissions.readonly() {
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn ignored_directories(src: &Path) -> Result<Vec<PathBuf>, String> {

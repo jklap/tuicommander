@@ -6832,7 +6832,17 @@ pub(super) async fn mcp_post(
                 let is_error = result.get("error").is_some();
                 (result, is_error)
             };
-            let tool_result = format_tool_call_result(&result, is_error);
+            let mut tool_result = format_tool_call_result(&result, is_error);
+            if request_is_modern_lifecycle(&headers, &body) {
+                // A completed 2026-07-28 tool call has this discriminator,
+                // including tool-level errors. Preserve any discriminator an
+                // upstream already supplied for a non-complete result.
+                tool_result
+                    .as_object_mut()
+                    .expect("tool-call results are objects")
+                    .entry("resultType")
+                    .or_insert_with(|| serde_json::json!("complete"));
+            }
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -7845,6 +7855,80 @@ mod tests {
             .await
             .unwrap();
         (resp_headers, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn current_bridge_search_tools_call_carries_a_complete_result() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            MODERN_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        let (_, response) = post_tool_call_with_headers(
+            test_state(),
+            headers,
+            "search_tools",
+            serde_json::json!({"query": "session list", "limit": 10}),
+        )
+        .await;
+
+        let result = &response["result"];
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["isError"], false);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("session")),
+            "ego must receive the discovered tool names: {response}"
+        );
+        assert!(result.get("ttlMs").is_none());
+        assert!(result.get("cacheScope").is_none());
+    }
+
+    #[tokio::test]
+    async fn current_bridge_tool_error_is_still_a_complete_result() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            MODERN_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        let (_, response) = post_tool_call_with_headers(
+            test_state(),
+            headers,
+            "search_tools",
+            serde_json::json!({}),
+        )
+        .await;
+
+        let result = &response["result"];
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["isError"], true);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("requires non-empty 'query'"))
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_bridge_search_tools_call_keeps_its_result_shape() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            DEFAULT_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        let (_, response) = post_tool_call_with_headers(
+            test_state(),
+            headers,
+            "search_tools",
+            serde_json::json!({"query": "session list", "limit": 10}),
+        )
+        .await;
+
+        let result = &response["result"];
+        assert!(result.get("resultType").is_none());
+        assert_eq!(result["isError"], false);
+        assert!(result["content"][0]["text"].is_string());
     }
 
     /// The blanket `mcp-session-id` rejection was the single blocker to stateless

@@ -771,7 +771,14 @@ Content-Type: application/json
 { JSON-RPC message }
 ```
 
-Single endpoint for all MCP JSON-RPC requests (initialize, tools/list, tools/call). Returns JSON-RPC responses directly in the HTTP response body. Session ID returned via `Mcp-Session-Id` header on initialize.
+Single endpoint for all MCP JSON-RPC requests (legacy `initialize`, current
+`server/discover`, `tools/list`, `tools/call`). Returns JSON-RPC responses
+directly in the HTTP response body. Session ID returned via `Mcp-Session-Id`
+header on legacy initialize. For 2026-07-28 requests, `server/discover` and
+`tools/list` return `resultType: "complete"`, `ttlMs: 0`, and
+`cacheScope: "private"`; completed `tools/call` results, including tool-level
+errors, return `resultType: "complete"` without cache fields. Legacy result
+shapes are unchanged.
 
 The native `session` tool includes `action=submit` for a managed-agent command
 and bounded terminal-movement receipt in that same JSON-RPC response. It is
@@ -1353,7 +1360,7 @@ connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
-connected; `update_in_progress` is present as `true` while an unattended update
+connected; `update_in_progress` is present as `true` while a manual or unattended update
 owns the connection. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 

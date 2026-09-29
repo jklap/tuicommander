@@ -8,11 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
 
+- **MCP current tool-call results** — The stdio bridge now returns `resultType: "complete"` for 2026-07-28 tool calls, including tool-level errors, so current-protocol clients can use TUIC tools. Legacy tool-call responses keep their existing shape.
+
+- **Worktree removal with read-only build artifacts** — Removal now makes files inside the checkout owner-writable before Git deletes them, and names a leftover directory when cleanup cannot complete.
+
 - **ACP peer mail receipts** — Sending normal or urgent mail to an ego peer with a subscribed MCP-over-ACP inbox now reports the ACP delivery route, including when it is registered as an orchestrator; disconnected peers still report inbox-only.
 
 - **Worktree removal review** — Confirmations identify untouched branches, live sessions, and local file counts. One-click Merge & Archive asks before moving a live agent's checkout. MCP and HTTP removal report the same hazards; automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees and report why.
 
-- **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected. Stalled transfers time out, and the manual update action is disabled during an automatic update.
+- **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected. Stalled transfers time out. The manual update action is disabled during an automatic update. Manual and automatic updates claim the same connection, so concurrent requests are rejected and both appear as in progress.
 
 - **Worktree cleanup after external removal** — Removing a checkout already unregistered by Git now cancels its pending build-input copy even when leftover directory cleanup fails.
 
