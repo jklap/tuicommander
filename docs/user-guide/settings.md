@@ -259,10 +259,13 @@ starts from. Everything here is ego's, read and written by running ego:
   not read its credential store* — the last is not the same as an empty store.
 
 **No API key ever enters TUICommander.** None is stored, none reaches the OS
-keyring, and no provider HTTP call is made from this process. Adding a
-credential is done in a terminal with `ego auth login <provider>`; the page names
-the command rather than running it, because that flow is interactive and would
-mean handling a secret on the way past.
+keyring, and no provider HTTP call is made from this process. **Login** next
+to a provider opens a terminal tab that runs `ego auth login <provider>` and
+closes Settings so the tab is in front. The browser, device-code or API-key
+prompt is ego talking to you directly in that terminal; TUICommander types the
+command and never sees the key. The tab stays open after ego exits so a refusal
+stays readable; reopening the page shows the credential state `ego doctor` now
+reports.
 
 When ego is not configured the page says so and points to the *ego executable*
 field in Settings → General instead of rendering an empty list. A path that is
