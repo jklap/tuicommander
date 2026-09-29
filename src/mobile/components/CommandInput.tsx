@@ -2,7 +2,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
-import { sendPtyKey } from "../../utils/sendCommand";
+import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
 import { retryWrite } from "../utils/retryWrite";
 import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
@@ -43,6 +43,7 @@ export function CommandInput(props: CommandInputProps) {
 	// the just-sent command from flashing back into the cleared textarea
 	// before the shell advances the prompt.
 	let lastSendAt = 0;
+	let lastInputWrite: Promise<unknown> = Promise.resolve();
 
 	createEffect(() => {
 		const pv = props.prefillValue;
@@ -84,7 +85,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	function writePty(data: string) {
-		rpc("write_pty", { sessionId: props.sessionId, data }).catch((err: unknown) => {
+		lastInputWrite = rpc("write_pty", { sessionId: props.sessionId, data }).catch((err: unknown) => {
 			appLogger.warn("network", "Failed to write to PTY", { error: err });
 		});
 	}
@@ -192,7 +193,10 @@ export function CommandInput(props: CommandInputProps) {
 			textareaEl.style.height = "auto";
 		}
 		try {
-			// Text is already in the PTY via live delta sync — just press Enter
+			// Let the final live delta reach the PTY, then leave the agent's
+			// paste-burst window before pressing Enter.
+			await lastInputWrite;
+			await waitForAgentEnterGap(props.agentType);
 			await retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data: "\r" }));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

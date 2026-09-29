@@ -32,6 +32,20 @@ describe("CommandWidget", () => {
 		expect(texts).toContain("/help");
 	});
 
+	it("offers Codex's supported status command instead of unsupported help", () => {
+		const { container } = render(() => <CommandWidget sessionId="s1" agentType="codex" onDismiss={() => {}} />);
+		const labels = Array.from(container.querySelectorAll("button")).map((button) => button.textContent);
+		expect(labels).toContain("/status");
+		expect(labels).not.toContain("/help");
+	});
+
+	it("sends the supported Codex status command from the widget", async () => {
+		const { container } = render(() => <CommandWidget sessionId="s1" agentType="codex" onDismiss={() => {}} />);
+		fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "/status")!);
+		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "s1", data: "\r" }));
+		expect(vi.mocked(rpc).mock.calls.filter(([command, args]) => command === "write_pty" && args?.data === "/status")).toHaveLength(1);
+	});
+
 	it("renders model buttons for claude-code agent", () => {
 		const { container } = render(() => <CommandWidget sessionId="s1" agentType="claude" onDismiss={() => {}} />);
 		const buttons = container.querySelectorAll("button");

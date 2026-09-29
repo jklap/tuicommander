@@ -31,6 +31,11 @@ const SHORT_ENTER_GAP_AGENTS = new Set(["claude", "gemini", "opencode", "aider",
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Keep Enter out of the agent's paste-burst window after the last input write. */
+export function waitForAgentEnterGap(agentType?: string | null): Promise<void> {
+	return delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : CODEX_ENTER_GAP_MS);
+}
+
 /** Fetch (and cache) the shell family for a PTY session. Returns "unknown"
  *  if the backend can't tell us — `sendCommand` then falls back to the
  *  platform heuristic. */
@@ -121,8 +126,7 @@ export async function sendCommand(
 	if (!submit) return;
 	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents;
 	// Codex also treats Enter as a newline for 120ms after a rapid paste burst.
-	if (agentInput || foregroundProbeFailed)
-		await delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : CODEX_ENTER_GAP_MS);
+	if (agentInput || foregroundProbeFailed) await waitForAgentEnterGap(agentType);
 	await writeFn("\r");
 }
 
