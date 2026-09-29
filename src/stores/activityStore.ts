@@ -1,10 +1,12 @@
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import type { ActivityItem, ActivitySection, Disposable } from "../plugins/types";
 import { appLogger } from "./appLogger";
 
 /** Serializable subset of ActivityItem (no onClick function) */
 type PersistedActivityItem = Omit<ActivityItem, "onClick">;
+const activityWriter = createConfigDeltaWriter<PersistedActivityItem[]>("save_activity", "items");
 
 interface ActivityStoreState {
 	items: ActivityItem[];
@@ -18,7 +20,7 @@ function toPersistedItems(items: ActivityItem[]): PersistedActivityItem[] {
 
 /** Fire-and-forget persist to Rust backend */
 function persistActivityNow(items: ActivityItem[]): void {
-	invoke("save_activity", { items: toPersistedItems(items) }).catch((err) =>
+	activityWriter.save(toPersistedItems(items)).catch((err) =>
 		appLogger.error("store", "Failed to save activity", err),
 	);
 }
@@ -48,6 +50,7 @@ function createActivityStore() {
 			const loaded = await invoke<PersistedActivityItem[] | { items?: PersistedActivityItem[] } | null>(
 				"load_activity",
 			);
+			activityWriter.loaded(Array.isArray(loaded) ? loaded : loaded?.items ?? []);
 			const items = Array.isArray(loaded) ? loaded : loaded?.items;
 			if (Array.isArray(items)) {
 				const migrated = items.map((item) => ({

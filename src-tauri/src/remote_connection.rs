@@ -23,6 +23,8 @@ pub(crate) struct RemoteConnection {
     pub(crate) auth_username: String,
     pub(crate) enabled: bool,
     #[serde(default)]
+    pub(crate) auto_update: bool,
+    #[serde(default)]
     pub(crate) deploy: DeployMode,
     #[serde(default = "default_survive_secs")]
     pub(crate) survive_secs: u64,
@@ -77,6 +79,7 @@ impl RemoteConnection {
             },
             auth_username: ssh_user,
             enabled: true,
+            auto_update: false,
             deploy: DeployMode::Never,
             survive_secs: default_survive_secs(),
         }
@@ -130,6 +133,7 @@ impl RemoteConnection {
             transport: RemoteTransport::Direct { url: url.into() },
             auth_username: auth_username.into(),
             enabled: true,
+            auto_update: false,
             deploy: DeployMode::Never,
             survive_secs: default_survive_secs(),
         }
@@ -142,7 +146,26 @@ impl RemoteConnection {
 
 pub(crate) struct RemoteConnectionStore;
 
+#[derive(Deserialize)]
+pub(crate) struct RemoteConnectionSaveRequest {
+    pub(crate) base: Option<RemoteConnection>,
+    pub(crate) connection: RemoteConnection,
+}
+
 impl RemoteConnectionStore {
+    /// Mutate the latest array under the same process and file locks used by
+    /// other config domains. Connection ids, rather than array positions, are
+    /// the unit of change.
+    pub(crate) fn update<R, F>(config_dir: &Path, mutate: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut Vec<RemoteConnection>) -> Result<(R, bool), String>,
+    {
+        crate::config::ConfigFile::<Vec<RemoteConnection>>::at_path(
+            config_dir.join(CONNECTIONS_FILE),
+        )
+        .update_with_strict(mutate)
+    }
+
     /// Load connections from `<config_dir>/connections.json`.
     /// Returns an empty vec if the file does not exist.
     pub(crate) fn load(config_dir: &Path) -> anyhow::Result<Vec<RemoteConnection>> {
@@ -183,16 +206,49 @@ impl RemoteConnectionStore {
 /// `state.connections_lock` around this to serialize concurrent writers.
 pub(crate) fn upsert_remote_connection(
     data_dir: &Path,
+    base: Option<RemoteConnection>,
     connection: RemoteConnection,
 ) -> Result<(), String> {
     connection.validate()?;
-    let mut connections = RemoteConnectionStore::load(data_dir).map_err(|e| e.to_string())?;
-    if let Some(existing) = connections.iter_mut().find(|c| c.id == connection.id) {
-        *existing = connection;
-    } else {
-        connections.push(connection);
+    if base.as_ref().is_some_and(|base| base.id != connection.id) {
+        return Err("base and connection ids differ".to_string());
     }
-    RemoteConnectionStore::save(data_dir, &connections).map_err(|e| e.to_string())
+    let delta = base
+        .as_ref()
+        .map(|base| {
+            let base = serde_json::to_value(base).map_err(|e| e.to_string())?;
+            let desired = serde_json::to_value(&connection).map_err(|e| e.to_string())?;
+            Ok::<_, String>(crate::config::json_merge_delta(&base, &desired))
+        })
+        .transpose()?;
+    RemoteConnectionStore::update(data_dir, move |connections| {
+        let current = connections.iter_mut().find(|c| c.id == connection.id);
+        match (base, current) {
+            (None, None) => {
+                connections.push(connection);
+                Ok(((), true))
+            }
+            (None, Some(_)) => Err("connection already exists; load it before editing".to_string()),
+            (Some(_), None) => Err("connection was deleted since it was loaded".to_string()),
+            (Some(_), Some(current)) => {
+                let Some(Some(delta)) = delta else {
+                    return Ok(((), false));
+                };
+                crate::config::apply_typed_json_merge_delta(current, &delta)?;
+                current.validate()?;
+                Ok(((), true))
+            }
+        }
+    })
+}
+
+pub(crate) fn remove_remote_connection(data_dir: &Path, id: &str) -> Result<bool, String> {
+    RemoteConnectionStore::update(data_dir, |connections| {
+        let before = connections.len();
+        connections.retain(|connection| connection.id != id);
+        let removed = connections.len() != before;
+        Ok((removed, removed))
+    })
 }
 
 /// How long the token exchange may take. The daemon answers from memory, so the
@@ -322,10 +378,11 @@ pub async fn list_remote_connections(
 #[tauri::command]
 pub async fn save_remote_connection(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    base: Option<RemoteConnection>,
     connection: RemoteConnection,
 ) -> Result<(), String> {
     let _guard = state.connections_lock.lock().await;
-    upsert_remote_connection(&state.data_dir, connection)
+    upsert_remote_connection(&state.data_dir, base, connection)
 }
 
 #[cfg(feature = "desktop")]
@@ -340,10 +397,7 @@ pub async fn delete_remote_connection(
     // first leaves all of it running with no way left to address it.
     crate::remote_runtime::teardown_deleted(state.inner(), &id);
     let _guard = state.connections_lock.lock().await;
-    let mut connections =
-        RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
-    connections.retain(|c| c.id != id);
-    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())?;
+    remove_remote_connection(&state.data_dir, &id)?;
     // The vault entry outlives connections.json unless this runs: the id is a
     // fresh UUID every time, so a forgotten secret is unreachable and permanent.
     delete_connection_credentials(&id)
@@ -526,11 +580,13 @@ mod tests {
         .unwrap();
         value.as_object_mut().unwrap().remove("deploy");
         value.as_object_mut().unwrap().remove("survive_secs");
+        value.as_object_mut().unwrap().remove("auto_update");
 
         let decoded: RemoteConnection = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.deploy, DeployMode::Never);
         assert_eq!(decoded.survive_secs, 1_800);
+        assert!(!decoded.auto_update);
     }
 
     #[tokio::test]
@@ -665,7 +721,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut bad = RemoteConnection::new_ssh("server", "host", "alice");
         bad.id = "../../escape".to_string(); // invalid UUID
-        let err = upsert_remote_connection(dir.path(), bad).unwrap_err();
+        let err = upsert_remote_connection(dir.path(), None, bad).unwrap_err();
         assert!(
             err.contains("valid UUID"),
             "expected UUID error, got: {err}"
@@ -681,16 +737,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
         let id = conn.id.clone();
-        upsert_remote_connection(dir.path(), conn).unwrap();
+        upsert_remote_connection(dir.path(), None, conn).unwrap();
         assert_eq!(RemoteConnectionStore::load(dir.path()).unwrap().len(), 1);
 
         // Same id updates in place rather than appending a duplicate.
         let mut updated = RemoteConnection::new_ssh("renamed", "host.example.com", "alice");
         updated.id = id.clone();
-        upsert_remote_connection(dir.path(), updated).unwrap();
+        let base = RemoteConnectionStore::load(dir.path()).unwrap().remove(0);
+        upsert_remote_connection(dir.path(), Some(base), updated).unwrap();
         let loaded = RemoteConnectionStore::load(dir.path()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, id);
         assert_eq!(loaded[0].name, "renamed");
+    }
+
+    #[test]
+    fn stale_remote_connection_saves_preserve_independent_fields() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let original = RemoteConnection::new_direct("first", "https://host.example", "alice");
+        upsert_remote_connection(dir.path(), None, original.clone()).unwrap();
+
+        let mut first = original.clone();
+        first.auto_update = true;
+        let mut second = original.clone();
+        second.name = "renamed".to_string();
+        upsert_remote_connection(dir.path(), Some(original.clone()), first).unwrap();
+        upsert_remote_connection(dir.path(), Some(original), second).unwrap();
+
+        let saved = RemoteConnectionStore::load(dir.path()).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "renamed");
+        assert!(
+            saved[0].auto_update,
+            "an unchanged stale field must not revert another writer"
+        );
     }
 }

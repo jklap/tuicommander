@@ -1,5 +1,6 @@
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 /**
@@ -39,6 +40,7 @@ export function generateId(): string {
  * (GH #107). Every mutation path funnels through saveIdeas, so gating here covers them all.
  */
 let hydrated = false;
+const notesWriter = createConfigDeltaWriter<{ notes: Idea[] }>("save_notes");
 
 /** Persist ideas to Rust backend (fire-and-forget) */
 function saveIdeas(ideas: Idea[]): void {
@@ -46,7 +48,7 @@ function saveIdeas(ideas: Idea[]): void {
 		appLogger.error("store", "Refusing to persist ideas before a successful hydrate — notes.json left untouched");
 		return;
 	}
-	invoke("save_notes", { config: { notes: ideas } }).catch((err) =>
+	notesWriter.save({ notes: ideas }).catch((err) =>
 		appLogger.error("store", "Failed to save ideas", err),
 	);
 }
@@ -62,6 +64,7 @@ function createIdeasStore() {
 		async hydrate(): Promise<void> {
 			try {
 				const loaded = await invoke<{ notes?: Idea[] }>("load_notes");
+				notesWriter.loaded({ notes: loaded?.notes ?? [] });
 				if (loaded?.notes && Array.isArray(loaded.notes)) {
 					const migrated = loaded.notes.map((n) => ({
 						...n,

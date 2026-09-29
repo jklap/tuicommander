@@ -219,9 +219,9 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
 | `remove_orphan_worktree` | `repo_path, worktree_path` | `()` | Remove a registered detached orphan by filesystem path. Refuses an in-progress Git operation or detached HEAD commit unreachable from durable refs. |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
-| `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When `after_merge` is `archive` or `delete` and the worktree is **not known to be clean**, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` and the lifecycle `expected_fingerprint` to proceed. The backend rejects a changed fingerprint before cleanup. The commit count does not enter that decision: delete removes the checkout, while archive moves and repairs the linked Git checkout with its files intact. A locked checkout is not archived. A dirty check that fails also blocks (`worktree_dirty` stays `false` because git never said "dirty"). If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
-| `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up a merged worktree. Passes the **same** dirty-worktree gate as `merge_and_archive_worktree`: without `force` a worktree that is not known to be clean comes back as `action: "needs_confirmation"` instead of being wiped (`merged: true` — only the cleanup stopped, the merge already landed). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. Archive moves and repairs the linked checkout without pruning it; a lock stops archiving. Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
-| `get_workspace_lifecycle` | `repo_path, workspace_id` | `{ dirty_files, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` | Fresh workspace-id-addressed removal preflight. `missing_checkout: true` identifies a registered checkout whose directory is gone; it has no dirty fingerprint and requires force confirmation. `dirty_files` counts files a removal discards (`null` when unavailable — not `0`); `commit_status` is `unmerged`, `in_sync`, `merged`, or `unknown`; `removal_safety` is `safe`, `requires_force`, or `unknown`. Unknown never authorizes removal. HTTP twin: `GET /worktrees/lifecycle`. |
+| `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive or delete. A pre-flight counts commits and checks the exact checkout. For `archive` or `delete`, an unverified or dirty checkout or one with a live session returns `action: "needs_confirmation"` **before merging**. Re-call with `force: true` and the confirmed lifecycle `expected_fingerprint` to proceed; a changed fingerprint aborts. A locked checkout is not archived. If conflict cleanup abort fails, the error includes the manual abort command. |
+| `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up after a completed merge. Uses the same lifecycle review as one-click cleanup and also requires merged commit status before automatic cleanup. Without `force`, a dirty, unverified, or live checkout returns `action: "needs_confirmation"` (`merged: true` — only cleanup stopped). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. A lock stops archiving. Delete may include `branch_delete_warning` if safe branch deletion kept the branch. |
+| `get_workspace_lifecycle` | `repo_path, workspace_id` | `{ dirty_files, untracked_files, live_sessions, warnings, missing_checkout, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` | Fresh workspace-id-addressed removal preflight. `missing_checkout: true` identifies a registered checkout whose directory is gone; it has no dirty fingerprint and requires force confirmation. `dirty_files` counts files a removal discards (`null` when unavailable — not `0`); `commit_status` is `unmerged`, `in_sync`, `merged`, or `unknown`; `removal_safety` is `safe`, `requires_force`, or `unknown`. Unknown never authorizes removal. HTTP twin: `GET /worktrees/lifecycle`. |
 | `list_base_ref_options` | `repo_path` | `Vec<String>` | List valid base refs for worktree creation |
 | `run_setup_script` | `script, cwd` | `JSON` | Run a setup script through `sh -c` / `cmd /C` in `cwd`; returns exit code and captured output |
 | `generate_clone_branch_name_cmd` | `base_name, existing_names` | `String` | Generate hybrid branch name for clone worktree |
@@ -231,36 +231,36 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_app_config` | -- | `AppConfig` | Load app settings |
-| `save_app_config` | `config` | `()` | Save app settings |
+| `save_app_config` | `base, config` | `()` | Save app settings |
 | `load_notification_config` | -- | `NotificationConfig` | Load notifications |
-| `save_notification_config` | `config` | `()` | Save notifications |
+| `save_notification_config` | `base, config` | `()` | Save notifications |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
-| `save_ui_prefs` | `config` | `()` | Save UI preferences |
+| `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
 | `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
-| `save_repo_settings` | `config` | `()` | Save per-repo settings |
+| `save_repo_settings` | `base, config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |
 | `load_repo_defaults` | -- | `RepoDefaultsConfig` | Load repo defaults |
-| `save_repo_defaults` | `config` | `()` | Save repo defaults |
+| `save_repo_defaults` | `base, config` | `()` | Save repo defaults |
 | `load_repositories` | -- | `JSON` | Load saved repositories |
 | `save_repositories` | `config` (`mutationVersion: 1` keyed delta) | `()` | Apply repository/group/order/active-selection changes to the latest locked document; same-record conflicts are returned to the caller |
 | `list_stale_temp_repository_candidates` | -- | `StaleTempCandidate[]` (`{path, displayName}`) | Read-only preview of rows classified as stale-temp ghosts (#763-d219); never mutates |
 | `repair_stale_temp_repositories` | `paths` (`string[]`) | `StaleTempRepairSummary` (`{removed, backupPath}`) | Re-validates every path against the classifier on the current on-disk document, refusing the whole request if any no longer matches, then removes the validated rows in one transactional write after backing up the pre-repair document |
 | `load_prompt_library` | -- | `PromptLibraryConfig` | Load prompts |
-| `save_prompt_library` | `config` | `()` | Save prompts |
+| `save_prompt_library` | `base, config` | `()` | Save prompts |
 | `load_notes` | -- | `JSON` | Load notes |
-| `save_notes` | `config` | `()` | Save notes |
+| `save_notes` | `base, config` | `()` | Save notes |
 | `save_note_image` | `note_id, data_base64, extension` | `String` (absolute path) | Decode base64 image, validate ≤10 MB, write to `config_dir()/note-images/<note_id>/<timestamp>.<ext>` |
 | `delete_note_assets` | `note_id` | `()` | Remove `note-images/<note_id>/` directory recursively (no-op if missing) |
 | `get_note_images_dir` | -- | `String` | Return `config_dir()/note-images/` absolute path |
 | `load_keybindings` | -- | `JSON` | Load keybinding overrides |
-| `save_keybindings` | `config` | `()` | Save keybinding overrides |
+| `save_keybindings` | `base, config` | `()` | Save keybinding overrides |
 | `load_agents_config` | -- | `AgentsConfig` | Load per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
-| `save_agents_config` | `config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
+| `save_agents_config` | `base, config` | `()` | Save per-agent run configs, including optional model defaults, and `prevent_alt_screen` overrides |
 | `get_agent_native_status_signals` | `agent_type` | `bool` | Read the default-on Claude/Codex launch-scoped status setting |
 | `set_agent_native_status_signals` | `agent_type`, `enabled` | `()` | Change launch-scoped status injection for future sessions |
 | `load_activity` | -- | `ActivityConfig` | Load activity dashboard state |
-| `save_activity` | `config` | `()` | Save activity dashboard state |
+| `save_activity` | `base, items` | `()` | Save activity dashboard state |
 | `load_repo_local_config` | `repo_path` | `RepoLocalConfig?` | Read `.tuic.json` from repo root; returns null if absent or malformed |
 | `save_repo_local_config` | `repo_path` | `()` | Write the repo's **effective resolved** worktree/branch settings (global defaults + per-repo overrides) to `.tuic.json` at its root (committable, team-shareable). Preserves fields already in the file (e.g. `mcp_upstreams`); never writes script fields |
 
@@ -285,7 +285,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
-| `save_remote_connection` | `connection` | `()` | Create or update a remote machine. Validates before saving |
+| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
@@ -304,7 +304,7 @@ remote daemon.
 |---------|------|---------|-------------|
 | `connect_remote_connection` | `id` | `()` | Bring a connection up. SSH connections may deploy a matching loopback-only daemon first, then authenticate with the vault pairing token; direct and unmanaged connections use the stored password exchange. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
 | `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
-| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected — a connection that is not connected has no route to hand out |
+| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected; `update_in_progress` is true during an unattended update. A disconnected machine has no route to hand out |
 | `prepare_remote_update` | `id` | `UpdatePreview` | Select the release or matching local daemon binary and report both build identities and the live session count |
 | `update_and_restart_remote` | `id, confirmedSessions, expectedSha256` | `UpdatePreview` | Check the confirmation, update by Direct upload or SSH deployment, and verify the new build after reconnect |
 
@@ -469,7 +469,7 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `start_dictation` | `source?` (`"fn"`, `"hotkey"`, `"ui"`) | `()` | Start recording; Fn starts are refused after native key release |
-| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s, truncated_s}`; `truncated_s` counts captured audio lost before transcription |
+| `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s, truncated_s}`; a capture without sustained speech returns `no sustained speech` before Whisper, a final transcription skip keeps its specific reason, an empty successful result says `no speech detected`, and `truncated_s` counts captured audio lost before transcription |
 | `inject_text` | `text` | `String` | Apply corrections |
 | `get_dictation_status` | -- | `DictationStatus` | Model/recording status plus normalized `audio_level` (0–1) |
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |
@@ -489,9 +489,9 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `get_correction_map` | -- | `HashMap<String,String>` | Load corrections |
 | `set_correction_map` | `map` | `()` | Save corrections |
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
-| `get_dictation_config` | -- | `DictationConfig` | Load config |
+| `get_dictation_config` | -- | `DictationConfig` | Load saved config. With an activation phrase, the hands-free runtime applies at least 5000 ms of hold-back even when the saved `hands_free_hold_back_ms` is shorter; hands-free status reports the effective value |
 | `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
-| `set_dictation_config` | `config` | `()` | Save config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
+| `set_dictation_config` | `base, config` | `()` | Save only the changes between the loaded base and edited config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 
@@ -654,7 +654,7 @@ empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_config` | -- | `AppConfig` | Alias for load_app_config |
-| `save_config` | `config` | `()` | Alias for save_app_config |
+| `save_config` | `base, config` | `()` | Alias for save_app_config |
 | `hash_password` | `password` | `String` | Bcrypt hash |
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
@@ -721,7 +721,7 @@ can choose what the host runs.
 | `acp_session_fork` | `connectionId, sessionId, authority` | `AcpAttachmentSnapshot` | `session/fork` |
 | `acp_session_delete` | `connectionId, sessionId` | `()` | `session/delete` — the session is gone for good |
 | `acp_session_close` | `connectionId, sessionId` | `()` | Detach without deleting |
-| `acp_session_prompt` | `connectionId, sessionId, prompt` | `AcpTurnId` | Start a turn or accept it into the server-owned FIFO when one is running |
+| `acp_session_prompt` | `connectionId, sessionId, prompt, viewedRepo?` | `AcpTurnId` | Start a turn or accept it into the server-owned FIFO when one is running. `viewedRepo` is sent as `_meta.tuicommander/viewedRepo`, a hint for that turn only |
 | `acp_session_cancel` | `connectionId, sessionId` | `()` | Cancel the running turn |
 | `acp_queued_prompt_cancel` | `connectionId, sessionId, turnId` | `()` | Remove one queued prompt before it reaches ego |
 | `acp_session_set_config_option` | `connectionId, sessionId, configId, value` | `Vec<SessionConfigOption>` | Set one option; the agent returns the whole resulting set |

@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
 // ---- Layout Tree Types (geometry only) ----
@@ -281,6 +282,7 @@ interface GroupsState {
 }
 
 function createPaneLayoutStore() {
+	const layoutWriter = createConfigDeltaWriter<PaneLayoutState>("save_pane_layout", "layout");
 	// Plain JS tree — no proxy wrapping
 	let tree: PaneNode | null = null;
 	let restoredFromDisk = false;
@@ -313,7 +315,7 @@ function createPaneLayoutStore() {
 			groups,
 			activeGroupId: state.activeGroupId,
 		};
-		invoke("save_pane_layout", { layout: snapshot }).catch((err: unknown) =>
+		layoutWriter.save(snapshot).catch((err: unknown) =>
 			appLogger.warn("app", "Failed to save pane layout", err),
 		);
 	}
@@ -637,6 +639,7 @@ function createPaneLayoutStore() {
 		async loadFromDisk(): Promise<void> {
 			try {
 				const saved = await invoke<PaneLayoutState | null>("load_pane_layout");
+				layoutWriter.loaded(saved ?? { root: null, groups: {}, activeGroupId: null });
 				if (!saved?.root) return;
 
 				// Filter out non-terminal tabs (md/diff/editor are session-bound)

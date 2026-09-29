@@ -7,7 +7,7 @@
  * only the shape each kind takes on screen.
  */
 
-import { type Component, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
@@ -52,6 +52,10 @@ function contentLine(content: AcpToolCallContent): string {
 	return content.content.type === "text" ? content.content.text : "";
 }
 
+function toolName(title: string): string {
+	return title.split(/\s+-lc\s+|\s+-c\s+/, 1)[0];
+}
+
 const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 	const startedAt = performance.now();
 	let finishedAt: number | undefined;
@@ -83,14 +87,14 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 						status() === "Failed" ? s.toolCallFailure : status() === "Running" ? s.toolCallPending : s.toolCallSuccess,
 					)}
 				/>
-				<span>
+				<span class={s.toolCallCount}>
 					{props.calls().length} tool {props.calls().length === 1 ? "call" : "calls"}
 				</span>
 				<span class={s.toolActivityTitles}>
 					{props
 						.calls()
 						.slice(0, 2)
-						.map((call) => call.title)
+						.map((call) => toolName(call.title))
 						.join(" · ")}
 					{props.calls().length > 2 ? " · …" : ""}
 				</span>
@@ -228,6 +232,18 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	let container: HTMLDivElement | undefined;
 	let searchInput: HTMLInputElement | undefined;
 	let matchIndex = -1;
+	let stickToBottom = true;
+	const onScroll = () => {
+		if (!container) return;
+		stickToBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 24;
+	};
+	createEffect(() => {
+		props.entries();
+		props.busy();
+		queueMicrotask(() => {
+			if (container && stickToBottom) container.scrollTop = container.scrollHeight;
+		});
+	});
 	const findNext = () => {
 		if (!container || !query()) return;
 		const needle = query().toLocaleLowerCase();
@@ -282,7 +298,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<div class={s.messageList} ref={container} aria-label="Chat transcript" tabIndex={0} onKeyDown={onKeyDown}>
+		<div class={s.messageList} ref={container} aria-label="Chat transcript" tabIndex={0} onKeyDown={onKeyDown} onScroll={onScroll}>
 			<Show when={finding()}>
 				<div class={s.findBar}>
 					<input

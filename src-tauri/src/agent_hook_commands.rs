@@ -136,11 +136,12 @@ pub(crate) fn state_at(agent_type: &str, settings_path: &Path) -> InstallState {
 /// default every reader falls back to, so it is stored as absent.
 fn persist_flag(agent_type: &str, enabled: bool) -> Result<(), String> {
     let mut cfg = crate::config::load_agents_config();
+    let base = cfg.clone();
     cfg.agents
         .entry(agent_type.to_string())
         .or_default()
         .hook_instrumentation = enabled.then_some(true);
-    crate::config::save_agents_config(cfg)
+    crate::config::save_agents_config(base, cfg)
 }
 
 /// Toggle hook instrumentation for an agent: persist the flag, then install (or
@@ -185,12 +186,13 @@ pub(crate) fn set_agent_native_status_signals(
     }
     // On is the default every reader falls back to, so it is stored as absent.
     let mut config = crate::config::load_agents_config();
+    let base = config.clone();
     config
         .agents
         .entry(agent_type)
         .or_default()
         .native_status_signals = (!enabled).then_some(false);
-    crate::config::save_agents_config(config)
+    crate::config::save_agents_config(base, config)
 }
 
 #[cfg(test)]

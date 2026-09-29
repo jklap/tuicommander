@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
+
+- **ACP peer mail receipts** — Sending normal or urgent mail to an ego peer with a subscribed MCP-over-ACP inbox now reports the ACP delivery route, including when it is registered as an orchestrator; disconnected peers still report inbox-only.
+
+- **Worktree removal review** — Confirmations identify untouched branches, live sessions, and local file counts. One-click Merge & Archive asks before moving a live agent's checkout. MCP and HTTP removal report the same hazards; automatic PR-close cleanup and merged-worktree archiving skip live or dirty worktrees and report why.
+
+- **Automatic remote daemon updates** — An optional per-machine setting updates an idle outdated daemon after connection. The update survives the daemon's restart, retries when a changing session count settles, and refreshes live session counts while connected. Stalled transfers time out, and the manual update action is disabled during an automatic update.
+
+- **Worktree cleanup after external removal** — Removing a checkout already unregistered by Git now cancels its pending build-input copy even when leftover directory cleanup fails.
+
+- **Push-to-talk sustained-speech gate** — The final pass uses the hands-free frame and duration rule to skip short noise bursts before Whisper. Its activity floor follows the configured transcription RMS floor so quiet sustained speech can still reach Whisper.
+
+- **Push-to-talk skip reasons** — When the final transcription rejects audio, the dictation status now shows the specific speech-gate reason instead of always saying “no speech detected”.
+
+- **One AI Chat across repositories** — The AI Chat is the same conversation whichever repository is on screen: switching repository keeps its tabs and starts nothing, and the repository you are viewing is sent with each message as context. ego starts with your first message (or **+**), runs in `~/Gits`, is shared by every window and the phone, and is ended when TUICommander quits.
+
+- **ego reaches TUICommander over ACP** — The AI Chat's ego sessions now get the `tuicommander` MCP server on the ACP connection itself (MCP-over-ACP) instead of a `tuic-bridge` process. Each tool call no longer opens a fresh HTTP MCP session; the tools, their names and ego's permission rules are unchanged, and ego can cancel a running call. Claude Code, Codex and other agents keep using the bridge and HTTP `/mcp`.
+
+- **AI Chat replay storm** — A chat tab replays its conversation at most once at a time, and a failed replay waits for the person to select the tab or press Retry instead of repeating on every update. The backend refuses a second `session/load` or `session/resume` while one is pending, and logs every attach with its method and session id.
+
+- **AI Chat layout and composer** — Collapsed tool activity keeps commands in the expanded view, message Copy has reserved space, and streaming output follows the bottom until you scroll up. The composer grows with text and condenses pastes over 200 words into a marker until sending.
+
 - **New worktree tabs** — A session spawned before its worktree appears in the repository list moves under the registered repository after a refresh, without a misleading Register toast.
 
 - **SSH remote readiness** — Tunnels become Connected after SSH survives startup and every local forward accepts connections. Installed remote daemons get a bounded health retry during startup.

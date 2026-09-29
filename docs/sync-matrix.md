@@ -104,7 +104,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
 | `session-state-changed` | `{ session_id: string, state: SessionState }` — `state` is exactly the object `list_active_sessions` returns per session, snake_case, with serde skipping the zero-valued fields. Both transports build it from `state.rs session_state_payload()`, one function on purpose | `state.rs publish_session_state_change()`, called only from the session-state accumulator — the sole writer of `session_states` and therefore the only place that can see a transition. Deduped by `SessionState`'s `PartialEq` (which excludes `last_activity_ms`), so a repaint that changes nothing a client renders emits nothing. Dual-emitted on `event_bus` as `SessionStateChanged` (`session-state-changed` SSE on `/events`). Ignored by `apply_event_to_session_state` — it is the accumulator's output, never its input | `useAgentPolling.ts` → `subscribeEvents({"session-state-changed"})` → `applySessionState()` → tab awaiting/busy badges + Activity Dashboard. Replaced a 1 Hz `list_active_sessions` poll; the only remaining reads are a single mount-time catch-up, for sessions already idle and silent, and the same catch-up re-run from `subscribeEvents`' `onResync` when the SSE stream reconnects or reports `lagged` (browser only — Tauri `listen()` cannot drop) |
 | `acp-notice` | `{ connectionId, generation, sessionId?, requestId?, sequence, kind }` — `kind` is `ready` \| `settled` \| `interaction_pending` \| `interaction_settled`. camelCase, unlike the PTY rows above: it is the same object the `/acp` routes and the `acp_*` commands return, and a second spelling would be a second thing to keep in sync | `state.rs spawn_acp_notice_pump()`, fed by `acp/events.rs` `AcpEventJournal::append` — the one place every ACP event is stamped, so a notice cannot be forgotten by a new producer. Dual-emitted on `event_bus` as `AcpNotice` (`acp-notice` SSE on `/events`) | TBD — no ACP frontend yet. It is a wake signal: react by reading `acp_connection_snapshot`, `acp_pending_interactions`, or the stream from the `sequence` it names. The ordered turn frames stay on `acp_subscribe` / the `/acp/connections/:id/stream` WebSocket and never ride this bus |
-| `remote-connection-status` | `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, error? }` — `status` is `disconnected` \| `connecting` \| `connected` \| `unauthenticated` \| `error`. snake_case: it is the `RemoteConnectionStatus` struct as `/config/remote-connections/status` returns it, and the push is the whole client view rather than a delta, so a missed event cannot leave a client holding a route the backend has retracted. `base_url` and `token` are present only while connected | `remote_runtime.rs publish()` — dual-emitted on every real change (dedup is on the snapshot, so a poll that keeps answering 200 emits nothing) | `stores/remoteConnections.ts` `applyStatus()` → store state + the SSE bridge, which exists exactly while the connection is connected |
+| `remote-connection-status` | `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error? }` — `status` is `disconnected` \| `connecting` \| `connected` \| `unauthenticated` \| `error`. snake_case: it is the `RemoteConnectionStatus` struct as `/config/remote-connections/status` returns it, and the push is the whole client view rather than a delta, so a missed event cannot leave a client holding a route the backend has retracted. `base_url`, `token`, `live_sessions`, and `update_notice` are present only while connected | `remote_runtime.rs publish()` — dual-emitted on every real change (dedup is on the snapshot, so a poll that keeps answering 200 emits nothing) | `stores/remoteConnections.ts` `applyStatus()` → store state + the SSE bridge, which exists exactly while the connection is connected |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
@@ -216,27 +216,31 @@ sentence, never with an empty result.
 
 ### AI Chat panel (ego over ACP)
 The panel is a control plane over an agent that lives outside it (#785-58ca). It
-binds to a **repository root and a session**, never to a terminal: a turn ego
-runs outlives any tab and touches files no tab is showing. Nothing here holds a
+is **one chat for the app** (#1157-1e54), never bound to a terminal or a
+repository: sessions run in `~/Gits`, and the repository on screen is a hint sent
+with each prompt. Nothing here holds a
 provider, an API key or a tool loop.
 
-The session's one MCP server is **our `tuic-bridge` sidecar over stdio**
-(#796-7fa3), the same adapter every PTY agent uses to reach `mcp.sock`. It was an
-HTTP URL built from the bound TCP port, which made the panel's tools depend on
-Remote Access being on; the socket has no such condition. A stdio entry is a
-command ego runs, so the server-side synthesis in `granted` is what keeps it safe
-— see plan §4.5.
+The session's one MCP server is **`tuicommander` on the ACP transport**
+(#1156-1b61): `{"type":"acp","name":"tuicommander","serverId":"tuicommander"}`,
+served on the ACP connection itself through `mcp/connect`, `mcp/message` and
+`mcp/disconnect`. It replaced the stdio `tuic-bridge` entry (#796-7fa3), which
+opened a fresh HTTP MCP session for every ego tool operation. Every request goes
+through the same `mcp_post` handler as HTTP `/mcp`, bound to the connection's
+peer identity; the server-side synthesis in `granted` still keeps a caller from
+naming a server — see plan §4.5.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_SOCKET` and host-issued `TUIC_SESSION` it carries, and `mcp_stdio` in `capability_snapshot` |
-| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and the bridge; `set_bridge_binary` and `set_socket_path` are what a wire test pins |
+| `src-tauri/src/acp/mod.rs` | `tuicommander_acp_mcp_server` — the entry's name and `serverId`, and `mcp_acp`/`mcp_stdio` in `capability_snapshot` |
+| `src-tauri/src/acp/mcp_host.rs` | The `McpOverAcpHost` contract and `McpChannel`: which `serverId` is served, unknown connection ids refused, every connection released when the ACP connection ends |
+| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; the connection's peer ID reaches ego's environment and every MCP connection; `set_mcp_host`; `mcp/message` runs under `$/cancel_request` |
+| `src-tauri/src/mcp_http/acp_mcp.rs` | `AcpMcpHost` — one protocol session per MCP connection, the GET `/mcp` stream forwarded as notifications, `end_mcp_session` on disconnect; `install` at both startup sites |
 | `src-tauri/src/acp_commands.rs`, `src-tauri/src/config.rs` | Persist a root's ACP peer UUID beside its selected conversation and reuse it after reconnect or restart |
 | `src-tauri/src/mcp_http/mcp_transport.rs` | Bind bridge mail, child parentage and blocked progress to the ACP peer without a PTY |
-| `src-tauri/src/mcp_http/mod.rs` | The bound socket is handed to `acp.set_socket_path` where it is recorded — the entry can only carry a path this process learned |
-| `src-tauri/src/agent_mcp.rs` | `locate_bridge_binary` — where the sidecar is looked for, shared with the agent config writers |
 | `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
-| `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
+| `src/components/AIChatPanel/useAcpChat.ts` | One connection for the app, rooted at `~/Gits` and started by the first message or "+"; global tabs; the viewed repo sent per prompt; every action it offers |
+| `src-tauri/src/acp/manager.rs` (`prompt_with_context`, `shutdown_all`, peer adoption) | `_meta.tuicommander/viewedRepo` on `session/prompt`; one live connection per peer id; every ego ended on app exit |
 | `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
 | `src/components/AIChatPanel/Interactions.tsx` | Permission options and elicitation forms; a single choice field with up to three values has direct buttons. `form` is the only mode drawn |
 | `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, pause/resume/compact, and readable labels for untitled conversations |

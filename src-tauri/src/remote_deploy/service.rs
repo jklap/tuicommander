@@ -285,14 +285,15 @@ async fn save_mode(
     mode: DeployMode,
 ) -> Result<(), String> {
     let _guard = state.connections_lock.lock().await;
-    let mut connections =
-        RemoteConnectionStore::load(&state.data_dir).map_err(|error| error.to_string())?;
-    let connection = connections
-        .iter_mut()
-        .find(|connection| connection.id == id)
-        .ok_or_else(|| format!("Unknown remote connection {id}"))?;
-    connection.deploy = mode;
-    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|error| error.to_string())
+    RemoteConnectionStore::update(&state.data_dir, |connections| {
+        let connection = connections
+            .iter_mut()
+            .find(|connection| connection.id == id)
+            .ok_or_else(|| format!("Unknown remote connection {id}"))?;
+        let changed = connection.deploy != mode;
+        connection.deploy = mode;
+        Ok(((), changed))
+    })
 }
 
 pub(crate) async fn install_remote_daemon_shared(

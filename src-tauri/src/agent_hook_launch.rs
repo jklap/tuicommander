@@ -327,7 +327,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(config).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
         let binary = crate::test_support::fake_ssh_script(
             "screen-setting-codex",
             "printf '%s\\n' '--no-alt-screen'",

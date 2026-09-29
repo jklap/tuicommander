@@ -7,8 +7,11 @@ mod dictation_config {
     /// Dictation configuration persisted to <config_dir>/dictation-config.json
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct DictationConfig {
+        #[serde(default)]
         pub enabled: bool,
+        #[serde(default = "default_hotkey")]
         pub hotkey: String,
+        #[serde(default = "default_language")]
         pub language: String,
         /// Selected whisper model name (e.g. "large-v3-turbo", "small")
         #[serde(default = "default_model")]
@@ -92,6 +95,14 @@ mod dictation_config {
         "large-v3-turbo".to_string()
     }
 
+    fn default_hotkey() -> String {
+        "F5".to_string()
+    }
+
+    fn default_language() -> String {
+        "auto".to_string()
+    }
+
     pub(crate) fn default_long_press_ms() -> u32 {
         400
     }
@@ -161,8 +172,8 @@ mod dictation_config {
         fn default() -> Self {
             Self {
                 enabled: false,
-                hotkey: "F5".to_string(),
-                language: "auto".to_string(),
+                hotkey: default_hotkey(),
+                language: default_language(),
                 model: default_model(),
                 device: None,
                 long_press_ms: default_long_press_ms(),
@@ -1598,6 +1609,12 @@ pub(crate) struct AgentsConfig {
     pub(crate) headless_agent: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ConfigSaveRequest<T> {
+    pub(crate) base: T,
+    pub(crate) config: T,
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands — one load/save pair per config type
 // ---------------------------------------------------------------------------
@@ -2011,6 +2028,37 @@ pub(crate) fn json_merge_delta(
     }
 }
 
+fn apply_json_merge_delta(target: &mut serde_json::Value, delta: &serde_json::Value) {
+    let serde_json::Value::Object(changes) = delta else {
+        *target = delta.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let object = target.as_object_mut().expect("object initialized above");
+    for (key, change) in changes {
+        if change.is_null() {
+            object.remove(key);
+        } else {
+            apply_json_merge_delta(
+                object.entry(key.clone()).or_insert(serde_json::Value::Null),
+                change,
+            );
+        }
+    }
+}
+
+pub(crate) fn apply_typed_json_merge_delta<T: Serialize + DeserializeOwned>(
+    latest: &mut T,
+    delta: &serde_json::Value,
+) -> Result<(), String> {
+    let mut merged = serde_json::to_value(&*latest).map_err(|e| e.to_string())?;
+    apply_json_merge_delta(&mut merged, delta);
+    *latest = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn app_config_delta(base: &AppConfig, desired: &AppConfig) -> Result<serde_json::Value, String> {
     let base =
         serde_json::to_value(base).map_err(|e| format!("Could not serialize base config: {e}"))?;
@@ -2178,6 +2226,52 @@ where
         Ok(result)
     }
 
+    /// Apply only the fields changed by this caller to the latest locked file.
+    /// Arrays are replaced as values; a null delta removes an object key.
+    pub(crate) fn save_delta(&self, base: &T, desired: &T) -> Result<(), String> {
+        self.save_delta_with(base, desired, false)
+    }
+
+    /// Keep invalid existing JSON available for recovery instead of defaulting it.
+    pub(crate) fn save_delta_strict(&self, base: &T, desired: &T) -> Result<(), String> {
+        self.save_delta_with(base, desired, true)
+    }
+
+    /// Repair a caller's malformed load without overwriting a valid document
+    /// another process saved since that load. Both cases are decided under one lock.
+    pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
+        let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
+        let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
+        let delta = json_merge_delta(&base_json, &desired_json);
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        match load_json_config_strict_from_path::<T>(&self.path) {
+            Ok(mut latest) => {
+                let Some(delta) = delta else { return Ok(()) };
+                apply_typed_json_merge_delta(&mut latest, &delta)?;
+                self.write_atomic(&latest)
+            }
+            Err(_) => self.write_atomic(desired),
+        }
+    }
+
+    fn save_delta_with(&self, base: &T, desired: &T, strict: bool) -> Result<(), String> {
+        let base = serde_json::to_value(base).map_err(|e| e.to_string())?;
+        let desired = serde_json::to_value(desired).map_err(|e| e.to_string())?;
+        let Some(delta) = json_merge_delta(&base, &desired) else {
+            return Ok(());
+        };
+        let apply = move |latest: &mut T| {
+            apply_typed_json_merge_delta(latest, &delta)?;
+            Ok(((), true))
+        };
+        if strict {
+            self.update_with_strict(apply)
+        } else {
+            self.update_with(apply)
+        }
+    }
+
     /// Write `value` unconditionally, taking only the cross-process file lock — no
     /// stamp check. Takes only the file lock itself, not `CONFIG_WRITE_LOCK`: the
     /// `&ConfigWriteGuard` parameter proves the caller already holds it, which is what
@@ -2225,12 +2319,33 @@ pub(crate) fn commit_config_change<F>(
 where
     F: FnOnce(&AppConfig) -> Result<AppConfig, String>,
 {
-    let _guard = config_write_lock();
-
+    let guard = config_write_lock();
     let cached = state.config.read().clone();
-    let mut requested = mutate(&cached)?;
+    let requested = mutate(&cached)?;
+    commit_config_change_locked(state, &guard, cached.clone(), cached, requested)
+}
+
+/// Save an interactive client's edit relative to the snapshot it loaded.
+pub(crate) fn commit_config_save(
+    state: &crate::AppState,
+    base: AppConfig,
+    requested: AppConfig,
+) -> Result<ConfigSaveEffects, String> {
+    let guard = config_write_lock();
+    let cached = state.config.read().clone();
+    commit_config_change_locked(state, &guard, cached, base, requested)
+}
+
+fn commit_config_change_locked(
+    state: &crate::AppState,
+    _guard: &ConfigWriteGuard,
+    cached: AppConfig,
+    mut base: AppConfig,
+    mut requested: AppConfig,
+) -> Result<ConfigSaveEffects, String> {
+    preserve_redacted_app_config_secrets(&mut base, &cached);
     preserve_redacted_app_config_secrets(&mut requested, &cached);
-    let delta = app_config_delta(&cached, &requested)?;
+    let delta = app_config_delta(&base, &requested)?;
 
     let file = ConfigFile::<AppConfig>::new(APP_CONFIG_FILE);
     let _file_lock = file.acquire_file_lock()?;
@@ -2240,7 +2355,11 @@ where
     // There is no competing persisted document in that case, so use the cache as
     // the base rather than dropping those values back to AppConfig::default().
     let latest = if file_exists { latest } else { cached.clone() };
-    let next = merge_partial_app_config(&latest, delta)?;
+    let mut next_json = serde_json::to_value(&latest)
+        .map_err(|e| format!("Could not serialize current config: {e}"))?;
+    apply_json_merge_delta(&mut next_json, &delta);
+    let next: AppConfig =
+        serde_json::from_value(next_json).map_err(|e| format!("Invalid config: {e}"))?;
 
     let effects = ConfigSaveEffects {
         tools_changed: cached.disabled_native_tools != next.disabled_native_tools
@@ -2534,7 +2653,6 @@ pub(crate) fn load_app_config() -> AppConfig {
 /// This is reserved for bootstrap and explicit replacement paths. Interactive config
 /// mutation goes through `commit_config_change`, which applies a delta to the latest
 /// locked disk value instead of replacing it with a stale snapshot.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_app_config(config: AppConfig) -> Result<(), String> {
     let _guard = config_write_lock();
     save_app_config_locked(config, &_guard)
@@ -2572,9 +2690,12 @@ pub(crate) fn load_notification_config() -> NotificationConfig {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_notification_config(config: NotificationConfig) -> Result<(), String> {
+pub(crate) fn save_notification_config(
+    base: NotificationConfig,
+    config: NotificationConfig,
+) -> Result<(), String> {
     let file: ConfigFile<NotificationConfig> = ConfigFile::new(NOTIFICATION_CONFIG_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 // UI prefs
@@ -2584,9 +2705,9 @@ pub(crate) fn load_ui_prefs() -> UIPrefsConfig {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_ui_prefs(config: UIPrefsConfig) -> Result<(), String> {
+pub(crate) fn save_ui_prefs(base: UIPrefsConfig, config: UIPrefsConfig) -> Result<(), String> {
     let file: ConfigFile<UIPrefsConfig> = ConfigFile::new(UI_PREFS_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 // Repo settings
@@ -2596,9 +2717,12 @@ pub(crate) fn load_repo_settings() -> RepoSettingsMap {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_repo_settings(config: RepoSettingsMap) -> Result<(), String> {
+pub(crate) fn save_repo_settings(
+    base: RepoSettingsMap,
+    config: RepoSettingsMap,
+) -> Result<(), String> {
     let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 /// Set or clear a human-readable label for a branch/worktree within a repo.
@@ -2779,9 +2903,12 @@ pub(crate) fn load_repo_defaults() -> RepoDefaultsConfig {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_repo_defaults(config: RepoDefaultsConfig) -> Result<(), String> {
+pub(crate) fn save_repo_defaults(
+    base: RepoDefaultsConfig,
+    config: RepoDefaultsConfig,
+) -> Result<(), String> {
     let file: ConfigFile<RepoDefaultsConfig> = ConfigFile::new(REPO_DEFAULTS_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 /// Resolve the effective setup script for a repo using the three-tier hierarchy:
@@ -3620,9 +3747,12 @@ pub(crate) fn load_pane_layout() -> serde_json::Value {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_pane_layout(layout: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_pane_layout(
+    base: serde_json::Value,
+    layout: serde_json::Value,
+) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(PANE_LAYOUT_FILE);
-    file.save(&layout)
+    file.save_delta(&base, &layout)
 }
 
 // Prompt library
@@ -3632,9 +3762,12 @@ pub(crate) fn load_prompt_library() -> PromptLibraryConfig {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_prompt_library(config: PromptLibraryConfig) -> Result<(), String> {
+pub(crate) fn save_prompt_library(
+    base: PromptLibraryConfig,
+    config: PromptLibraryConfig,
+) -> Result<(), String> {
     let file: ConfigFile<PromptLibraryConfig> = ConfigFile::new(PROMPT_LIBRARY_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 // Notes (opaque JSON — schema owned by frontend)
@@ -3648,9 +3781,9 @@ pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_notes(config: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_notes(base: serde_json::Value, config: serde_json::Value) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(NOTES_FILE);
-    file.save(&config)
+    file.save_delta_strict(&base, &config)
 }
 
 // Activity center (opaque JSON — schema owned by frontend)
@@ -3660,9 +3793,12 @@ pub(crate) fn load_activity() -> serde_json::Value {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_activity(items: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_activity(
+    base: serde_json::Value,
+    items: serde_json::Value,
+) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(ACTIVITY_FILE);
-    file.save(&items)
+    file.save_delta(&base, &items)
 }
 
 // Keybindings (opaque JSON — schema owned by frontend)
@@ -3672,9 +3808,12 @@ pub(crate) fn load_keybindings() -> serde_json::Value {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_keybindings(config: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_keybindings(
+    base: serde_json::Value,
+    config: serde_json::Value,
+) -> Result<(), String> {
     let file: ConfigFile<serde_json::Value> = ConfigFile::new(KEYBINDINGS_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 // Agents config
@@ -3684,9 +3823,9 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
+pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
-    file.save(&config)
+    file.save_delta(&base, &config)
 }
 
 // ---------------------------------------------------------------------------
@@ -7448,6 +7587,25 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn stale_app_config_saves_in_one_process_preserve_independent_changes() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let base = state.config.read().clone();
+        let mut first = base.clone();
+        first.font_size = 21;
+        let mut second = base.clone();
+        second.collapse_tools = true;
+        commit_config_save(&state, base.clone(), first).unwrap();
+        commit_config_save(&state, base, second).unwrap();
+        let saved = load_app_config();
+        assert_eq!(saved.font_size, 21);
+        assert!(saved.collapse_tools);
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn config_patch_applies_only_the_named_key() {
         crate::credentials::reset_test_faults();
         let dir = tempfile::tempdir().expect("tempdir");
@@ -7903,6 +8061,227 @@ mod tests {
     // ConfigFile<T> — cross-process-safe update/save
     // -----------------------------------------------------------------
 
+    #[test]
+    #[serial_test::serial]
+    fn stale_agents_saves_preserve_independent_changes() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_agents_config();
+
+        let mut first = base.clone();
+        first.headless_agent = Some("claude".to_string());
+        let mut second = base.clone();
+        second
+            .agents
+            .entry("claude".to_string())
+            .or_default()
+            .progress_tracking = Some(true);
+
+        save_agents_config(base.clone(), first).expect("first client save");
+        save_agents_config(base, second).expect("second client save");
+
+        let persisted = load_agents_config();
+        assert_eq!(persisted.headless_agent.as_deref(), Some("claude"));
+        assert_eq!(persisted.agents["claude"].progress_tracking, Some(true));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_notification_saves_preserve_independent_changes() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_notification_config();
+        let mut first = base.clone();
+        first.enabled = false;
+        let mut second = base.clone();
+        second.volume = 0.2;
+        save_notification_config(base.clone(), first).unwrap();
+        save_notification_config(base, second).unwrap();
+        let saved = load_notification_config();
+        assert!(!saved.enabled);
+        assert_eq!(saved.volume, 0.2);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_ui_prefs_saves_preserve_independent_changes() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_ui_prefs();
+        let mut first = base.clone();
+        first.sidebar_visible = false;
+        let mut second = base.clone();
+        second.settings_expert_mode = true;
+        save_ui_prefs(base.clone(), first).unwrap();
+        save_ui_prefs(base, second).unwrap();
+        let saved = load_ui_prefs();
+        assert!(!saved.sidebar_visible);
+        assert!(saved.settings_expert_mode);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_repo_defaults_saves_preserve_independent_changes() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_repo_defaults();
+        let mut first = base.clone();
+        first.base_branch = "main".to_string();
+        let mut second = base.clone();
+        second.auto_fetch_interval_minutes = 15;
+        save_repo_defaults(base.clone(), first).unwrap();
+        save_repo_defaults(base, second).unwrap();
+        let saved = load_repo_defaults();
+        assert_eq!(saved.base_branch, "main");
+        assert_eq!(saved.auto_fetch_interval_minutes, 15);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_repo_settings_saves_preserve_distinct_repositories() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_repo_settings();
+        let mut first = base.clone();
+        first.repos.insert(
+            "/alpha".into(),
+            RepoSettingsEntry {
+                path: "/alpha".into(),
+                ..Default::default()
+            },
+        );
+        let mut second = base.clone();
+        second.repos.insert(
+            "/beta".into(),
+            RepoSettingsEntry {
+                path: "/beta".into(),
+                ..Default::default()
+            },
+        );
+        save_repo_settings(base.clone(), first).unwrap();
+        save_repo_settings(base, second).unwrap();
+        let saved = load_repo_settings();
+        assert!(saved.repos.contains_key("/alpha"));
+        assert!(saved.repos.contains_key("/beta"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn stale_pane_layout_saves_preserve_independent_object_keys() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = serde_json::json!({"left": {"width": 30}, "right": {"width": 40}});
+        ConfigFile::<serde_json::Value>::new(PANE_LAYOUT_FILE)
+            .save(&base)
+            .unwrap();
+        save_pane_layout(
+            base.clone(),
+            serde_json::json!({"left": {"width": 35}, "right": {"width": 40}}),
+        )
+        .unwrap();
+        save_pane_layout(
+            base,
+            serde_json::json!({"left": {"width": 30}, "right": {"width": 45}}),
+        )
+        .unwrap();
+        assert_eq!(
+            load_pane_layout(),
+            serde_json::json!({"left": {"width": 35}, "right": {"width": 45}})
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn notes_array_replaces_whole_while_unrelated_object_key_survives() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = serde_json::json!({"notes": [{"id": "old"}], "meta": "initial"});
+        ConfigFile::<serde_json::Value>::new(NOTES_FILE)
+            .save(&base)
+            .unwrap();
+        save_notes(
+            base.clone(),
+            serde_json::json!({"notes": [{"id": "old"}], "meta": "new"}),
+        )
+        .unwrap();
+        save_notes(
+            base,
+            serde_json::json!({"notes": [{"id": "new"}], "meta": "initial"}),
+        )
+        .unwrap();
+        assert_eq!(
+            load_notes().unwrap(),
+            serde_json::json!({"notes": [{"id": "new"}], "meta": "new"})
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn notes_delta_removes_deleted_key_without_erasing_another_edit() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = serde_json::json!({"notes": [], "obsolete": "remove", "other": "old"});
+        ConfigFile::<serde_json::Value>::new(NOTES_FILE)
+            .save(&base)
+            .unwrap();
+        save_notes(
+            base.clone(),
+            serde_json::json!({"notes": [], "obsolete": "remove", "other": "new"}),
+        )
+        .unwrap();
+        save_notes(base, serde_json::json!({"notes": [], "other": "old"})).unwrap();
+        assert_eq!(
+            load_notes().unwrap(),
+            serde_json::json!({"notes": [], "other": "new"})
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn notes_null_inside_new_object_is_a_delete_marker() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = serde_json::json!({});
+        save_notes(
+            base,
+            serde_json::json!({"metadata": {"unset": null, "kept": "value"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            load_notes().unwrap(),
+            serde_json::json!({"metadata": {"kept": "value"}})
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn notes_delta_refuses_to_replace_corrupt_file() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join(NOTES_FILE);
+        fs::write(&path, b"{incomplete").unwrap();
+        assert!(
+            save_notes(
+                serde_json::json!({"notes": []}),
+                serde_json::json!({"notes": [{"id": "new"}]})
+            )
+            .is_err()
+        );
+        assert!(!path.exists(), "the invalid document must not be replaced");
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("notes.corrupt-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(backups[0].path()).unwrap(), b"{incomplete");
+    }
+
     #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
     struct CounterDoc {
         counters: HashMap<String, i64>,
@@ -7974,12 +8353,16 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        save_activity(serde_json::json!([{ "id": 1 }])).expect("seed write");
+        ConfigFile::<serde_json::Value>::new(ACTIVITY_FILE)
+            .save(&serde_json::json!([{ "id": 1 }]))
+            .expect("seed write");
         ConfigFile::<serde_json::Value>::new(ACTIVITY_FILE)
             .save(&serde_json::json!([{ "id": 2 }]))
             .expect("interloper write");
 
-        save_activity(serde_json::json!([{ "id": 3 }])).expect("must not be refused");
+        ConfigFile::<serde_json::Value>::new(ACTIVITY_FILE)
+            .save(&serde_json::json!([{ "id": 3 }]))
+            .expect("must not be refused");
         assert_eq!(load_activity(), serde_json::json!([{ "id": 3 }]));
     }
 

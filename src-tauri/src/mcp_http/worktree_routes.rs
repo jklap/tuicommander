@@ -296,9 +296,16 @@ pub(super) async fn remove_worktree_http(
             .into_response();
     }
     let id_for_event = workspace_id.clone();
+    let preview_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
+        let warnings = crate::worktree::inspect_worktree_removal(
+            &preview_state,
+            std::path::Path::new(&repo_path),
+            &workspace_id,
+        )
+        .warnings;
         let archive = crate::worktree::resolve_archive_script(&repo_path);
-        crate::worktree::remove_worktree_with_presence_confirmation(
+        let outcome = crate::worktree::remove_worktree_with_presence_confirmation(
             &repo_path,
             &workspace_id,
             delete_branch,
@@ -307,12 +314,13 @@ pub(super) async fn remove_worktree_http(
             override_lock,
             expected_fingerprint.as_deref(),
             confirm_missing_checkout,
-        )
+        )?;
+        Ok::<_, String>((outcome, warnings))
     })
     .await;
     // The branch comes off the outcome: it was read from the record before the
     // checkout was removed, and nothing can resolve the id afterwards.
-    if let Ok(Ok(ref outcome)) = result {
+    if let Ok(Ok((ref outcome, _))) = result {
         state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
             repo_path: q.repo_path.clone(),
             workspace_id: id_for_event,
@@ -320,12 +328,13 @@ pub(super) async fn remove_worktree_http(
         });
     }
     match result {
-        Ok(Ok(outcome)) => (
+        Ok(Ok((outcome, warnings))) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ok": true,
                 "branch_delete_warning": outcome.branch_delete_warning,
                 "removal_rule": outcome.removal_rule,
+                "warnings": warnings,
             })),
         )
             .into_response(),
@@ -453,12 +462,16 @@ pub(super) async fn merge_pr_via_github_http(
 }
 
 /// Fresh linked-worktree removal preflight.
-pub(super) async fn workspace_lifecycle_http(Query(q): Query<WorkspaceIdQuery>) -> Response {
+pub(super) async fn workspace_lifecycle_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WorkspaceIdQuery>,
+) -> Response {
     if let Err(error) = validate_repo_path(&q.repo_path) {
         return error.into_response();
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::inspect_workspace_lifecycle(
+        crate::worktree::inspect_worktree_removal(
+            &state,
             std::path::Path::new(&q.repo_path),
             &q.workspace_id,
         )
@@ -632,7 +645,8 @@ mod warm_tests {
             gate.display(),
             finished.display()
         );
-        crate::config::save_repo_defaults(defaults).unwrap();
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+            .unwrap();
     }
 
     #[cfg(unix)]

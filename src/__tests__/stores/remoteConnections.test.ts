@@ -132,6 +132,17 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			await store.hydrate();
 		});
 
+		it("sends the loaded base for edits and null for a new connection", async () => {
+			const loaded = store.getConnectionState("c1")!.connection;
+			const edited = { ...loaded, auto_update: true };
+			await store.addConnection(edited);
+			const added = directConn("c2");
+			await store.addConnection(added);
+
+			expect(invokeMock).toHaveBeenCalledWith("save_remote_connection", { base: loaded, connection: edited });
+			expect(invokeMock).toHaveBeenCalledWith("save_remote_connection", { base: null, connection: added });
+		});
+
 		it("connect asks the backend and waits: the status arrives as a push", async () => {
 			await store.connect("c1");
 

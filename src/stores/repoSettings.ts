@@ -1,5 +1,6 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
 import { appLogger } from "./appLogger";
 import type {
@@ -172,6 +173,7 @@ interface RepoSettingsState {
 }
 
 const LEGACY_STORAGE_KEY = "tui-commander-repo-settings";
+const repoSettingsWriter = createConfigDeltaWriter<{ repos: Record<string, unknown> }>("save_repo_settings");
 
 /**
  * Persist settings to Rust backend (fire-and-forget).
@@ -186,7 +188,7 @@ const LEGACY_STORAGE_KEY = "tui-commander-repo-settings";
 function saveSettings(settings: Record<string, RepoSettings>): void {
 	const repos: Record<string, unknown> = {};
 	for (const [path, entry] of Object.entries(settings)) repos[path] = toSnakeKeys(entry);
-	invoke("save_repo_settings", { config: { repos } }).catch((err) =>
+	repoSettingsWriter.save({ repos }).catch((err) =>
 		appLogger.error("config", "Failed to save repo settings", err),
 	);
 }
@@ -289,7 +291,9 @@ function createRepoSettingsStore() {
 						const parsed = JSON.parse(legacy) as Record<string, RepoSettings>;
 						const repos: Record<string, unknown> = {};
 						for (const [path, entry] of Object.entries(parsed)) repos[path] = toSnakeKeys(entry);
-						await invoke("save_repo_settings", { config: { repos } });
+						const current = (await invoke<{ repos: Record<string, unknown> }>("load_repo_settings")) ?? { repos: {} };
+						repoSettingsWriter.loaded(current);
+						await repoSettingsWriter.save({ repos: { ...current.repos, ...repos } });
 					} catch {
 						/* ignore corrupt legacy data */
 					}
@@ -297,6 +301,7 @@ function createRepoSettingsStore() {
 				}
 
 				const loaded = await invoke<{ repos?: Record<string, Record<string, unknown>> }>("load_repo_settings");
+				repoSettingsWriter.loaded({ repos: loaded?.repos ?? {} });
 				if (loaded?.repos) {
 					setState("settings", fromWire(loaded.repos));
 				}

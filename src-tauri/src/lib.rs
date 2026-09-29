@@ -342,10 +342,14 @@ mod boot_commands {
 /// Save configuration to disk, update the AppState cache, and live-restart the HTTP server
 /// if MCP / Remote Access settings changed (no app restart required).
 #[tauri::command]
-fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Result<(), String> {
+fn save_config(
+    state: State<'_, Arc<AppState>>,
+    base: config::AppConfig,
+    config: config::AppConfig,
+) -> Result<(), String> {
     // Serialized read-merge-persist: see config::commit_config_change. Two overlapping
     // saves used to read the same snapshot and the loser's fields were silently dropped.
-    let effects = config::commit_config_change(state.inner(), move |_current| Ok(config))?;
+    let effects = config::commit_config_save(state.inner(), base, config)?;
 
     if effects.tools_changed {
         let _ = state.mcp.tools_changed.send(());
@@ -356,6 +360,16 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn save_app_config(
+    state: State<'_, Arc<AppState>>,
+    base: config::AppConfig,
+    config: config::AppConfig,
+) -> Result<(), String> {
+    save_config(state, base, config)
 }
 
 /// Hash a plaintext password with bcrypt for remote access config
@@ -2093,7 +2107,7 @@ pub fn run() {
             dictation::commands::get_hands_free_status,
             global_hotkey::set_global_hotkey,
             config::load_app_config,
-            config::save_app_config,
+            save_app_config,
             boot_commands::load_notification_config_async,
             config::save_notification_config,
             boot_commands::load_ui_prefs_async,
@@ -2335,6 +2349,9 @@ pub fn run() {
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
                         }
+                        // End every ego AI Chat started: `std::process::exit`
+                        // skips the destructors that would kill them.
+                        tauri::async_runtime::block_on(state.acp.shutdown_all());
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the
@@ -2585,6 +2602,7 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     );
     // The daemon is precisely where nobody can watch a CPU spike happen.
     cpu_watchdog::spawn(state.clone());
+    mcp_http::acp_mcp::install(state);
     mcp_http::spawn_maintenance_sweep(state);
 
     // Deliberately NOT started on the daemon:
@@ -3315,6 +3333,22 @@ mod tests {
                 "run_remote must call {call} — without it the machine's repos have no index"
             );
         }
+    }
+
+    /// The remote boot path enters a Tokio runtime before registering its
+    /// repositories. Registering a real watcher here exercises the same
+    /// runtime-dependent path that panicked in synchronous headless tests.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn remote_boot_can_register_a_repository_watcher() {
+        let repo = tempfile::tempdir().expect("repository directory");
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let path = repo.path().to_str().expect("UTF-8 test path");
+
+        crate::repo_watcher::start_watching(path, &state)
+            .expect("remote boot must register a watcher inside its Tokio runtime");
+        assert!(state.repo_watchers.contains_key(path));
+        crate::repo_watcher::stop_watching(path, &state);
     }
 
     #[test]
