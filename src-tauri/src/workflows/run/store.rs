@@ -6,9 +6,10 @@ use crate::workflows::{CheckDefinition, NodeKind, WorkflowKind, WorkflowStore};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -18,10 +19,21 @@ pub struct RunStore {
 }
 
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
+static RECONCILED_RUN_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 impl RunStore {
     pub fn open() -> Result<Self, String> {
-        Self::open_at(&crate::config::config_dir().join("workflow_runs.sqlite3"))
+        let db_path = crate::config::config_dir().join("workflow_runs.sqlite3");
+        let mut reconciled = RECONCILED_RUN_STORES
+            .lock()
+            .map_err(|_| "workflow recovery lock poisoned")?;
+        let store = Self::open_at(&db_path)?;
+        if !reconciled.contains(&db_path) {
+            store.reconcile_active()?;
+            reconciled.insert(db_path);
+        }
+        Ok(store)
     }
 
     pub(crate) fn open_at(path: &Path) -> Result<Self, String> {
@@ -168,6 +180,7 @@ impl RunStore {
         insert_event(&tx, &snapshot.id, &receipt)?;
         tx.commit()
             .map_err(|e| format!("commit plan run start: {e}"))?;
+        StoryStore::open()?.reconcile_integrated_dependencies(plan_id)?;
         Ok(snapshot)
     }
 
@@ -885,7 +898,7 @@ impl RunStore {
         self.snapshot(run_id)
     }
 
-    /// Called once at process startup, before new workflow work is accepted.
+    /// Called on first workflow use, before new workflow work is accepted.
     pub fn reconcile_active(&self) -> Result<usize, String> {
         let conn = self.connect()?;
         let mut stmt = conn
@@ -934,6 +947,20 @@ pub fn story_integrated_at_revision(story_id: &str, revision: i64) -> Result<boo
         story_id,
         revision,
     )
+}
+
+pub(crate) fn plan_has_workflow_run_in(db_path: &Path, plan_id: &str) -> Result<bool, String> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("open workflow run store: {error}"))?;
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE plan_id=?1)",
+        [plan_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| format!("read workflow run ownership: {error}"))
 }
 
 pub(crate) fn story_integrated_at_revision_in(

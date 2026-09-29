@@ -88,14 +88,23 @@ pub(super) fn dependencies_integrated(
     story: &Story,
     story_db: &Path,
 ) -> Result<bool, String> {
+    if story.dependencies.is_empty() {
+        return Ok(true);
+    }
     let run_db = story_db
         .parent()
         .ok_or("story store has no parent directory")?
         .join("workflow_runs.sqlite3");
+    let requires_receipt = crate::workflows::plan_has_workflow_run_in(&run_db, &story.plan_id)?;
     for id in &story.dependencies {
         let dependency = read_story(conn, id)?;
         if dependency.status != StoryStatus::Done
-            || !crate::workflows::story_integrated_at_revision_in(&run_db, id, dependency.revision)?
+            || (requires_receipt
+                && !crate::workflows::story_integrated_at_revision_in(
+                    &run_db,
+                    id,
+                    dependency.revision,
+                )?)
         {
             return Ok(false);
         }

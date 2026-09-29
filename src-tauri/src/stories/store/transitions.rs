@@ -272,6 +272,9 @@ impl StoryStore {
                     .map_err(|e| format!("encode story actor: {e}"))?,
             ],
         ).map_err(|e| format!("record story transition: {e}"))?;
+        if story.status == StoryStatus::Done {
+            reconcile_ready(&tx, &story.plan_id, &self.db_path)?;
+        }
         tx.commit()
             .map_err(|e| format!("commit story transition: {e}"))?;
         Ok(story)

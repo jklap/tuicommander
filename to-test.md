@@ -357,6 +357,8 @@
 
 ## Native story API (2026-09-24) — Rust, needs `make dev` restart
 
+- [ ] After rebuilding an isolated instance, approve a prerequisite in a manual plan and confirm its dependent becomes Ready immediately. Start a workflow run for a separate plan, approve its prerequisite, and confirm the dependent stays Backlog until integration is recorded. Confirm desktop and headless startup remain responsive before opening a workflow; the first workflow access should recover prior active runs.
+
 - [ ] After rebuilding an isolated instance, create a plan and story using `tuic story`, read them from the browser `/stories/action` route, and confirm another project's path cannot read their IDs. Claim from a live tab and verify stale revisions are rejected.
 
 ## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
