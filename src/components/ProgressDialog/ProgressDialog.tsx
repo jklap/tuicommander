@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import {
 	type ProgressFlow as FlowData,
@@ -70,6 +70,17 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 		return path ? progressStore.state.projects[path] : undefined;
 	};
 	const entries = createMemo<ProgressEntry[]>(() => projectState()?.entries ?? []);
+	const [expandedEntries, setExpandedEntries] = createSignal<number[]>([]);
+	createEffect(() => {
+		project();
+		setExpandedEntries([]);
+	});
+	const isLong = (text: string) => text.length > 160 || text.split("\n").length > 4;
+	function toggleExpanded(id: number) {
+		setExpandedEntries((current) =>
+			current.includes(id) ? current.filter((entryId) => entryId !== id) : [...current, id],
+		);
+	}
 	const terminalNames = createMemo(
 		() =>
 			new Map(
@@ -246,7 +257,25 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 								<div class={s.entry} data-kind={entry.type}>
 									<KindIcon kind={entry.type} />
 									<div class={s.body}>
-										<p class={s.text}>{entry.text}</p>
+										<p
+											class={s.text}
+											classList={{
+												[s.textCollapsed]:
+													!!props.embedded && isLong(entry.text) && !expandedEntries().includes(entry.id),
+											}}
+										>
+											{entry.text}
+										</p>
+										<Show when={props.embedded && isLong(entry.text)}>
+											<button
+												type="button"
+												class={s.more}
+												aria-expanded={expandedEntries().includes(entry.id)}
+												onClick={() => toggleExpanded(entry.id)}
+											>
+												{expandedEntries().includes(entry.id) ? "Less" : "More"}
+											</button>
+										</Show>
 										<div class={s.meta}>
 											<Show when={entry.type === "intent"}>
 												<span class={s.kindLabel}>set out to</span>

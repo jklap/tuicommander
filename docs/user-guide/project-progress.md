@@ -81,6 +81,8 @@ terminal. Use **Go to repo** when you want to navigate.
 
 The dialog opens on the active PTY, newest first. The selector switches to
 another PTY in the project or **All repo**, which combines their histories.
+In the mobile Progress tab, a long entry initially shows about four lines;
+tap **More** to read it all and **Less** to collapse it again.
 Closed PTYs with saved entries remain selectable. A PTY with no entries has an
 empty view; it does not inherit another PTY's work. Entries recorded before
 terminal identity was stored, and direct local reports with no PTY binding,

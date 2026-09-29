@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::Query;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use super::types::*;
@@ -127,6 +127,50 @@ pub(super) async fn fs_read_file_http(Query(q): Query<FsFileQuery>) -> Response 
         return e.into_response();
     }
     json_result(crate::fs::fs_read_file(q.repo_path, q.file).await)
+}
+
+/// Serve Markdown images through the authenticated HTTP router. Canonical paths
+/// keep both `..` and symlinks from escaping the selected repository.
+pub(super) async fn markdown_image_http(Query(q): Query<FsFileQuery>) -> Response {
+    const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    let root = match tokio::fs::canonicalize(&q.repo_path).await {
+        Ok(root) => root,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let image = match tokio::fs::canonicalize(root.join(&q.file)).await {
+        Ok(image) => image,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if !image.starts_with(&root) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let mime = mime_guess::from_path(&image).first_or_octet_stream();
+    if mime.type_().as_str() != "image" {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    let metadata = match tokio::fs::metadata(&image).await {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let bytes = match tokio::fs::read(&image).await {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, mime.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 /// Repo file read for the code editor, at the larger `MAX_EDITOR_LARGE_FILE_SIZE` cap.
