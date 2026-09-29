@@ -105,6 +105,7 @@ describe("session Files navigation", () => {
 		await waitFor(() => expect(view.getByText("Live session output")).toBeTruthy());
 		const composer = view.container.querySelector("textarea")!;
 		await fireEvent.input(composer, { target: { value: "unsent draft" } });
+		const writesBeforeBrowse = rpc.mock.calls.filter(([command]) => command === "write_pty").length;
 		await openSessionFiles(view);
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("list_directory", {
@@ -114,6 +115,7 @@ describe("session Files navigation", () => {
 		);
 		expect(view.getByRole("button", { name: "README.md" })).toBeTruthy();
 		expect(view.queryByRole("button", { name: /repo\/nested/ })).toBeNull();
+		expect(rpc.mock.calls.filter(([command]) => command === "write_pty")).toHaveLength(writesBeforeBrowse);
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
 		expect(view.getByText("Live session output")).toBeTruthy();
 		expect(view.container.querySelector("textarea")).toBe(composer);

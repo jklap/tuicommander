@@ -25,7 +25,7 @@ See [Remote Access](remote-access.md) for setup and [Troubleshooting](troublesho
 
 ## Mobile PWA
 
-The mobile interface is optimized for observation and quick actions: inspect sessions, follow output, answer questions, and monitor agent activity. The Files tab lists configured repositories. In a session, tap the folder button in the header to browse that session's repository directly; Back returns to the session with its output and unsent command intact. Use the desktop or full browser workspace for worktree management and complex Git operations.
+The mobile interface is optimized for observation and quick actions: inspect sessions, follow output, answer questions, and monitor agent activity. The Files tab lists configured repositories; long-press a repository path to see it in full, browse normal folders ahead of hidden ones, or search nested files. In a session, tap the folder button in the header to browse that session's repository directly; Back returns to the session with its output and unsent command intact. File editing uses the remaining screen height and wraps long lines. Use the desktop or full browser workspace for worktree management and complex Git operations.
 
 ## Remote daemon
 
