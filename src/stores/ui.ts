@@ -111,6 +111,9 @@ interface UIStoreState {
 	// Diff viewer mode (persisted)
 	diffViewMode: DiffViewMode;
 
+	// Soft-wrap long lines in the diff viewer (persisted)
+	diffSoftWrap: boolean;
+
 	// File browser view mode (persisted)
 	fileBrowserViewMode: "flat" | "tree";
 	editorWrapText: boolean;
@@ -164,6 +167,7 @@ function createUIStore() {
 		settingsNavWidth: SETTINGS_NAV_DEFAULT_WIDTH,
 		settingsExpertMode: false,
 		diffViewMode: "split" as DiffViewMode,
+		diffSoftWrap: false,
 		fileBrowserViewMode: "tree" as "flat" | "tree",
 		editorWrapText: editorWrapPrefs.text,
 		editorWrapCode: editorWrapPrefs.code,
@@ -214,6 +218,7 @@ function createUIStore() {
 		settings_nav_width?: number;
 		settings_expert_mode?: boolean;
 		diff_view_mode?: string;
+		diff_soft_wrap?: boolean;
 		file_browser_view_mode?: string;
 		detached_panels?: Record<string, string>;
 		github_section_collapsed?: Record<string, boolean>;
@@ -234,6 +239,7 @@ function createUIStore() {
 			settings_nav_width: state.settingsNavWidth,
 			settings_expert_mode: state.settingsExpertMode,
 			diff_view_mode: state.diffViewMode,
+			diff_soft_wrap: state.diffSoftWrap,
 			file_browser_view_mode: state.fileBrowserViewMode,
 			detached_panels: state.detachedPanels,
 			github_section_collapsed: state.githubSectionCollapsed,
@@ -295,6 +301,9 @@ function createUIStore() {
 				// valid DiffViewMode — normalize to "split" and re-persist.
 				setState("diffViewMode", "split");
 				migrated = true;
+			}
+			if (loaded.diff_soft_wrap !== undefined) {
+				setState("diffSoftWrap", loaded.diff_soft_wrap);
 			}
 			if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
 				setState("fileBrowserViewMode", loaded.file_browser_view_mode);
@@ -378,6 +387,12 @@ function createUIStore() {
 		// Diff view mode
 		setDiffViewMode(mode: DiffViewMode): void {
 			setState("diffViewMode", mode);
+			saveUIPrefs();
+		},
+
+		// Diff soft-wrap
+		setDiffSoftWrap(wrap: boolean): void {
+			setState("diffSoftWrap", wrap);
 			saveUIPrefs();
 		},
 
@@ -643,6 +658,7 @@ registerDebugSnapshot("ui", () => {
 		diffViewMode: s.diffViewMode,
 		editorWrapText: s.editorWrapText,
 		editorWrapCode: s.editorWrapCode,
+		diffSoftWrap: s.diffSoftWrap,
 		isLoading: s.isLoading,
 	};
 });

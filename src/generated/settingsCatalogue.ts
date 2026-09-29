@@ -2233,6 +2233,134 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.diff_ignore_case": {
+      "id": "app.diff_ignore_case",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "diff_ignore_case",
+      "order": 128,
+      "path": "/diff_ignore_case",
+      "labelKey": "settings.catalogue.app.diff_ignore_case.label",
+      "helpKey": "settings.catalogue.app.diff_ignore_case.help",
+      "label": "diff ignore case",
+      "schema": {
+        "description": "Diff comparison: case-insensitive line comparison.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Compares diff lines case-insensitively.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.diff_ignore_leading_whitespace": {
+      "id": "app.diff_ignore_leading_whitespace",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "diff_ignore_leading_whitespace",
+      "order": 125,
+      "path": "/diff_ignore_leading_whitespace",
+      "labelKey": "settings.catalogue.app.diff_ignore_leading_whitespace.label",
+      "helpKey": "settings.catalogue.app.diff_ignore_leading_whitespace.help",
+      "label": "diff ignore leading whitespace",
+      "schema": {
+        "description": "Diff comparison: ignore leading whitespace on each line (Session Diff\nReview and Branch Diff Scroll, via the shared `diff_options` engine —\n`git diff` has no native equivalent for leading-only whitespace).",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Ignores leading-whitespace-only changes in Session Diff Review and Branch Diff.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.diff_ignore_trailing_whitespace": {
+      "id": "app.diff_ignore_trailing_whitespace",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "diff_ignore_trailing_whitespace",
+      "order": 126,
+      "path": "/diff_ignore_trailing_whitespace",
+      "labelKey": "settings.catalogue.app.diff_ignore_trailing_whitespace.label",
+      "helpKey": "settings.catalogue.app.diff_ignore_trailing_whitespace.help",
+      "label": "diff ignore trailing whitespace",
+      "schema": {
+        "description": "Diff comparison: ignore trailing whitespace on each line.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Ignores trailing-whitespace-only changes in Session Diff Review and Branch Diff.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.diff_ignore_whitespace_amount": {
+      "id": "app.diff_ignore_whitespace_amount",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "diff_ignore_whitespace_amount",
+      "order": 127,
+      "path": "/diff_ignore_whitespace_amount",
+      "labelKey": "settings.catalogue.app.diff_ignore_whitespace_amount.label",
+      "helpKey": "settings.catalogue.app.diff_ignore_whitespace_amount.help",
+      "label": "diff ignore whitespace amount",
+      "schema": {
+        "description": "Diff comparison: collapse runs of whitespace to a single space before\ncomparing (catches reindentation/retabbing with no other content change).",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Treats whitespace runs of any length as equal when diffing.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "app.disabled_agents": {
       "id": "app.disabled_agents",
       "store": "app",
@@ -4221,6 +4349,84 @@ export const settingsCatalogue = {
         "reset"
       ],
       "confirmationClass": "execution_authority"
+    },
+    "app.session_diff_auto_open": {
+      "id": "app.session_diff_auto_open",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "session_diff_auto_open",
+      "order": 129,
+      "path": "/session_diff_auto_open",
+      "labelKey": "settings.catalogue.app.session_diff_auto_open.label",
+      "helpKey": "settings.catalogue.app.session_diff_auto_open.help",
+      "label": "session diff auto open",
+      "schema": {
+        "description": "When TUIC detects an agent has edited files in a session: \"off\" (never\nopen Session Diff Review automatically), \"ask\" (toast with an \"Open\"\naction), or \"auto\" (open the tab in the background, no activation).",
+        "type": "string",
+        "default": "ask",
+        "enum": [
+          "off",
+          "ask",
+          "auto"
+        ]
+      },
+      "nullable": false,
+      "default": "ask",
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "off",
+          "ask",
+          "auto"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Chooses whether an agent edit opens Session Diff Review: never, after asking, or automatically.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.session_diff_truncate_lines": {
+      "id": "app.session_diff_truncate_lines",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "session_diff_truncate_lines",
+      "order": 130,
+      "path": "/session_diff_truncate_lines",
+      "labelKey": "settings.catalogue.app.session_diff_truncate_lines.label",
+      "helpKey": "settings.catalogue.app.session_diff_truncate_lines.help",
+      "label": "session diff truncate lines",
+      "schema": {
+        "description": "Truncate a single change's displayed diff above this many lines, with a\n\"Show all N lines\" expander. `0` disables truncation entirely.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 300
+      },
+      "nullable": false,
+      "default": 300,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Collapses a single change above this many lines behind Show all; 0 never truncates.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
     },
     "app.shell": {
       "id": "app.shell",
@@ -7900,7 +8106,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "preferences",
       "group": "detached_panels",
-      "order": 22,
+      "order": 23,
       "path": "/detached_panels/{key}",
       "labelKey": "settings.catalogue.preferences.detached_panels.{key}.label",
       "helpKey": "settings.catalogue.preferences.detached_panels.{key}.help",
@@ -7979,6 +8185,38 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates diff panel width for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "preferences.diff_soft_wrap": {
+      "id": "preferences.diff_soft_wrap",
+      "store": "preferences",
+      "owner": "instance",
+      "area": "preferences",
+      "group": "diff_soft_wrap",
+      "order": 22,
+      "path": "/diff_soft_wrap",
+      "labelKey": "settings.catalogue.preferences.diff_soft_wrap.label",
+      "helpKey": "settings.catalogue.preferences.diff_soft_wrap.help",
+      "label": "diff soft wrap",
+      "schema": {
+        "description": "Soft-wrap long lines in the diff viewer instead of horizontal scroll.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Soft-wraps long diff lines instead of scrolling horizontally.",
       "operations": [
         "get",
         "set",
@@ -8171,7 +8409,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "preferences",
       "group": "github_section_collapsed",
-      "order": 23,
+      "order": 24,
       "path": "/github_section_collapsed/{key}",
       "labelKey": "settings.catalogue.preferences.github_section_collapsed.{key}.label",
       "helpKey": "settings.catalogue.preferences.github_section_collapsed.{key}.help",
@@ -8658,7 +8896,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "preferences",
       "group": "tasks_view_preferences",
-      "order": 24,
+      "order": 25,
       "path": "/tasks_view_preferences/{key}",
       "labelKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.label",
       "helpKey": "settings.catalogue.preferences.tasks_view_preferences.{key}.help",

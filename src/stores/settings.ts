@@ -151,6 +151,12 @@ interface RustAppConfig {
 	custom_launchers?: CustomLauncher[];
 	additional_readable_dirs?: string[];
 	custom_pty_env?: CustomEnvVarEntry[];
+	diff_ignore_leading_whitespace?: boolean;
+	diff_ignore_trailing_whitespace?: boolean;
+	diff_ignore_whitespace_amount?: boolean;
+	diff_ignore_case?: boolean;
+	session_diff_auto_open?: string;
+	session_diff_truncate_lines?: number;
 	inline_blame_enabled?: boolean;
 	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
 	ego_executable?: string;
@@ -433,6 +439,12 @@ interface SettingsStoreState {
 	egoExecutable: string;
 	egoProfile: string;
 	aiChatWorkspace: string;
+	diffIgnoreLeadingWhitespace: boolean;
+	diffIgnoreTrailingWhitespace: boolean;
+	diffIgnoreWhitespaceAmount: boolean;
+	diffIgnoreCase: boolean;
+	sessionDiffAutoOpen: "off" | "ask" | "auto";
+	sessionDiffTruncateLines: number;
 	indicatorOverrides: IndicatorOverride[];
 	showDiffStats: boolean;
 	showPrBadges: boolean;
@@ -514,6 +526,12 @@ function createSettingsStore() {
 		egoExecutable: "",
 		egoProfile: "",
 		aiChatWorkspace: "",
+		diffIgnoreLeadingWhitespace: false,
+		diffIgnoreTrailingWhitespace: false,
+		diffIgnoreWhitespaceAmount: false,
+		diffIgnoreCase: false,
+		sessionDiffAutoOpen: "ask",
+		sessionDiffTruncateLines: 300,
 		indicatorOverrides: [],
 		showDiffStats: true,
 		showPrBadges: true,
@@ -610,6 +628,18 @@ function createSettingsStore() {
 		// Revalidated here, not just on write — a hand-edited config.json is
 		// untrusted input reaching real process environment variables.
 		values.customPtyEnv = sanitizeCustomPtyEnv(config.custom_pty_env ?? []);
+		values.diffIgnoreLeadingWhitespace = config.diff_ignore_leading_whitespace ?? false;
+		values.diffIgnoreTrailingWhitespace = config.diff_ignore_trailing_whitespace ?? false;
+		values.diffIgnoreWhitespaceAmount = config.diff_ignore_whitespace_amount ?? false;
+		values.diffIgnoreCase = config.diff_ignore_case ?? false;
+		// The Rust field is a plain unvalidated String (matches diff_view_mode's
+		// own convention) — an unrecognized value on disk falls back to "ask"
+		// here, at the frontend's rendering boundary, rather than at load time.
+		values.sessionDiffAutoOpen =
+			config.session_diff_auto_open === "off" || config.session_diff_auto_open === "auto"
+				? config.session_diff_auto_open
+				: "ask";
+		values.sessionDiffTruncateLines = config.session_diff_truncate_lines ?? 300;
 		values.inlineBlameEnabled = config.inline_blame_enabled ?? true;
 		values.egoExecutable = config.ego_executable ?? "";
 		values.egoProfile = config.ego_profile ?? "";
@@ -696,6 +726,12 @@ function createSettingsStore() {
 			custom_launchers: [...values.customLaunchers],
 			additional_readable_dirs: [...values.additionalReadableDirs],
 			custom_pty_env: values.customPtyEnv.map((e) => ({ ...e })),
+			diff_ignore_leading_whitespace: values.diffIgnoreLeadingWhitespace,
+			diff_ignore_trailing_whitespace: values.diffIgnoreTrailingWhitespace,
+			diff_ignore_whitespace_amount: values.diffIgnoreWhitespaceAmount,
+			diff_ignore_case: values.diffIgnoreCase,
+			session_diff_auto_open: values.sessionDiffAutoOpen,
+			session_diff_truncate_lines: values.sessionDiffTruncateLines,
 			inline_blame_enabled: values.inlineBlameEnabled,
 			ego_executable: values.egoExecutable,
 			ego_profile: values.egoProfile,
@@ -1220,6 +1256,36 @@ function createSettingsStore() {
 		/** Toggle GitLens-style inline git blame on the editor's active line */
 		setInlineBlameEnabled(enabled: boolean): void {
 			setState("inlineBlameEnabled", enabled);
+			save();
+		},
+
+		setDiffIgnoreLeadingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreLeadingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreTrailingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreTrailingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreWhitespaceAmount(enabled: boolean): void {
+			setState("diffIgnoreWhitespaceAmount", enabled);
+			save();
+		},
+
+		setDiffIgnoreCase(enabled: boolean): void {
+			setState("diffIgnoreCase", enabled);
+			save();
+		},
+
+		setSessionDiffAutoOpen(mode: "off" | "ask" | "auto"): void {
+			setState("sessionDiffAutoOpen", mode);
+			save();
+		},
+
+		setSessionDiffTruncateLines(lines: number): void {
+			setState("sessionDiffTruncateLines", Math.max(0, Math.trunc(lines)));
 			save();
 		},
 
