@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
@@ -1890,6 +1891,19 @@ describe("Sidebar", () => {
 			expect(rows[1].querySelector(".branchSubAgentTag svg")).not.toBeNull();
 			// The name is on the tag itself, so a screen reader announces it.
 			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("aria-label")).toBe("Spawned by Orchestrator");
+		});
+
+		// Catches: the passive robot and actionable GitHub badge sharing the accent color.
+		it("uses muted metadata color for the sub-agent tag while GitHub keeps the accent", () => {
+			const css = readFileSync("src/components/Sidebar/Sidebar.module.css", "utf8");
+			const colorToken = (className: string) => {
+				const body = css.split(`\n.${className} {`)[1]?.split("}")[0];
+				expect(body, `${className} rule exists`).toBeDefined();
+				return body?.match(/\bcolor:\s*(var\(--[\w-]+\))/)?.[1];
+			};
+			expect(colorToken("branchSubAgentTag")).toBe(colorToken("branchAgentTime"));
+			expect(colorToken("ghBadgeBtn")).toBe("var(--accent)");
+			expect(colorToken("branchSubAgentTag")).not.toBe(colorToken("ghBadgeBtn"));
 		});
 
 		it("renders the activity card for a single terminal", () => {

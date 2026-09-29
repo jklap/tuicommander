@@ -800,7 +800,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--accent);
+  color: var(--fg-muted);
   font-size: var(--font-2xs);
   flex-shrink: 1;
 }
