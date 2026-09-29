@@ -27,6 +27,23 @@ self.addEventListener("activate", (event) => {
 // --- Fetch interception (navigation only, network-first) ---
 
 self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method === "POST" && url.pathname === "/mobile/share") {
+    event.respondWith((async () => {
+      const form = await event.request.formData();
+      const file = form.get("attachment");
+      if (!file || typeof file.name !== "string") {
+        return new Response("No shared file", { status: 400 });
+      }
+      const key = crypto.randomUUID();
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(`/_shared/${key}`, new Response(file, {
+        headers: { "content-type": file.type || "application/octet-stream", "x-file-name": file.name },
+      }));
+      return new Response(null, { status: 303, headers: { location: `/mobile?shared=${key}` } });
+    })());
+    return;
+  }
   // Only intercept navigation requests (HTML page loads)
   if (event.request.mode !== "navigate") return;
 

@@ -270,11 +270,29 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			text: string,
 			images: Extract<AcpContentBlock, { type: "image" }>[] = [],
 			viewedRepo: string | null = null,
+			files: { name: string; path: string }[] = [],
 		): Promise<string> {
 			if (images.length && !acpStore.connection(connectionId)?.capabilities?.promptImage) {
 				throw new Error("This agent does not support images.");
 			}
-			const prompt: AcpContentBlock[] = [...(text.trim() ? [{ type: "text" as const, text }] : []), ...images];
+			// Resource links are baseline ACP content blocks. Include readable paths as
+			// text too, so agents that ignore links can still open the files.
+			const filePaths = files.map((file) => `@${file.path}`).join("\n");
+			const promptText = [text, filePaths].filter(Boolean).join("\n\n");
+			const prompt: AcpContentBlock[] = [
+				...(promptText.trim() ? [{ type: "text" as const, text: promptText }] : []),
+				...images,
+				...files.map((file) => {
+					const path = file.path.replaceAll("\\", "/");
+					const windowsDrive = /^[A-Za-z]:\//.test(path);
+					const parts = path.split("/").map((part, index) => windowsDrive && index === 0 ? part : encodeURIComponent(part));
+					return {
+						type: "resource_link" as const,
+						uri: `file://${windowsDrive ? "/" : ""}${parts.join("/")}`,
+						name: file.name,
+					};
+				}),
+			];
 			return invoke<string>("acp_session_prompt", { connectionId, sessionId, prompt, viewedRepo });
 		},
 

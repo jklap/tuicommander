@@ -1438,6 +1438,14 @@ Returns dynamic server instructions for the MCP bridge binary as `{"instructions
 
 ## Filesystem Endpoints
 
+`POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
+streams a binary request body into the target's working directory at
+`.tuic/attachments/<timestamp>-<safe-name>`. It returns `{ "path": "/absolute/path", "size": N }`.
+The default per-file cap is 25 MiB (`attachment_max_bytes`), including uploads
+without `Content-Length`; partial and empty files are removed on failure. Git
+repositories receive a local `.git/info/exclude` entry for that directory.
+Authentication matches the other shared HTTP routes.
+
 ```
 GET  /fs/list?repoPath=/path/to/repo&subdir=src
 GET  /fs/search?repoPath=/path/to/repo&query=main&limit=50
@@ -2430,6 +2438,10 @@ POST   /acp/connections/{cid}/permissions/{request_id}/response  {outcome}      
 POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}                  -> AcpInteractionSettlement
 POST   /acp/one-shot                                            {root, prompt}            -> EgoTurn
 ```
+
+The ACP session prompt route accepts a buffered JSON body large enough for the
+shared 10 MiB image draft cap after base64 encoding, plus 64 KiB for JSON and
+text. Other JSON routes retain the 2 MiB default body limit.
 
 `POST /acp/connections`, `.../reconnect` and `POST /acp/one-shot` are the three
 that launch a process, and they are the three that take the

@@ -1,4 +1,4 @@
-import { createEffect, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { Composer } from "../../components/AIChatPanel/Composer";
 import { Interactions } from "../../components/AIChatPanel/Interactions";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
@@ -11,6 +11,8 @@ import styles from "./MobileChatScreen.module.css";
 export function MobileChatScreen() {
 	const linkedRepository = new URLSearchParams(location.search).get("repo");
 	const linkedSession = new URLSearchParams(location.search).get("session");
+	const [sharedFileError, setSharedFileError] = createSignal<string | null>(null);
+	const [sharedFile, setSharedFile] = createSignal<File | null>(null);
 	const chat = createAcpChat(() => linkedRepository, () => true);
 	const answering = new Set<AcpHostRequestId>();
 	let linkHandled = false;
@@ -25,6 +27,25 @@ export function MobileChatScreen() {
 	});
 
 	onMount(() => {
+		const sharedKey = new URLSearchParams(location.search).get("shared");
+		if (sharedKey && /^[a-zA-Z0-9-]+$/.test(sharedKey)) {
+			void (async () => {
+				try {
+					const cache = await caches.open("tuic-shell-v1");
+					const key = `/_shared/${sharedKey}`;
+					const response = await cache.match(key);
+					if (!response) throw new Error("Shared file is no longer available.");
+					const name = response.headers.get("x-file-name") || "shared-file";
+					setSharedFile(new File([await response.blob()], name, { type: response.headers.get("content-type") || "application/octet-stream" }));
+					await cache.delete(key);
+					const nextUrl = new URL(location.href);
+					nextUrl.searchParams.delete("shared");
+					history.replaceState(null, "", nextUrl);
+				} catch (error) {
+					setSharedFileError(error instanceof Error ? error.message : "Could not read shared file.");
+				}
+			})();
+		}
 		void settingsStore.hydrate();
 	});
 
@@ -40,6 +61,9 @@ export function MobileChatScreen() {
 			<header class={styles.header}>
 				<strong>AI Chat</strong>
 			</header>
+			<Show when={sharedFileError()}>
+				{(message) => <div class={styles.banner} role="alert">{message()}</div>}
+			</Show>
 			<Show when={chat.gap()}>
 				{(gap) => (
 					<div class={styles.banner}>
@@ -114,7 +138,7 @@ export function MobileChatScreen() {
 				/>
 			</Transcript>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
-				<Composer chat={chat} />
+				<Composer chat={chat} mobileAttachments sharedFile={sharedFile()} onSharedFileConsumed={() => setSharedFile(null)} />
 			</Show>
 		</section>
 	);
