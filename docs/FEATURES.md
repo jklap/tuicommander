@@ -855,8 +855,9 @@ one configured ego binary and speaks ACP to it, per
   mode) and `Cmd/Ctrl+W` to close one (`Cmd/Ctrl+Alt+W` in browser mode)
 - Transcript text and tool output are selectable. User and assistant messages,
   tool outputs and code blocks have copy actions using the terminal clipboard
-  adapter. Web links open externally and file paths use the terminal file opener
-  after backend resolution. Transcript focus gives `Cmd/Ctrl+A` (select this
+  adapter. Web links open externally; after backend resolution, file paths use
+  the terminal file opener and directory paths open the file browser, including
+  from a detached chat. Transcript focus gives `Cmd/Ctrl+A` (select this
   transcript), `Cmd/Ctrl+F` (find), and `Cmd/Ctrl+K` (clear this tab's view)
 - **Streamed answers**, reasoning folded into a disclosure, one collapsed tool
   activity line per turn with calls and outputs expandable, and the agent's plan
