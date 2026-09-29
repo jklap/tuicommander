@@ -209,10 +209,18 @@
   font-size: var(--font-xs);
 }
 
-.userMsg .copyAction,
 .assistantMsg .copyAction {
   min-height: 18px;
   margin-top: 4px;
+}
+
+/* The bubble is only as tall as its text. Copy sits in the gutter to its left
+   (the bubble is capped at 85% of the row) instead of holding a hidden row. */
+.userMsg .copyAction {
+  position: absolute;
+  right: 100%;
+  bottom: 6px;
+  margin: 0 6px 0 0;
 }
 
 .userMsg:hover .copyAction,
@@ -253,6 +261,7 @@
 }
 
 .userMsg {
+  position: relative;
   align-self: flex-end;
   max-width: 85%;
   background: var(--bg-tertiary);
