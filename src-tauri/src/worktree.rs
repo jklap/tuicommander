@@ -149,6 +149,9 @@ pub(crate) fn inspect_worktree_removal(
         WorkspaceCommitStatus::Unmerged => {
             warnings.push("This branch has unmerged commits".to_string())
         }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            warnings.push("This branch is not merged, but all its commits are pushed".to_string())
+        }
         WorkspaceCommitStatus::Unknown => {
             warnings.push("Branch history could not be verified".to_string())
         }
@@ -527,7 +530,7 @@ pub(crate) fn remove_orphan_worktree(
         branch: None,
         base_repo,
     };
-    remove_worktree_internal(&worktree, false)?;
+    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
     state.invalidate_repo_caches(&repo_path);
     Ok(())
 }
