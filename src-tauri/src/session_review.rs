@@ -30,6 +30,7 @@
 //!   version. The cache still avoids re-parsing on every poll of a session
 //!   that hasn't changed.
 
+use crate::diff_options::DiffOptions;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,13 @@ pub(crate) struct SessionSummary {
     pub edit_count: Option<u32>,
     pub file_count: Option<u32>,
     pub has_subagents: bool,
+    /// The TUIC PTY session currently running this Claude session, if any —
+    /// resolved from `AppState::tuic_session_for_claude_session`, which this
+    /// disk-reading module has no access to. Always `None` here; populated by
+    /// the transport layer that has `AppState` (today: the HTTP routes in
+    /// `mcp_http::session_review_routes`; the desktop Tauri command does not
+    /// yet thread `AppState` through `list_review_sessions`, a known gap).
+    pub tuic_session_id: Option<String>,
 }
 
 /// What one tool call did to a file.
@@ -88,6 +96,30 @@ pub(crate) struct EditStep {
     pub agent_name: Option<String>,
     pub user_modified: bool,
     pub replace_all: bool,
+    /// Which turn (one user prompt, or the equivalent for a subagent — see
+    /// `assign_turns`) this step belongs to. Turn indices increase
+    /// monotonically in chronological order across the whole session,
+    /// main and subagent steps interleaved.
+    pub turn_index: u32,
+    /// The turn's own start time, when known — either the real prompt
+    /// record's timestamp, or (fallback) this step's own timestamp.
+    pub turn_started_at: Option<String>,
+    /// First line of the turn's prompt text, truncated to 160 chars.
+    /// `None` for a turn whose prompt record couldn't be resolved (a
+    /// subagent's own turn, or a promptId-missing fallback bucket).
+    pub prompt_preview: Option<String>,
+    /// The raw hex subagent id (same value as `agent_name` above — kept as
+    /// a second, more clearly-named field for the frontend rather than
+    /// repurposing `agent_name`, which predates this and is read elsewhere
+    /// by that name already). `None` for a main-session step.
+    pub agent_id: Option<String>,
+    /// A human-readable name for whichever agent made this edit: the
+    /// subagent's own `meta.json` name/description/agentType (falling back
+    /// to its raw hex id) for a sidechain step, or the session's own title
+    /// (falling back to the literal `"main"`) for a main-session step —
+    /// either way, never the bare UUID a caller would otherwise have to
+    /// show.
+    pub agent_display_name: Option<String>,
 }
 
 /// Where the session-start content of a file came from.
@@ -137,6 +169,26 @@ pub(crate) struct FileReview {
     /// True when a `@v1` backup exists on disk right now.
     pub backup_available: bool,
     pub is_binary: bool,
+    /// A short, stable fingerprint of this file's current review state — a
+    /// hash of `cumulative_patch` plus the last touching step's
+    /// `tool_use_id`. Lets a caller detect "did this file's content
+    /// actually change" between two reviews without diffing the patch text
+    /// itself (used for the live-refresh flash/highlight feature).
+    pub revision: String,
+}
+
+/// One user prompt's worth of edits — see `assign_turns` for how a step is
+/// assigned to a turn.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TurnSummary {
+    pub turn_index: u32,
+    pub started_at: Option<String>,
+    pub prompt_preview: Option<String>,
+    pub step_indices: Vec<u32>,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Display/rel path of every file touched in this turn, first-touch order.
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +204,11 @@ pub(crate) struct SessionReview {
     /// Non-fatal parse problems — render as a dismissible banner, never swallow.
     pub warnings: Vec<String>,
     pub included_subagents: bool,
+    /// See `SessionSummary::tuic_session_id` — same deferred-population note.
+    pub tuic_session_id: Option<String>,
+    /// One entry per distinct turn, in the same order turns first appear in
+    /// `steps` (which is itself chronological, so this is turn_index order).
+    pub turns: Vec<TurnSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,7 +233,7 @@ pub(crate) struct RevertResult {
 /// the caller's own `repo_path`. Every command that accepts a `session_id`
 /// directly from the transport (not one this module derived itself by
 /// listing a directory) must call this before using it in any path join.
-fn validate_session_id(session_id: &str) -> Result<(), String> {
+pub(crate) fn validate_session_id(session_id: &str) -> Result<(), String> {
     let bytes = session_id.as_bytes();
     let valid = bytes.len() == 36
         && bytes[8] == b'-'
@@ -198,7 +255,7 @@ fn validate_session_id(session_id: &str) -> Result<(), String> {
 }
 
 /// `<projects>/<slug>/` for a repo path, honoring `CLAUDE_CONFIG_DIR`.
-fn project_dir_for(repo_path: &str, cfg: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn project_dir_for(repo_path: &str, cfg: Option<&str>) -> Option<PathBuf> {
     let path =
         crate::agent_session::claude_project_dir(repo_path.to_string(), cfg.map(String::from))
             .ok()?;
@@ -228,6 +285,44 @@ fn subagent_name_from_path(p: &Path) -> Option<String> {
     Some(stem.strip_prefix("agent-").unwrap_or(stem).to_string())
 }
 
+/// Fields read from a subagent's sibling `agent-<id>.meta.json`, when
+/// present. Both fields are independently optional: a meta.json can exist
+/// with no useful name (falls back to the hex id at the call site), and
+/// `tool_use_id` can be missing on an older format.
+#[derive(Debug, Clone, Default)]
+struct SubagentMetaInfo {
+    /// `name` -> `description` -> `agentType`, first one present.
+    display_name: Option<String>,
+    /// The id of the parent transcript's Agent/Task tool_use call that
+    /// spawned this subagent — used to look up that call's own `promptId`
+    /// in the parent's `TranscriptScan::tool_result_prompt_ids`.
+    tool_use_id: Option<String>,
+}
+
+/// `<subagent>.jsonl` -> its sibling `<subagent>.meta.json`, if present and
+/// parseable. Never fails loudly — a missing or malformed meta.json just
+/// means the caller falls back to the raw hex id and an unresolved turn.
+fn read_subagent_meta(transcript: &Path) -> SubagentMetaInfo {
+    let meta_path = transcript.with_extension("meta.json");
+    let Ok(bytes) = std::fs::read(&meta_path) else {
+        return SubagentMetaInfo::default();
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return SubagentMetaInfo::default();
+    };
+    let display_name = v
+        .get("name")
+        .and_then(|s| s.as_str())
+        .or_else(|| v.get("description").and_then(|s| s.as_str()))
+        .or_else(|| v.get("agentType").and_then(|s| s.as_str()))
+        .map(String::from);
+    let tool_use_id = v.get("toolUseId").and_then(|s| s.as_str()).map(String::from);
+    SubagentMetaInfo {
+        display_name,
+        tool_use_id,
+    }
+}
+
 /// `~/.claude/file-history/<session_id>/<backup_file_name>` (or the
 /// `CLAUDE_CONFIG_DIR` equivalent).
 fn backup_path(session_id: &str, backup_file_name: &str, cfg: Option<&str>) -> Option<PathBuf> {
@@ -255,6 +350,13 @@ fn line_is_interesting(line: &str) -> bool {
         || line.contains("\"file-history-delta\"")
         || line.contains("\"custom-title\"")
         || line.contains("\"last-prompt\"")
+        // Real user-prompt records (no toolUseResult) — needed for turn
+        // start times/previews. Real Claude Code transcripts write compact
+        // JSON with no space after the colon, so this is exact, not a
+        // loose guess; it also matches most toolUseResult-bearing "user"
+        // records too (already let through above), so this only adds the
+        // ones that were previously rejected: real human prompts.
+        || line.contains("\"type\":\"user\"")
 }
 
 /// Raw per-step facts lifted straight out of one `toolUseResult`.
@@ -531,6 +633,22 @@ struct TranscriptScan {
     last_prompt: Option<String>,
     first_ts: Option<String>,
     last_ts: Option<String>,
+    /// `promptId -> (timestamp, first-line preview)` for every real
+    /// (non-meta) human prompt record seen — the turn-start info `EditStep`
+    /// and `TurnSummary` display. Keyed by promptId so a later tool-call
+    /// record sharing that same promptId can look its turn's start info up.
+    prompts: HashMap<String, (String, String)>,
+    /// `tool_use_id -> promptId` for every "user"+toolUseResult record seen
+    /// (main or subagent scan, not just ones that became a `RawEdit`) — a
+    /// subagent-spawning Agent/Task tool call has no file to edit, so it's
+    /// otherwise invisible to this scan, but its promptId is exactly what a
+    /// subagent's steps need to inherit (see `assign_turns`). Resolved via
+    /// each subagent's own `meta.json.toolUseId`, matched back against this
+    /// map — always built from the MAIN transcript's own scan (a subagent
+    /// spawning a further nested subagent is not resolved by this; it falls
+    /// through to `assign_turns`'s "attach to whichever turn is open"
+    /// fallback instead).
+    tool_result_prompt_ids: HashMap<String, String>,
 }
 
 /// One streaming pass over one transcript, appending into `out`.
@@ -602,11 +720,76 @@ fn scan_transcript(
             continue;
         }
 
+        capture_turn_info(&v, out);
+
         if let Some(edit) = raw_edit_from_record(&v, is_sidechain, agent_name) {
             out.edits.push(edit);
         }
     }
     Ok(())
+}
+
+/// Populates `TranscriptScan::prompts` and `::tool_result_prompt_ids` from
+/// one already-parsed "user"-type record. Runs for every such record
+/// (whether or not it also becomes a `RawEdit`) — see `assign_turns` for
+/// how the two maps this builds are consumed.
+fn capture_turn_info(v: &serde_json::Value, out: &mut TranscriptScan) {
+    if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+        return;
+    }
+    let prompt_id = v.get("promptId").and_then(|p| p.as_str());
+    let content = v.get("message").and_then(|m| m.get("content"));
+
+    // Any tool_result record's own tool_use_id -> promptId, regardless of
+    // whether it's a file edit — this is what lets a subagent-spawning
+    // Agent/Task call's promptId be recovered later from just its
+    // tool_use_id (the id every subagent's meta.json names).
+    if let (Some(tool_use_id), Some(pid)) = (
+        content
+            .and_then(|c| c.get(0))
+            .and_then(|c0| c0.get("tool_use_id"))
+            .and_then(|t| t.as_str()),
+        prompt_id,
+    ) {
+        out.tool_result_prompt_ids
+            .entry(tool_use_id.to_string())
+            .or_insert_with(|| pid.to_string());
+    }
+
+    // A real human prompt: no toolUseResult, text-shaped content, not a
+    // system-injected `isMeta` re-injection (command output, caveats, etc).
+    if v.get("toolUseResult").is_some() {
+        return;
+    }
+    if v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false) {
+        return;
+    }
+    let Some(pid) = prompt_id else { return };
+    let text = content.and_then(|c| {
+        if let Some(s) = c.as_str() {
+            Some(s.to_string())
+        } else {
+            c.as_array()?
+                .first()?
+                .get("text")?
+                .as_str()
+                .map(String::from)
+        }
+    });
+    let Some(text) = text else { return };
+    let ts = v
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview = first_line_truncated(&text, 160);
+    out.prompts.entry(pid.to_string()).or_insert((ts, preview));
+}
+
+/// First line of `s`, trimmed and truncated to `max_chars` (char-boundary
+/// safe — unlike a byte slice, this never panics on multi-byte UTF-8).
+fn first_line_truncated(s: &str, max_chars: usize) -> String {
+    s.lines().next().unwrap_or("").trim().chars().take(max_chars).collect()
 }
 
 // ─────────────────────────── Replay / diffing ───────────────────────────────
@@ -711,6 +894,118 @@ fn is_binary_str(data: &str) -> bool {
 
 fn is_binary_bytes(data: &[u8]) -> bool {
     data.iter().take(8000).any(|&b| b == 0)
+}
+
+/// A short, stable fingerprint of a file's current review state — lets a
+/// caller detect "did this file's content actually change" between two
+/// reviews (the live-refresh flash/highlight feature) without diffing the
+/// patch text itself. Not cryptographic; sha2 is already a dependency and
+/// this reuses it purely for a cheap, collision-resistant-enough digest.
+fn compute_file_revision(cumulative_patch: &str, last_tool_use_id: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(cumulative_patch.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(last_tool_use_id.as_bytes());
+    hex::encode(hasher.finalize())[..16].to_string()
+}
+
+/// Per-edit turn assignment, aligned 1:1 with the globally time-sorted
+/// `edits` slice `assign_turns` is called with — `out[i]` describes
+/// `edits[i]`.
+struct TurnAssignment {
+    turn_index: u32,
+    started_at: Option<String>,
+    prompt_preview: Option<String>,
+}
+
+/// Assigns each edit (main-session or subagent, already globally
+/// chronologically sorted) to a turn.
+///
+/// A turn is one `promptId`. A main-session edit's own `promptId` (already
+/// parsed onto `RawEdit` from its `toolUseResult` record) identifies its
+/// turn directly. A subagent edit has no `promptId` of its own that means
+/// anything at the session level — every one of a given subagent
+/// invocation's edits instead inherits the turn of whichever prompt spawned
+/// that subagent, resolved via `subagent_parent_prompt_id` (built by the
+/// caller from each subagent's own `meta.json.toolUseId`, looked up against
+/// the main transcript's `tool_use_id -> promptId` map).
+///
+/// When neither source resolves to a promptId (an older transcript format,
+/// or a resolution miss — a missing/malformed meta.json, or a nested
+/// subagent this module doesn't chase), the edit attaches to whichever turn
+/// is currently open, i.e. the most recently assigned turn in this same
+/// chronological pass. This is a better guess than leaving it unassigned,
+/// and keeps `turn_index` monotonically non-decreasing across the pass
+/// exactly like every resolvable edit already is.
+fn assign_turns(
+    edits: &[RawEdit],
+    prompts: &HashMap<String, (String, String)>,
+    subagent_parent_prompt_id: &HashMap<String, Option<String>>,
+) -> Vec<TurnAssignment> {
+    let mut out = Vec::with_capacity(edits.len());
+    let mut turn_for_prompt: HashMap<String, u32> = HashMap::new();
+    let mut next_turn_index: u32 = 0;
+    let mut current = TurnAssignment {
+        turn_index: 0,
+        started_at: None,
+        prompt_preview: None,
+    };
+    let mut opened_any = false;
+
+    for e in edits {
+        let effective_prompt_id: Option<&str> = if e.is_sidechain {
+            e.agent_name
+                .as_deref()
+                .and_then(|hex_id| subagent_parent_prompt_id.get(hex_id))
+                .and_then(|opt| opt.as_deref())
+        } else {
+            e.prompt_id.as_deref()
+        };
+
+        if let Some(pid) = effective_prompt_id {
+            let is_new = !turn_for_prompt.contains_key(pid);
+            let turn_index = *turn_for_prompt.entry(pid.to_string()).or_insert_with(|| {
+                let idx = next_turn_index;
+                next_turn_index += 1;
+                idx
+            });
+            if is_new {
+                let (started_at, prompt_preview) = match prompts.get(pid) {
+                    Some((ts, preview)) => (Some(ts.clone()), Some(preview.clone())),
+                    None => (e.timestamp.clone(), None),
+                };
+                current = TurnAssignment {
+                    turn_index,
+                    started_at,
+                    prompt_preview,
+                };
+            } else {
+                current.turn_index = turn_index;
+            }
+            opened_any = true;
+        } else if !opened_any {
+            // The very first edit(s) in the session carry no resolvable
+            // promptId at all — open turn 0 with this edit's own timestamp
+            // as a best-effort start time.
+            current = TurnAssignment {
+                turn_index: 0,
+                started_at: e.timestamp.clone(),
+                prompt_preview: None,
+            };
+            next_turn_index = next_turn_index.max(1);
+            opened_any = true;
+        }
+        // else: no promptId resolved and a turn is already open — attach
+        // this edit to `current` unchanged.
+
+        out.push(TurnAssignment {
+            turn_index: current.turn_index,
+            started_at: current.started_at.clone(),
+            prompt_preview: current.prompt_preview.clone(),
+        });
+    }
+    out
 }
 
 /// Build a `git apply`-able unified diff between `old` and `new`, plus
@@ -891,6 +1186,7 @@ fn build_session_review_full(
     subagents: &[PathBuf],
     session_id: &str,
     claude_config_dir: Option<&str>,
+    options: DiffOptions,
 ) -> Result<BuildResult, String> {
     let mut warnings = Vec::new();
     let mut scan = TranscriptScan::default();
@@ -898,6 +1194,12 @@ fn build_session_review_full(
         .map_err(|e| format!("Failed to read transcript: {e}"))?;
 
     let mut included_subagents = false;
+    // Resolved once per subagent, after all scanning (main transcript first,
+    // so `scan.tool_result_prompt_ids` already has every candidate
+    // tool_use_id -> promptId pair a meta.json could reference) — see
+    // `assign_turns`'s doc comment for how these two maps are consumed.
+    let mut subagent_parent_prompt_id: HashMap<String, Option<String>> = HashMap::new();
+    let mut subagent_display_names: HashMap<String, String> = HashMap::new();
     for sub in subagents {
         included_subagents = true;
         let agent_name = subagent_name_from_path(sub);
@@ -908,6 +1210,15 @@ fn build_session_review_full(
                 sub.display()
             ));
         }
+        let Some(hex_id) = agent_name else { continue };
+        let meta = read_subagent_meta(sub);
+        let parent_prompt_id = meta
+            .tool_use_id
+            .as_deref()
+            .and_then(|tuid| scan.tool_result_prompt_ids.get(tuid))
+            .cloned();
+        subagent_parent_prompt_id.insert(hex_id.clone(), parent_prompt_id);
+        subagent_display_names.insert(hex_id.clone(), meta.display_name.unwrap_or(hex_id));
     }
 
     // Stable chronological order: transcript append-order is already
@@ -917,6 +1228,9 @@ fn build_session_review_full(
     let mut indexed: Vec<(usize, RawEdit)> = scan.edits.into_iter().enumerate().collect();
     indexed.sort_by(|a, b| a.1.timestamp.cmp(&b.1.timestamp).then(a.0.cmp(&b.0)));
     let edits: Vec<RawEdit> = indexed.into_iter().map(|(_, e)| e).collect();
+
+    let turn_assignments = assign_turns(&edits, &scan.prompts, &subagent_parent_prompt_id);
+    let main_display_name = scan.title.clone().unwrap_or_else(|| "main".to_string());
 
     let canonical_repo = repo_path.canonicalize().ok();
 
@@ -988,7 +1302,7 @@ fn build_session_review_full(
                         old_exists,
                         true,
                         &display_path,
-                        crate::diff_options::DiffOptions::default(),
+                        options,
                     )
                 }
                 _ => match e.kind {
@@ -1003,7 +1317,7 @@ fn build_session_review_full(
                                 true,
                                 true,
                                 &display_path,
-                                crate::diff_options::DiffOptions::default(),
+                                options,
                             )
                         }
                     },
@@ -1015,13 +1329,22 @@ fn build_session_review_full(
                             false,
                             true,
                             &display_path,
-                            crate::diff_options::DiffOptions::default(),
+                            options,
                         )
                     }
                 },
             };
 
             let overall_index = idxs[local_i];
+            let ta = &turn_assignments[overall_index];
+            let agent_display_name = if e.is_sidechain {
+                e.agent_name
+                    .as_deref()
+                    .and_then(|hex_id| subagent_display_names.get(hex_id))
+                    .cloned()
+            } else {
+                Some(main_display_name.clone())
+            };
             wire_steps[overall_index] = Some(EditStep {
                 step_index: overall_index as u32,
                 tool_use_id: e.tool_use_id.clone(),
@@ -1037,6 +1360,11 @@ fn build_session_review_full(
                 agent_name: e.agent_name.clone(),
                 user_modified: e.user_modified,
                 replace_all: e.replace_all,
+                turn_index: ta.turn_index,
+                turn_started_at: ta.started_at.clone(),
+                prompt_preview: ta.prompt_preview.clone(),
+                agent_id: e.agent_name.clone(),
+                agent_display_name,
             });
         }
 
@@ -1054,7 +1382,7 @@ fn build_session_review_full(
                     old_exists,
                     disk_exists,
                     &display_path,
-                    crate::diff_options::DiffOptions::default(),
+                    options,
                 )
             }
             _ => (String::new(), 0, 0),
@@ -1065,6 +1393,13 @@ fn build_session_review_full(
         } else if fold.base_source == BaseSource::CreatedInSession {
             NetChange::Added
         } else if fold.base.as_deref() == final_content.as_deref() {
+            NetChange::Unchanged
+        } else if !options.is_noop() && additions == 0 && deletions == 0 {
+            // With non-default whitespace/case options, `additions`/
+            // `deletions` (computed above through the same options-aware
+            // `unified_patch`) is the more accurate signal than raw string
+            // equality — a change the active options ignore shouldn't show
+            // up as "Modified" with an empty diff.
             NetChange::Unchanged
         } else {
             NetChange::Modified
@@ -1078,6 +1413,11 @@ fn build_session_review_full(
             _ => false,
         };
 
+        let last_tool_use_id = edits_for_file
+            .last()
+            .map(|e| e.tool_use_id.as_str())
+            .unwrap_or("");
+        let revision = compute_file_revision(&cumulative_patch, last_tool_use_id);
         files.push(FileReview {
             abs_path: path.clone(),
             rel_path: rel_path.clone(),
@@ -1092,10 +1432,12 @@ fn build_session_review_full(
             drifted_from_disk,
             backup_available,
             is_binary: disk_is_binary,
+            revision,
         });
     }
 
     let steps: Vec<EditStep> = wire_steps.into_iter().flatten().collect();
+    let turns = build_turn_summaries(&steps);
 
     Ok(BuildResult {
         review: SessionReview {
@@ -1109,10 +1451,43 @@ fn build_session_review_full(
             files,
             warnings,
             included_subagents,
+            tuic_session_id: None,
+            turns,
         },
         file_bases,
         backup_bytes,
     })
+}
+
+/// Groups `steps` (already in chronological/step_index order, with
+/// `turn_index` monotonically non-decreasing — see `assign_turns`) into one
+/// `TurnSummary` per distinct turn, in the order each turn first appears.
+fn build_turn_summaries(steps: &[EditStep]) -> Vec<TurnSummary> {
+    let mut turns: Vec<TurnSummary> = Vec::new();
+    let mut turn_pos: HashMap<u32, usize> = HashMap::new();
+    for step in steps {
+        let file_entry = step.rel_path.clone().unwrap_or_else(|| step.abs_path.clone());
+        let pos = *turn_pos.entry(step.turn_index).or_insert_with(|| {
+            turns.push(TurnSummary {
+                turn_index: step.turn_index,
+                started_at: step.turn_started_at.clone(),
+                prompt_preview: step.prompt_preview.clone(),
+                step_indices: Vec::new(),
+                additions: 0,
+                deletions: 0,
+                files: Vec::new(),
+            });
+            turns.len() - 1
+        });
+        let t = &mut turns[pos];
+        t.step_indices.push(step.step_index);
+        t.additions += step.additions;
+        t.deletions += step.deletions;
+        if !t.files.contains(&file_entry) {
+            t.files.push(file_entry);
+        }
+    }
+    turns
 }
 
 /// The whole pipeline, with no Tauri/HTTP in sight — the unit-test entry
@@ -1124,12 +1499,37 @@ pub(crate) fn build_session_review(
     session_id: &str,
     claude_config_dir: Option<&str>,
 ) -> Result<SessionReview, String> {
+    build_session_review_with_options(
+        repo_path,
+        transcript,
+        subagents,
+        session_id,
+        claude_config_dir,
+        DiffOptions::default(),
+    )
+}
+
+/// Same as [`build_session_review`], with caller-supplied whitespace/case
+/// diff options threaded through every computed patch — what
+/// [`get_session_review`] actually calls. Kept as a separate function
+/// (rather than adding a 6th parameter to `build_session_review` itself) so
+/// every existing test call site of the no-options version keeps compiling
+/// unchanged.
+pub(crate) fn build_session_review_with_options(
+    repo_path: &Path,
+    transcript: &Path,
+    subagents: &[PathBuf],
+    session_id: &str,
+    claude_config_dir: Option<&str>,
+    options: DiffOptions,
+) -> Result<SessionReview, String> {
     build_session_review_full(
         repo_path,
         transcript,
         subagents,
         session_id,
         claude_config_dir,
+        options,
     )
     .map(|r| r.review)
 }
@@ -1387,6 +1787,7 @@ pub(crate) async fn list_review_sessions(
                     edit_count,
                     file_count,
                     has_subagents,
+                    tuic_session_id: None,
                 }
             })
             .collect()
@@ -1411,6 +1812,10 @@ struct CachedReview {
     /// without this a session with subagent edits could keep serving a
     /// stale review indefinitely after a subagent transcript grew.
     subagent_fp: SubagentFingerprint,
+    /// Also part of the cache key: two different whitespace/case option
+    /// sets for the same session must never collide — otherwise whichever
+    /// was computed first would keep being served back for the other.
+    options: DiffOptions,
     /// Monotonic use counter for LRU eviction — see `next_use_tick`. Not a
     /// wall-clock timestamp: two entries touched within the same instant
     /// must still have a well-defined "least recently used" answer.
@@ -1476,7 +1881,11 @@ fn review_cache() -> &'static Mutex<HashMap<PathBuf, CachedReview>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<SessionReview> {
+fn get_cached_review(
+    transcript: &Path,
+    include_subagents: bool,
+    options: DiffOptions,
+) -> Option<SessionReview> {
     let meta = std::fs::metadata(transcript).ok()?;
     let mtime = meta.modified().ok()?;
     let subagent_fp = subagent_fingerprint_for_transcript(transcript);
@@ -1486,6 +1895,7 @@ fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<Sessi
         && entry.mtime == mtime
         && entry.include_subagents == include_subagents
         && entry.subagent_fp == subagent_fp
+        && entry.options == options
     {
         entry.last_used = next_use_tick();
         Some(entry.review.clone())
@@ -1494,7 +1904,12 @@ fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<Sessi
     }
 }
 
-fn put_cached_review(transcript: &Path, include_subagents: bool, review: &SessionReview) {
+fn put_cached_review(
+    transcript: &Path,
+    include_subagents: bool,
+    options: DiffOptions,
+    review: &SessionReview,
+) {
     let Ok(meta) = std::fs::metadata(transcript) else {
         return;
     };
@@ -1521,6 +1936,7 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
             mtime,
             include_subagents,
             subagent_fp,
+            options,
             last_used: next_use_tick(),
             review: review.clone(),
         },
@@ -1532,7 +1948,7 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
 /// mutates the working tree — a revert changes files on disk, not the
 /// transcript itself, so the `(len, mtime)` cache key would otherwise keep
 /// serving the stale pre-revert review indefinitely.
-fn invalidate_cached_review(transcript: &Path) {
+pub(crate) fn invalidate_cached_review(transcript: &Path) {
     if let Ok(mut map) = review_cache().lock() {
         map.remove(transcript);
     }
@@ -1547,8 +1963,10 @@ pub(crate) async fn get_session_review(
     session_id: String,
     include_subagents: Option<bool>,
     claude_config_dir: Option<String>,
+    options: Option<DiffOptions>,
 ) -> Result<SessionReview, String> {
     let include_subagents = include_subagents.unwrap_or(true);
+    let options = options.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         validate_session_id(&session_id)?;
         let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
@@ -1560,7 +1978,7 @@ pub(crate) async fn get_session_review(
                 transcript.display()
             ));
         }
-        if let Some(cached) = get_cached_review(&transcript, include_subagents) {
+        if let Some(cached) = get_cached_review(&transcript, include_subagents, options) {
             return Ok(cached);
         }
         let repo = PathBuf::from(&repo_path);
@@ -1569,14 +1987,15 @@ pub(crate) async fn get_session_review(
         } else {
             Vec::new()
         };
-        let review = build_session_review(
+        let review = build_session_review_with_options(
             &repo,
             &transcript,
             &subs,
             &session_id,
             claude_config_dir.as_deref(),
+            options,
         )?;
-        put_cached_review(&transcript, include_subagents, &review);
+        put_cached_review(&transcript, include_subagents, options, &review);
         Ok(review)
     })
     .await
@@ -1784,7 +2203,14 @@ pub(crate) async fn revert_file_to_session_start(
             }
             let repo = PathBuf::from(&repo_path);
             let subs = subagent_transcripts(&project_dir, &session_id);
-            let built = build_session_review_full(&repo, &transcript, &subs, &session_id, claude_config_dir.as_deref())?;
+            let built = build_session_review_full(
+                &repo,
+                &transcript,
+                &subs,
+                &session_id,
+                claude_config_dir.as_deref(),
+                DiffOptions::default(),
+            )?;
 
             let Some(file) = built.review.files.iter().find(|f| f.abs_path == abs_path) else {
                 return Err(format!("No file review entry for {abs_path} in this session"));
@@ -1889,6 +2315,14 @@ pub(crate) mod test_fixtures {
         /// can chain builder calls (which must return `Self`) and still get
         /// back the ids it needs for revert-style assertions.
         tool_use_ids: Vec<String>,
+        /// Set by `.prompt(...)`, applied to every subsequent tool-result
+        /// record's `promptId` field until the next `.prompt(...)` call —
+        /// mirrors a real transcript, where every tool call within one
+        /// turn shares that turn's promptId.
+        current_prompt_id: Option<String>,
+        /// agent hex id -> its `meta.json` contents, written by `build()`
+        /// next to that agent's own `subagents/agent-<id>.jsonl`.
+        subagent_meta: HashMap<String, serde_json::Value>,
     }
 
     fn ts(seq: u64) -> String {
@@ -1905,6 +2339,8 @@ pub(crate) mod test_fixtures {
                 subagent_lines: HashMap::new(),
                 seq: 0,
                 tool_use_ids: Vec::new(),
+                current_prompt_id: None,
+                subagent_meta: HashMap::new(),
             }
         }
 
@@ -1934,10 +2370,60 @@ pub(crate) mod test_fixtures {
                 "cwd": self.repo_cwd,
                 "gitBranch": "main",
                 "isSidechain": false,
+                "promptId": self.current_prompt_id,
                 "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]},
                 "toolUseResult": tur,
             });
             self.lines.push(record.to_string());
+        }
+
+        /// A real human prompt record: `promptId` on this record, and on
+        /// every tool-result record pushed after it up to the next
+        /// `.prompt(...)` call — matching a real transcript's shape (see
+        /// `capture_turn_info`/`assign_turns`).
+        pub(crate) fn prompt(mut self, prompt_id: &str, text: &str) -> Self {
+            let timestamp = self.next_ts();
+            let record = serde_json::json!({
+                "type": "user",
+                "timestamp": timestamp,
+                "promptId": prompt_id,
+                "isMeta": false,
+                "message": {"role": "user", "content": text},
+            });
+            self.lines.push(record.to_string());
+            self.current_prompt_id = Some(prompt_id.to_string());
+            self
+        }
+
+        /// Spawns a subagent from the MAIN transcript: pushes a generic
+        /// (non-file) tool-result record under the current prompt — giving
+        /// that call its own `promptId`, exactly like a real Agent/Task
+        /// tool call — and writes a sibling `agent-<agent>.meta.json`
+        /// naming this call's `tool_use_id`, so `read_subagent_meta` can
+        /// resolve the subagent's parent turn and display name.
+        pub(crate) fn spawn_subagent(
+            mut self,
+            agent: &str,
+            name: Option<&str>,
+            description: Option<&str>,
+            agent_type: Option<&str>,
+        ) -> Self {
+            let tool_use_id = format!("toolu_{}", uuid::Uuid::new_v4().simple());
+            self.push_tool_result(&tool_use_id, serde_json::json!({"content": []}));
+            let mut meta = serde_json::Map::new();
+            meta.insert("toolUseId".into(), tool_use_id.into());
+            if let Some(n) = name {
+                meta.insert("name".into(), n.into());
+            }
+            if let Some(d) = description {
+                meta.insert("description".into(), d.into());
+            }
+            if let Some(t) = agent_type {
+                meta.insert("agentType".into(), t.into());
+            }
+            self.subagent_meta
+                .insert(agent.to_string(), serde_json::Value::Object(meta));
+            self
         }
 
         /// Register a `file-history-delta` naming a `@v1` backup, and write
@@ -2109,13 +2595,20 @@ pub(crate) mod test_fixtures {
             let transcript = project_dir.join(format!("{}.jsonl", self.session_id));
             std::fs::write(&transcript, self.lines.join("\n") + "\n").unwrap();
 
-            if !self.subagent_lines.is_empty() {
+            if !self.subagent_lines.is_empty() || !self.subagent_meta.is_empty() {
                 let sub_dir = project_dir.join(&self.session_id).join("subagents");
                 std::fs::create_dir_all(&sub_dir).unwrap();
                 for (agent, lines) in &self.subagent_lines {
                     std::fs::write(
                         sub_dir.join(format!("agent-{agent}.jsonl")),
                         lines.join("\n") + "\n",
+                    )
+                    .unwrap();
+                }
+                for (agent, meta) in &self.subagent_meta {
+                    std::fs::write(
+                        sub_dir.join(format!("agent-{agent}.meta.json")),
+                        meta.to_string(),
                     )
                     .unwrap();
                 }
@@ -2709,6 +3202,7 @@ mod tests {
             session_id.to_string(),
             Some(false),
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -2717,6 +3211,7 @@ mod tests {
             session_id.to_string(),
             Some(false),
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -3078,6 +3573,7 @@ mod tests {
             session_id.clone(),
             Some(false),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -3096,7 +3592,7 @@ mod tests {
         assert!(result.applied, "revert failed: {:?}", result.message);
         assert_eq!(std::fs::read_to_string(&abs).unwrap(), "a1\na2\na3\n");
 
-        let after = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+        let after = get_session_review(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         let file_after = after.files.iter().find(|f| f.abs_path == abs).unwrap();
@@ -3137,12 +3633,13 @@ mod tests {
             session_id.clone(),
             Some(true),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
         assert_eq!(with_subs.steps.len(), 1);
 
-        let without_subs = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+        let without_subs = get_session_review(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -3219,6 +3716,7 @@ mod tests {
             "../../../../etc/passwd".to_string(),
             None,
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap_err();
@@ -3432,6 +3930,7 @@ mod tests {
             session_id.clone(),
             Some(true),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -3460,7 +3959,7 @@ mod tests {
         )
         .unwrap();
 
-        let r2 = get_session_review(repo_str, session_id, Some(true), Some(cfg_str))
+        let r2 = get_session_review(repo_str, session_id, Some(true), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -3497,23 +3996,25 @@ mod tests {
             files: Vec::new(),
             warnings: Vec::new(),
             included_subagents: false,
+            tuic_session_id: None,
+            turns: Vec::new(),
         };
 
         for (i, p) in paths.iter().take(4).enumerate() {
-            put_cached_review(p, false, &dummy_review(&format!("s{i}")));
+            put_cached_review(p, false, DiffOptions::default(), &dummy_review(&format!("s{i}")));
         }
         // Touch entry 0, making it the most-recently-used.
-        assert!(get_cached_review(&paths[0], false).is_some());
+        assert!(get_cached_review(&paths[0], false, DiffOptions::default()).is_some());
         // Insert a 5th entry, forcing an eviction.
-        put_cached_review(&paths[4], false, &dummy_review("s4"));
+        put_cached_review(&paths[4], false, DiffOptions::default(), &dummy_review("s4"));
 
         assert!(
-            get_cached_review(&paths[0], false).is_some(),
+            get_cached_review(&paths[0], false, DiffOptions::default()).is_some(),
             "the just-touched entry must survive eviction"
         );
         let still_present = paths[1..4]
             .iter()
-            .filter(|p| get_cached_review(p, false).is_some())
+            .filter(|p| get_cached_review(p, false, DiffOptions::default()).is_some())
             .count();
         assert_eq!(
             still_present, 2,
@@ -3567,5 +4068,293 @@ mod tests {
             "steps from main and subagent transcripts must interleave in \
              real chronological order, not main-first-then-subagent"
         );
+    }
+
+    #[test]
+    fn turns_group_edits_by_prompt_id_across_main_and_subagent() {
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        let abs2 = repo.join("c.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+        std::fs::write(&abs2, "z\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Fix the first two files")
+            .edit(&abs1, "x\n", "X\n", false)
+            .spawn_subagent("worker1", Some("fixer"), None, None)
+            .subagent_edit("worker1", &abs_sub, "y\n", "Y\n")
+            .prompt("p2", "Now fix the third file")
+            .edit(&abs2, "z\n", "Z\n", false);
+
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 3);
+        // The main edit and the subagent's edit both belong to turn 0 (p1) —
+        // the subagent was spawned under p1, so its edit inherits that turn
+        // even though it has no promptId of its own.
+        assert_eq!(review.steps[0].turn_index, 0);
+        assert_eq!(review.steps[1].turn_index, 0, "subagent edit must inherit the parent's turn");
+        assert_eq!(review.steps[2].turn_index, 1);
+
+        assert_eq!(review.turns.len(), 2);
+        assert_eq!(review.turns[0].prompt_preview.as_deref(), Some("Fix the first two files"));
+        assert_eq!(review.turns[0].step_indices, vec![0, 1]);
+        assert_eq!(review.turns[1].prompt_preview.as_deref(), Some("Now fix the third file"));
+        assert_eq!(review.turns[1].step_indices, vec![2]);
+    }
+
+    #[test]
+    fn turn_assignment_falls_back_to_open_turn_when_promptid_missing() {
+        // No `.prompt(...)` call at all — every tool-result record has
+        // `promptId: null`, matching an older transcript format. Every edit
+        // must still land in a single well-defined turn 0, not panic or
+        // silently drop steps.
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs2 = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs2, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .edit(&abs1, "x\n", "X\n", false)
+            .edit(&abs2, "y\n", "Y\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.iter().map(|s| s.turn_index).collect::<Vec<_>>(), vec![0, 0]);
+        assert_eq!(review.turns.len(), 1);
+        assert_eq!(review.turns[0].prompt_preview, None);
+    }
+
+    #[test]
+    fn subagent_turn_resolves_via_meta_json_tool_use_id() {
+        let (_dir, repo) = fixture_repo();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Delegate this")
+            .spawn_subagent("worker1", Some("named-worker"), None, None)
+            .subagent_edit("worker1", &abs_sub, "y\n", "Y\n");
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 1);
+        let step = &review.steps[0];
+        assert_eq!(step.turn_index, 0);
+        assert_eq!(step.prompt_preview.as_deref(), Some("Delegate this"));
+        assert_eq!(step.agent_id.as_deref(), Some("worker1"));
+        assert_eq!(step.agent_display_name.as_deref(), Some("named-worker"));
+    }
+
+    #[test]
+    fn agent_display_name_falls_back_through_description_then_agent_type_then_hex_id() {
+        let (_dir, repo) = fixture_repo();
+        let abs_named = repo.join("named.txt").to_string_lossy().to_string();
+        let abs_desc = repo.join("desc.txt").to_string_lossy().to_string();
+        let abs_type = repo.join("typ.txt").to_string_lossy().to_string();
+        let abs_none = repo.join("none.txt").to_string_lossy().to_string();
+        for p in [&abs_named, &abs_desc, &abs_type, &abs_none] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .spawn_subagent("named", Some("real-name"), Some("a description"), Some("Explore"))
+            .subagent_edit("named", &abs_named, "x\n", "X\n")
+            .spawn_subagent("desconly", None, Some("a description"), Some("Explore"))
+            .subagent_edit("desconly", &abs_desc, "x\n", "X\n")
+            .spawn_subagent("typeonly", None, None, Some("Explore"))
+            .subagent_edit("typeonly", &abs_type, "x\n", "X\n")
+            .spawn_subagent("noneofit", None, None, None)
+            .subagent_edit("noneofit", &abs_none, "x\n", "X\n");
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        let names: HashMap<&str, &str> = review
+            .steps
+            .iter()
+            .map(|s| (s.agent_id.as_deref().unwrap(), s.agent_display_name.as_deref().unwrap()))
+            .collect();
+        assert_eq!(names["named"], "real-name");
+        assert_eq!(names["desconly"], "a description");
+        assert_eq!(names["typeonly"], "Explore");
+        assert_eq!(names["noneofit"], "noneofit", "falls back to the raw hex id");
+    }
+
+    #[test]
+    fn main_session_steps_get_title_or_literal_main_as_display_name() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "x\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .custom_title("Fix the thing")
+            .edit(&abs, "x\n", "X\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(review.steps[0].agent_display_name.as_deref(), Some("Fix the thing"));
+
+        // No title at all -> literal "main".
+        let abs2 = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs2, "x\n").unwrap();
+        let tb2 = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs2, "x\n", "X\n", false);
+        let (cfg2, transcript2) = tb2.build();
+        let session_id2 = transcript2.file_stem().unwrap().to_str().unwrap();
+        let review2 = build_session_review(
+            &repo,
+            &transcript2,
+            &[],
+            session_id2,
+            Some(&cfg2.path().to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(review2.steps[0].agent_display_name.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn file_revision_is_stable_across_rebuilds_and_changes_with_content() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "x\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "x\n", "X\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+
+        let r1 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
+        let r2 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
+        assert_eq!(r1.files[0].revision, r2.files[0].revision, "unchanged content must produce the same revision");
+        assert!(!r1.files[0].revision.is_empty());
+
+        // A further edit to the same file must change the revision.
+        std::fs::write(&abs, "X\n").unwrap();
+        let tb3 = TranscriptBuilder::new(&repo.to_string_lossy())
+            .edit(&abs, "x\n", "X\n", false)
+            .edit(&abs, "X\n", "XX\n", false);
+        let (cfg3, transcript3) = tb3.build();
+        let session_id3 = transcript3.file_stem().unwrap().to_str().unwrap();
+        let r3 = build_session_review(&repo, &transcript3, &[], session_id3, Some(&cfg3.path().to_string_lossy())).unwrap();
+        assert_ne!(r1.files[0].revision, r3.files[0].revision);
+    }
+
+    #[test]
+    fn diff_options_ignore_leading_ws_suppresses_a_leading_whitespace_only_change() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "  hello\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+
+        let default_review = build_session_review_with_options(
+            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), DiffOptions::default(),
+        )
+        .unwrap();
+        assert!(default_review.files[0].additions > 0 || default_review.files[0].deletions > 0);
+
+        let ignoring = DiffOptions {
+            ignore_leading_ws: true,
+            ..DiffOptions::default()
+        };
+        let options_review = build_session_review_with_options(
+            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), ignoring,
+        )
+        .unwrap();
+        assert_eq!(options_review.files[0].additions, 0);
+        assert_eq!(options_review.files[0].deletions, 0);
+        assert_eq!(
+            options_review.files[0].net_change,
+            NetChange::Unchanged,
+            "a leading-whitespace-only change must report as unchanged when ignore_leading_ws is on"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_session_review_cache_isolates_different_diff_options() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "  hello\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap().to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+
+        let default_review = get_session_review(
+            repo_str.clone(),
+            session_id.clone(),
+            Some(false),
+            Some(cfg_str.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(default_review.files[0].additions > 0 || default_review.files[0].deletions > 0);
+
+        // A second call for the SAME session, differing only by options, must
+        // not be served the first call's cached (wrong) result.
+        let ignoring = DiffOptions {
+            ignore_leading_ws: true,
+            ..DiffOptions::default()
+        };
+        let options_review = get_session_review(
+            repo_str,
+            session_id,
+            Some(false),
+            Some(cfg_str),
+            Some(ignoring),
+        )
+        .await
+        .unwrap();
+        assert_eq!(options_review.files[0].additions, 0);
+        assert_eq!(options_review.files[0].deletions, 0);
     }
 }

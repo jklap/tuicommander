@@ -18,6 +18,11 @@ function step(overrides: Partial<EditStep>): EditStep {
 		agent_name: null,
 		user_modified: false,
 		replace_all: false,
+		turn_index: 0,
+		turn_started_at: null,
+		prompt_preview: null,
+		agent_id: null,
+		agent_display_name: null,
 		...overrides,
 	};
 }
@@ -37,6 +42,7 @@ function fileGroup(overrides: Partial<FileReview>): FileReview {
 		drifted_from_disk: false,
 		backup_available: true,
 		is_binary: false,
+		revision: "rev1",
 		...overrides,
 	};
 }
@@ -53,6 +59,7 @@ function review(overrides: Partial<SessionReview>): SessionReview {
 		files: [],
 		warnings: [],
 		included_subagents: false,
+		turns: [],
 		...overrides,
 	};
 }

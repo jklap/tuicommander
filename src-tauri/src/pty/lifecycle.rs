@@ -4190,6 +4190,11 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     }
     state.suspend_metadata.remove(session_id);
     state.session_maps.attachment_launch_dirs.remove(session_id);
+    // Reverse-map removal keeps this O(1) instead of scanning
+    // `claude_session_map` for a matching value.
+    if let Some((_, claude_session_id)) = state.tuic_to_claude_session.remove(session_id) {
+        state.claude_session_map.remove(&claude_session_id);
+    }
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast
