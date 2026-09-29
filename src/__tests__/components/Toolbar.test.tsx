@@ -50,6 +50,7 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 
 function setTauriEnv(on: boolean) {
@@ -79,6 +80,7 @@ describe("Toolbar", () => {
 	});
 
 	afterEach(() => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		setTauriEnv(true);
 		commandPaletteStore.close();
 		prNotificationsStore._testCancelPendingTimers();
