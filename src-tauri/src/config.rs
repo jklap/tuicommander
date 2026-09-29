@@ -1566,10 +1566,19 @@ pub(crate) struct AgentRunConfig {
     pub(crate) is_default: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+pub(crate) const DEFAULT_IDLE_CLOSE_MINUTES: u32 = 15;
+
+fn default_idle_close_minutes() -> u32 {
+    DEFAULT_IDLE_CLOSE_MINUTES
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AgentSettings {
     #[serde(default)]
     pub(crate) run_configs: Vec<AgentRunConfig>,
+    /// Minutes a finished managed child stays available for follow-up. Zero disables cleanup.
+    #[serde(default = "default_idle_close_minutes")]
+    pub(crate) idle_close_minutes: u32,
     /// Automatically retry on server errors (5xx) by injecting "continue" into the session.
     /// Retries up to 3 times with exponential backoff (5s, 15s, 30s).
     #[serde(default)]
@@ -1605,6 +1614,25 @@ pub(crate) struct AgentSettings {
     /// Missing means enabled; user-opened terminals retain the CLI's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_trust_dialog: Option<bool>,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            run_configs: Vec::new(),
+            idle_close_minutes: DEFAULT_IDLE_CLOSE_MINUTES,
+            auto_retry_on_error: false,
+            headless_template: None,
+            env_flags: HashMap::new(),
+            intent_tab_title: None,
+            suggest_followups: None,
+            progress_tracking: None,
+            hook_instrumentation: None,
+            native_status_signals: None,
+            prevent_alt_screen: None,
+            skip_trust_dialog: None,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -5437,6 +5465,7 @@ mod tests {
                         is_default: false,
                     },
                 ],
+                idle_close_minutes: DEFAULT_IDLE_CLOSE_MINUTES,
                 auto_retry_on_error: false,
                 headless_template: None,
                 env_flags: HashMap::new(),

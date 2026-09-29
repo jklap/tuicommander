@@ -2,6 +2,7 @@
     not(feature = "desktop"),
     allow(dead_code, unused_imports, unused_variables)
 )]
+#![recursion_limit = "256"]
 
 pub mod acp;
 pub(crate) mod acp_commands;
@@ -43,6 +44,7 @@ pub(crate) mod generators;
 pub(crate) mod git;
 pub(crate) use tuic_git::git_cli;
 pub(crate) mod git_graph;
+pub(crate) mod idle_close;
 pub(crate) use tuic_git::git_locks;
 pub(crate) use tuic_git::git_reads;
 pub(crate) mod github;
@@ -2378,6 +2380,7 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_session_state_accumulator(state.clone());
+    idle_close::spawn(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
     drop(
         state
@@ -2580,6 +2583,7 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 #[cfg(not(feature = "desktop"))]
 fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_session_state_accumulator(state.clone());
+    idle_close::spawn(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
     pty::spawn_tombstone_sweeper(state.clone());
     // The agents run here, so the argv/env snapshot session discovery reads is

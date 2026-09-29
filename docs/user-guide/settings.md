@@ -68,7 +68,7 @@ never all expert: in basic mode it would show an empty page.
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
-| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
@@ -204,6 +204,13 @@ Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh`
 ## AI
 
 ### Agents
+
+**Close idle managed child after** sets the time a finished orchestrator-spawned
+agent stays open for follow-up. The default is 15 minutes; 0 disables automatic
+closure. User-created sessions are unaffected. Unread mail and background work
+keep a managed child open, and its parent receives an idle-timeout notice before
+closure. A child can also be marked keep-open at spawn or through the agent or
+session tool.
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 

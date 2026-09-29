@@ -32,6 +32,17 @@ from the last user prompt captured by input-line bookkeeping. MCP spawn and
 input actions update it through `pty-description-changed`; desktop and browser
 clients render it together with the last prompt above the terminal.
 
+The idle-close task considers only managed child PTYs with an idle or completed
+agent state. After the configured per-agent delay it sends the parent an
+`idle_timeout` lifecycle notice and closes through the normal session-close
+path without removing the worktree. Activity restarts the window; unread mail,
+background work, a live detached runner, a failed background wake, and keep-open
+disable closure while they remain present.
+The five-second idle sweep reads in-memory state first and requests a process
+inventory only when an eligible child's delay has expired. A failed inventory
+defers closure; a panicking sweep logs the error and restarts its timer state on
+the next tick.
+
 ## Tauri Commands
 
 ### Session Creation

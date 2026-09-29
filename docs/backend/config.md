@@ -838,6 +838,7 @@ struct AgentRunConfig {
 
 struct AgentSettings {
     run_configs: Vec<AgentRunConfig>,
+    idle_close_minutes: u32, // default 15; 0 disables managed-child cleanup
     prevent_alt_screen: Option<bool>, // absent = true
     skip_trust_dialog: Option<bool>, // absent = true; MCP spawns only
 }
@@ -854,6 +855,15 @@ selects the run config. A model passed on the spawn call overrides it. Existing
 `--model` entries in `args` remain unchanged; they still conflict with an
 explicit spawn model. Set the model in Settings > Agents when a run config needs
 an overrideable default.
+
+`idle_close_minutes` is per agent type. Only orchestrator-spawned children use it;
+user-created terminals are never candidates. The idle window restarts on input,
+output, mail, or agent-state changes. Unread mail, background work, a running
+`tuic bg` job, a failed or retrying background wake, and a per-session keep-open
+mark prevent closure.
+The latest background-wake status for each session is stored atomically at
+`<config_dir>/bg-wakes/<TUIC_SESSION>.json`; a `retrying` or `failed` status
+keeps that managed child open.
 
 **This file belongs to a machine, not to the app.** Every backend reads its own copy, and
 the frontend keeps one per machine: a tab opened on a repository registered against a
