@@ -2786,7 +2786,7 @@ seconds and confirm the duplicate receipt produces no second event.
       toggle, the create dialog has no mechanism or parent-changes picker, and
       the Worktree Manager has no clone badge or Publish action.
 
-- [ ] After restarting `make dev`, verify Project Progress HTTP controls on the
+- [x] After restarting `make dev`, verify Project Progress HTTP controls on the _(obsolete, verified 2026-09-29: Progress pause/resume/clear removed: transport.test.ts:395 lists progress_pause/clear/export as gone; no /progress/pause route in mcp_http/mod.rs:884-890.)_
       isolated test instance: pause rejects reports, resume accepts only new reports,
       and clear leaves an existing `progress.md` untouched. _(Rust backend change;
       requires restart to load.)_
@@ -2828,12 +2828,12 @@ HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
       `04-mobile-progress-tab.png`. NOTE: the mobile shell never calls
       `repositoriesStore.hydrate()`, so the tab has no projects to scope and can
       only show the empty state — the layout is proven, the data path is not.)_
-- [ ] Provenance, pagination (**Load older …**), and the destructive confirmation
+- [x] Provenance, pagination (**Load older …**), and the destructive confirmation _(obsolete, verified 2026-09-29: Feature gone: rg 'Load older|loadOlder' src src-tauri/src only hits src/mobile/components/OutputView.tsx:167 (unrelated); ProgressDialog has no pagination/provenance/confirm.)_
       text, which name the scope and the count and state that existing
       `progress.md` exports are not deleted. Not captured: the seeded set was
       below one page and the confirmations are native `window.confirm` dialogs,
       which a screenshot of the page cannot show.
-- [ ] While the panel is open, report another event and verify the displayed
+- [x] While the panel is open, report another event and verify the displayed _(obsolete, verified 2026-09-29: ProgressPanel replaced by ProgressDialog; rg -i 'watermark|unread' src/components/ProgressDialog src-tauri/src/progress -> no matches)_
       watermark stays frozen, the later event remains unread, and exactly one
       toast appears without a duplicate MESSAGES row.
 
@@ -2850,11 +2850,11 @@ HTTP `:9877`) in browser mode live in `~/Gits/.tmp/story752/shots/`.
 
 ## Project Progress export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE`, select a project in the
+- [x] After restarting an isolated `TUIC_APP_INSTANCE`, select a project in the _(obsolete, verified 2026-09-29: Progress export feature removed: transport.test.ts:395 asserts progress_export is gone; rg 'progress_export|ProgressExport' finds only that test line; progress.md only a comment at progress/store.rs:273.)_
   Progress panel, preview `progress.md`, and export it. Verify the preview remains
   usable at desktop and narrow/mobile widths and the file appears at the owning
   project root rather than the active worker workspace.
-- [ ] Preview an existing `progress.md`, edit it externally, then choose Replace.
+- [x] Preview an existing `progress.md`, edit it externally, then choose Replace. _(obsolete, verified 2026-09-29: Project Progress export (progress.md Replace) removed: transport.test.ts:395 lists progress_export as gone; no export route in mcp_http/mod.rs:884-890.)_
   Verify the stale write is refused and the external edit remains unchanged;
   preview again and confirm explicit replacement succeeds.
 
@@ -2908,10 +2908,10 @@ assertion below can be promoted from the backend evidence.
 
 Still owed, and only these — all of them are about what is drawn:
 
-- [ ] Open the Progress panel and confirm the **global scope** shows both
+- [x] Open the Progress panel and confirm the **global scope** shows both _(obsolete, verified 2026-09-29: Global scope/workstreams UI absent: rg -i 'global|workstream' src/components/ProgressDialog/ProgressDialog.tsx = no matches (dialog rewritten to one journal, see line 3079).)_
       projects with the right per-project state, and that switching to each
       project scope shows that project's workstreams and its blocked one.
-- [ ] Report into a **paused** project while the panel is open: the receipt is
+- [x] Report into a **paused** project while the panel is open: the receipt is _(obsolete, verified 2026-09-29: Progress pause/correction removed: rg -i 'pause' src-tauri/src/progress -> no matches; no correction control in src/components/ProgressDialog; transport.test.ts:395 lists progress_pause gone)_
       already proven to say `paused`, but confirm no toast appears either.
 - [ ] Correct one event through the panel's correction control (edit a summary)
       and confirm the panel and a fresh export both show the corrected text.
@@ -2951,19 +2951,19 @@ tests plus a live HTTP run against a rebuilt debug instance on `:9877`:
 preview → write → `progress_export_exists` → `progress_export_content_changed`
 with the human edit preserved). What is left is what HTTP cannot observe.
 
-- [ ] Open the Progress panel in the desktop app, pick one project, and check
+- [x] Open the Progress panel in the desktop app, pick one project, and check _(obsolete, verified 2026-09-29: Export card removed: rg 'Include source metadata|Replace progress' src src-tauri/src = no matches; section header itself says OBSOLETE.)_
       the export card against `docs/frontend/STYLE_GUIDE.md`: the source-metadata
       checkbox, the preview button, the revision line, and the scrolling
       Markdown preview block.
-- [ ] Toggle "Include source metadata" while a preview is shown. The preview and
+- [x] Toggle "Include source metadata" while a preview is shown. The preview and _(obsolete, verified 2026-09-29: Section marked OBSOLETE; rg 'Include source metadata|Replace progress' src -> no matches; progress_export gone (transport.test.ts:395))_
       its export button must disappear, because that snapshot can no longer be
       written.
-- [ ] Export once, then export again. The second run must ask for confirmation
+- [x] Export once, then export again. The second run must ask for confirmation _(obsolete, verified 2026-09-29: Section header at to-test.md:2940 says OBSOLETE; `rg 'Replace progress' src src-tauri/src` returns no matches (only a comment in progress/store.rs:273).)_
       before replacing the file, and the button must read `Replace progress.md`.
-- [ ] Edit `progress.md` by hand between the preview and the write, then write.
+- [x] Edit `progress.md` by hand between the preview and the write, then write. _(obsolete, verified 2026-09-29: Section marked OBSOLETE; `rg progress_export_content_changed src src-tauri/src` -> no matches (progress.md export gone))_
       The panel must show `progress_export_content_changed` and your edit must
       still be in the file.
-- [ ] After an export, run `git status` in that project: only `progress.md` may
+- [x] After an export, run `git status` in that project: only `progress.md` may _(obsolete, verified 2026-09-29: Progress Markdown export removed (heading says OBSOLETE); rg 'progress_export|ProgressExport' matches only transport.test.ts:395 asserting it is gone.)_
       appear. Nothing under `.tuic/` may be listed.
 
 ## MCP instruction de-duplication (#754-affa) — needs a `make dev` restart
@@ -2979,7 +2979,7 @@ strings until the backend is restarted; nothing below can be checked before that
 - [x] `ack` / `intent:` / `suggest:` markers must be byte-identical to before — _(verified 2026-09-29: ack, intent and suggest marker lines present verbatim in /mcp/instructions (comparison with the old capture not possible))_
       they are protocol, and a reworded marker breaks the tab title and the
       suggestion bar. Compare against a capture of the old output if in doubt.
-- [ ] In a connected agent, ask for the `repo` tool schema: its description must
+- [x] In a connected agent, ask for the `repo` tool schema: its description must _(obsolete, verified 2026-09-29: repo tool now has only progress_list: REPO_ACTIONS at mcp_http/mcp_transport.rs:1148 lists a single progress_* action, not nine; text obsolete.)_
       now document all nine `progress_*` actions, which it never did before.
 - [ ] Watch one agent session for a turn. It must still emit `ack` exactly once
       per connection and `intent:` at each phase change — the markers moved not
@@ -3392,11 +3392,11 @@ restart, not before.
       `ai_watchers_enabled` are still in Boss's file and must be ignored).
 - [ ] Settings → General → Experimental Features shows the master toggle alone;
       the AI Chat, AI Triage and AI Watchers sub-toggles are gone.
-- [ ] With the master toggle ON, the AI Chat panel opens and shows the
+- [ ] With the master toggle ON, the AI Chat panel opens and shows the _(NOTE 2026-09-29: rg -i 'moving to' src finds no 'moving to ego' shell string; AI Chat panel is real now; re-write the expectation)_
       "moving to ego" shell with the focused terminal's name in its header; with
       it OFF the panel, its shortcut and its command-palette entry are absent.
 - [ ] SSH Tunnels still opens — it shares that master toggle. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
-- [ ] Settings has no Providers tab and no AI Chat tab, and its search returns
+- [ ] Settings has no Providers tab and no AI Chat tab, and its search returns _(NOTE 2026-09-29: description stale — an AI Chat settings tab exists (SettingsPanel.tsx:78, settingsSearchIndex.ts:625); re-write the expectation before testing)_
       nothing for "provider", "triage" or "watcher".
 - [ ] The toolbar has no watcher eye next to the notification bell.
 - [ ] A PR detail popover opens and shows checks, files and comments with no AI
@@ -3785,7 +3785,7 @@ and disarm before walking away.
 - [ ] Arm, then unplug or switch away the input device. After the silence
       timeout the mode must disarm with `DeviceFailed` and name the device in the
       message, rather than sitting armed and deaf.
-- [ ] `owner` is now checked against the one adapter that exists. Any value other
+- [ ] `owner` is now checked against the one adapter that exists. Any value other _(NOTE 2026-09-29: description stale — a browser audio owner now exists (continuous.rs:321); the refusal text was not found by rg 'Audio endpoint' in Rust)_
       than `desktop` must be refused with `Audio endpoint '<owner>' is not
       available on this build` and must leave the mode unarmed — the browser
       endpoint is story 818. This is a behaviour change: arming from a remote
