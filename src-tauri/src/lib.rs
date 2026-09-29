@@ -2006,7 +2006,23 @@ pub fn run() {
     // Ensure MCP bridge config is installed and up-to-date in all agent configs.
     // Runs every launch: installs missing entries and updates stale paths.
     // Skips agents the user explicitly disabled via Settings > Agents.
-    agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
+    //
+    // Never runs at all for a named `TUIC_APP_INSTANCE` (a dev/test build):
+    // these agent config files (`~/.claude.json` and friends) live in `$HOME`,
+    // not under the isolated per-instance config directory `AppInstance`
+    // otherwise gives a debug/test build — so without this guard, a worktree
+    // `make dev` build still overwrites the SAME global entry Boss's real
+    // instance owns, pointing it at a binary path that stops existing the
+    // moment that worktree is removed. See `app_instance`'s doc comment and
+    // `docs/backend/config.md`'s "MCP Bridge Auto-Install" section.
+    if crate::app_instance::current_app_instance().is_default() {
+        agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
+    } else {
+        tracing::info!(
+            source = "mcp",
+            "Skipping MCP bridge auto-install: named TUIC_APP_INSTANCE never touches the user's global agent configs"
+        );
+    }
 
     sanitize_window_state();
 
@@ -3154,7 +3170,16 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 
     spawn_background_tasks(&state);
 
-    agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
+    // See the matching guard in `run()` above: never auto-install/repair the
+    // user's global agent MCP configs for a named `TUIC_APP_INSTANCE`.
+    if crate::app_instance::current_app_instance().is_default() {
+        agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
+    } else {
+        tracing::info!(
+            source = "mcp",
+            "Skipping MCP bridge auto-install: named TUIC_APP_INSTANCE never touches the user's global agent configs"
+        );
+    }
 
     let tls_config = match &app_config.services.tls {
         config::TlsConfig::Manual {
