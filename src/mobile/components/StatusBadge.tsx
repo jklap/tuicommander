@@ -1,6 +1,6 @@
 import styles from "./StatusBadge.module.css";
 
-export type SessionStatus = "idle" | "busy" | "sub-tasks" | "question" | "error" | "rate-limited";
+export type SessionStatus = "idle" | "busy" | "sub-tasks" | "question" | "error" | "rate-limited" | "unseen";
 
 interface StatusBadgeProps {
 	status: SessionStatus;
@@ -13,6 +13,7 @@ const STATUS_LABELS: Record<SessionStatus, string> = {
 	question: "Input",
 	error: "Error",
 	"rate-limited": "Rate Limited",
+	unseen: "Finished",
 };
 
 export function StatusBadge(props: StatusBadgeProps) {
@@ -24,6 +25,7 @@ export function StatusBadge(props: StatusBadgeProps) {
 				[styles.busy]: props.status === "busy" || props.status === "sub-tasks",
 				[styles.question]: props.status === "question",
 				[styles.error]: props.status === "error" || props.status === "rate-limited",
+				[styles.unseen]: props.status === "unseen",
 			}}
 		>
 			{STATUS_LABELS[props.status]}
