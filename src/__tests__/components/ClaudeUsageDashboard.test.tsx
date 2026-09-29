@@ -94,7 +94,8 @@ describe("ClaudeUsageDashboard", () => {
 	it("clears the previous account quota when the next profile has no credentials", async () => {
 		vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
 			if (cmd === "get_claude_usage_api") {
-				if ((args as { sessionId?: string } | undefined)?.sessionId === "missing") throw new Error("No Claude OAuth token found");
+				if ((args as { sessionId?: string } | undefined)?.sessionId === "missing")
+					throw new Error("No Claude OAuth token found");
 				return { ...mockUsageApiResponse, five_hour: { utilization: 21, resets_at: null } };
 			}
 			if (cmd === "get_claude_session_stats") return mockSessionStats;
@@ -115,7 +116,10 @@ describe("ClaudeUsageDashboard", () => {
 		vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
 			if (cmd === "get_claude_usage_api") {
 				const sessionId = (args as { sessionId?: string } | undefined)?.sessionId;
-				if (sessionId === "first") return new Promise((resolve) => { resolveFirst = resolve; });
+				if (sessionId === "first")
+					return new Promise((resolve) => {
+						resolveFirst = resolve;
+					});
 				return { ...mockUsageApiResponse, five_hour: { utilization: 42, resets_at: null } };
 			}
 			if (cmd === "get_claude_session_stats") return mockSessionStats;

@@ -1,7 +1,7 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
-import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 import type {
 	AutoDeleteOnPrClose,
@@ -188,9 +188,7 @@ const repoSettingsWriter = createConfigDeltaWriter<{ repos: Record<string, unkno
 function saveSettings(settings: Record<string, RepoSettings>): void {
 	const repos: Record<string, unknown> = {};
 	for (const [path, entry] of Object.entries(settings)) repos[path] = toSnakeKeys(entry);
-	repoSettingsWriter.save({ repos }).catch((err) =>
-		appLogger.error("config", "Failed to save repo settings", err),
-	);
+	repoSettingsWriter.save({ repos }).catch((err) => appLogger.error("config", "Failed to save repo settings", err));
 }
 
 /** An entry with no overrides set — every field present, every override null. */

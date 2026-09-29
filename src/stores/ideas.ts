@@ -48,9 +48,7 @@ function saveIdeas(ideas: Idea[]): void {
 		appLogger.error("store", "Refusing to persist ideas before a successful hydrate — notes.json left untouched");
 		return;
 	}
-	notesWriter.save({ notes: ideas }).catch((err) =>
-		appLogger.error("store", "Failed to save ideas", err),
-	);
+	notesWriter.save({ notes: ideas }).catch((err) => appLogger.error("store", "Failed to save ideas", err));
 }
 
 /** Create the ideas store */

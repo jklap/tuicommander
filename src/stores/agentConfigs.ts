@@ -90,7 +90,10 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 				savedBase = full;
 			};
 			const operation = saveTail ? saveTail.then(write) : write();
-			const settled = operation.then(() => undefined, () => undefined);
+			const settled = operation.then(
+				() => undefined,
+				() => undefined,
+			);
 			saveTail = settled;
 			void settled.then(() => {
 				if (saveTail === settled) saveTail = null;
@@ -219,11 +222,14 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		},
 
 		async setIdleCloseMinutes(type: AgentType, minutes: number): Promise<void> {
-			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error("Idle close must be 0–1440 minutes");
-			setState(produce((s) => {
-				if (!s.agents[type]) s.agents[type] = { run_configs: [] };
-				s.agents[type].idle_close_minutes = minutes;
-			}));
+			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440)
+				throw new Error("Idle close must be 0–1440 minutes");
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					s.agents[type].idle_close_minutes = minutes;
+				}),
+			);
 			await saveToDisk();
 		},
 

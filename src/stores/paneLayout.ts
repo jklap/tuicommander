@@ -315,9 +315,7 @@ function createPaneLayoutStore() {
 			groups,
 			activeGroupId: state.activeGroupId,
 		};
-		layoutWriter.save(snapshot).catch((err: unknown) =>
-			appLogger.warn("app", "Failed to save pane layout", err),
-		);
+		layoutWriter.save(snapshot).catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 	}
 
 	function scheduleSave(): void {

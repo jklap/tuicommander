@@ -1,5 +1,10 @@
 import { type Component, lazy, Suspense } from "solid-js";
-import type { ClaudeUsageTab as ClaudeUsageTabData, GithubOpsTab as GithubOpsTabData, MdTabData, PrDiffTab as PrDiffTabData } from "../../stores/mdTabs";
+import type {
+	ClaudeUsageTab as ClaudeUsageTabData,
+	GithubOpsTab as GithubOpsTabData,
+	MdTabData,
+	PrDiffTab as PrDiffTabData,
+} from "../../stores/mdTabs";
 
 const ClaudeUsageDashboard = lazy(() =>
 	import("../ClaudeUsageDashboard").then((module) => ({ default: module.ClaudeUsageDashboard })),
@@ -27,7 +32,8 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 	return (
 		<Suspense>
 			{(() => {
-				if (tab.type === "claude-usage") return <ClaudeUsageDashboard sessionId={() => (props.tab as ClaudeUsageTabData).sessionId} />;
+				if (tab.type === "claude-usage")
+					return <ClaudeUsageDashboard sessionId={() => (props.tab as ClaudeUsageTabData).sessionId} />;
 				if (tab.type === "codex-usage") return <CodexUsageDashboard />;
 				if (tab.type === "grok-usage") return <GrokUsageDashboard />;
 				if (tab.type === "github-ops") return <GithubOpsDashboard repoPath={(tab as GithubOpsTabData).repoPath} />;

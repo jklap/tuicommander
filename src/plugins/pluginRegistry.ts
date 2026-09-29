@@ -534,7 +534,14 @@ function createPluginRegistry() {
 					return;
 				}
 				const shellFamily = await getShellFamily(sessionId);
-				await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, shellFamily, true, sessionId);
+				await sendCommand(
+					(data) => invoke("write_pty", { sessionId, data }),
+					text,
+					agentType,
+					shellFamily,
+					true,
+					sessionId,
+				);
 			},
 
 			async readSessionOutput(sessionId: string, maxLines?: number): Promise<string> {

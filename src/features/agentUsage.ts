@@ -145,15 +145,16 @@ async function poll(agent: UsageAgent, sessionId: string | null): Promise<void> 
 			write("unknown", 5);
 			return;
 		}
-		const api = agent === "claude"
-			? await invoke<never>(spec.command, { sessionId })
-			: await invoke<never>(spec.command);
+		const api =
+			agent === "claude" ? await invoke<never>(spec.command, { sessionId }) : await invoke<never>(spec.command);
 		write(spec.buildText(api), spec.priority(api));
 	} catch (err) {
 		const errStr = String(err);
-		const text = agent === "claude" && /No Claude OAuth token|Cannot (?:resolve|read) Claude session profile|Failed to parse credentials/.test(errStr)
-			? "unknown"
-			: describeUsageError(errStr, spec.missingTokenHint);
+		const text =
+			agent === "claude" &&
+			/No Claude OAuth token|Cannot (?:resolve|read) Claude session profile|Failed to parse credentials/.test(errStr)
+				? "unknown"
+				: describeUsageError(errStr, spec.missingTokenHint);
 		if (text !== "no token") {
 			appLogger.warn("network", `${spec.label} usage poll: ${text}`, errStr);
 		}

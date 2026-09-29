@@ -174,7 +174,9 @@ export function useSessions() {
 	function markSeen(sessionId: string) {
 		if (sessions().find((session) => session.session_id === sessionId)?.state?.agent_state !== "completed") return;
 		seenCompletions.add(sessionId);
-		setSessions((prev) => prev.map((session) => session.session_id === sessionId ? { ...session, unseen: false } : session));
+		setSessions((prev) =>
+			prev.map((session) => (session.session_id === sessionId ? { ...session, unseen: false } : session)),
+		);
 	}
 
 	/** Force an immediate refresh (sets refreshing=true while in-flight) */

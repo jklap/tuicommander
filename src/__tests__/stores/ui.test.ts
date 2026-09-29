@@ -43,7 +43,8 @@ describe("uiStore", () => {
 				expect(mockInvoke).not.toHaveBeenCalledWith("save_ui_prefs", expect.anything());
 
 				store.flushSave();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ sidebar_visible: false }),
 				});
 
@@ -113,7 +114,8 @@ describe("uiStore", () => {
 			testInScope(() => {
 				store.toggleSidebar();
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ sidebar_visible: false }),
 				});
 			});
@@ -260,7 +262,8 @@ describe("uiStore", () => {
 				await store.hydrate();
 				expect(localStorage.getItem("tui-commander-sidebar-width")).toBeNull();
 				// Should have used default 300 since NaN was parsed
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ sidebar_width: 300 }),
 				});
 			});
@@ -325,7 +328,8 @@ describe("uiStore", () => {
 			testInScope(() => {
 				store.setSidebarWidth(350);
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ sidebar_width: 350 }),
 				});
 			});
@@ -434,7 +438,8 @@ describe("uiStore", () => {
 				mockInvoke.mockClear();
 				store.persistUIPrefs();
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ settings_nav_width: 220 }),
 				});
 			});
@@ -466,7 +471,8 @@ describe("uiStore", () => {
 			testInScope(() => {
 				store.setSidebarWidth(300);
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({
 						sidebar_visible: true,
 						sidebar_width: 300,
@@ -489,7 +495,8 @@ describe("uiStore", () => {
 				store.setSettingsExpertMode(true);
 				expect(store.state.settingsExpertMode).toBe(true);
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ settings_expert_mode: true }),
 				});
 			});
@@ -625,7 +632,8 @@ describe("uiStore", () => {
 			testInScope(() => {
 				setVisible(true);
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ [backendKey]: true }),
 				});
 			});
@@ -730,7 +738,8 @@ describe("uiStore", () => {
 			testInScope(() => {
 				store.setGithubSectionCollapsed("issues", true);
 				flushPersist();
-				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", { base: expect.anything(),
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
 					config: expect.objectContaining({ github_section_collapsed: { issues: true } }),
 				});
 			});

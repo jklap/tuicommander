@@ -14,7 +14,7 @@ const ACK = /^TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+connected\.[\t ]*/;
 const BULLET = "(?:[●⏺•◦][\\t ]+)?";
 const INTENT = new RegExp(`^[\\t ]*${BULLET}intent:[\\t ]+(.+)$`);
 const SUGGEST = new RegExp(`^[\\t ]*${BULLET}suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$`);
-const TRAILING_SUGGEST = new RegExp("[\\t ]+suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$");
+const TRAILING_SUGGEST = /[\t ]+suggest:[\t ]*\[([^[\]\r\n]*)\][\t ]*$/;
 const TITLE = /^(.*?)\(([^)]+)\)\s*$/;
 
 export function projectChatProtocolText(text: string): ChatProtocolText {

@@ -1626,10 +1626,7 @@ describe("repositoriesStore", () => {
 			await testInScopeAsync(async () => {
 				store.add({ path: "/repo", displayName: "Repo" });
 				await vi.advanceTimersByTimeAsync(500);
-				expect(errorSpy).toHaveBeenCalledWith(
-					"[store]",
-					"Repository changes were not saved",
-				);
+				expect(errorSpy).toHaveBeenCalledWith("[store]", "Repository changes were not saved");
 				expect(logger.getEntries()).toContainEqual(
 					expect.objectContaining({
 						message: "Repository changes were not saved",
@@ -1889,10 +1886,7 @@ describe("repositoriesStore", () => {
 				});
 				await store.refreshStaleTempCandidates();
 				expect(store.getStaleTempCandidates()).toEqual([]);
-				expect(errorSpy).toHaveBeenCalledWith(
-					"[store]",
-					"Failed to list stale-temp repository candidates",
-				);
+				expect(errorSpy).toHaveBeenCalledWith("[store]", "Failed to list stale-temp repository candidates");
 				expect(logger.getEntries()).toContainEqual(
 					expect.objectContaining({
 						message: "Failed to list stale-temp repository candidates",

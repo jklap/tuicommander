@@ -52,7 +52,9 @@ describe("mobile terminal controls", () => {
 	});
 
 	it("keeps generic confirmations for an awaiting question without choices", () => {
-		render(() => <TerminalKeybar sessionId="plain-question" agentType="claude" awaitingInput={true} questionConfident={true} />);
+		render(() => (
+			<TerminalKeybar sessionId="plain-question" agentType="claude" awaitingInput={true} questionConfident={true} />
+		));
 		expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "No" })).toBeTruthy();
 	});

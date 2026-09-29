@@ -124,8 +124,13 @@ describe("ToastContainer", () => {
 			repo_path: "/progress-repo",
 			payload: {
 				entry: {
-					id: 1, project: "/progress-repo", ptyId: "pty-reporting", createdAtMs: 1,
-					type: "done", text: "Build complete", step: "Build",
+					id: 1,
+					project: "/progress-repo",
+					ptyId: "pty-reporting",
+					createdAtMs: 1,
+					type: "done",
+					text: "Build complete",
+					step: "Build",
 				},
 			},
 		});
@@ -183,8 +188,13 @@ describe("ToastContainer", () => {
 			repo_path: "/progress-gone",
 			payload: {
 				entry: {
-					id: 2, project: "/progress-gone", ptyId: "pty-closed", createdAtMs: 2,
-					type: "blocked", text: "Review needed", step: "Review",
+					id: 2,
+					project: "/progress-gone",
+					ptyId: "pty-closed",
+					createdAtMs: 2,
+					type: "blocked",
+					text: "Review needed",
+					step: "Review",
 				},
 			},
 		});
@@ -193,7 +203,11 @@ describe("ToastContainer", () => {
 
 		expect(repositoriesStore.state.activeRepoPath).toBe("/progress-gone");
 		expect(terminalsStore.state.activeId).toBe(current);
-		expect(warn).toHaveBeenCalledWith("app", expect.stringContaining("terminal"), expect.objectContaining({ sessionId: "pty-closed" }));
+		expect(warn).toHaveBeenCalledWith(
+			"app",
+			expect.stringContaining("terminal"),
+			expect.objectContaining({ sessionId: "pty-closed" }),
+		);
 	});
 
 	it("places the repo action before the primary toast action", () => {

@@ -61,7 +61,8 @@ function createRepoDefaultsStore() {
 	const [state, setState] = createStore<RepoDefaults>({ ...INITIAL_DEFAULTS });
 
 	function save(): void {
-		repoDefaultsWriter.save({
+		repoDefaultsWriter
+			.save({
 				base_branch: state.baseBranch,
 				copy_ignored_files: state.copyIgnoredFiles,
 				copy_untracked_files: state.copyUntrackedFiles,
@@ -77,7 +78,8 @@ function createRepoDefaultsStore() {
 				after_merge: state.afterMerge,
 				auto_fetch_interval_minutes: state.autoFetchIntervalMinutes,
 				auto_delete_on_pr_close: state.autoDeleteOnPrClose,
-		}).catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
+			})
+			.catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
 	}
 
 	return {

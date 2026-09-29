@@ -156,7 +156,9 @@ describe("RemoteMachinesPanel", () => {
 		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), { target: { value: "builder.local" } });
 		fireEvent.click(toggle);
 		fireEvent.click(getByText("Save"));
-		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledWith(expect.objectContaining({ auto_update: true })));
+		await waitFor(() =>
+			expect(actions.addConnection).toHaveBeenCalledWith(expect.objectContaining({ auto_update: true })),
+		);
 	});
 
 	it("persists deployment mode and survive minutes when saving an SSH machine", async () => {
