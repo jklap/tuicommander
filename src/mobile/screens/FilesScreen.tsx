@@ -307,7 +307,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					</button>
 				</Show>
 				<strong class={styles.title} title={file() || dir() || repo() || "Files"}>
-					{file() ? repoName(file()!) : dir() || repoName(repo() ?? "") || "Files"}
+					<bdi dir="ltr">{file() ? repoName(file()!) : dir() || repoName(repo() ?? "") || "Files"}</bdi>
 				</strong>
 				<Show when={file() !== null && (editing() || (!error() && !busy()))}>
 					<Show
@@ -386,7 +386,9 @@ export function FilesScreen(props: FilesScreenProps) {
 								}}
 							>
 								<span class={styles.name}>{repoName(path)}</span>
-								<span class={styles.path}>{path}</span>
+								<span class={styles.path}>
+									<bdi dir="ltr">{path}</bdi>
+								</span>
 							</button>
 						)}
 					</For>
