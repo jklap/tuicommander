@@ -540,6 +540,28 @@ pub(super) struct RemoveOrphanRequest {
     pub repo_path: String,
     #[serde(rename = "worktreePath")]
     pub worktree_path: String,
+    #[serde(rename = "safeOnly", default)]
+    pub safe_only: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BeginOrphanCleanupRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AnswerOrphanCleanupRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub decision: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClearOrphanCleanupRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
 }
 
 #[derive(Deserialize)]

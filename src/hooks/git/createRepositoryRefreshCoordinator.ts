@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
@@ -39,7 +40,11 @@ interface RepositoryRefreshCoordinatorDeps {
 			workspace_statuses: Record<string, WorkspaceLifecycleResponse>;
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
+		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
+		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
+		clearOrphanCleanup: (repoPath: string) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
@@ -51,7 +56,12 @@ interface RepositoryRefreshCoordinatorDeps {
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 	};
 	dialogs: {
-		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
+		confirmOrphanCleanup?: (
+			repoPath: string,
+			assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+			countdownSeconds: number,
+		) => Promise<boolean>;
+		answerOrphanCleanup?: (repoPath: string, remove: boolean) => void;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	closeTerminalsInWorktree: (worktreePath: string) => Promise<void>;
@@ -479,27 +489,29 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
 		if (orphanCleanup === "off") return;
 
-		let orphanPaths: string[];
+		let assessments: Array<{ path: string; safe: boolean; reason?: string }>;
 		try {
-			orphanPaths = await deps.repo.detectOrphanWorktrees(repoPath);
+			assessments = await deps.repo.assessOrphanCleanup(repoPath);
 		} catch {
 			return; // Detection failure is non-fatal
 		}
-		if (orphanPaths.length === 0) return;
+		if (assessments.length === 0) return;
 
 		if (orphanCleanup === "on") {
-			// Auto-remove silently
+			// Auto-remove only the worktrees the backend classified as safe.
 			let removed = 0;
 			await Promise.allSettled(
-				orphanPaths.map(async (wtPath) => {
-					try {
-						await deps.closeTerminalsInWorktree(wtPath);
-						await deps.repo.removeOrphanWorktree(repoPath, wtPath);
-						removed++;
-					} catch (err) {
-						appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
-					}
-				}),
+				assessments
+					.filter((entry) => entry.safe)
+					.map(async ({ path: wtPath }) => {
+						try {
+							await deps.closeTerminalsInWorktree(wtPath);
+							await deps.repo.removeOrphanWorktree(repoPath, wtPath, true);
+							removed++;
+						} catch (err) {
+							appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
+						}
+					}),
 			);
 			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
 			return;
@@ -508,29 +520,66 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// orphanCleanup === "ask"
 		// Skip orphans the user already chose to keep — otherwise the dialog re-fires
 		// on every refresh until the underlying worktree state changes. (#65)
-		const pending = orphanPaths.filter((p) => !keptOrphans.has(p));
+		const pending = assessments.filter((entry) => !keptOrphans.has(entry.path));
 		if (pending.length === 0) return;
 
 		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes
 		orphanDialogOpen = true;
 		let confirmed: boolean;
+		let poll: ReturnType<typeof setInterval> | undefined;
+		let dialogActive = true;
 		try {
-			confirmed = (await deps.dialogs.confirmOrphanCleanup?.(pending)) ?? false;
+			await deps.repo.beginOrphanCleanup(
+				repoPath,
+				pending.map((entry) => entry.path),
+			);
+			let polling = false;
+			poll = setInterval(async () => {
+				if (polling) return;
+				polling = true;
+				try {
+					const answer = await deps.repo.pendingOrphanCleanupAnswer(repoPath);
+					if (dialogActive && answer !== null) {
+						clearInterval(poll);
+						deps.dialogs.answerOrphanCleanup?.(repoPath, answer);
+					}
+				} catch (err) {
+					appLogger.warn("git", `Failed to read pending orphan cleanup answer for ${repoPath}`, err);
+				} finally {
+					polling = false;
+				}
+			}, 500);
+			confirmed =
+				(await deps.dialogs.confirmOrphanCleanup?.(
+					repoPath,
+					pending,
+					Math.max(1, repoDefaultsStore.state.orphanCleanupCountdownSeconds),
+				)) ?? false;
+			// An agent's Keep answer wins if it arrived at the end of the countdown,
+			// before the next poll could settle the dialog.
+			const finalAnswer = await deps.repo.pendingOrphanCleanupAnswer(repoPath);
+			if (finalAnswer !== null) confirmed = finalAnswer;
 		} finally {
-			orphanDialogOpen = false;
+			dialogActive = false;
+			if (poll) clearInterval(poll);
+			try {
+				await deps.repo.clearOrphanCleanup(repoPath);
+			} finally {
+				orphanDialogOpen = false;
+			}
 		}
 		if (!confirmed) {
 			// User chose "Keep" — remember these so we don't prompt again this session.
-			for (const p of pending) keptOrphans.add(p);
+			for (const entry of pending) keptOrphans.add(entry.path);
 			return;
 		}
 
 		let removed = 0;
 		await Promise.allSettled(
-			pending.map(async (wtPath) => {
+			pending.map(async ({ path: wtPath, safe }) => {
 				try {
 					await deps.closeTerminalsInWorktree(wtPath);
-					await deps.repo.removeOrphanWorktree(repoPath, wtPath);
+					await deps.repo.removeOrphanWorktree(repoPath, wtPath, safe);
 					removed++;
 				} catch (err) {
 					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);

@@ -1,5 +1,5 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { isDiffStatus } from "../../stores/diffTabs";
@@ -7,7 +7,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import { fullTimestamp, relativeTimeWithClock } from "../../utils/time";
 import type { GraphNode } from "./CommitGraph";
-import { CommitGraph, graphWidth } from "./CommitGraph";
+import { CommitGraph, laneWidthsByRow } from "./CommitGraph";
 import type { OpenDiffFn } from "./GitPanel";
 import s from "./LogTab.module.css";
 import type { ChangedFile, CommitLogEntry } from "./types";
@@ -144,12 +144,16 @@ export const LogTab: Component<LogTabProps> = (props) => {
 		if (expandedHash() === hash) {
 			setExpandedHash(null);
 			setExpandedExtraHeight(0);
+			virtualizer.measure();
 			return;
 		}
 		setExpandedHash(hash);
 		// Reset so the previous commit's height isn't reused before the new
 		// section is measured.
 		setExpandedExtraHeight(0);
+		// Reflow the rows below now, from the estimate; the ResizeObserver
+		// refines it once the section renders.
+		virtualizer.measure();
 
 		const repoPath = props.repoPath;
 		if (!repoPath) return;
@@ -182,8 +186,9 @@ export const LogTab: Component<LogTabProps> = (props) => {
 		const measured = expandedExtraHeight();
 		if (measured > 0) return ROW_HEIGHT + measured + 6;
 		// First-paint fallback before the ResizeObserver fires (rough estimate).
-		const bodyLines = commit.body ? commit.body.split("\n").length : 0;
-		const bodyHeight = bodyLines > 0 ? bodyLines * BODY_LINE_HEIGHT + 8 : 0;
+		// The expanded body holds the full message: subject, blank line, body.
+		const bodyLines = commit.body ? commit.body.split("\n").length + 2 : 1;
+		const bodyHeight = bodyLines * BODY_LINE_HEIGHT + 8;
 		const files = changedFiles()[commit.hash];
 		if (!files) return ROW_HEIGHT + EXPANDED_OVERHEAD + bodyHeight + FILE_LINE_HEIGHT;
 		return ROW_HEIGHT + EXPANDED_OVERHEAD + bodyHeight + files.length * FILE_LINE_HEIGHT;
@@ -262,8 +267,13 @@ export const LogTab: Component<LogTabProps> = (props) => {
 		});
 	});
 
-	/** Left padding for commit rows to leave room for the graph */
-	const graphPad = () => graphWidth(graphNodes());
+	/** Per-row left padding: only the lanes drawn in that row */
+	const laneWidths = createMemo(() => laneWidthsByRow(graphNodes()));
+
+	/** Graph row of the expanded commit (graph rows follow log order), or -1.
+	 *  Only that row is taller than ROW_HEIGHT, so the virtualizer's total size
+	 *  gives its extra height exactly as the rows below are placed. */
+	const expandedIndex = () => commits().findIndex((c) => c.hash === expandedHash());
 
 	function handleListKeyDown(e: KeyboardEvent) {
 		const tag = (e.target as HTMLElement)?.tagName;
@@ -304,6 +314,8 @@ export const LogTab: Component<LogTabProps> = (props) => {
 					scrollTop={scrollTop()}
 					viewportHeight={viewportHeight()}
 					totalHeight={virtualizer.getTotalSize()}
+					expandedRow={expandedIndex()}
+					expandedExtra={virtualizer.getTotalSize() - commits().length * ROW_HEIGHT}
 				/>
 			</Show>
 			{/* Always-mounted scroll container so virtualizer has a valid ref */}
@@ -324,6 +336,7 @@ export const LogTab: Component<LogTabProps> = (props) => {
 								const isFilesLoading = () => (commit() ? filesLoading()[commit()!.hash] : false);
 
 								const isFocused = () => focusedIndex() === virtualItem.index;
+								const pad = () => laneWidths()[virtualItem.index] ?? 0;
 
 								return (
 									<div
@@ -333,7 +346,7 @@ export const LogTab: Component<LogTabProps> = (props) => {
 											top: `${virtualItem.start}px`,
 											height: `${virtualItem.size}px`,
 											width: "100%",
-											"padding-left": graphPad() > 0 ? `${graphPad() + 4}px` : undefined,
+											"padding-left": pad() > 0 ? `${pad() + 4}px` : undefined,
 										}}
 										onClick={() => {
 											setFocusedIndex(virtualItem.index);
@@ -341,7 +354,7 @@ export const LogTab: Component<LogTabProps> = (props) => {
 										}}
 									>
 										{/* Line 1: subject (full width) */}
-										<div class={s.commitLine1} title={commit()?.subject}>
+										<div class={s.commitLine1}>
 											<Show when={graphNodes().length === 0}>
 												<span class={s.commitDot} />
 											</Show>
@@ -364,9 +377,9 @@ export const LogTab: Component<LogTabProps> = (props) => {
 										    row reserves the real wrapped height). */}
 										<Show when={isExpanded()}>
 											<div ref={attachExpandedMeasure}>
-												<Show when={commit()?.body}>
-													<div class={s.commitBody}>{commit()!.body}</div>
-												</Show>
+												<div class={s.commitBody}>
+													{commit()?.body ? `${commit()!.subject}\n\n${commit()!.body}` : commit()?.subject}
+												</div>
 												<div class={s.changedFiles}>
 													<Show when={!isFilesLoading()} fallback={<div class={s.filesLoading}>Loading files...</div>}>
 														<For each={files() ?? []}>

@@ -22,6 +22,59 @@ describe("canvas terminal scroll controller", () => {
 		expect(scroll.settleTarget).toBeNull();
 	});
 
+	// #1264-89c8. Oracle: alacritty's rule for a scrolled-back viewport — output
+	// adds the lines it pushed into history to the offset, clamped to the history
+	// size, and leaves offset 0 following the tail.
+	describe("followHistory", () => {
+		it("catches: a gesture at the bottom being pinned above new output", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(0, 0, 50);
+			expect(scroll.followHistory(5, 55, 0)).toBe(false);
+			expect(scroll.position).toBe(0);
+		});
+
+		it("catches: an unsent offset flushed in the pre-output coordinates", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(-3.5, 0, 50);
+			expect(scroll.followHistory(5, 55, 0)).toBe(true);
+			expect(scroll.position).toBe(8.5);
+			expect(scroll.pendingOffset).toBe(8);
+		});
+
+		it("catches: a backend that already holds the lines being sent a redundant offset", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(-3, 0, 50);
+			scroll.pendingOffset = null;
+			expect(scroll.followHistory(5, 55, 8)).toBe(false);
+			expect(scroll.position).toBe(8);
+		});
+
+		it("catches: a backend that missed the output being left forward of the user", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(-3, 0, 50);
+			scroll.pendingOffset = null;
+			expect(scroll.followHistory(5, 55, 3)).toBe(true);
+			expect(scroll.pendingOffset).toBe(8);
+		});
+
+		it("catches: a snapped gesture never handing off because its target went stale", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(-3.6, 0, 50);
+			expect(scroll.snap()).toBe(4);
+			scroll.followHistory(3, 53, 7);
+			expect(scroll.acceptSettledFrame(7)).toBe(true);
+			expect(scroll.position).toBeNull();
+		});
+
+		it("catches: an offset past the top once the scrollback cap evicts lines", () => {
+			const scroll = createCanvasScrollController();
+			scroll.applyDelta(-48, 0, 50);
+			// Full history: its size stays 50 while 5 lines are evicted from the top.
+			scroll.followHistory(5, 50, 50);
+			expect(scroll.position).toBe(50);
+		});
+	});
+
 	it("owns cache state and cancels every transient field", () => {
 		const scroll = createCanvasScrollController();
 		scroll.requestedChunks.add(2);

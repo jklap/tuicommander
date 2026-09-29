@@ -483,6 +483,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "repo_defaults.orphan_cleanup",
 	},
+	{
+		tab: "github",
+		section: "Worktree Defaults",
+		label: "Safe orphan cleanup countdown",
+		expert: true,
+		configKey: "repo_defaults.orphan_cleanup_countdown_seconds",
+	},
 	{ tab: "github", section: "Worktree Defaults", label: "PR Merge Strategy" },
 	{
 		tab: "github",
