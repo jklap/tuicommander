@@ -119,6 +119,7 @@ After you enable the setting, a branch gets an activity caret when it has at lea
 
 ### Notifications
 
+- When the desktop window is unfocused, agent questions and Progress `done`/`blocked` entries can appear in the operating system's Notification Center. TUICommander checks notification permission when the first alert is needed. On macOS, clicking an alert opens the named terminal or Progress project. An open, focused window receives no duplicate system alert.
 - **Enable Audio Notifications** — Master toggle
 - **Volume** — 0-100% (applied natively by the Rust playback path). Releasing the slider plays a short preview at the new level.
 - **Audio Output Device** — defaults to the system output. Click **Choose output device…** to enumerate available outputs and pick a specific one. Enumeration is deferred until you click, because on macOS the audio device scan triggers the microphone-permission prompt — notifications never record audio.

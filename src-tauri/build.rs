@@ -1,4 +1,13 @@
 fn main() {
+    if cfg!(feature = "desktop") && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        cc::Build::new()
+            .file("src/native_notification.m")
+            .flag("-fobjc-arc")
+            .flag("-Wno-deprecated-declarations")
+            .compile("tuic_native_notification");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rerun-if-changed=src/native_notification.m");
+    }
     // Expose git commit hash as BUILD_GIT_HASH for version checks (PWA update detection).
     let hash = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

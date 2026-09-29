@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Managed child idle close** — Idle managed agent children close after a configurable delay, while unread mail, background work, keep-open, or a failed background wake keeps them available.
 - **Orphan worktree cleanup** — The status message counts only successful removals and does not claim success when cleanup fails.
 
+- **Native desktop alerts** — Agent questions and Progress outcomes send system notifications while TUICommander is unfocused, with a short duplicate suppression window. Clicking one on macOS returns to its terminal or Progress project. The macOS sender accepts repeated requests without holding a backend thread per unanswered alert.
 - **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
 - **Queued Codex confirmation** — A stop hook can delay the Working screen for several seconds. Queued submissions now wait long enough for that confirmation before showing an uncertain-delivery error.
 - **Queued Claude confirmation** — Claude can hold a submitted notice in its own queue for several seconds. TUIC now waits for its busy hook or Working screen before showing an uncertain-delivery error.

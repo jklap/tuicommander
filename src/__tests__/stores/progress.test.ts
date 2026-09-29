@@ -2,6 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
 const toastAdd = vi.fn();
+const nativeSend = vi.fn();
+
+vi.mock("@tauri-apps/plugin-notification", () => ({
+	isPermissionGranted: vi.fn().mockResolvedValue(true),
+	requestPermission: vi.fn().mockResolvedValue("granted"),
+	sendNotification: nativeSend,
+}));
 
 vi.mock("../../invoke", () => ({ invoke: invokeMock }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
@@ -45,6 +52,7 @@ describe("progressStore", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.resetModules();
+		nativeSend.mockReset();
 	});
 
 	it("shows the complete journal when the backend returns multiple pages", async () => {
@@ -299,6 +307,35 @@ describe("progressStore", () => {
 		// Open on the same project, the list refreshes instead of counting.
 		store.presentLive({ repo_path: "/repo", payload: { entry: { ...entry(3, 300), ptyId: "pty-a" } } });
 		expect(store.unreadCount).toBe(0);
+	});
+
+	it("notifies natively for unfocused done and blocked outcomes but not intent or hand-off", async () => {
+		vi.stubGlobal("__TAURI_INTERNALS__", {});
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			const { createProgressStore } = await import("../../stores/progress");
+			const store = createProgressStore();
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(31, 100, "done") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(32, 200, "blocked") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(33, 300, "intent") } });
+			store.presentLive({ repo_path: "/repo", payload: { entry: entry(34, 400, "delegated") } });
+			await vi.waitFor(() => expect(nativeSend).toHaveBeenCalledTimes(2));
+			expect(nativeSend).toHaveBeenCalledWith(
+				expect.objectContaining({
+					title: expect.stringContaining("Repo"),
+					body: "entry 31",
+				}),
+			);
+			expect(nativeSend).toHaveBeenCalledWith(
+				expect.objectContaining({
+					title: expect.stringContaining("Repo"),
+					body: "entry 32",
+				}),
+			);
+		} finally {
+			focus.mockRestore();
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("keeps a failed command visible as one line", async () => {
