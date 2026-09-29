@@ -1175,6 +1175,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route("/fs/markdown-image", get(fs_routes::markdown_image_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route("/fs/write", post(fs_routes::write_file_http))
         .route("/fs/mkdir", post(fs_routes::create_directory_http))
@@ -3326,6 +3327,92 @@ mod tests {
         assert_eq!(reply["value"]["title"], "Route plan");
     }
 
+    #[tokio::test]
+    async fn markdown_image_route_serves_nested_images_and_rejects_escapes_and_unauthenticated_peers()
+     {
+        let parent = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let root = parent.path().join("repo");
+        std::fs::create_dir_all(root.join("docs/images")).unwrap();
+        std::fs::write(root.join("docs/images/chart.png"), [137, 80, 78, 71]).unwrap();
+        std::fs::write(parent.path().join("outside.png"), [1, 2, 3]).unwrap();
+        std::fs::write(root.join("docs/images/not-image.txt"), b"private").unwrap();
+        std::fs::File::create(root.join("docs/images/huge.png"))
+            .unwrap()
+            .set_len(10 * 1024 * 1024 + 1)
+            .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            parent.path().join("outside.png"),
+            root.join("docs/images/link.png"),
+        )
+        .unwrap();
+
+        let uri = |file: &str| {
+            let mut params = url::form_urlencoded::Serializer::new(String::new());
+            params
+                .append_pair("repoPath", root.to_str().unwrap())
+                .append_pair("file", file);
+            format!("/fs/markdown-image?{}", params.finish())
+        };
+        let request = |path: String, addr: std::net::SocketAddr| {
+            let mut req = Request::get(path).body(Body::empty()).unwrap();
+            req.extensions_mut().insert(ConnectInfo(addr));
+            req
+        };
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let app = build_router(test_state(), false, true);
+        let denied = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png"), remote))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let accepted = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png"), local))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(accepted.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            axum::body::to_bytes(accepted.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+            [137, 80, 78, 71]
+        );
+        for path in [
+            "docs/images/../../../outside.png",
+            "docs/images/not-image.txt",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(uri(path), local))
+                .await
+                .unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::OK,
+                "unexpectedly served {path}"
+            );
+        }
+        let huge = app
+            .clone()
+            .oneshot(request(uri("docs/images/huge.png"), local))
+            .await
+            .unwrap();
+        assert_eq!(huge.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        #[cfg(unix)]
+        {
+            let response = app
+                .oneshot(request(uri("docs/images/link.png"), local))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a
     /// `tuic-remote` daemon serves them, and asserted in prose that "auth is
     /// unchanged". Nothing tested it: `progress_auth` had no test anywhere, and
@@ -3517,6 +3604,7 @@ mod tests {
             "/agents/detect",
             "/fs/list",
             "/fs/read",
+            "/fs/markdown-image",
             "/fs/write",
             "/fs/stat",
             "/claude/usage",

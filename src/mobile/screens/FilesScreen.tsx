@@ -3,6 +3,7 @@ import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { getRemoteBaseUrl, getRepoConnection, withRemoteToken } from "../../transportRuntime";
 import styles from "./FilesScreen.module.css";
 
 interface FileEntry {
@@ -243,6 +244,18 @@ export function FilesScreen(props: FilesScreenProps) {
 		else setRepo(null);
 	}
 
+	function markdownImageSrc(relativePath: string): string {
+		const repoPath = repo();
+		const currentFile = file();
+		if (!repoPath || !currentFile) return relativePath;
+		const connectionId = getRepoConnection(repoPath);
+		const base = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
+		const url = new URL("/fs/markdown-image", base ?? window.location.origin);
+		url.searchParams.set("repoPath", repoPath);
+		url.searchParams.set("file", `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
+		return withRemoteToken(url.toString(), connectionId);
+	}
+
 	async function save() {
 		const repoPath = repo();
 		const filePath = file();
@@ -415,7 +428,7 @@ export function FilesScreen(props: FilesScreenProps) {
 					fallback={
 						file()?.toLowerCase().endsWith(".md") ? (
 							<div class={styles.markdownView}>
-								<ContentRenderer content={content()} />
+								<ContentRenderer content={content()} imageSrc={markdownImageSrc} />
 							</div>
 						) : (
 							<pre class={styles.viewer}>{content()}</pre>
