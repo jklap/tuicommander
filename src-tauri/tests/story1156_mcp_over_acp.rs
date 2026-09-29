@@ -9,6 +9,7 @@
 //! opened outlives the connection. The host itself is the application's MCP
 //! handler and is tested beside it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -16,7 +17,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use tuicommander_lib::acp::{
-    AcpConnectionSettlementReason, McpNotify, McpOverAcpError, McpOverAcpHost, McpReply,
+    AcpClientManager, AcpConnectionSettlementReason, McpNotify, McpOverAcpError, McpOverAcpHost,
+    McpReply,
 };
 
 mod acp_support;
@@ -34,6 +36,7 @@ struct Recorder {
     messages: Mutex<Vec<(String, String)>>,
     notifications: Mutex<Vec<(String, String)>>,
     disconnects: Mutex<Vec<String>>,
+    inbox_subscribers: Mutex<HashSet<String>>,
     /// Set when a call that never answers is dropped, which is what an abort is.
     abandoned: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -48,6 +51,10 @@ impl Drop for Abandoned {
 }
 
 impl McpOverAcpHost for Recorder {
+    fn has_inbox_subscriber(&self, peer_id: &str) -> bool {
+        self.inbox_subscribers.lock().contains(peer_id)
+    }
+
     fn connect(&self, peer_id: Option<&str>, notify: McpNotify) -> Result<String, McpOverAcpError> {
         self.connects.lock().push(peer_id.map(str::to_owned));
         self.notifiers.lock().push(notify);
@@ -96,6 +103,20 @@ impl McpOverAcpHost for Recorder {
     fn disconnect(&self, connection_id: &str) {
         self.disconnects.lock().push(connection_id.to_owned());
     }
+}
+
+#[test]
+fn inbox_subscription_is_visible_only_to_its_peer() {
+    let manager = AcpClientManager::new();
+    let recorder = Arc::new(Recorder::default());
+    manager.set_mcp_host(recorder.clone());
+
+    assert!(!manager.has_acp_inbox_subscriber(PEER));
+    recorder.inbox_subscribers.lock().insert(PEER.to_owned());
+    assert!(manager.has_acp_inbox_subscriber(PEER));
+    assert!(!manager.has_acp_inbox_subscriber("another-peer"));
+    recorder.inbox_subscribers.lock().remove(PEER);
+    assert!(!manager.has_acp_inbox_subscriber(PEER));
 }
 
 /// Wait, bounded, until `ready` holds.
