@@ -219,7 +219,7 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
     dev_store::init();
 
     #[cfg(any(test, feature = "test-support"))]
-    ensure_mock_keyring();
+    ensure_test_keyring();
 
     let instance = crate::app_instance::current_app_instance();
     let mut vault: Vault = match read_keyring_entry(
@@ -338,7 +338,7 @@ pub fn probe_named_vault_read() -> Result<(), String> {
     dev_store::init();
 
     #[cfg(any(test, feature = "test-support"))]
-    ensure_mock_keyring();
+    ensure_test_keyring();
 
     read_keyring_entry(instance.vault_service(), instance.vault_user()).map(|_| ())
 }
@@ -494,6 +494,17 @@ pub fn reset_test_faults() {
     let mut cb = CIRCUIT.lock().unwrap_or_else(|e| e.into_inner());
     cb.failures = 0;
     cb.last_failure = None;
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn ensure_test_keyring() {
+    // Integration tests enable test-support for the daemon binary too. Let the
+    // named-vault test exercise the debug file store in its isolated HOME.
+    #[cfg(all(debug_assertions, not(test)))]
+    if std::env::var("TUIC_TEST_USE_FILE_VAULT").as_deref() == Ok("1") {
+        return;
+    }
+    ensure_mock_keyring();
 }
 
 #[cfg(any(test, feature = "test-support"))]
