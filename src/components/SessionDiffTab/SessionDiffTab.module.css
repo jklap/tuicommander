@@ -181,6 +181,17 @@
   border-color: var(--warning);
 }
 
+.badgeLink {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.badgeLink:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-secondary);
+  border-color: var(--accent);
+}
+
 .fileActions {
   display: flex;
   align-items: center;
