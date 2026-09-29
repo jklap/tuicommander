@@ -408,11 +408,11 @@
 
 ## Native WontFix dependency recovery (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a plan with a WontFix prerequisite and a Backlog dependent through the test instance. Confirm the dialog marks the prerequisite abandoned, offers Remove only on that direct cancelled edge, and reports the plan Active until its remaining stories are Done or WontFix. The current live backend cannot load this Rust change without a restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a plan with a WontFix prerequisite and a Backlog dependent through the test instance. Confirm the dialog marks the prerequisite abandoned, offers Remove only on that direct cancelled edge, and reports the plan Active until its remaining stories are Done or WontFix. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only, t_story2.py via POST /stories/action on tuic-remote --instance validate): WontFix prerequisite with dependents leaves plan_state=active and plan_view marks dependents abandoned; dialog UI not checked)_
 - [ ] After the native-stories backend rebuild, add a dependency to a story, reload Plans and Stories, and confirm the story list and derived plan state agree. This checks the reused SQLite connection and status aggregation in the rebuilt app.
-- [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction.
-- [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state.
-- [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story.
+- [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction. _(NOT VERIFIED 2026-09-29: PARTIAL: GET /stories/capabilities returns true; UI error-message part not checked)_
+- [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only): cancelling prerequisite A of chain A<-B<-C gives plan_view abandoned A,B,C true, wontFixCount=1, state active; dialog UI not checked)_
+- [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story. _(NOT VERIFIED 2026-09-29: PARTIAL (backend only): WontFix on an already cancelled story returns 'story is already cancelled' and revision unchanged; remove_dependency on a non-cancelled edge refused ('only cancelled dependencies in the same plan can be removed'); Backlog-only limitation not exercised)_
 ## Agent native scrollback (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a safe `make dev` restart in an isolated `TUIC_APP_INSTANCE`, launch a throwaway agent whose `--help` child hangs. Confirm the first launch waits at most the two-second probe deadline, later launches of the same binary version do not wait again, and replacing the binary permits a new probe. On Windows, confirm no `cmd.exe` or `node.exe` child remains after timeout.
@@ -450,7 +450,7 @@
 
 ## Native story API (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After rebuilding an isolated instance, create a plan and story using `tuic story`, read them from the browser `/stories/action` route, and confirm another project's path cannot read their IDs. Claim from a live tab and verify stale revisions are rejected.
+- [ ] After rebuilding an isolated instance, create a plan and story using `tuic story`, read them from the browser `/stories/action` route, and confirm another project's path cannot read their IDs. Claim from a live tab and verify stale revisions are rejected. _(NOT VERIFIED 2026-09-29: PARTIAL: another project's path cannot read plan/story ids ('plan does not belong to project'); claim refuses without a live PTY session so the stale-revision check was not reachable; tuic story CLI and browser route not used)_
 
 ## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
 
