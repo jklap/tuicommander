@@ -6807,7 +6807,13 @@ impl ChunkProcessor {
         // so false-positive cost is low. Dedup via last_choice_prompt_sig
         // guards against repaint re-emission.
         if let Some(screen) = screen_cache {
-            match crate::output_parser::parse_choice_prompt(screen) {
+            let choice = if agent_type.as_deref() == Some("claude") {
+                crate::output_parser::parse_claude_ask_user_question(screen)
+                    .or_else(|| crate::output_parser::parse_choice_prompt(screen))
+            } else {
+                crate::output_parser::parse_choice_prompt(screen)
+            };
+            match choice {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
                 // same dialog is detected again the next time it appears, instead of
@@ -7104,6 +7110,56 @@ impl ChunkProcessor {
         if let Some((expected_question_text, turn_epoch)) = canceled_codex_approval {
             self.codex_approval_question = None;
             self.codex_approval_canceled = false;
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: session_id.to_string(),
+                parsed: serde_json::json!({
+                    "type": "protocol-question-cleared",
+                    "expected_question_text": expected_question_text,
+                    "_turn_epoch": turn_epoch,
+                })
+                .into(),
+            });
+        }
+
+        // Claude prints this tool result when Esc dismisses AskUserQuestion.
+        // A bare Esc has no line-input event, so its confident notification
+        // otherwise stays latched after the completed turn. Require the newly
+        // painted result and a ready composer; a dialog still on screen must
+        // retain its badge, including while Claude repaints its status line.
+        let declined_claude_question = if agent_type.as_deref() == Some("claude")
+            && screen_activity == AgentScreenActivity::Ready
+            && changed_rows.iter().any(|row| {
+                row.text.contains("User declined") && row.text.contains("answer questions")
+            })
+            && screen_cache
+                .is_some_and(|screen| crate::output_parser::ink_dialog_footer(screen).is_none())
+            && !events.iter().any(|event| {
+                matches!(
+                    event,
+                    ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
+                )
+            }) {
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .and_then(|session| {
+                    if session.awaiting_input
+                        && session.question_confident
+                        && session.choice_prompt.is_none()
+                    {
+                        session
+                            .question_text
+                            .as_ref()
+                            .map(|text| (text.clone(), session.turn_epoch))
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        if let Some((expected_question_text, turn_epoch)) = declined_claude_question {
             state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                 session_id: session_id.to_string(),
                 parsed: serde_json::json!({
@@ -8542,6 +8598,9 @@ pub(crate) fn prefill_agent_input(
 /// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+// A Codex stop hook delayed the accepted turn's Working repaint by four seconds.
+const CODEX_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
+    std::time::Duration::from_secs(6);
 
 /// The same framed multiline payload works for every supported agent; only the
 /// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
@@ -9324,7 +9383,7 @@ pub(crate) fn deliver_notice_to_managed_pty(
 /// different session or ordered lifecycle notices on `INJECTION_QUEUE`.
 /// Each idle edge with pending input may start another short-lived worker;
 /// there is no global thread cap. A blocked claim returns immediately, while
-/// the successful claim can wait up to the one-second acknowledgement bound.
+/// the successful claim waits for the agent-specific acknowledgement bound.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
 /// reads the queue to tell `Typed` from `Queued` — call the blocking form directly.
@@ -9376,7 +9435,12 @@ fn wait_for_queued_submission(
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
     let profile = agent_submit_profile(agent_type.as_deref());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let confirmation_window = if agent_type.as_deref() == Some("codex") {
+        CODEX_QUEUED_SUBMISSION_CONFIRMATION
+    } else {
+        std::time::Duration::from_secs(1)
+    };
+    let deadline = std::time::Instant::now() + confirmation_window;
     loop {
         let output_advanced = state
             .session_maps

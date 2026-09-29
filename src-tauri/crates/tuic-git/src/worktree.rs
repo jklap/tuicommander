@@ -3550,6 +3550,45 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_ignored_tree_refuses_removal_before_git_unregisters_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "unreadable-build-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        let unreadable = path.join("target/build/evidence");
+        fs::create_dir_all(&unreadable).unwrap();
+        fs::write(unreadable.join("result.txt"), "keep me\n").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "unreadable-build-removal".into(),
+            path: path.clone(),
+            branch: Some("unreadable-build-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = result.expect_err("unreadable build output must refuse removal");
+        assert!(
+            error.contains(&path.to_string_lossy().to_string()),
+            "{error}"
+        );
+        assert!(path.exists(), "refusal must retain the checkout");
+        assert!(
+            registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            fs::read_to_string(unreadable.join("result.txt")).unwrap(),
+            "keep me\n"
+        );
+    }
+
     #[test]
     fn test_remove_nonexistent_worktree() {
         let repo = setup_test_repo();

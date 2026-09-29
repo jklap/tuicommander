@@ -457,8 +457,7 @@ signals because the VT parser consumes escape sequences before clean-row parsing
 
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
-whatever sets it owns nothing until something retracts it. Four paths clear it,
-and three of them wait for an event that may never arrive:
+whatever sets it owns nothing until something retracts it. These paths clear it:
 
 | Clear | Fires on | Misses when |
 |---|---|---|
@@ -466,6 +465,7 @@ and three of them wait for an event that may never arrive:
 | `status-line` | a parsed busy tick (low-confidence only) | busy is inferred from screen movement |
 | `resolve_choice_prompt_input` | an option keypress | no `choice_prompt` was ever set |
 | `question-cleared` | silence timer sees the question gone from the screen | — (the backstop; low-confidence only) |
+| `protocol-question-cleared` | Claude renders `User declined to answer questions` after Esc and returns to a ready composer | a dialog is still open or a different question replaced it |
 
 `question-cleared` is the backstop that catches the rest. It never touches a
 confident question: grok repaints while it waits, so "not on screen this tick"
