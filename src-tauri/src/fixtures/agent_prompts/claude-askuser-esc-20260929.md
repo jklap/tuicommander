@@ -14,3 +14,13 @@ Esc input byte. Record 188 renders `User declined to answer questions` and
 `Worked for 4s · done` above the ready composer. A later prompt begins at
 record 196 and is excluded. The regression test replays the source bytes
 through the PTY chunk processor and the event-bus session-state accumulator.
+
+## Mobile choice replay (#1212-3093)
+
+The open dialog frame contains the title `Which color do you prefer?`, five
+numbered options, and the column-zero `Enter to select` footer. The highlighted
+`❯ 1. Red` row is a choice, not Claude's composer. Replaying the recorded
+output into the mobile screen trim previously cut the screen at that row;
+replaying it into the session-state accumulator left `choice_prompt` empty.
+The two capture-backed tests now assert the complete visible dialog and a
+`navigate-enter` choice contract with option 2 labeled `Green`.

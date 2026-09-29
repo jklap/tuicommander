@@ -144,7 +144,35 @@ describe("mobile managed-agent reply", () => {
 		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "2" });
 	});
 
-	// Catches: Other writes a choice key into the wrong Codex input panel.
+	// Catches: a Claude Ink picker receives a numeric key without the Enter its footer requires.
+	it("moves to and selects the second captured Claude AskUserQuestion option once", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="claude-question"
+				agentType="claude"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={{
+					title: "Which color do you prefer?",
+					options: [
+						{ key: "1", label: "Red", highlighted: true, destructive: false },
+						{ key: "2", label: "Green", highlighted: false, destructive: false },
+						{ key: "3", label: "Blue", highlighted: false, destructive: false },
+						{ key: "4", label: "Type something.", highlighted: false, destructive: false },
+						{ key: "5", label: "Chat about this", highlighted: false, destructive: false },
+					],
+					dismiss_key: "cancel",
+					selection_mode: "navigate-enter",
+				}}
+			/>
+		));
+		const green = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Green"))!;
+		await fireEvent.click(green);
+		await fireEvent.click(green);
+		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(2));
+		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\r"]);
+	});
+
 	it("opens Codex Other notes before typing a free-form answer", async () => {
 		const { container } = render(() => (
 			<CommandInput

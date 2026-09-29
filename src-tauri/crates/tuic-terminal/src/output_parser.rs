@@ -115,13 +115,14 @@ pub enum ParsedEvent {
     /// Fired when the user types / in an agent TUI and a menu appears.
     #[serde(rename = "slash-menu")]
     SlashMenu { items: Vec<SlashMenuItem> },
-    /// Numbered choice dialog rendered below the prompt line (edit-confirmation,
-    /// bash-confirmation, apply-patch, etc.). Cross-agent: Claude Code, Codex,
-    /// Aider, Gemini all follow the same "title? / N. option" layout.
+    /// Numbered choice dialog rendered by an agent. The selection mode records
+    /// whether its labels are direct keys or an Ink menu needs arrow navigation.
     #[serde(rename = "choice-prompt")]
     ChoicePrompt {
         title: String,
         options: Vec<ChoiceOption>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection_mode: Option<ChoiceSelectionMode>,
         #[serde(skip_serializing_if = "Option::is_none")]
         dismiss_key: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,10 +177,18 @@ pub enum ParsedEvent {
 pub struct ChoicePromptPayload {
     pub title: String,
     pub options: Vec<ChoiceOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_mode: Option<ChoiceSelectionMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismiss_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amend_key: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChoiceSelectionMode {
+    NavigateEnter,
 }
 
 /// A single option in a numbered choice dialog (edit-confirm, bash-confirm, etc.).
@@ -2113,8 +2122,7 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
 /// footer is `Enter to select · …`, not `Esc to … · Tab to …`. Relaxing steps 1–2
 /// enough to absorb it would also match any prose "Which one do you want?\n1. …
 /// \n   detail\n2. …" an agent prints — and a false ChoicePrompt renders a real
-/// interactive overlay. That dialog is covered by the `Enter to select` question
-/// footer in `parse_question` instead.
+/// interactive overlay. That dialog has a separate, footer-anchored parser.
 pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         // Option: optional ❯/›/> marker, digit(s), . or ), space, label.
@@ -2250,8 +2258,58 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     Some(ParsedEvent::ChoicePrompt {
         title,
         options,
+        selection_mode: None,
         dismiss_key,
         amend_key,
+    })
+}
+
+/// Claude Ink AskUserQuestion uses arrow navigation and Enter, even though its
+/// displayed options are numbered. Parse only while its column-zero footer is
+/// present; descriptions and wrapped text may separate option rows.
+pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEvent> {
+    let footer = screen_rows
+        .iter()
+        .rposition(|row| is_ink_dialog_footer_row(row))?;
+    let title = (0..footer)
+        .rev()
+        .find(|&idx| screen_rows[idx].trim_end().ends_with('?'))?;
+    lazy_static::lazy_static! {
+        static ref OPTION_RE: regex::Regex =
+            regex::Regex::new(r"^\s*([❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$").unwrap();
+    }
+    let mut options = Vec::new();
+    for row in &screen_rows[title + 1..footer] {
+        let Some(caps) = OPTION_RE.captures(row) else {
+            continue;
+        };
+        let key = caps[2].to_string();
+        if key.parse::<usize>().ok() != Some(options.len() + 1) {
+            return None;
+        }
+        let label = caps[3].trim().to_string();
+        let lower = label.to_lowercase();
+        options.push(ChoiceOption {
+            key,
+            label,
+            highlighted: caps.get(1).is_some(),
+            destructive: matches!(lower.as_str(), "no" | "cancel" | "reject")
+                || lower.starts_with("no "),
+            hint: None,
+        });
+    }
+    if options.len() < 2 {
+        return None;
+    }
+    if !options.iter().any(|option| option.highlighted) {
+        options[0].highlighted = true;
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title: screen_rows[title].trim().to_string(),
+        options,
+        selection_mode: Some(ChoiceSelectionMode::NavigateEnter),
+        dismiss_key: Some("cancel".to_string()),
+        amend_key: None,
     })
 }
 
@@ -6292,6 +6350,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             options,
             dismiss_key,
             amend_key,
+            ..
         } = actual
         else {
             panic!(
@@ -6480,6 +6539,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     hint: None,
                 },
             ],
+            selection_mode: None,
             dismiss_key: Some("cancel".into()),
             amend_key: Some("amend".into()),
         };
@@ -6491,6 +6551,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(payload.options.len(), 2);
         assert_eq!(payload.dismiss_key.as_deref(), Some("cancel"));
         assert_eq!(payload.amend_key.as_deref(), Some("amend"));
+    }
+
+    #[test]
+    fn quoted_ink_dialog_footer_does_not_create_mobile_choices() {
+        let rows = [
+            "  Which color do you prefer?",
+            "  ❯ 1. Red",
+            "  2. Green",
+            "  Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        .map(str::to_string);
+        assert!(parse_claude_ask_user_question(&rows).is_none());
     }
 
     #[test]

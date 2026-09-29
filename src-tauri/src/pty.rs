@@ -6796,7 +6796,13 @@ impl ChunkProcessor {
         // so false-positive cost is low. Dedup via last_choice_prompt_sig
         // guards against repaint re-emission.
         if let Some(screen) = screen_cache {
-            match crate::output_parser::parse_choice_prompt(screen) {
+            let choice = if agent_type.as_deref() == Some("claude") {
+                crate::output_parser::parse_claude_ask_user_question(screen)
+                    .or_else(|| crate::output_parser::parse_choice_prompt(screen))
+            } else {
+                crate::output_parser::parse_choice_prompt(screen)
+            };
+            match choice {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
                 // same dialog is detected again the next time it appears, instead of
