@@ -1974,7 +1974,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.7 Settings
 - Connection status: connectivity indicator with real-time Connected/Disconnected state
 - Server URL display
-- App and server versions, plus a persistent Dark/Light choice using desktop theme colors
+- App and server versions, plus a persistent Dark/Light choice using desktop theme colors and a separate server-side mobile preference
 - Notification sound toggle (localStorage-persisted)
 - Open Desktop UI link
 

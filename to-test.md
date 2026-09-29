@@ -4326,4 +4326,4 @@ or credential is touched.
 
 - [ ] On a 360 px phone, confirm a long Progress message shows about four lines, More reveals it all, and Less collapses it again.
 - [ ] Confirm Activity shows local 24-hour times, a completed 2343-second run as 39 min, and a single block as `1 block`.
-- [ ] In mobile Settings, choose Light, reload the PWA, and confirm the theme stays light; check that app and server versions are visible.
+- [ ] After restarting `make dev` to load the Rust `mobile_theme` preference, choose Light in mobile Settings, reload the PWA, and confirm the theme stays light. Confirm the desktop theme remains unchanged and app/server versions are visible.

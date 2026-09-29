@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **Mobile Markdown images** — Relative images in repository Markdown now load from the file's directory through an authenticated image route. Paths outside the selected repository and non-image files are refused.
-- **Mobile Progress, Activity and Settings** — Long journal messages expand on demand, Activity shows local times and minute durations, and Settings shows app and server versions and offers a persistent light theme.
+- **Mobile Progress, Activity and Settings** — Long journal messages expand on demand, Activity shows local times and minute durations, and Settings shows app and server versions and offers a light theme saved separately from the desktop theme in server preferences.
 
 - **Mobile Files** — Repository paths keep their end visible and reveal the full path on long press. The tree puts hidden folders after normal ones and searches nested files. File actions share the title row; the editor fills the available height and wraps lines.
 - **Compact mobile session header** — A 56 px row shows the agent logo, state, session name, and tasks count. Intent, tasks, and session progress open temporary sheets; Files, output search, Ideas, and quick commands remain reachable from overflow without reducing terminal space.

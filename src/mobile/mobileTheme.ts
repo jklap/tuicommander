@@ -1,17 +1,31 @@
+import { invoke } from "../invoke";
 import { applyAppTheme, loadThemes, themesLoaded } from "../themes";
 
-const MOBILE_THEME_KEY = "tuic-mobile-theme";
+export type MobileTheme = "commander" | "vscode-light";
 
-export function mobileTheme(): "commander" | "vscode-light" {
-	return localStorage.getItem(MOBILE_THEME_KEY) === "vscode-light" ? "vscode-light" : "commander";
+let currentTheme: MobileTheme = "commander";
+
+function supportedTheme(value: unknown): MobileTheme {
+	return value === "vscode-light" ? "vscode-light" : "commander";
 }
 
-export async function loadMobileTheme(): Promise<void> {
-	if (!themesLoaded()) await loadThemes();
-	applyAppTheme(mobileTheme(), false);
+export function mobileTheme(): MobileTheme {
+	return currentTheme;
 }
 
-export function setMobileTheme(theme: "commander" | "vscode-light"): void {
-	localStorage.setItem(MOBILE_THEME_KEY, theme);
+export async function loadMobileTheme(): Promise<MobileTheme> {
+	const [prefs] = await Promise.all([
+		invoke<Record<string, unknown>>("load_ui_prefs"),
+		themesLoaded() ? Promise.resolve() : loadThemes(),
+	]);
+	currentTheme = supportedTheme(prefs.mobile_theme);
+	applyAppTheme(currentTheme, false);
+	return currentTheme;
+}
+
+export async function setMobileTheme(theme: MobileTheme): Promise<void> {
+	const base = await invoke<Record<string, unknown>>("load_ui_prefs");
+	await invoke("save_ui_prefs", { base, config: { ...base, mobile_theme: theme } });
+	currentTheme = theme;
 	applyAppTheme(theme, false);
 }
