@@ -127,7 +127,9 @@ export function useConfirmDialog() {
 				? "This branch's commits are in the default branch"
 				: status.commitStatus === "in_sync"
 					? "This branch has nothing of its own, not merged work"
-					: "commits remain in the parent repository";
+					: status.commitStatus === "pushed_unmerged"
+						? "This branch is not merged, but all its commits are pushed"
+						: "commits remain in the parent repository";
 		const untracked = status.untrackedFiles
 			? `\nUntracked files: ${status.untrackedFiles} untracked files will be discarded.`
 			: "";

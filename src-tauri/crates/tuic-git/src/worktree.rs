@@ -451,6 +451,9 @@ pub fn create_worktree_with_stale_recovery(
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceCommitStatus {
     Unmerged,
+    /// Not merged, but every commit exists on the branch's own remote-tracking
+    /// ref, so deleting the local branch loses nothing.
+    PushedUnmerged,
     /// HEAD is the default branch's tip: this workspace has no commits of its
     /// own, so it was never merged. Kept apart from `Merged` because both
     /// satisfy `merge-base --is-ancestor` and only one of them describes a
@@ -846,6 +849,50 @@ pub fn merged_pr_proof_from_pages(
     false
 }
 
+/// Refs a branch is compared against: the default branch's upstream, which the
+/// local default branch routinely trails, and the local default branch itself
+/// (it may hold merges not yet pushed). Missing refs are skipped.
+fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
+    [
+        format!("refs/remotes/origin/{default_branch}"),
+        format!("refs/heads/{default_branch}"),
+    ]
+    .into_iter()
+    .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
+    .collect()
+}
+
+/// Human-readable form of `integration_bases`, for messages.
+fn describe_bases(bases: &[String]) -> String {
+    bases
+        .iter()
+        .map(|base| {
+            base.strip_prefix("refs/heads/")
+                .or_else(|| base.strip_prefix("refs/remotes/"))
+                .unwrap_or(base)
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, String> {
+    for base in bases {
+        if is_ancestor(repo, tip, base)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Every commit up to `tip` exists on the branch's own remote-tracking ref.
+fn pushed_to_own_remote(repo: &Path, branch: &str, tip: &str) -> Result<bool, String> {
+    let remote = format!("refs/remotes/origin/{branch}");
+    if rev_at(repo, &format!("{remote}^{{commit}}")).is_err() {
+        return Ok(false);
+    }
+    is_ancestor(repo, tip, &remote)
+}
+
 fn classify_branch_merge(
     repo: &Path,
     branch: &str,
@@ -853,8 +900,11 @@ fn classify_branch_merge(
     default_branch: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
-    let default_tip = rev_at(repo, default_branch)?;
-    let merged = is_ancestor(repo, tip, &default_tip)?;
+    let bases = integration_bases(repo, default_branch);
+    if bases.is_empty() {
+        return Err(format!("default branch '{default_branch}' was not found"));
+    }
+    let merged = is_ancestor_of_any(repo, tip, &bases)?;
     // Ancestry alone cannot distinguish own commits from a branch that merely
     // followed the default branch. The branch reflog records both its source
     // and how its ref moved after creation.
@@ -909,12 +959,23 @@ fn classify_branch_merge(
         Ok((WorkspaceCommitStatus::Merged, Some("integration_ancestry")))
     } else if pr_proves_tip(repo, branch, tip) {
         Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+    } else if pushed_to_own_remote(repo, branch, tip)? {
+        Ok((WorkspaceCommitStatus::PushedUnmerged, None))
     } else {
         Ok((WorkspaceCommitStatus::Unmerged, None))
     }
 }
 
-fn patches_integrated(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+fn patches_integrated(repo: &Path, bases: &[String], tip: &str) -> Result<bool, String> {
+    for base in bases {
+        if patches_integrated_in(repo, base, tip)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
     // `git cherry` omits merge commits and their resolution changes.
     let merges = git_cmd(repo)
         .args(["rev-list", "--merges", &format!("{target}..{tip}")])
@@ -1290,6 +1351,13 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
         None => Ok(()),
     }
 }
+/// Remove a detached orphan. A checkout whose directory is already gone holds
+/// nothing to lose, so dropping its registration is confirmed by the safety
+/// assessment instead of a `force` flag.
+pub fn remove_orphan_worktree_internal(worktree: &WorktreeInfo) -> Result<(), String> {
+    remove_worktree_internal(worktree, !path_entry_exists(&worktree.path)?)
+}
+
 pub fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
     remove_worktree_internal_with_lock(worktree, force, false, None, None)
 }
@@ -2038,17 +2106,20 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
             match lifecycle.commit_status {
                 WorkspaceCommitStatus::Unmerged => {
                     let default_branch = get_remote_default_branch(repo_path)?;
-                    if !patches_integrated(&base_repo, &default_branch, &expected_branch_oid)
-                        .map_err(|error| {
+                    let bases = integration_bases(&base_repo, &default_branch);
+                    if !patches_integrated(&base_repo, &bases, &expected_branch_oid).map_err(
+                        |error| {
                             format!("Cannot check patch equivalence for {branch_name}: {error}")
-                        })?
-                    {
+                        },
+                    )? {
                         return Err(format!(
-                            "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                            "Cannot remove {branch_name}: branch has unmerged commits (compared against {}). Merge it first, or remove the worktree while keeping the branch.",
+                            describe_bases(&bases)
                         ));
                     }
                     Ok("patch_equivalence")
                 }
+                WorkspaceCommitStatus::PushedUnmerged => Ok("remote_tracking"),
                 WorkspaceCommitStatus::Unknown => {
                     Err(lifecycle.error.clone().unwrap_or_else(|| {
                         format!("Cannot verify whether {branch_name} can be safely removed")
@@ -2324,13 +2395,20 @@ pub fn delete_integrated_local_branch_with_pr(
         WorkspaceCommitStatus::Merged => merge_proof
             .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
         WorkspaceCommitStatus::Unmerged => {
-            if patches_integrated(repo, &default_branch, &tip)? {
+            let bases = integration_bases(repo, &default_branch);
+            if patches_integrated(repo, &bases, &tip)? {
                 "patch_equivalence"
             } else {
                 return Err(format!(
-                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch"
+                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
+                    describe_bases(&bases)
                 ));
             }
+        }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            return Err(format!(
+                "Cannot delete '{branch_name}': it is pushed but not merged into the default branch"
+            ));
         }
         WorkspaceCommitStatus::Unknown => {
             return Err(format!("Cannot verify merged commits for '{branch_name}'"));
@@ -8050,6 +8128,41 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    /// The directory was moved away but git still lists the worktree. Spawning
+    /// git in the missing cwd used to surface as "Failed to spawn git".
+    #[test]
+    fn orphan_whose_directory_is_gone_is_safe_to_forget_and_removal_drops_the_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-moved-away");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let assessments = assess_orphan_worktrees(&repo.to_string_lossy()).unwrap();
+
+        let entry = assessments
+            .iter()
+            .find(|entry| entry.path.ends_with("orphan-moved-away"))
+            .expect("the tracked orphan is still listed");
+        assert!(entry.safe, "{entry:?}");
+        let reason = entry.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("already gone"), "{reason}");
+        assert!(!reason.contains("spawn"), "{reason}");
+
+        let worktree = WorktreeInfo {
+            name: "orphan-moved-away".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo.clone(),
+        };
+        remove_orphan_worktree_internal(&worktree).unwrap();
+        let listed = git_cmd(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains("orphan-moved-away"), "{listed}");
+    }
+
     #[tokio::test]
     async fn queued_warm_cannot_recreate_a_removed_worktree() {
         let (_temp, repo, _workspaces) = workspace_fixture();
@@ -8297,12 +8410,147 @@ branch refs/heads/feat
         assert!(!error.contains("No workspace found"), "{error}");
     }
 
+    /// A bare origin holding the repo's default branch, fetched so
+    /// `origin/<default>` exists locally.
+    fn add_origin(repo: &Path) -> PathBuf {
+        let origin = repo.parent().unwrap().join("origin.git");
+        git_cmd(repo.parent().unwrap())
+            .args(["init", "--bare", &origin.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo)
+            .args(["remote", "add", "origin", &origin.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo)
+            .args(["push", "origin", &base_branch_of(repo)])
+            .run()
+            .unwrap();
+        git_cmd(repo).args(["fetch", "origin"]).run().unwrap();
+        origin
+    }
+
+    /// Local main is stale (10 behind origin/main in the field); the branch
+    /// was merged upstream. Comparing only the local default branch called it
+    /// unmerged and refused removal.
+    #[test]
+    fn branch_merged_into_upstream_default_while_local_default_is_stale_is_merged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "landed-upstream");
+        commit_file(&worktree, "feature.txt", "landed work\n");
+        let main = base_branch_of(&repo);
+        git_cmd(&worktree)
+            .args(["push", "origin", &format!("landed-upstream:{main}")])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "landed-upstream");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "landed-upstream",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "ancestry");
+        assert!(!worktree.exists());
+    }
+
+    /// Every commit is on origin/<branch>: deleting the local ref loses
+    /// nothing, so removal must not be refused as data loss.
+    #[test]
+    fn branch_fully_pushed_to_its_own_remote_is_pushed_unmerged_and_removable() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "pushed-only");
+        commit_file(&worktree, "feature.txt", "pushed work\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "pushed-only"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "pushed-only");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::PushedUnmerged);
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "pushed-only",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "remote_tracking");
+        assert!(!worktree.exists());
+        let remaining = git_cmd(&repo)
+            .args(["branch", "--list", "pushed-only"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(remaining.trim().is_empty(), "{remaining}");
+        git_cmd(&repo)
+            .args(["cat-file", "-e", "refs/remotes/origin/pushed-only"])
+            .run()
+            .expect("the pushed commits stay reachable");
+    }
+
+    #[test]
+    fn branch_with_a_commit_missing_from_its_remote_stays_unmerged_and_refused() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "half-pushed");
+        commit_file(&worktree, "one.txt", "pushed\n");
+        git_cmd(&worktree)
+            .args(["push", "origin", "half-pushed"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["fetch", "origin"]).run().unwrap();
+        commit_file(&worktree, "two.txt", "local only\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "half-pushed");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+
+        let error = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "half-pushed",
+            true,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("unmerged"), "{error}");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn unmerged_refusal_names_every_base_it_compared() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_origin(&repo);
+        let worktree = add_worktree(&repo, "unshared");
+        commit_file(&worktree, "feature.txt", "local only\n");
+        let main = base_branch_of(&repo);
+
+        let error =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), "unshared", true, None, false)
+                .unwrap_err();
+
+        assert!(error.contains(&format!("origin/{main}")), "{error}");
+        assert!(error.contains(&format!("and {main}")), "{error}");
+    }
+
     /// The serialized spellings are the contract the sidebar's label table
     /// reads; renaming a variant silently turns a badge into dead code.
     #[test]
     fn commit_status_serializes_as_the_frontend_spells_it() {
         let spellings = [
             (WorkspaceCommitStatus::Unmerged, "unmerged"),
+            (WorkspaceCommitStatus::PushedUnmerged, "pushed_unmerged"),
             (WorkspaceCommitStatus::InSync, "in_sync"),
             (WorkspaceCommitStatus::Merged, "merged"),
             (WorkspaceCommitStatus::Unknown, "unknown"),
@@ -8339,9 +8587,9 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
             .into_iter()
             .map(|path| match orphan_cleanup_safety(repo_path, &path) {
                 Ok(()) => OrphanCleanupAssessment {
+                    reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
                     path,
                     safe: true,
-                    reason: None,
                 },
                 Err(reason) => OrphanCleanupAssessment {
                     path,
@@ -8353,9 +8601,16 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     })
 }
 
+const DIRECTORY_GONE: &str = "directory is already gone; removal only drops the tracking entry";
+
 pub fn orphan_cleanup_safety(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     validate_worktree_path(repo_path, worktree_path)?;
     let worktree = Path::new(worktree_path);
+    // Nothing to inspect: git cannot run in a missing cwd, and there is no
+    // work left to lose.
+    if !worktree.exists() {
+        return Ok(());
+    }
     let status = git_cmd(worktree)
         .args([
             "status",
