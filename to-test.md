@@ -29,6 +29,10 @@
 
 # To Test
 
+## Managed child idle close (story 1209-cc47) — Rust restart required
+
+- [ ] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE=<id>`, spawn a disposable managed agent child and set its per-agent idle-close delay to 1 minute. Let it become idle and confirm the parent receives an `idle_timeout` notice before the child terminal closes. Confirm its worktree remains. Send a follow-up before a second child's delay ends and confirm the timer restarts; confirm a user-created terminal and a managed child marked keep-open stay open. Run a disposable `tuic bg` job with an unreachable queue and mail path; its failed wake marker must keep the child open. The current live backend and installed CLI need a rebuild to load this change.
+
 ## Background wake retry (story 1233-4738) — rebuild the Rust CLI
 
 - [ ] After rebuilding and reinstalling `tuic`, run a disposable `tuic bg` command against an isolated instance. If the instance temporarily stops answering, check that `<log>.wake` shows `retrying` with `tuic_session` and `attempts`, then `queued` or `mailed` after recovery. The installed CLI cannot load the Rust change until rebuilt.

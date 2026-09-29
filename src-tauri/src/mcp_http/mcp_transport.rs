@@ -314,7 +314,7 @@ fn pending_parent_id(mcp_session_id: &str) -> String {
 }
 
 /// A placeholder is a routing key, not a session: never publish it as a parent.
-pub(super) fn is_pending_parent(parent: &str) -> bool {
+pub(crate) fn is_pending_parent(parent: &str) -> bool {
     parent.starts_with(PENDING_PARENT_PREFIX)
 }
 
@@ -1108,8 +1108,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str =
-    "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, wait";
+const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -1181,10 +1180,11 @@ fn native_tool_definitions() -> serde_json::Value {
             "name": "session",
             "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, close, kill, pause, resume" },
                 "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
+                "enabled": { "type": "boolean", "description": "Required for action=keep_open: true disables idle close for a managed child; false restores it." },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "action=submit: acknowledgement wait, clamped 250-10000ms, default 3000. action=wait: max wait, default 60000; values at or above 300000 run as 295000." },
                 "input": { "type": "string", "description": "Non-empty command (action=submit) or raw text (action=input)" },
@@ -1226,6 +1226,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "urgency": { "type": "string", "enum": ["normal", "urgent"], "description": "action=send: normal (default), or urgent when the recipient must change course before its next step. Urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer; it never interrupts a running tool." },
+                "keep_open": { "type": "boolean", "description": "action=spawn: keep this managed child open; action=send: set or clear the recipient managed child's keep-open flag." },
                 "limit": { "type": "integer", "minimum": 1, "maximum": crate::state::AGENT_INBOX_CAPACITY, "description": "Maximum inbox entries to return (action=inbox; default 100, maximum 100). Read again while has_more is true." },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
@@ -3205,6 +3206,24 @@ fn handle_session(
             emit_close_html_tabs(state.as_ref(), session_id);
             serde_json::json!({"ok": true})
         }
+        "keep_open" => {
+            let resolved = match require_session_id(state, args, "keep_open") {
+                Ok(id) => id,
+                Err(error) => return error,
+            };
+            let Some(enabled) = args.get("enabled").and_then(serde_json::Value::as_bool) else {
+                return serde_json::json!({"error": "enabled (boolean) is required for action=keep_open"});
+            };
+            if !state.session_maps.session_parent.contains_key(&resolved) {
+                return serde_json::json!({"error": "keep_open applies only to managed child sessions"});
+            }
+            if enabled {
+                state.keep_open_sessions.insert(resolved);
+            } else {
+                state.keep_open_sessions.remove(&resolved);
+            }
+            serde_json::json!({"ok": true, "keep_open": enabled})
+        }
         "kill" => {
             let resolved = match require_session_id(state, args, "kill") {
                 Ok(id) => id,
@@ -3356,6 +3375,18 @@ fn handle_session(
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'session'. Available: {}", other, SESSION_ACTIONS
         )}),
+    }
+}
+
+/// Use the same close path as `session action=close`, including frontend events.
+pub(crate) fn close_idle_managed_session(state: &Arc<AppState>, session_id: &str) {
+    let result = handle_session(
+        state,
+        &serde_json::json!({"action": "close", "session_id": session_id}),
+        None,
+    );
+    if result.get("error").is_some() {
+        tracing::warn!(session_id, %result, "idle-close session close failed");
     }
 }
 
@@ -3831,6 +3862,13 @@ fn handle_agent_with_parent_cwd(
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "Agent spawning is restricted to localhost connections"});
             }
+            let keep_open = match args.get("keep_open") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Some(value) => value,
+                    None => return serde_json::json!({"error": "keep_open must be a boolean"}),
+                },
+            };
             for removed in ["allow_alt_screen", "allowAltScreen"] {
                 if args.get(removed).is_some() {
                     return serde_json::json!({"error": format!("Removed agent spawn parameter: {removed}; configure prevent_alt_screen for the agent instead")});
@@ -4309,6 +4347,9 @@ fn handle_agent_with_parent_cwd(
                     .session_maps
                     .session_parent
                     .insert(session_id.clone(), parent_id);
+                if keep_open {
+                    state.keep_open_sessions.insert(session_id.clone());
+                }
                 if state.pending_initial_prompts.contains_key(&session_id) {
                     let watchdog_state = Arc::clone(state);
                     let watchdog_session = session_id.clone();
@@ -4816,6 +4857,16 @@ fn handle_messaging(
                 Err(error) => return serde_json::json!({"error": error}),
             };
             let to = resolved_to.as_deref().unwrap_or(requested_to);
+            let keep_open = match args.get("keep_open") {
+                None => None,
+                Some(value) => match value.as_bool() {
+                    Some(value) => Some(value),
+                    None => return serde_json::json!({"error": "keep_open must be a boolean"}),
+                },
+            };
+            if keep_open.is_some() && !state.session_maps.session_parent.contains_key(to) {
+                return serde_json::json!({"error": "keep_open applies only to managed child sessions"});
+            }
             let message = match args["message"].as_str() {
                 Some(s) if !s.is_empty() => s,
                 _ => return serde_json::json!({"error": "Action 'send' requires 'message'"}),
@@ -4879,6 +4930,13 @@ fn handle_messaging(
                 }
                 state.push_agent_inbox(to, msg)
             };
+            if let Some(enabled) = keep_open {
+                if enabled {
+                    state.keep_open_sessions.insert(to.to_string());
+                } else {
+                    state.keep_open_sessions.remove(to);
+                }
+            }
             // DEFERRED (2026-09-23) — a recipient with no terminal (an external
             // MCP client) has no Progress Flow column, so its mail is not
             // journaled. Showing it needs a non-terminal participant kind.

@@ -171,6 +171,11 @@ for command completion and `.wake` for both queue and mail failures. Both
 errors are also appended to the log. Neither status file can start a new agent
 turn while TUICommander is unavailable.
 
+The instance config directory also holds `bg-wakes/<TUIC_SESSION>.json`. It is
+marked `retrying` while a background command is active or its wake is being
+retried, then records the final result. Automatic managed-child idle closure
+reads this record and keeps a child open after a failed wake.
+
 ```bash
 # Spawn an AI agent (the prompt is required — the agent starts on it)
 tuic agent spawn claude "review the failing tests"

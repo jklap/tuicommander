@@ -59,6 +59,7 @@ const DEFAULTS = {
 		headless_template: null,
 		native_status_signals: null,
 		prevent_alt_screen: null,
+		idle_close_minutes: 15,
 		skip_trust_dialog: null,
 		hook_instrumentation: null,
 		intent_tab_title: null,
@@ -71,6 +72,7 @@ const DEFAULTS = {
 
 /** Per-agent override rows: label, the agent whose row carries it, a stored override. */
 const OVERRIDES: Array<[string, "claude" | "gemini", Record<string, unknown>]> = [
+	["Close idle managed child after", "claude", { idle_close_minutes: 0 }],
 	["Native status signals", "claude", { native_status_signals: false }],
 	["Prevent alternate screen", "gemini", { prevent_alt_screen: false }],
 	["Accept workspace trust for managed spawns", "claude", { skip_trust_dialog: false }],
@@ -225,6 +227,26 @@ describe("AgentsTab expert controls", () => {
 				expect.objectContaining({
 					config: expect.objectContaining({
 						agents: expect.objectContaining({ claude: expect.objectContaining({ skip_trust_dialog: false }) }),
+					}),
+				}),
+			),
+		);
+	});
+
+	it("stores zero minutes to keep managed children open", async () => {
+		await setup();
+		uiStore.setSettingsExpertMode(true);
+		const { container } = renderExpanded("claude");
+		const input = container.querySelector<HTMLInputElement>("#idle-close-claude");
+		expect(input?.value).toBe("15");
+		fireEvent.change(input!, { target: { value: "0" } });
+		await waitFor(() => expect(agentConfigsStore.getIdleCloseMinutes("claude")).toBe(0));
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ claude: expect.objectContaining({ idle_close_minutes: 0 }) }),
 					}),
 				}),
 			),

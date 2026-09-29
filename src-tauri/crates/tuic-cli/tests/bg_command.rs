@@ -26,6 +26,12 @@ fn socket_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
+fn bg_command(log: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuic"));
+    command.env("TUIC_BG_WAKE_DIR", format!("{}.markers", log.display()));
+    command
+}
+
 fn read_request(stream: &mut std::os::unix::net::UnixStream) -> (String, serde_json::Value) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut line = String::new();
@@ -109,12 +115,9 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         (first, second)
     });
     // Warm the freshly linked executable before measuring only launcher behavior.
-    Command::new(env!("CARGO_BIN_EXE_tuic"))
-        .arg("--version")
-        .output()
-        .unwrap();
+    bg_command(&log).arg("--version").output().unwrap();
     let start = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -143,6 +146,12 @@ fn bg_returns_before_command_exits_and_queues_one_exact_wake() {
         "launcher wrote the exit before the command ended"
     );
     assert!(!wake_file.exists(), "launcher left a stale wake failure");
+    let active_marker: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.markers/caller-1.json", log.display())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(active_marker["status"], "retrying");
+    assert_eq!(active_marker["session_id"], "caller-1");
     wait_for(&exit_file);
     wait_for(&wake_file);
     assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "7");
@@ -181,6 +190,9 @@ fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
     let socket = socket_path("retry-timeout.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let server_wake_file = wake_file.clone();
+    let marker_dir = std::path::PathBuf::from(format!("{}.markers", log.display()));
+    let marker = marker_dir.join("caller-1.json");
+    let server_marker = marker.clone();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let first = read_request(&mut stream);
@@ -209,6 +221,11 @@ fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
                         assert_eq!(in_progress["status"], "retrying");
                         assert_eq!(in_progress["tuic_session"], "caller-1");
                         assert_eq!(in_progress["attempts"], 1);
+                        let marker: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(&server_marker).unwrap())
+                                .unwrap();
+                        assert_eq!(marker["session_id"], "caller-1");
+                        assert_eq!(marker["status"], "retrying");
                         reply(
                             &mut stream,
                             r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
@@ -227,11 +244,8 @@ fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
         requests
     });
 
-    Command::new(env!("CARGO_BIN_EXE_tuic"))
-        .arg("--version")
-        .output()
-        .unwrap();
-    let launch = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    bg_command(&log).arg("--version").output().unwrap();
+    let launch = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 0"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -243,6 +257,10 @@ fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
     assert_eq!(outcome["status"], "queued", "{outcome}");
     assert_eq!(outcome["tuic_session"], "caller-1");
     assert!(outcome["attempts"].as_u64().unwrap_or(0) >= 2, "{outcome}");
+    let final_marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(final_marker["status"], "queued");
+    assert_eq!(final_marker["session_id"], "caller-1");
     assert_eq!(
         requests,
         [
@@ -254,6 +272,7 @@ fn bg_retries_after_a_socket_read_timeout_and_queues_the_wake() {
     std::fs::remove_file(wake_file).unwrap();
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(marker_dir).unwrap();
 }
 
 #[test]
@@ -288,7 +307,7 @@ fn bg_mails_completion_when_session_lookup_cannot_find_caller() {
         reply(&mut stream, &response.to_string());
         (lookup, initialize, mail)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo done"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -350,7 +369,7 @@ fn bg_does_not_call_inbox_only_mail_a_wake() {
         reply(&mut stream, &response.to_string());
         (lookup, initialize, mail)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 3"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -404,7 +423,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
         .unwrap();
         (first, second)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 7"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -420,6 +439,12 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
     assert_eq!(wake_status["status"], "failed");
     assert_eq!(wake_status["attempts"], 1);
     assert_eq!(wake_status["tuic_session"], "caller-1");
+    let failed_marker: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.markers/caller-1.json", log.display())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(failed_marker["status"], "failed");
+    assert_eq!(failed_marker["session_id"], "caller-1");
     assert!(wake_status["error"].as_str().unwrap().contains("HTTP 400"));
     assert!(wake_status["error"].as_str().unwrap().contains("mail:"));
     let (first, second) = server.join().unwrap();
@@ -435,7 +460,7 @@ fn bg_keeps_command_exit_separate_from_rejected_wake() {
 fn bg_records_wake_failure_when_tuic_is_unavailable() {
     let log = test_path("tuic-down.log");
     let missing_socket = socket_path("tuic-down.sock");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 9"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &missing_socket)
@@ -464,7 +489,7 @@ fn bg_records_wake_failure_when_tuic_is_unavailable() {
 fn bg_refuses_to_start_without_a_managed_session() {
     let log = test_path("missing.log");
     let marker = test_path("missing.marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -500,7 +525,7 @@ fn bg_creates_missing_log_directories_and_wakes_caller() {
         reply(&mut stream, r#"{"typed":false,"queued":1}"#);
         (first, second)
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "echo five"])
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", &socket)
@@ -516,6 +541,8 @@ fn bg_creates_missing_log_directories_and_wakes_caller() {
     let (first, second) = server.join().unwrap();
     assert_eq!(first.0, "GET /sessions HTTP/1.1");
     assert_eq!(second.0, "POST /sessions/pty-1/queue HTTP/1.1");
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    assert_eq!(wait_for_terminal_wake(&wake_file)["status"], "queued");
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_file(socket).unwrap();
 }
@@ -526,7 +553,7 @@ fn bg_refuses_an_uncreatable_log_before_running_command() {
     let marker = test_path("blocked-marker");
     std::fs::write(&parent_file, "not a directory").unwrap();
     let log = parent_file.join("job.log");
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+    let output = bg_command(&log)
         .args([
             "bg",
             log.to_str().unwrap(),
@@ -569,6 +596,7 @@ fn bg_command_survives_killing_its_launchers_process_group() {
     shell
         .env("TUIC_SESSION", "caller-1")
         .env("TUIC_SOCKET", socket_path("absent.sock"))
+        .env("TUIC_BG_WAKE_DIR", format!("{}.markers", log.display()))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);

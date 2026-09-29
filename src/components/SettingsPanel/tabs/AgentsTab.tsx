@@ -815,6 +815,30 @@ const AgentRow: Component<{
 
 			<Show when={expanded()}>
 				<div class={a.agentExpanded}>
+					<ExpertSetting
+						configKey="agent_settings.idle_close_minutes"
+						value={configStore.getIdleCloseMinutes(props.agentType)}
+					>
+						<div class={a.expandedSection}>
+							<label for={`idle-close-${props.agentType}`}>Close idle managed child after</label>
+							<input
+								id={`idle-close-${props.agentType}`}
+								class={a.formInput}
+								type="number"
+								min="0"
+								max="1440"
+								step="1"
+								value={configStore.getIdleCloseMinutes(props.agentType)}
+								onChange={(event) => {
+									const minutes = event.currentTarget.valueAsNumber;
+									if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440) {
+										void configStore.setIdleCloseMinutes(props.agentType, minutes);
+									}
+								}}
+							/>
+							<p class={s.hint}>Minutes. Set to 0 to keep managed children open.</p>
+						</div>
+					</ExpertSetting>
 					{/* Enable/Disable toggle */}
 					<div class={a.expandedSection}>
 						<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
