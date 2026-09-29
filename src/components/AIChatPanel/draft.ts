@@ -26,12 +26,78 @@ export interface StagedFile {
 const [text, setText] = createSignal("");
 const [images, setImages] = createSignal<StagedImage[]>([]);
 const [files, setFiles] = createSignal<StagedFile[]>([]);
-const drafts = new Map<string, { text: string; images: StagedImage[]; files: StagedFile[] }>();
+interface DraftContent { text: string; images: StagedImage[]; files: StagedFile[] }
+interface StoredDraft extends DraftContent { pastes: [string, string][] }
+const drafts = new Map<string, DraftContent>();
+const [parked, setParked] = createSignal<DraftContent | null>(null);
+const [storageError, setStorageError] = createSignal(false);
+const parkedDrafts = new Map<string, DraftContent>();
 const pastedText = new Map<string, string>();
+const PARKED_DB = "tuic-ai-chat-parked-drafts";
+const PARKED_STORE = "drafts";
+let database: Promise<IDBDatabase | null> | undefined;
 let activeSession = "";
 let revision = 0;
 let pendingBytes = 0;
 let pasteNumber = 0;
+
+function openDatabase(): Promise<IDBDatabase | null> {
+	if (database) return database;
+	if (typeof indexedDB === "undefined") return Promise.resolve(null);
+	database = new Promise((resolve) => {
+		try {
+			const request = indexedDB.open(PARKED_DB, 1);
+			request.onupgradeneeded = () => request.result.createObjectStore(PARKED_STORE);
+			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => resolve(null);
+			request.onblocked = () => resolve(null);
+		} catch {
+			resolve(null);
+		}
+	});
+	return database;
+}
+
+function persistParked(session: string, draft: DraftContent | null): void {
+	void openDatabase().then((db) => {
+		if (!db) {
+			if (draft) setStorageError(true);
+			return;
+		}
+		try {
+			const transaction = db.transaction(PARKED_STORE, "readwrite");
+			transaction.oncomplete = () => setStorageError(false);
+			transaction.onerror = () => setStorageError(true);
+			transaction.onabort = () => setStorageError(true);
+			const store = transaction.objectStore(PARKED_STORE);
+			if (draft) {
+				const pastes = [...pastedText].filter(([marker]) => draft.text.includes(marker));
+				store.put({ ...draft, pastes } satisfies StoredDraft, session);
+			} else {
+				store.delete(session);
+			}
+		} catch {
+			setStorageError(true);
+		}
+	});
+}
+
+function hydrateParked(session: string, atRevision: number): void {
+	void openDatabase().then((db) => {
+		if (!db) return;
+		const request = db.transaction(PARKED_STORE, "readonly").objectStore(PARKED_STORE).get(session);
+		request.onsuccess = () => {
+			const saved = request.result as StoredDraft | undefined;
+			if (!saved || activeSession !== session || revision !== atRevision || parked()) return;
+			for (const [marker, value] of saved.pastes) {
+				pastedText.set(marker, value);
+				pasteNumber = Math.max(pasteNumber, Number(marker.match(/#(\d+)/)?.[1] ?? 0));
+			}
+			setParked({ text: saved.text, images: saved.images, files: saved.files ?? [] });
+			parkedDrafts.set(session, { text: saved.text, images: saved.images, files: saved.files ?? [] });
+		};
+	});
+}
 
 function readImage(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -58,16 +124,57 @@ export const aiChatDraft = {
 	},
 	images,
 	files,
+	parked,
+	storageError,
 	activate(session: string): void {
-		if (session === activeSession) return;
+		if (session === activeSession) {
+			if (!session && !parked()) hydrateParked(session, revision);
+			return;
+		}
+		const previousSession = activeSession;
 		const previous = { text: text(), images: images(), files: files() };
 		if (activeSession) drafts.set(activeSession, previous);
 		const next = drafts.get(session) ?? (activeSession === "" && session ? previous : undefined);
+		const nextParked = parkedDrafts.get(session) ?? (activeSession === "" && session ? parked() : null);
 		activeSession = session;
 		setText(next?.text ?? "");
 		setImages(next?.images ?? []);
 		setFiles(next?.files ?? []);
+		setParked(nextParked);
 		revision += 1;
+		if (!nextParked) hydrateParked(session, revision);
+		if (!previousSession && session && nextParked) {
+			persistParked(session, nextParked);
+			persistParked("", null);
+		}
+	},
+	parkOrSwap(): void {
+		const current = { text: text(), images: images(), files: files() };
+		const previous = parked();
+		if (!previous && !current.text.trim() && current.images.length === 0 && current.files.length === 0) return;
+		setText(previous?.text ?? "");
+		setImages(previous?.images ?? []);
+		setFiles(previous?.files ?? []);
+		setParked(previous && (current.text.trim() || current.images.length || current.files.length) ? current : previous ? null : current);
+		revision += 1;
+		if (activeSession) {
+			const saved = parked();
+			if (saved) parkedDrafts.set(activeSession, saved);
+			else parkedDrafts.delete(activeSession);
+		}
+		persistParked(activeSession, parked());
+	},
+	restoreAfterSend(): void {
+		const saved = parked();
+		this.clear();
+		if (!saved) return;
+		setText(saved.text);
+		setImages(saved.images);
+		setFiles(saved.files);
+		setParked(null);
+		setStorageError(false);
+		parkedDrafts.delete(activeSession);
+		persistParked(activeSession, null);
 	},
 
 	/** Validate bytes before FileReader expands them into base64. */
@@ -127,6 +234,9 @@ export const aiChatDraft = {
 
 	reset(): void {
 		drafts.clear();
+		parkedDrafts.clear();
+		setParked(null);
+		setStorageError(false);
 		pastedText.clear();
 		pasteNumber = 0;
 		activeSession = "";
@@ -134,5 +244,8 @@ export const aiChatDraft = {
 		setText("");
 		setImages([]);
 		setFiles([]);
+		void openDatabase().then((db) => {
+			if (db) db.transaction(PARKED_STORE, "readwrite").objectStore(PARKED_STORE).clear();
+		});
 	},
 };

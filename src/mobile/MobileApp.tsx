@@ -48,6 +48,9 @@ export default function MobileApp() {
 	// the fixed shell. html/body are height:auto so the document has no
 	// scrollable content — iOS can't scroll the page on keyboard open.
 	onMount(() => {
+		void import("./mobileTheme")
+			.then(({ loadMobileTheme }) => loadMobileTheme())
+			.catch((error: unknown) => appLogger.warn("app", "Could not load mobile theme", error));
 		const vv = window.visualViewport;
 		if (!vv) return;
 		let raf = 0;
@@ -74,7 +77,7 @@ export default function MobileApp() {
 		});
 	});
 
-	const [activeTab, setActiveTab] = createSignal<TabId>("chat");
+	const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
 	const [progressProjects, setProgressProjects] = createSignal<string[] | undefined>();
 	const [progressProjectsError, setProgressProjectsError] = createSignal<string | null>(null);
 	createEffect(() => {
@@ -97,7 +100,8 @@ export default function MobileApp() {
 	});
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
-	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
+	const [sessionFileLink, setSessionFileLink] = createSignal<{ candidate: string; line?: number } | null>(null);
+	const { sessions, loading, refreshing, error, refresh, questionCount, markSeen } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
@@ -115,7 +119,10 @@ export default function MobileApp() {
 	// Update last known session whenever live data arrives; keep stale value when gone
 	createEffect(() => {
 		const live = liveSession();
-		if (live) setLastKnownSession(live);
+		if (live) {
+			if (live.unseen) markSeen(live.session_id);
+			setLastKnownSession(live);
+		}
 	});
 
 	const sessionExists = createMemo(() => {
@@ -125,11 +132,13 @@ export default function MobileApp() {
 	});
 
 	function navigateToSession(id: string) {
+		markSeen(id);
 		setSelectedSessionId(id);
 	}
 
 	function handleBack() {
 		setSessionFilesOpen(false);
+		setSessionFileLink(null);
 		setSelectedSessionId(null);
 		setLastKnownSession(null);
 	}
@@ -159,7 +168,15 @@ export default function MobileApp() {
 				when={showDetail()}
 				fallback={
 					<>
-						<TopBar notificationCount={questionCount()} isConnected={error() === null} />
+						<TopBar
+							notificationCount={questionCount()}
+							isConnected={error() === null}
+							onOpenSettings={() => setActiveTab("settings")}
+							onNotificationsClick={() => {
+								const waiting = sessions().find((session) => session.state?.awaiting_input);
+								if (waiting) navigateToSession(waiting.session_id);
+							}}
+						/>
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
 							<Switch>
@@ -203,17 +220,28 @@ export default function MobileApp() {
 						session={lastKnownSession()!}
 						sessionExists={sessionExists()}
 						onBack={handleBack}
-						onOpenFiles={() => setSessionFilesOpen(true)}
+						onOpenFiles={() => {
+							setSessionFileLink(null);
+							setSessionFilesOpen(true);
+						}}
+						onOpenFileLink={(candidate, line) => {
+							setSessionFileLink({ candidate, line });
+							setSessionFilesOpen(true);
+						}}
 					/>
 				</div>
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
 								worktreePath: lastKnownSession()!.worktree_path,
 								cwd: lastKnownSession()!.cwd,
 							}}
-							onExit={() => setSessionFilesOpen(false)}
+							onExit={() => {
+								setSessionFilesOpen(false);
+								setSessionFileLink(null);
+							}}
 						/>
 					</main>
 				</Show>

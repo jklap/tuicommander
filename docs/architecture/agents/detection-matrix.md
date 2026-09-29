@@ -4,6 +4,31 @@ Standardized checklist for analyzing and onboarding new AI coding agent CLIs.
 Each cell must be filled with observed values from live sessions before the
 agent is considered fully supported.
 
+## Mobile question and choice contract (2026-09-29)
+
+The mobile client renders the backend's `SessionState.choice_prompt` and follows
+its `selection_mode` for Claude. Codex's existing `Other` notes path still has
+a client-side special case. Only rows marked as captured below have a verified
+end-to-end choice contract;
+unknown forms stay as terminal output until they have a real capture and test.
+
+| Registry type | Observed question or approval UI | Selection contract and evidence |
+|---|---|---|
+| `claude` | Ink AskUserQuestion: title, numbered options separated by description rows, column-zero `Enter to select` footer | `navigate-enter`: arrows move the highlight, Enter submits, Esc cancels. Claude 2.1.280 capture `src-tauri/src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap`; the older permission menu is documented in [Claude Code](claude-code.md). |
+| `codex` | Queued `request_user_input`: title and numbered choices under `• Queued follow-up inputs`; a separate command approval panel exists | Numbered key for ordinary options; `Other` navigates to notes. Captures and limits in [Codex](codex.md). |
+| `gemini` | No interactive permission UI in the v0.34.0 workspace-restriction observation | No captured question-option contract; see [Gemini CLI](gemini-cli.md). |
+| `aider` | Inline file-add confirmation offers `Y/N/A/S/D` | Character keys shown in the prompt; this is not a numbered choice overlay. See [Aider](aider.md). |
+| `opencode` | Framed `△ Permission required` with inline `Allow once / Allow always / Reject` | Navigation and Enter shown in the footer, but no captured mobile option contract. See [OpenCode](opencode.md). |
+| `pi` | Permission and menu screens are reported | Specific question rows and selection bytes not captured; see [pi](pi.md). |
+| `amp`, `cursor`, `goose`, `grok`, `droid` | No question-option capture in this repository | Unknown; no agent-specific mobile choice parser is enabled. |
+| `git`, `api` | Registry execution types, not a captured interactive agent dialog | No choice contract. |
+
+The generic numbered confirmation parser remains available for agents with its
+strict title and option shape. The Claude Ink parser is gated by `agent_type`
+and the full-bleed footer so a quoted dialog in agent output cannot become a
+clickable choice. A missing `choice_prompt` is not evidence that Yes/No is a
+safe substitute for a multi-option question.
+
 ## Detection Matrix
 
 ### 1. Identity & Rendering

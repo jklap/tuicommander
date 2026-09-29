@@ -13,11 +13,12 @@ vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate } }));
 vi.mock("../../components/AIChatPanel/useAcpChat", () => ({ createAcpChat }));
 
 import { MobileChatScreen } from "../screens/MobileChatScreen";
+import { aiChatDraft } from "../../components/AIChatPanel/draft";
 
 function chat() {
 	return {
 		phase: () => "live",
-		root: () => "/repo",
+		root: () => "/home/boss/Gits",
 		connectionId: () => "connection-1",
 		sessionId: () => "current",
 		entries: () => [
@@ -62,12 +63,10 @@ function chat() {
 }
 
 beforeEach(() => {
+	aiChatDraft.reset();
 	history.replaceState(null, "", "/mobile");
-	invoke.mockReset().mockImplementation(async (command: string) => {
-		if (command === "load_repositories") return { repos: { "/repo": {} } };
-		throw new Error(`unexpected ${command}`);
-	});
-	createAcpChat.mockReturnValue(chat());
+	invoke.mockReset();
+	createAcpChat.mockReset().mockReturnValue(chat());
 	answerPermission.mockClear();
 	selectSession.mockClear();
 });
@@ -78,14 +77,25 @@ afterEach(() => {
 });
 
 describe("mobile ego chat", () => {
-	it("opens the repository and conversation named by a push link", async () => {
-		history.replaceState(null, "", "/mobile?repo=%2Frepo&session=previous");
-		invoke.mockImplementation(async (command: string) => {
-			if (command === "load_repositories") return { repos: { "/other": {}, "/repo": {} } };
-			throw new Error(`unexpected ${command}`);
-		});
+	it("opens global chat without a repository selection or repository fetch", async () => {
 		render(() => <MobileChatScreen />);
-		await waitFor(() => expect(screen.getByRole("combobox", { name: "Repository" })).toHaveProperty("value", "/repo"));
+		expect(screen.queryByRole("combobox", { name: "Repository" })).toBeNull();
+		expect(screen.getByRole("combobox", { name: "Conversation" })).toBeTruthy();
+		expect(invoke).not.toHaveBeenCalledWith("load_repositories");
+		expect(createAcpChat.mock.calls[0][0]()).toBeNull();
+	});
+
+	it("opens a linked conversation without a repository in the URL", async () => {
+		history.replaceState(null, "", "/mobile?session=previous");
+		render(() => <MobileChatScreen />);
+		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
+	});
+
+	it("opens a push-linked conversation with its repository as a context hint", async () => {
+		history.replaceState(null, "", "/mobile?repo=%2Frepo&session=previous");
+		render(() => <MobileChatScreen />);
+		expect(screen.queryByRole("combobox", { name: "Repository" })).toBeNull();
+		expect(createAcpChat.mock.calls[0][0]()).toBe("/repo");
 		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
 	});
 
@@ -105,14 +115,14 @@ describe("mobile ego chat", () => {
 		expect(container.querySelector("textarea")).toBeTruthy();
 	});
 
-	it("ignores a push link to a repository this phone has not registered", async () => {
+	it("opens a push-linked conversation without loading a local repository list", async () => {
 		history.replaceState(null, "", "/mobile?repo=%2Funknown&session=previous");
 		render(() => <MobileChatScreen />);
-		await waitFor(() => expect(screen.getByRole("combobox", { name: "Repository" })).toHaveProperty("value", "/repo"));
-		expect(selectSession).not.toHaveBeenCalled();
+		await waitFor(() => expect(selectSession).toHaveBeenCalledWith("previous"));
+		expect(invoke).not.toHaveBeenCalledWith("load_repositories");
 	});
 
-	it("shows the conversation, card and collapsed activity after selecting its repository", async () => {
+	it("shows the conversation, card and collapsed activity on direct open", async () => {
 		const { container } = render(() => <MobileChatScreen />);
 		await waitFor(() => expect(screen.getByText("The build passed.")).toBeTruthy());
 		expect(screen.getByText("Check the build")).toBeTruthy();
@@ -186,5 +196,33 @@ describe("mobile ego chat", () => {
 		expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel queued prompt Follow up from desktop" }));
 		expect(shared.cancelQueued).toHaveBeenCalledWith("phone-turn");
+	});
+
+	it("parks and restores a phone draft using the composer control", async () => {
+		const { container } = render(() => <MobileChatScreen />);
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		fireEvent.input(textarea, { target: { value: "Phone draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		expect(textarea.value).toBe("");
+		expect(screen.getByText("Parked draft")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		expect(textarea.value).toBe("Phone draft");
+	});
+
+	it("parks an uploaded document and restores it as an unsent attachment", async () => {
+		const current = chat();
+		createAcpChat.mockReturnValue(current);
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ path: "/repo/.tuic/attachments/1-report.pdf", size: 6 }), { status: 200 })));
+		const { container } = render(() => <MobileChatScreen />);
+		const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.change(picker, { target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] } });
+		await waitFor(() => expect(screen.getByText("report.pdf")).toBeTruthy());
+		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
+		expect(screen.queryByText("report.pdf")).toBeNull();
+		expect(current.send).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
+		expect(screen.getByText("report.pdf")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		expect(current.send).toHaveBeenCalledWith("", [], [{ name: "report.pdf", path: "/repo/.tuic/attachments/1-report.pdf" }]);
 	});
 });

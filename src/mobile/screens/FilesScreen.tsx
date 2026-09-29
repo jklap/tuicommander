@@ -1,7 +1,9 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
+import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { getRemoteBaseUrl, getRepoConnection, withRemoteToken } from "../../transportRuntime";
 import styles from "./FilesScreen.module.css";
 
 interface FileEntry {
@@ -15,7 +17,18 @@ const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
 interface FilesScreenProps {
 	initialRepo?: { worktreePath: string | null; cwd: string | null };
+	initialLink?: { candidate: string; line?: number };
 	onExit?: () => void;
+}
+
+function normalizedPath(path: string): string {
+	return path.replaceAll("\\", "/").replace(/\/+$/, "");
+}
+
+function withinRoot(path: string, root: string): boolean {
+	const file = normalizedPath(path);
+	const directory = normalizedPath(root);
+	return file === directory || file.startsWith(`${directory}/`);
 }
 
 export function FilesScreen(props: FilesScreenProps) {
@@ -23,6 +36,10 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [repo, setRepo] = createSignal<string | null>(null);
 	const [dir, setDir] = createSignal("");
 	const [entries, setEntries] = createSignal<FileEntry[]>([]);
+	const [searchQuery, setSearchQuery] = createSignal("");
+	const [searchResults, setSearchResults] = createSignal<FileEntry[]>([]);
+	const [searching, setSearching] = createSignal(false);
+	const [previewPath, setPreviewPath] = createSignal<string | null>(null);
 	const [file, setFile] = createSignal<string | null>(null);
 	const [content, setContent] = createSignal("");
 	const [draft, setDraft] = createSignal("");
@@ -30,9 +47,20 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
 	let requestId = 0;
+	let searchRequestId = 0;
+	let pathPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+	let suppressRepoOpen = false;
+	let editorEl: HTMLTextAreaElement | undefined;
+	onCleanup(() => {
+		if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
+	});
 
 	onMount(async () => {
 		try {
+			if (props.initialLink) {
+				await openLinkedFile(props.initialLink);
+				return;
+			}
 			const worktreePath = props.initialRepo?.worktreePath?.trim();
 			if (worktreePath) {
 				await openDirectory(worktreePath, "");
@@ -46,13 +74,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
 			const registered = Object.keys(config.repos ?? {});
 			if (cwd) {
-				const normalizedCwd = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
-				const matching = registered
-					.filter((path) => {
-						const root = path.replaceAll("\\", "/").replace(/\/+$/, "");
-						return normalizedCwd === root || normalizedCwd.startsWith(`${root}/`);
-					})
-					.sort((a, b) => b.length - a.length);
+				const matching = registered.filter((path) => withinRoot(cwd, path)).sort((a, b) => b.length - a.length);
 				if (matching.length === 0) {
 					setError("No registered repository contains this session directory.");
 					return;
@@ -66,8 +88,64 @@ export function FilesScreen(props: FilesScreenProps) {
 		}
 	});
 
+	async function openLinkedFile(link: { candidate: string; line?: number }) {
+		const cwd = props.initialRepo?.cwd?.trim() || props.initialRepo?.worktreePath?.trim();
+		if (!cwd) {
+			setError("Repository path is unavailable for this session.");
+			return;
+		}
+		const resolved = await rpc<{ absolute_path: string; is_directory: boolean } | null>("resolve_terminal_path", {
+			cwd,
+			candidate: link.candidate,
+		});
+		if (!resolved || resolved.is_directory) {
+			setError("Markdown file is unavailable.");
+			return;
+		}
+		const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
+		const roots = [props.initialRepo?.worktreePath, ...Object.keys(config.repos ?? {})].filter(
+			(path): path is string => !!path,
+		);
+		const root = roots
+			.filter((path) => withinRoot(resolved.absolute_path, path))
+			.sort((a, b) => b.length - a.length)[0];
+		if (!root) {
+			setError("File is outside an allowed registered repository.");
+			toastsStore.add(
+				"Cannot open Markdown file",
+				resolved.absolute_path,
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+			return;
+		}
+		const stat = await rpc<{ exists: boolean; is_dir: boolean; size: number }>("stat_path", {
+			path: resolved.absolute_path,
+		});
+		if (!stat.exists || stat.is_dir) {
+			setError("Markdown file is unavailable.");
+			return;
+		}
+		const relative = normalizedPath(resolved.absolute_path).slice(normalizedPath(root).length + 1);
+		setRepo(root);
+		setDir(relative.split("/").slice(0, -1).join("/"));
+		await openFile(
+			{ name: relative.split("/").pop() ?? relative, path: relative, is_dir: false, size: stat.size },
+			link.line,
+		);
+	}
+
 	async function openDirectory(repoPath: string, subdir: string) {
 		const currentRequest = ++requestId;
+		++searchRequestId;
+		setSearchQuery("");
+		setSearchResults([]);
+		setSearching(false);
 		setBusy(true);
 		setError("");
 		try {
@@ -84,7 +162,28 @@ export function FilesScreen(props: FilesScreenProps) {
 		}
 	}
 
-	async function openFile(entry: FileEntry) {
+	async function searchFiles(query: string) {
+		setSearchQuery(query);
+		const currentRequest = ++searchRequestId;
+		if (!query.trim() || !repo()) {
+			setSearchResults([]);
+			setSearching(false);
+			setError("");
+			return;
+		}
+		setSearching(true);
+		setError("");
+		try {
+			const result = await rpc<FileEntry[]>("search_files", { repoPath: repo(), query: query.trim(), limit: 100 });
+			if (currentRequest === searchRequestId) setSearchResults(result);
+		} catch (err) {
+			if (currentRequest === searchRequestId) setError(`Could not search files: ${String(err)}`);
+		} finally {
+			if (currentRequest === searchRequestId) setSearching(false);
+		}
+	}
+
+	async function openFile(entry: FileEntry, line?: number) {
 		const currentRequest = ++requestId;
 		setFile(entry.path);
 		setContent("");
@@ -102,6 +201,18 @@ export function FilesScreen(props: FilesScreenProps) {
 				setError("This is a binary or non-text file.");
 			} else {
 				setContent(result);
+				if (line) {
+					setDraft(result);
+					setEditing(true);
+					queueMicrotask(() => {
+						if (currentRequest !== requestId || !editorEl) return;
+						const lines = result.split("\n");
+						const target = Math.min(line - 1, lines.length - 1);
+						const offset = lines.slice(0, target).reduce((sum, text) => sum + text.length + 1, 0);
+						editorEl.focus();
+						editorEl.setSelectionRange(offset, offset);
+					});
+				}
 			}
 		} catch (err) {
 			if (currentRequest !== requestId) return;
@@ -116,6 +227,10 @@ export function FilesScreen(props: FilesScreenProps) {
 		requestId++;
 		setBusy(false);
 		setError("");
+		if (props.initialLink && props.onExit) {
+			props.onExit();
+			return;
+		}
 		if (file() !== null) {
 			setFile(null);
 			setEditing(false);
@@ -127,6 +242,18 @@ export function FilesScreen(props: FilesScreenProps) {
 		}
 		if (props.onExit) props.onExit();
 		else setRepo(null);
+	}
+
+	function markdownImageSrc(relativePath: string): string {
+		const repoPath = repo();
+		const currentFile = file();
+		if (!repoPath || !currentFile) return relativePath;
+		const connectionId = getRepoConnection(repoPath);
+		const base = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
+		const url = new URL("/fs/markdown-image", base ?? window.location.origin);
+		url.searchParams.set("repoPath", repoPath);
+		url.searchParams.set("file", `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
+		return withRemoteToken(url.toString(), connectionId);
 	}
 
 	async function save() {
@@ -148,6 +275,28 @@ export function FilesScreen(props: FilesScreenProps) {
 	}
 
 	const repoName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+	function stopPathPreviewTimer() {
+		if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
+		pathPreviewTimer = undefined;
+	}
+
+	function showPathPreview(path: string) {
+		stopPathPreviewTimer();
+		suppressRepoOpen = true;
+		setPreviewPath(path);
+	}
+
+	function startPathPreview(path: string) {
+		stopPathPreviewTimer();
+		pathPreviewTimer = setTimeout(() => showPathPreview(path), 450);
+	}
+	const visibleEntries = () =>
+		searchQuery().trim()
+			? searchResults()
+			: [...entries()].sort((a, b) => {
+					const hidden = Number(a.name.startsWith(".")) - Number(b.name.startsWith("."));
+					return hidden || Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name);
+				});
 
 	return (
 		<div class={styles.screen}>
@@ -157,8 +306,55 @@ export function FilesScreen(props: FilesScreenProps) {
 						‹ Back
 					</button>
 				</Show>
-				<strong class={styles.title}>{file() || dir() || repoName(repo() ?? "") || "Files"}</strong>
+				<strong class={styles.title} title={file() || dir() || repo() || "Files"}>
+					<bdi dir="ltr">{file() ? repoName(file()!) : dir() || repoName(repo() ?? "") || "Files"}</bdi>
+				</strong>
+				<Show when={file() !== null && (editing() || (!error() && !busy()))}>
+					<Show
+						when={editing()}
+						fallback={
+							<button
+								class={styles.action}
+								onClick={() => {
+									setDraft(content());
+									setEditing(true);
+								}}
+							>
+								Edit
+							</button>
+						}
+					>
+						<button
+							class={styles.action}
+							onClick={() => {
+								setEditing(false);
+								setError("");
+							}}
+						>
+							Cancel
+						</button>
+						<button class={styles.action} disabled={busy()} onClick={() => void save()}>
+							Save
+						</button>
+					</Show>
+				</Show>
 			</header>
+			<Show when={previewPath()}>
+				<div class={styles.pathPreviewBackdrop}>
+					<div class={styles.pathPreview} role="dialog" aria-label="Repository path">
+						<p>{previewPath()}</p>
+						<button
+							class={styles.action}
+							onClick={() => {
+								suppressRepoOpen = false;
+								setPreviewPath(null);
+							}}
+						>
+							Close
+						</button>
+					</div>
+				</div>
+			</Show>
 			<Show when={error()}>
 				<p class={styles.error} role="alert">
 					{error()}
@@ -171,16 +367,47 @@ export function FilesScreen(props: FilesScreenProps) {
 				<Show when={repos().length > 0} fallback={<p class={styles.status}>No repositories configured</p>}>
 					<For each={repos()}>
 						{(path) => (
-							<button class={styles.row} onClick={() => void openDirectory(path, "")}>
+							<button
+								class={styles.row}
+								title={path}
+								onTouchStart={() => startPathPreview(path)}
+								onTouchEnd={stopPathPreviewTimer}
+								onTouchCancel={stopPathPreviewTimer}
+								onContextMenu={(event) => {
+									event.preventDefault();
+									showPathPreview(path);
+								}}
+								onClick={() => {
+									if (suppressRepoOpen) {
+										suppressRepoOpen = false;
+										return;
+									}
+									void openDirectory(path, "");
+								}}
+							>
 								<span class={styles.name}>{repoName(path)}</span>
-								<span class={styles.path}>{path}</span>
+								<span class={styles.path}>
+									<bdi dir="ltr">{path}</bdi>
+								</span>
 							</button>
 						)}
 					</For>
 				</Show>
 			</Show>
 			<Show when={repo() !== null && file() === null}>
-				<For each={entries()}>
+				<label class={styles.search}>
+					<input
+						type="search"
+						aria-label="Search files"
+						placeholder="Search files"
+						value={searchQuery()}
+						onInput={(event) => void searchFiles(event.currentTarget.value)}
+					/>
+				</label>
+				<Show when={searching()}>
+					<p class={styles.status}>Searching…</p>
+				</Show>
+				<For each={visibleEntries()}>
 					{(entry) => (
 						<button
 							class={styles.row}
@@ -188,47 +415,22 @@ export function FilesScreen(props: FilesScreenProps) {
 						>
 							<span class={styles.name}>
 								{entry.is_dir ? "▸ " : ""}
-								{entry.name}
+								{searchQuery().trim() ? entry.path : entry.name}
 							</span>
 						</button>
 					)}
 				</For>
-				<Show when={entries().length === 0 && !busy() && !error()}>
-					<p class={styles.status}>Empty directory</p>
+				<Show when={visibleEntries().length === 0 && !busy() && !searching() && !error()}>
+					<p class={styles.status}>{searchQuery().trim() ? "No matching files" : "Empty directory"}</p>
 				</Show>
 			</Show>
 			<Show when={file() !== null && (editing() || (!error() && !busy()))}>
-				<div class={styles.actions}>
-					<Show
-						when={editing()}
-						fallback={
-							<button
-								onClick={() => {
-									setDraft(content());
-									setEditing(true);
-								}}
-							>
-								Edit
-							</button>
-						}
-					>
-						<button
-							onClick={() => {
-								setEditing(false);
-								setError("");
-							}}
-						>
-							Cancel
-						</button>
-						<button onClick={() => void save()}>Save</button>
-					</Show>
-				</div>
 				<Show
 					when={editing()}
 					fallback={
 						file()?.toLowerCase().endsWith(".md") ? (
 							<div class={styles.markdownView}>
-								<ContentRenderer content={content()} />
+								<ContentRenderer content={content()} imageSrc={markdownImageSrc} />
 							</div>
 						) : (
 							<pre class={styles.viewer}>{content()}</pre>
@@ -236,8 +438,10 @@ export function FilesScreen(props: FilesScreenProps) {
 					}
 				>
 					<textarea
+						ref={editorEl}
 						class={styles.editor}
 						aria-label="File content"
+						wrap="soft"
 						value={draft()}
 						onInput={(event) => setDraft(event.currentTarget.value)}
 						spellcheck={false}

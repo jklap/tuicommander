@@ -11622,6 +11622,197 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
     );
 }
 
+/// A Codex stop hook can delay the child's Working repaint well past Enter.
+/// The sender must not see an error when that turn was actually accepted.
+#[cfg(unix)]
+#[test]
+fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-stop-hook-delayed-working";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[22;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(
+            "\x1b[21;1H• Working (1s • esc to interrupt)",
+            &silence,
+            sid,
+            &state,
+        );
+    });
+
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "a Codex Working screen three seconds after Enter confirms the queued turn"
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "the accepted turn must not show a false failure toast"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn queued_codex_without_child_response_remains_uncertain() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-silent-after-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let bytes = insert_recording_session(&state, sid);
+    let mut alerts = state.event_bus.subscribe();
+
+    enqueue_user_command(&state, sid, "wake the agent").unwrap();
+
+    assert!(bytes.lock().unwrap().ends_with(b"\r"));
+    assert!(
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "a silent Codex child cannot confirm its own queued turn"
+    );
+    assert!(std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
+        event,
+        crate::state::AppEvent::McpToast { level, .. } if level == "error"
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn queued_claude_hook_busy_confirms_submission() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "claude-hook-confirmed-queue";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let capture = String::from_utf8(agent_prompt_fixture(
+        "claude-hooked-missing-question-20260921.raw",
+    ))
+    .expect("recorded Claude hook stream is UTF-8");
+    let busy = capture.find("state=busy").expect("captured busy hook");
+    let start = capture[..busy].rfind('\x1b').expect("hook escape start");
+    let end = busy + capture[busy..].find("\x1b\\").expect("hook terminator") + 2;
+    let busy_hook = &capture[start..end];
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(15))
+                    .unwrap(),
+                expected
+            );
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(busy_hook, &silence, sid, &state);
+    });
+
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "Claude's busy hook must confirm queued Enter without a false toast"
+    );
+}
+
 /// A Codex idle marker can precede its ready repaint. The old Working row is
 /// still visible when Enter is written, then a fresh Ready and Working pair
 /// arrive from the child. This is a real new turn despite that old row.
@@ -16557,6 +16748,120 @@ async fn confident_awaiting_is_never_retracted() {
     );
 }
 
+/// Live Claude 2.1.280 capture: AskUserQuestion notified a confident wait,
+/// Esc dismissed it without a typed line, and the turn ended at the composer.
+/// The badge must follow that completed turn, not the historical notification.
+#[tokio::test(flavor = "current_thread")]
+async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "claude-askuser-esc";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_wait = false;
+    let mut saw_esc = false;
+    let mut saw_done = false;
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Output => {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+                if clean.contains("Claude needs your permission") {
+                    saw_wait = true;
+                    assert!(
+                        await_session(&state, sid, |s| {
+                            s.awaiting_input
+                                && s.question_confident
+                                && s.question_text.as_deref()
+                                    == Some("Claude needs your permission")
+                        })
+                        .await,
+                        "an open AskUserQuestion must keep the confident badge"
+                    );
+                    // Catches: awaiting_input is set, but the mobile choice
+                    // overlay has no title or options for the live Claude dialog.
+                    assert!(
+                        await_session(&state, sid, |s| {
+                            s.choice_prompt.as_ref().is_some_and(|prompt| {
+                                prompt.title == "Which color do you prefer?"
+                                    && prompt.options.len() == 5
+                                    && prompt.selection_mode
+                                        == Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+                                    && prompt
+                                        .options
+                                        .iter()
+                                        .any(|option| option.key == "2" && option.label == "Green")
+                            })
+                        })
+                        .await,
+                        "live AskUserQuestion must expose its choices to mobile"
+                    );
+                }
+                saw_done |= clean.contains("Worked for 4s");
+            }
+            crate::pty_capture::CaptureDirection::Input if saw_wait && record.data == b"\x1b" => {
+                saw_esc = true;
+                assert!(
+                    await_session(&state, sid, |s| s.awaiting_input).await,
+                    "bare Esc must not retract a still-open dialog before Claude responds"
+                );
+            }
+            crate::pty_capture::CaptureDirection::Input => {}
+        }
+    }
+    assert!(
+        saw_wait && saw_esc && saw_done,
+        "capture must contain the full scenario"
+    );
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input && !s.question_confident).await,
+        "the completed turn must retract Claude's dismissed question"
+    );
+
+    // The captured composer is ready after Claude finishes. Model the normal
+    // idle settlement, then exercise the same PTY write used by MCP submit.
+    #[cfg(unix)]
+    {
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(SHELL_IDLE, Ordering::Release);
+        silence.lock().confirm_idle();
+        let bytes = insert_recording_session(&state, sid);
+        assert!(matches!(
+            write_agent_submission_to_pty(&state, sid, "echo ready"),
+            AgentSubmissionWrite::Complete { .. }
+        ));
+        assert!(
+            bytes
+                .lock()
+                .unwrap()
+                .windows(b"echo ready".len())
+                .any(|part| part == b"echo ready")
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn protocol_awaiting_clears_on_protocol_busy_and_idle() {
     for (session_id, target, label) in [
@@ -16621,6 +16926,7 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
     session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
         title: "Which approach should I use?".to_string(),
         options: vec![],
+        selection_mode: None,
         dismiss_key: None,
         amend_key: None,
     });
@@ -17926,6 +18232,59 @@ fn process_tree_snapshot_reports_own_process() {
 // payloads, the shell state and the awaiting badge — for a real capture
 // replayed through the real `process_chunk`, so a regression shows up as a
 // diff in the recorded trace rather than as a subtle live-session bug.
+
+#[test]
+fn captured_codex_request_user_input_reaches_choice_prompt() {
+    let bytes = agent_prompt_fixture("codex-request-user-input-20260929.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("real Codex capture");
+    let (rows, cols) = capture.geometry.expect("capture records terminal geometry");
+    let sid = "codex-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut prompts = Vec::new();
+
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed.get("type").and_then(serde_json::Value::as_str) == Some("choice-prompt")
+            {
+                prompts.push(parsed);
+            }
+        }
+    }
+
+    assert!(
+        prompts.iter().any(|prompt| {
+            prompt.get("title").and_then(serde_json::Value::as_str)
+                == Some("Boss, scegli rosso o blu?")
+                && prompt["options"].as_array().is_some_and(|options| {
+                    options
+                        .iter()
+                        .any(|option| option["key"] == "2" && option["label"] == "Blu")
+                })
+        }),
+        "captured Codex question must reach the mobile choice-prompt state"
+    );
+}
 
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]

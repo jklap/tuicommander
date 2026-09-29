@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandInput } from "../components/CommandInput";
 import { HttpRpcError } from "../../transport";
+import codexQuestion from "../../../src-tauri/src/fixtures/choice_prompts/codex-request-user-input.json";
 
 const { rpc } = vi.hoisted(() => ({
 	rpc: vi.fn(async (_command: string, _args: Record<string, unknown>) => ({ status: "acknowledged", submitted: true, acknowledged: true })),
@@ -123,5 +124,71 @@ describe("mobile managed-agent reply", () => {
 		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Approve"))!);
 		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 		expect(rpc.mock.calls.some(([command, args]) => command === "write_pty" && args.data === "1")).toBe(true);
+	});
+
+	// Catches: a captured Codex option is followed by an extra Enter or sent twice.
+	it("submits a Codex question option once without an extra Enter", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="codex-question"
+				agentType="codex"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={codexQuestion}
+			/>
+		));
+		const option = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Blu"))!;
+		await fireEvent.click(option);
+		await fireEvent.click(option);
+		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "2" });
+	});
+
+	// Catches: a Claude Ink picker receives a numeric key without the Enter its footer requires.
+	it("moves to and selects the second captured Claude AskUserQuestion option once", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="claude-question"
+				agentType="claude"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={{
+					title: "Which color do you prefer?",
+					options: [
+						{ key: "1", label: "Red", highlighted: true, destructive: false },
+						{ key: "2", label: "Green", highlighted: false, destructive: false },
+						{ key: "3", label: "Blue", highlighted: false, destructive: false },
+						{ key: "4", label: "Type something.", highlighted: false, destructive: false },
+						{ key: "5", label: "Chat about this", highlighted: false, destructive: false },
+					],
+					dismiss_key: "cancel",
+					selection_mode: "navigate-enter",
+				}}
+			/>
+		));
+		const green = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Green"))!;
+		await fireEvent.click(green);
+		await fireEvent.click(green);
+		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(2));
+		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\r"]);
+	});
+
+	it("opens Codex Other notes before typing a free-form answer", async () => {
+		const { container } = render(() => (
+			<CommandInput
+				sessionId="codex-other"
+				agentType="codex"
+				awaitingInput={true}
+				managedSession={true}
+				choicePrompt={codexQuestion}
+			/>
+		));
+		await fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!);
+		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-other", data: "\t" }));
+		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\t"]);
+		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Purple" } });
+		await fireEvent.click(container.querySelector("button[type=button]")!);
+		await waitFor(() => expect(rpc.mock.calls.some(([, args]) => args.data === "\r")).toBe(true));
+		expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 	});
 });

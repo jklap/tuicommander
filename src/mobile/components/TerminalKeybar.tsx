@@ -9,8 +9,10 @@ interface TerminalKeybarProps {
 	sessionId: string;
 	agentType?: string | null;
 	awaitingInput?: boolean;
+	choicePromptOpen?: boolean;
 	/** True when the question was detected with high confidence (Ink menu footer) */
 	questionConfident?: boolean;
+	sessionExists?: boolean;
 	onCommandWidgetOpen?: () => void;
 	/** Request to prefill "/" in CommandInput and focus it. */
 	onSlashRequest?: () => void;
@@ -64,6 +66,7 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 	const [sending, setSending] = createSignal(false);
 
 	async function send(seq: string, autoEnter?: boolean) {
+		if (props.sessionExists === false) return;
 		const data = autoEnter ? seq + "\r" : seq;
 		const label = seq.length <= 3 ? JSON.stringify(seq) : `${seq.length}b`;
 		appLogger.debug("terminal", `TerminalKeybar send: ${label} to ${props.sessionId}`);
@@ -80,10 +83,7 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 	}
 
 	function handleSlash() {
-		// Focus the CommandInput with "/" prefilled — the CommandInput handles
-		// PTY sync and slash menu display. We send Escape first to dismiss any
-		// currently open slash menu on the agent side.
-		void send("\x1b");
+		if (props.sessionExists === false) return;
 		props.onSlashRequest?.();
 	}
 
@@ -91,13 +91,13 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 
 	return (
 		<div class={styles.bar}>
-			<Show when={props.awaitingInput}>
+			<Show when={props.awaitingInput && !props.choicePromptOpen}>
 				<For each={confirmKeys()}>
 					{(k) => (
 						<button
 							class={`${styles.key} ${styles.confirm}`}
 							classList={{ [styles.sending]: sending() }}
-							disabled={sending()}
+							disabled={sending() || props.sessionExists === false}
 							onClick={() => send(k.seq, k.autoEnter)}
 						>
 							{k.label}
@@ -106,12 +106,17 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 				</For>
 				<div class={styles.divider} />
 			</Show>
-			<button class={`${styles.key} ${styles.accent}`} onClick={handleSlash}>
+			<button class={`${styles.key} ${styles.accent}`} disabled={props.sessionExists === false} onClick={handleSlash}>
 				/
 			</button>
 			<For each={STANDARD_KEYS}>
 				{(k) => (
-					<button class={styles.key} classList={{ [styles.danger]: !!k.danger }} onClick={() => send(k.seq)}>
+					<button
+						class={styles.key}
+						classList={{ [styles.danger]: !!k.danger }}
+						disabled={props.sessionExists === false}
+						onClick={() => send(k.seq)}
+					>
 						{k.label}
 					</button>
 				)}

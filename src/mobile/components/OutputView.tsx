@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, Index, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
 import {
@@ -10,6 +10,7 @@ import {
 	sameLine,
 	spanStyle,
 } from "../utils/logLine";
+import { detectOutputLinks } from "../utils/outputLinks";
 import { createVisibilityGate } from "../utils/pageVisibility";
 import styles from "./OutputView.module.css";
 
@@ -29,6 +30,8 @@ interface OutputViewProps {
 	onInputLine?: (text: string | null) => void;
 	/** When set, only lines matching this query (case-insensitive) are shown. */
 	searchQuery?: string;
+	/** Open a verified terminal path in the session's file viewer. */
+	onOpenFileLink?: (candidate: string, line?: number) => void;
 }
 
 export function OutputView(props: OutputViewProps) {
@@ -240,6 +243,70 @@ export function OutputView(props: OutputViewProps) {
 
 	const lineBlocks = createMemo(() => groupLineBlocks(displayedLines()));
 
+	function styledRange(line: LogLine, start: number, end: number): JSX.Element[] {
+		const result: JSX.Element[] = [];
+		let offset = 0;
+		for (const span of line.spans) {
+			const from = Math.max(start, offset);
+			const to = Math.min(end, offset + span.text.length);
+			if (to > from) {
+				const part = span.text.slice(from - offset, to - offset);
+				const style = spanStyle(span);
+				result.push(style ? <span style={style}>{part}</span> : part);
+			}
+			offset += span.text.length;
+		}
+		return result;
+	}
+
+	function renderLine(line: LogLine) {
+		const text = line.spans.map((span) => span.text).join("");
+		let indent = 0;
+		for (const char of text) {
+			if (char === " ") indent++;
+			else if (char === "\t") indent += 8 - (indent % 8);
+			else break;
+		}
+		const wrapStyle = indent ? { "--wrap-indent": `${indent}ch` } : undefined;
+		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
+		if (links.length === 0) {
+			return (
+				<div class={styles.line} style={wrapStyle}>
+					<Index each={line.spans}>
+						{(span) => {
+							const style = spanStyle(span());
+							return style ? <span style={style}>{span().text}</span> : span().text;
+						}}
+					</Index>
+				</div>
+			);
+		}
+		const parts: JSX.Element[] = [];
+		let offset = 0;
+		for (const link of links) {
+			parts.push(...styledRange(line, offset, link.start));
+			const content = styledRange(line, link.start, link.end);
+			parts.push(
+				link.kind === "web" ? (
+					<a class={styles.webLink} href={link.text} target="_blank" rel="noopener noreferrer external">
+						{content}
+					</a>
+				) : (
+					<button
+						type="button"
+						class={styles.fileLink}
+						onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
+					>
+						{content}
+					</button>
+				),
+			);
+			offset = link.end;
+		}
+		parts.push(...styledRange(line, offset, text.length));
+		return <div class={styles.line} style={wrapStyle}>{parts}</div>;
+	}
+
 	return (
 		<div ref={containerEl} class={styles.output}>
 			<Show when={subscribeError()}>
@@ -251,16 +318,6 @@ export function OutputView(props: OutputViewProps) {
 			<pre class={styles.text}>
 				<For each={lineBlocks()}>
 					{(block) => {
-						const renderLine = (line: LogLine) => (
-							<div class={styles.line}>
-								<Index each={line.spans}>
-									{(span) => {
-										const st = spanStyle(span());
-										return st ? <span style={st}>{span().text}</span> : span().text;
-									}}
-								</Index>
-							</div>
-						);
 						return block.type === "table" ? (
 							<div class={styles.tableBlock}>
 								<For each={block.lines}>{renderLine}</For>

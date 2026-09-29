@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { onMount } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "../MobileApp";
 import type { SessionInfo } from "../useSessions";
 
@@ -38,6 +38,7 @@ vi.mock("../components/OutputView", () => ({
 	},
 }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
+vi.mock("../screens/MobileChatScreen", () => ({ MobileChatScreen: () => <div /> }));
 vi.mock("../components/MobileToastContainer", () => ({ MobileToastContainer: () => <div /> }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
 
@@ -50,6 +51,12 @@ function session(cwd: string | null, worktreePath: string | null = null): Sessio
 		state: { awaiting_input: false, rate_limited: false, last_activity_ms: 1 },
 	};
 }
+
+beforeAll(async () => {
+	// MobileApp loads Files lazily after Browse. Finish its transform before
+	// behavior waits; the unrelated initial Chat route is mocked above.
+	await import("../screens/FilesScreen");
+});
 
 beforeEach(() => {
 	mockRepos.current = { "/repo": {}, "/repo/nested": {} };
@@ -70,7 +77,26 @@ afterEach(() => {
 	history.replaceState(null, "", "/mobile");
 });
 
+async function openSessionFiles(view: ReturnType<typeof render>) {
+	await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+	await fireEvent.click(view.getByRole("button", { name: "Files" }));
+}
+
 describe("session Files navigation", () => {
+	it("starts on the Sessions tab", () => {
+		mockSessions.current = [];
+		const view = render(() => <MobileApp />);
+		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
+	});
+	it("opens Settings from the app bar and returns to Sessions", async () => {
+		mockSessions.current = [];
+		const view = render(() => <MobileApp />);
+		await fireEvent.click(view.getByRole("button", { name: "More options" }));
+		await fireEvent.click(view.getByRole("menuitem", { name: "Settings" }));
+		await waitFor(() => expect(view.getByRole("heading", { name: "CONNECTION" })).toBeTruthy());
+		await fireEvent.click(view.getByRole("button", { name: "Sessions" }));
+		expect(view.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe("page");
+	});
 	// Catches: opening the registered parent instead of the session's worktree, or resetting the detail on return.
 	it("opens the worktree root and returns with the live output and draft intact", async () => {
 		mockSessions.current = [session("/repo/nested/src", "/worktrees/feature")];
@@ -79,7 +105,8 @@ describe("session Files navigation", () => {
 		await waitFor(() => expect(view.getByText("Live session output")).toBeTruthy());
 		const composer = view.container.querySelector("textarea")!;
 		await fireEvent.input(composer, { target: { value: "unsent draft" } });
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		const writesBeforeBrowse = rpc.mock.calls.filter(([command]) => command === "write_pty").length;
+		await openSessionFiles(view);
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("list_directory", {
 				repoPath: "/worktrees/feature",
@@ -88,6 +115,7 @@ describe("session Files navigation", () => {
 		);
 		expect(view.getByRole("button", { name: "README.md" })).toBeTruthy();
 		expect(view.queryByRole("button", { name: /repo\/nested/ })).toBeNull();
+		expect(rpc.mock.calls.filter(([command]) => command === "write_pty")).toHaveLength(writesBeforeBrowse);
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
 		expect(view.getByText("Live session output")).toBeTruthy();
 		expect(view.container.querySelector("textarea")).toBe(composer);
@@ -100,7 +128,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo/nested/src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() =>
 			expect(rpc).toHaveBeenCalledWith("list_directory", {
 				repoPath: "/repo/nested",
@@ -115,7 +143,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("C:\\repo\\src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("list_directory", { repoPath: "C:\\repo", subdir: "" }));
 	});
 
@@ -124,7 +152,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session(null)];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/repository path.*unavailable/i));
 		expect(rpc).not.toHaveBeenCalledWith("list_directory", expect.anything());
 	});
@@ -134,7 +162,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo-other/src")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/no registered repository/i));
 		expect(rpc).not.toHaveBeenCalledWith("list_directory", expect.anything());
 	});
@@ -144,7 +172,7 @@ describe("session Files navigation", () => {
 		mockSessions.current = [session("/repo", "/refused")];
 		history.replaceState(null, "", "/mobile/session/session-1");
 		const view = render(() => <MobileApp />);
-		await fireEvent.click(view.getByRole("button", { name: "Browse session files" }));
+		await openSessionFiles(view);
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/permission denied/i));
 		expect(view.queryByText("Empty directory")).toBeNull();
 	});

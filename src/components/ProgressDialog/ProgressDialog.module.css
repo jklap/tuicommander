@@ -21,6 +21,14 @@
 .terminalSelect:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .filter { display: flex; align-items: center; gap: 6px; color: var(--fg-secondary); font-size: var(--font-xs); cursor: pointer; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .embedded .header { flex-wrap: wrap; }
+  .embedded .title { flex: 1 1 100%; }
+  .embedded .terminalSelect { flex: 1 1 110px; min-width: 0; }
+  .embedded .viewToggle, .embedded .filter { flex: 0 0 auto; }
+}
+
 .iconButton { display: flex; align-items: center; border: 0; background: transparent; color: var(--fg-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); }
 .iconButton:hover { background: var(--bg-highlight); color: var(--fg-primary); }
 
@@ -37,6 +45,9 @@
 }
 .body { flex: 1; min-width: 0; }
 .text { margin: 0; color: var(--fg-primary); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.textCollapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.more { margin-top: 4px; padding: 4px 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-xs); cursor: pointer; }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; color: var(--fg-muted); font-size: var(--font-xs); }
 /* Only an intent carries a word: it is the one line that says what the agent
    started, not what it finished, and muted italics alone do not say that. */

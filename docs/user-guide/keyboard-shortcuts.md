@@ -46,6 +46,12 @@ A configurable OS-level shortcut to toggle TUICommander's visibility from any ap
 - Not available in browser/PWA mode
 - Persists across app restarts
 
+## AI Chat Composer
+
+AI Chat's composer handles `Ctrl+S` locally to park or restore its prompt,
+including on macOS. The same action is available from the composer button on a
+phone; it is not a configurable global shortcut.
+
 ## Terminal Operations
 
 | Shortcut | Action |

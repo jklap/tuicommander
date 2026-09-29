@@ -6,7 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
+- **Queued Codex confirmation** — A stop hook can delay the Working screen for several seconds. Queued submissions now wait long enough for that confirmation before showing an uncertain-delivery error.
+
+- **Claude questions on mobile** — The session shows every AskUserQuestion option and offers those choices instead of generic Yes/No. Tapping a choice navigates Claude's menu and submits it with Enter.
+
+- **Mobile Codex questions** — Open queued questions from the session header, see their choices, and answer with one tap or typed notes. The question overlay does not reduce terminal space.
+
+- **CLI MCP worktree timeouts** — On Unix, `tuic mcp` and `tuic repo` wait up to 305 seconds for worktree creation and removal. Other commands retain their short timeout. A timed-out MCP request now warns that the server may still complete it, so callers can inspect state before retrying.
+
+- **Mobile Markdown images** — Relative images in repository Markdown now load from the file's directory through an authenticated image route. Paths outside the selected repository and non-image files are refused.
+- **Mobile Progress, Activity and Settings** — Long journal messages expand on demand, Activity shows local times and minute durations, and Settings shows app and server versions and offers a light theme saved separately from the desktop theme in server preferences.
+
+- **Mobile Files** — Repository paths keep their end visible and reveal the full path on long press. The tree puts hidden folders after normal ones and searches nested files. File actions share the title row; the editor fills the available height and wraps lines.
+- **Compact mobile session header** — A 56 px row shows the agent logo, state, session name, and tasks count. Intent, tasks, and session progress open temporary sheets; Files, output search, Ideas, and quick commands remain reachable from overflow without reducing terminal space.
+
+- **AI Chat prompt parking** — `Ctrl+S` parks a draft and its images while you ask something else; the parked draft returns after Send. The composer control also works on phones.
+
 - **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.
+
+- **Mobile session links** — Markdown references in terminal output open the mobile Files editor, while web links open in the phone's browser. A path outside registered repositories shows a refusal with the path.
+
 - **Mobile session search** — A magnifier above the session list filters by session name, repository, worktree, branch, or agent.
 
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
