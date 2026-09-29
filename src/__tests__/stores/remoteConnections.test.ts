@@ -118,6 +118,41 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 		expect(calls).toEqual(["list_remote_connections", "subscribe", "remote_connection_statuses"]);
 	});
 
+	it("starts with no remote routes before hydration", () => {
+		expect(store.getConnections()).toEqual({});
+		expect(store.getBaseUrl("c1")).toBeUndefined();
+	});
+
+	it("hydrates once when two consumers request the loaded connection list", async () => {
+		await store.hydrate();
+		await store.hydrate();
+
+		expect(calls).toEqual(["list_remote_connections", "subscribe", "remote_connection_statuses"]);
+		expect(Object.keys(store.getConnections())).toEqual(["c1"]);
+	});
+
+	it("an empty backend connection list gives consumers an empty collection", async () => {
+		invokeMock.mockImplementation((command: string) => {
+			if (command === "list_remote_connections") return Promise.resolve([]);
+			if (command === "remote_connection_statuses") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		await store.hydrate();
+
+		expect(store.getConnections()).toEqual({});
+	});
+
+	it("a missing backend connection list gives consumers an empty collection", async () => {
+		invokeMock.mockImplementation((command: string) => {
+			if (command === "list_remote_connections") return Promise.resolve(null);
+			if (command === "remote_connection_statuses") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		await store.hydrate();
+
+		expect(store.getConnections()).toEqual({});
+	});
+
 	it("hydrate adopts the live status the backend already holds", async () => {
 		initialStatuses = [connected];
 		await store.hydrate();
@@ -141,6 +176,15 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 
 			expect(invokeMock).toHaveBeenCalledWith("save_remote_connection", { base: loaded, connection: edited });
 			expect(invokeMock).toHaveBeenCalledWith("save_remote_connection", { base: null, connection: added });
+			expect(store.getConnectionState("c2")).toMatchObject({ connection: added, status: "disconnected" });
+		});
+
+		it("a rejected save leaves the loaded connection unchanged", async () => {
+			const original = store.getConnectionState("c1")!.connection;
+			invokeMock.mockRejectedValueOnce(new Error("save failed"));
+
+			await expect(store.addConnection({ ...original, name: "edited" })).rejects.toThrow("save failed");
+			expect(store.getConnectionState("c1")?.connection.name).toBe(original.name);
 		});
 
 		it("connect asks the backend and waits: the status arrives as a push", async () => {
@@ -181,12 +225,21 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			};
 			invokeMock.mockResolvedValueOnce(preview);
 			await expect(store.prepareUpdate("c1")).resolves.toEqual(preview);
+			expect(invokeMock).toHaveBeenCalledWith("prepare_remote_update", { id: "c1" });
 			await store.updateAndRestart("c1", 3, "fixture-hash");
 			expect(invokeMock).toHaveBeenCalledWith("update_and_restart_remote", {
 				id: "c1",
 				confirmedSessions: 3,
 				expectedSha256: "fixture-hash",
 			});
+		});
+
+		it("unknown install, uninstall and removal leave the backend untouched", async () => {
+			await store.install("ghost");
+			await store.uninstall("ghost");
+			await store.removeConnection("ghost");
+
+			expect(invokeMock.mock.calls.map((c) => c[0])).toEqual(["list_remote_connections", "remote_connection_statuses"]);
 		});
 
 		it("install and uninstall update the persisted deploy mode after the backend succeeds", async () => {
@@ -204,6 +257,24 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 
 			await expect(store.probeSshHosts()).resolves.toEqual([{ host: "builder", auth: "shell" }]);
 			expect(invokeMock).toHaveBeenCalledWith("probe_ssh_config_hosts");
+		});
+
+		it("returns an empty host list when the backend has no probe result", async () => {
+			invokeMock.mockResolvedValueOnce(null);
+
+			await expect(store.probeSshHosts()).resolves.toEqual([]);
+		});
+
+		it("reports the password vault result for this connection", async () => {
+			invokeMock.mockResolvedValueOnce(true);
+			await expect(store.hasPassword("c1")).resolves.toBe(true);
+			expect(invokeMock).toHaveBeenCalledWith("remote_connection_password_exists", { id: "c1" });
+
+			invokeMock.mockResolvedValueOnce(false);
+			await expect(store.hasPassword("c1")).resolves.toBe(false);
+
+			invokeMock.mockResolvedValueOnce(null);
+			await expect(store.hasPassword("c1")).resolves.toBe(false);
 		});
 
 		it("does no networking and runs no poll of its own", async () => {
@@ -272,6 +343,13 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 				push({ id: "c1", status: "disconnected" });
 
 				expect(invalidateAgentConfigsMock).toHaveBeenCalledWith("c1");
+			});
+
+			it("does not evict a machine cache for repeated disconnected status", () => {
+				push({ id: "c1", status: "disconnected" });
+				push({ id: "c1", status: "disconnected" });
+
+				expect(invalidateAgentConfigsMock).not.toHaveBeenCalled();
 			});
 
 			it("re-reads it on reconnect rather than trusting the old copy", () => {
@@ -349,6 +427,21 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			push({ id: "ghost", status: "connected", base_url: "http://ghost:9876", token: "t" });
 			expect(store.getConnectionState("ghost")).toBeUndefined();
 			expect(store.getToken("ghost")).toBeUndefined();
+			expect(store.getBaseUrl("ghost")).toBeUndefined();
+		});
+
+		it("does not route a disconnected connection even if a stale URL arrives", () => {
+			push({ id: "c1", status: "disconnected", base_url: "http://stale.test:9876" });
+
+			expect(store.getBaseUrl("c1")).toBeUndefined();
+		});
+
+		it("registers the connected URL and token with transport routing", async () => {
+			const { getRemoteBaseUrl, getRemoteToken } = await import("../../transportRuntime");
+			push(connected);
+
+			expect(getRemoteBaseUrl("c1")).toBe("http://remote.test:9876");
+			expect(getRemoteToken("c1")).toBe("tok-abc");
 		});
 
 		it("the password goes to the vault through the backend and is never held here", async () => {
@@ -372,9 +465,17 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 
 			const commands = invokeMock.mock.calls.map((c) => c[0]);
 			expect(commands).toContain("delete_remote_connection");
+			expect(invokeMock).toHaveBeenCalledWith("delete_remote_connection", { id: "c1" });
 			expect(commands).not.toContain("disconnect_remote_connection");
 			expect(store.getConnectionState("c1")).toBeUndefined();
 			expect(store.getToken("c1")).toBeUndefined();
+		});
+
+		it("a rejected delete keeps the connection available", async () => {
+			invokeMock.mockRejectedValueOnce(new Error("delete failed"));
+
+			await expect(store.removeConnection("c1")).rejects.toThrow("delete failed");
+			expect(store.getConnectionState("c1")?.connection.id).toBe("c1");
 		});
 	});
 });
