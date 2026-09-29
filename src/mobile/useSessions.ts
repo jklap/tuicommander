@@ -40,6 +40,8 @@ export interface ChoicePrompt {
 	options: ChoiceOption[];
 	dismiss_key?: string;
 	amend_key?: string;
+	/** How this agent's dialog accepts a selected option. */
+	selection_mode?: "navigate-enter";
 }
 
 /** Single option in a ChoicePrompt. Matches Rust output_parser::ChoiceOption. */

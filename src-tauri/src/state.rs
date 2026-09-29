@@ -729,7 +729,8 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
         let Some(prompt) = session.choice_prompt.as_ref() else {
             return false;
         };
-        let resolves = prompt.options.iter().any(|option| option.key == data)
+        let resolves = (prompt.selection_mode.is_none()
+            && prompt.options.iter().any(|option| option.key == data))
             || matches!(data, "\r" | "\n")
             || match prompt.dismiss_key.as_deref() {
                 Some("cancel") => data == "\x1b",
@@ -9362,6 +9363,47 @@ mod tests {
                 .is_some()
         );
         assert!(resolve_choice_prompt_input(&state, "s1", "\x1d"));
+        assert!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .choice_prompt
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn claude_navigation_choice_stays_open_until_enter() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Which color do you prefer?",
+                    "options": [
+                        {"key": "1", "label": "Red", "highlighted": true, "destructive": false},
+                        {"key": "2", "label": "Green", "highlighted": false, "destructive": false}
+                    ],
+                    "selection_mode": "navigate-enter",
+                    "dismiss_key": "cancel"
+                }),
+            ),
+        );
+        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b[B"));
+        assert!(!resolve_choice_prompt_input(&state, "s1", "2"));
+        assert!(
+            state
+                .session_maps
+                .session_states
+                .get("s1")
+                .unwrap()
+                .choice_prompt
+                .is_some()
+        );
+        assert!(resolve_choice_prompt_input(&state, "s1", "\r"));
         assert!(
             state
                 .session_maps

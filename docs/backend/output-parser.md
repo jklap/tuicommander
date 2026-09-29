@@ -4,6 +4,14 @@
 
 Parses terminal output to detect structured events: rate limits, status lines, PR URLs, and progress indicators.
 
+For mobile choices, `choice-prompt` includes an optional `selection_mode`.
+The Claude-specific Ink AskUserQuestion parser requires a full-bleed
+`Enter to select` footer and reads numbered options across description rows;
+it emits `navigate-enter`, so the client sends arrow keys followed by Enter.
+Other numbered confirmations retain their existing key selection path. The
+screen trim keeps an open Ink dialog intact because its highlighted option
+also begins with the composer glyph `❯`.
+
 Terminal-grid row snapshots retain the base character and all stored zero-width
 characters. A combining mark received in a later PTY chunk marks its base cell
 dirty, so changed-row consumers receive the updated text. This preserves the

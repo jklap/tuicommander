@@ -302,6 +302,13 @@ export function CommandInput(props: CommandInputProps) {
 			const selectedIndex = options.findIndex((option) => option.highlighted);
 			const choiceIndex = options.findIndex((option) => option.key === key);
 			const label = options[choiceIndex]?.label;
+			if (props.choicePrompt?.selection_mode === "navigate-enter") {
+				const steps = choiceIndex - Math.max(selectedIndex, 0);
+				const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
+				for (let i = 0; i < Math.abs(steps); i++) await sendPtyKey(write, arrow);
+				await sendPtyKey(write, "\r");
+				return;
+			}
 			if (props.agentType === "codex" && (label === "Other" || label === "None of the above")) {
 				const steps = (choiceIndex - Math.max(selectedIndex, 0) + options.length) % options.length;
 				for (let i = 0; i < steps; i++) await sendPtyKey(write, "\x1b[B");

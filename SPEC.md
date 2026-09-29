@@ -651,6 +651,7 @@ Some frontend-only stores persist to localStorage:
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
 - [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
 - [x] ChoicePrompt parser variant — numbered confirmation menu detection with destructive-label flagging, PWA overlay, `sendPtyKey()` helper
+- [~] Claude AskUserQuestion on mobile — captured Ink dialog supplies all choices and arrow-then-Enter selection; real-phone verification after backend restart pending
 - [x] MCP OAuth 2.1 — RFC 9728 + RFC 8414 PKCE flow for upstream MCP servers, `tuic://oauth-callback` deep link, shared `TokenManager` with thundering-herd-safe refresh
 - [x] GitHub Ops dashboard — live review findings, proposals, auto-fix sessions, conflict assists, and CI/merge readiness. Review, changelog, and improvement scans run as unattended ego turns (#795-320b)
 

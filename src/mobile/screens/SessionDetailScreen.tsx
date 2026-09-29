@@ -396,6 +396,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				sessionId={props.session.session_id}
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
+				choicePromptOpen={!!sessionState()?.choice_prompt}
 				questionConfident={sessionState()?.question_confident}
 				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}

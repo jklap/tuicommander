@@ -16605,6 +16605,24 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
                         .await,
                         "an open AskUserQuestion must keep the confident badge"
                     );
+                    // Catches: awaiting_input is set, but the mobile choice
+                    // overlay has no title or options for the live Claude dialog.
+                    assert!(
+                        await_session(&state, sid, |s| {
+                            s.choice_prompt.as_ref().is_some_and(|prompt| {
+                                prompt.title == "Which color do you prefer?"
+                                    && prompt.options.len() == 5
+                                    && prompt.selection_mode
+                                        == Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+                                    && prompt
+                                        .options
+                                        .iter()
+                                        .any(|option| option.key == "2" && option.label == "Green")
+                            })
+                        })
+                        .await,
+                        "live AskUserQuestion must expose its choices to mobile"
+                    );
                 }
                 saw_done |= clean.contains("Worked for 4s");
             }
@@ -16717,6 +16735,7 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
     session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
         title: "Which approach should I use?".to_string(),
         options: vec![],
+        selection_mode: None,
         dismiss_key: None,
         amend_key: None,
     });
