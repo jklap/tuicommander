@@ -25,6 +25,7 @@ const WORKSPACE_OPERATION_RESPONSE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(305);
 const CONFIRM_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(305);
 const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
+const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 const MCP_WAIT_DEFAULT_MS: u64 = 60_000;
 const MCP_WAIT_MAX_MS: u64 = 300_000;
 /// Bounded transport overhead beyond the server-side wait. This covers HTTP
@@ -636,24 +637,29 @@ fn start_sse_listener(state: &Arc<BridgeState>) {
 }
 
 /// Respond when TUIC is not available.
-fn emit_offline_response(method: &str, id: &Value) {
-    match method {
-        "tools/list" => emit(&serde_json::json!({
-            "jsonrpc": "2.0", "id": id,
-            "result": { "tools": [] }
-        })),
-        "tools/call" => emit(&serde_json::json!({
-            "jsonrpc": "2.0", "id": id,
-            "result": {
+fn emit_offline_response(method: &str, id: &Value, request: &str) {
+    let mut result = match method {
+        "tools/list" => serde_json::json!({ "tools": [] }),
+        "tools/call" => serde_json::json!({
                 "content": [{ "type": "text", "text": "TUICommander MCP is unavailable. The app may still be running; enable its MCP server and retry." }],
                 "isError": true
-            }
-        })),
-        _ => emit(&serde_json::json!({
-            "jsonrpc": "2.0", "id": id,
-            "error": { "code": -32601, "message": format!("Method not found: {method}") }
-        })),
+        }),
+        _ => {
+            emit(&serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": { "code": -32601, "message": format!("Method not found: {method}") }
+            }));
+            return;
+        }
+    };
+    if request_protocol_version(request) == MODERN_PROTOCOL_VERSION {
+        result["resultType"] = serde_json::json!("complete");
+        if method == "tools/list" {
+            result["ttlMs"] = serde_json::json!(0);
+            result["cacheScope"] = serde_json::json!("private");
+        }
     }
+    emit(&serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }));
 }
 
 // ---------------------------------------------------------------------------
@@ -699,7 +705,7 @@ async fn proxy_request(state: Arc<BridgeState>, line: String, method: String, id
         ensure_connected(&state).await;
     }
     if !state.connected.load(Ordering::Acquire) {
-        emit_offline_response(&method, &id);
+        emit_offline_response(&method, &id, &line);
         return;
     }
 

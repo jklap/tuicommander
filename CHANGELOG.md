@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **MCP current tool-call results** — The stdio bridge now returns `resultType: "complete"` for 2026-07-28 tool calls, including tool-level errors, so current-protocol clients can use TUIC tools. Legacy tool-call responses keep their existing shape.
+
 - **Worktree removal with read-only build artifacts** — Removal now makes files inside the checkout owner-writable before Git deletes them, and names a leftover directory when cleanup cannot complete.
 
 - **ACP peer mail receipts** — Sending normal or urgent mail to an ego peer with a subscribed MCP-over-ACP inbox now reports the ACP delivery route, including when it is registered as an orchestrator; disconnected peers still report inbox-only.
