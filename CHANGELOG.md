@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **Mobile slash commands** — Typed and menu-selected commands wait for the agent's input gap before Enter, so Codex accepts the submission. The Codex quick-command widget offers `/status` in place of unsupported `/help`.
+- **Mobile session search** — A magnifier above the session list filters by session name, repository, worktree, branch, or agent.
 
 - **Concurrent settings saves** — Editing different settings in overlapping windows now preserves both changes across app, agent, notification, UI, repository, remote connection, prompt, notes, activity, keybinding, dictation, and GitHub account and binding configuration.
 
