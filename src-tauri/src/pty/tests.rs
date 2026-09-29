@@ -11622,6 +11622,197 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
     );
 }
 
+/// A Codex stop hook can delay the child's Working repaint well past Enter.
+/// The sender must not see an error when that turn was actually accepted.
+#[cfg(unix)]
+#[test]
+fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-stop-hook-delayed-working";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[22;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+                expected
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(
+            "\x1b[21;1H• Working (1s • esc to interrupt)",
+            &silence,
+            sid,
+            &state,
+        );
+    });
+
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "a Codex Working screen three seconds after Enter confirms the queued turn"
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "the accepted turn must not show a false failure toast"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn queued_codex_without_child_response_remains_uncertain() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-silent-after-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let bytes = insert_recording_session(&state, sid);
+    let mut alerts = state.event_bus.subscribe();
+
+    enqueue_user_command(&state, sid, "wake the agent").unwrap();
+
+    assert!(bytes.lock().unwrap().ends_with(b"\r"));
+    assert!(
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain,
+        "a silent Codex child cannot confirm its own queued turn"
+    );
+    assert!(std::iter::from_fn(|| alerts.try_recv().ok()).any(|event| matches!(
+        event,
+        crate::state::AppEvent::McpToast { level, .. } if level == "error"
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn queued_claude_hook_busy_confirms_submission() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "claude-hook-confirmed-queue";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let capture = String::from_utf8(agent_prompt_fixture(
+        "claude-hooked-missing-question-20260921.raw",
+    ))
+    .expect("recorded Claude hook stream is UTF-8");
+    let busy = capture.find("state=busy").expect("captured busy hook");
+    let start = capture[..busy].rfind('\x1b').expect("hook escape start");
+    let end = busy + capture[busy..].find("\x1b\\").expect("hook terminator") + 2;
+    let busy_hook = &capture[start..end];
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            assert_eq!(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(15))
+                    .unwrap(),
+                expected
+            );
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(busy_hook, &silence, sid, &state);
+    });
+
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .injection_delivery_uncertain
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "Claude's busy hook must confirm queued Enter without a false toast"
+    );
+}
+
 /// A Codex idle marker can precede its ready repaint. The old Working row is
 /// still visible when Enter is written, then a fresh Ready and Working pair
 /// arrive from the child. This is a real new turn despite that old row.
