@@ -6,11 +6,15 @@ import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
+import { classifyFingerprintedDiff } from "../../utils/classifyReviewDiff";
+import { diffOptionsFromSettings } from "../../utils/diffOptionsFromSettings";
 import { openFileAction } from "../../utils/filePreview";
 import type { CommitLogEntry } from "../GitPanel/types";
 import s from "../PrDiffTab/PrDiffTab.module.css";
-import { DiffFileList } from "../shared/DiffFileList";
-import { parseDiffFiles } from "../ui/DiffViewer";
+import { DiffFileList, fileRowKeys, sectionToRawDiff } from "../shared/DiffFileList";
+import type { DiffListNavHandle } from "../shared/diffListNav";
+import { Button } from "../ui/Button";
+import { type DiffFileSection, parseDiffFiles } from "../ui/DiffViewer";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { Switch } from "../ui/Switch";
@@ -18,8 +22,16 @@ import v from "./AllChangesView.module.css";
 
 export interface AllChangesViewProps {
 	repoPath: string;
+	/** Split vs. unified — owned by the caller (`DiffTab`), which already
+	 *  resolves the shared `uiStore.diffViewMode`. `DiffViewMode` no longer has
+	 *  a "scroll" variant (that's this component's own reason to exist, not a
+	 *  mode a value of this type can carry), so no mapping is needed here. */
+	mode?: DiffViewMode;
 	/** Pass a ref callback to get the scroll container for Cmd+F search */
 	contentRef?: (el: HTMLElement) => void;
+	/** Forwarded to the underlying `DiffFileList` — the `<`/`>` file-to-file toolbar
+	 *  (owned by `DiffTab`, which hosts this component) drives it. */
+	ref?: (handle: DiffListNavHandle) => void;
 }
 
 export type AllChangesScope = "uncommitted" | "branch" | "commits";
@@ -58,6 +70,20 @@ export const AllChangesView: Component<AllChangesViewProps> = (props) => {
 	const [diff, setDiff] = createSignal("");
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal<string | null>(null);
+
+	// This component's own nav handle — needed internally (to know which files are on
+	// screen, for the live-update classification below) as well as forwarded to `props.ref`.
+	const [ownHandle, setOwnHandle] = createSignal<DiffListNavHandle | null>(null);
+
+	// Live-update bookkeeping. There is no per-file revision fingerprint (this is a plain
+	// git diff, not a tracked review), so a file's reconstructed diff text stands in as
+	// its fingerprint: it changes iff the file's actual diff content does.
+	const [displayedFiles, setDisplayedFiles] = createSignal<DiffFileSection[]>([]);
+	const [flashKeys, setFlashKeys] = createSignal<Set<string>>(new Set());
+	const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const [pendingHiddenCount, setPendingHiddenCount] = createSignal(0);
+	const [latestFetchedFiles, setLatestFetchedFiles] = createSignal<DiffFileSection[] | null>(null);
+	const [hasNewFilesBelow, setHasNewFilesBelow] = createSignal(false);
 
 	const sessionKey = () => `${props.repoPath}\0${branch() ?? ""}`;
 
@@ -141,6 +167,8 @@ export const AllChangesView: Component<AllChangesViewProps> = (props) => {
 		const currentScope = diffScope();
 		if (!repoPath) return;
 		void repositoriesStore.getRevision(repoPath);
+		// Read in the effect body so a whitespace/case option change reloads the diff.
+		const options = diffOptionsFromSettings();
 		// A revision-bump burst can fire several loads; only the newest may settle
 		// state, so a slow earlier fetch can't overwrite a fresher diff.
 		const gen = ++diffGen;
@@ -157,7 +185,7 @@ export const AllChangesView: Component<AllChangesViewProps> = (props) => {
 		shownScope = currentScope;
 		if (!untrack(diff)) setLoading(true);
 		repo
-			.getDiff(repoPath, currentScope)
+			.getDiff(repoPath, currentScope, options)
 			.then((text) => {
 				if (gen !== diffGen) return;
 				setDiff(text);
@@ -172,14 +200,126 @@ export const AllChangesView: Component<AllChangesViewProps> = (props) => {
 
 	// DEFERRED (2026-11-07) — binary, rename-only and mode-only files have no +/- lines and stay
 	// hidden (filter kept from the old view); branch and range scopes show them more often.
-	const files = createMemo(() => parseDiffFiles(diff()).filter((f) => f.additions > 0 || f.deletions > 0));
+	const fetchedFiles = createMemo(() => parseDiffFiles(diff()).filter((f) => f.additions > 0 || f.deletions > 0));
+
+	function flashFiles(keys: string[]) {
+		if (keys.length === 0) return;
+		setFlashKeys((prev) => new Set([...prev, ...keys]));
+		for (const k of keys) {
+			const existing = flashTimers.get(k);
+			if (existing) clearTimeout(existing);
+			flashTimers.set(
+				k,
+				setTimeout(() => {
+					flashTimers.delete(k);
+					setFlashKeys((prev) => {
+						if (!prev.has(k)) return prev;
+						const next = new Set(prev);
+						next.delete(k);
+						return next;
+					});
+				}, 1500),
+			);
+		}
+	}
+
+	function nearBottom(): boolean {
+		const handle = ownHandle();
+		if (!handle) return true;
+		return handle.currentIndex() >= handle.rowCount() - 2;
+	}
+
+	function applyPendingHiddenUpdates() {
+		const fresh = latestFetchedFiles();
+		if (!fresh) return;
+		setDisplayedFiles(fresh);
+		setPendingHiddenCount(0);
+		setLatestFetchedFiles(null);
+	}
+
+	function jumpToNewContentBelow() {
+		const handle = ownHandle();
+		handle?.scrollToIndex(Math.max(handle.rowCount() - 1, 0), { align: "end" });
+		setHasNewFilesBelow(false);
+	}
+
+	/** Classifies `fresh` against what is displayed and applies it: new files and on-screen
+	 *  changes apply at once (the latter with a flash), an off-screen file's change is held
+	 *  behind "Refresh (N)". */
+	function applyFreshFiles(fresh: DiffFileSection[]) {
+		const current = displayedFiles();
+		if (current.length === 0) {
+			setDisplayedFiles(fresh);
+			return;
+		}
+		const currentKeys = fileRowKeys(current);
+		const freshKeys = fileRowKeys(fresh);
+		const visible = ownHandle()?.visibleIndices() ?? new Set<number>();
+		const visibleKeys = new Set([...visible].map((i) => currentKeys[i]).filter((k): k is string => k !== undefined));
+
+		const { newKeys, changedVisible, changedHidden } = classifyFingerprintedDiff(
+			current.map((f, i) => ({ key: currentKeys[i], fingerprint: sectionToRawDiff(f) })),
+			fresh.map((f, i) => ({ key: freshKeys[i], fingerprint: sectionToRawDiff(f) })),
+			visibleKeys,
+		);
+
+		if (changedHidden.length === 0) {
+			setDisplayedFiles(fresh);
+			setPendingHiddenCount(0);
+			setLatestFetchedFiles(null);
+		} else {
+			const oldByKey = new Map(current.map((f, i) => [currentKeys[i], f]));
+			const hiddenSet = new Set(changedHidden);
+			const hybrid = fresh.map((f, i) => (hiddenSet.has(freshKeys[i]) ? (oldByKey.get(freshKeys[i]) ?? f) : f));
+			setDisplayedFiles(hybrid);
+			setPendingHiddenCount(changedHidden.length);
+			setLatestFetchedFiles(fresh);
+		}
+		if (changedVisible.length > 0) flashFiles(changedVisible);
+		if (newKeys.length > 0 && !nearBottom()) setHasNewFilesBelow(true);
+	}
+
+	// A new scope shows its own diff outright; a revision bump within the same scope goes
+	// through the live-update classification so on-screen files are not yanked around.
+	let appliedScope: string | null = null;
+	createEffect(() => {
+		const fresh = fetchedFiles();
+		const currentScope = diffScope();
+		untrack(() => {
+			if (currentScope !== appliedScope || fresh.length === 0) {
+				appliedScope = currentScope;
+				setDisplayedFiles(fresh);
+				setPendingHiddenCount(0);
+				setLatestFetchedFiles(null);
+				setHasNewFilesBelow(false);
+				return;
+			}
+			applyFreshFiles(fresh);
+		});
+	});
+
+	const files = displayedFiles;
 	const totalAdd = createMemo(() => files().reduce((sum, f) => sum + f.additions, 0));
 	const totalDel = createMemo(() => files().reduce((sum, f) => sum + f.deletions, 0));
 
-	// In scroll mode, each DiffViewer uses unified or split (not "scroll" which DiffViewer doesn't understand)
-	const baseMode = (): DiffViewMode => {
-		const m = uiStore.state.diffViewMode;
-		return m === "scroll" ? "unified" : m;
+	// Owns collapse state here (rather than letting DiffFileList fall back to
+	// its own internal signal) so a refresh that drops a file also drops its
+	// now-meaningless collapsed entry, instead of growing forever.
+	const [collapsedKeys, setCollapsedKeys] = createSignal<Set<string>>(new Set());
+	createEffect(() => {
+		const live = new Set(fileRowKeys(files()));
+		setCollapsedKeys((prev) => {
+			const next = new Set([...prev].filter((k) => live.has(k)));
+			return next.size === prev.size ? prev : next;
+		});
+	});
+	const toggleCollapsed = (key: string) => {
+		setCollapsedKeys((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
 	};
 
 	const chooseBase = (name: string) => {
@@ -293,12 +433,34 @@ export const AllChangesView: Component<AllChangesViewProps> = (props) => {
 				</div>
 			}
 		>
+			<Show when={hasNewFilesBelow() || pendingHiddenCount() > 0}>
+				<div class={s.liveUpdateBar}>
+					<Show when={hasNewFilesBelow()}>
+						<Button size="compact" class={s.pillBtn} onClick={jumpToNewContentBelow}>
+							{t("diffScroll.newContentBelow", "New content below")}
+						</Button>
+					</Show>
+					<Show when={pendingHiddenCount() > 0}>
+						<Button size="compact" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
+							{t("diffScroll.refreshCount", "Refresh ({count})", { count: String(pendingHiddenCount()) })}
+						</Button>
+					</Show>
+				</div>
+			</Show>
 			<DiffFileList
 				files={files()}
-				mode={baseMode()}
+				mode={props.mode ?? uiStore.state.diffViewMode}
+				flashKeys={flashKeys()}
 				onOpenFile={(path) => openFileAction(path, props.repoPath)}
 				scrollRef={props.contentRef}
 				header={summaryHeader()}
+				headerHeight={35}
+				collapsedKeys={collapsedKeys()}
+				onToggleCollapsed={toggleCollapsed}
+				ref={(handle) => {
+					setOwnHandle(handle);
+					props.ref?.(handle);
+				}}
 			/>
 		</Show>
 	);
