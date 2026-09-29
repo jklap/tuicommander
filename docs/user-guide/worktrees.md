@@ -120,9 +120,11 @@ The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflict
 
 ### Uncommitted work in the worktree
 
-Both **Archive** and **Delete** remove the worktree, so TUICommander asks first whenever the worktree is not known to be clean — whether or not the branch carries commits, and whether the cleanup was started by hand or by **Auto-archive merged**. The confirmation names what happens to the work: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, that counts as "not clean" and the cleanup still stops.
+Before manual removal, the confirmation distinguishes a branch with no commits of its own from one whose commits were merged. It names live terminal sessions and counts uncommitted and untracked files. Confirming still allows removal; review the warnings before proceeding. Automatic PR-close deletion keeps a worktree with live sessions or local changes and logs why it was skipped.
 
-The automatic sweep never asks — it keeps a dirty worktree and reports it in the status line (`kept N with uncommitted work`).
+Both **Archive** and **Delete** remove the worktree, so one-click cleanup asks before merging when the worktree is not known to be clean or has a live terminal session. The confirmation names the sessions and what happens to the files: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, cleanup stops. Post-merge cleanup uses the same review before moving or deleting the checkout.
+
+The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 
 Removing a worktree without force also refuses uncommitted changes when the
 branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive
@@ -136,6 +138,10 @@ and reflog-only commits are preserved in the main checkout's module repository
 before removal. If the main checkout's copy of a
 submodule is uninitialized or points at the wrong Git repository, removal stops
 and leaves the worktree available for recovery. If the checkout directory is already missing, the confirmation identifies the stale Git registration and needs no fabricated dirty-file fingerprint. Cleanup skips the archive script because its working directory is gone. A lock requires a separate override. TUICommander preserves registered submodule refs before pruning.
+
+If Git has already removed the registration but left a directory behind, cleanup
+still cancels any pending build-input warming before reporting a directory error.
+
 Deinitialized submodules with retained Git history also block removal, even when
 their Git module name differs from the checkout path or they are nested.
 

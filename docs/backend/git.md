@@ -178,6 +178,10 @@ ignored build directory cannot leave a half-deleted, unregistered worktree.
 Symlinks are not followed. A leftover path without Git registration is
 reported with its path instead of being treated as a successful removal.
 
+If Git has already unregistered a checkout but its directory remains, removal
+still clears a pending warm token before attempting directory cleanup. A path
+without a Git registration or a TUIC warm token is left untouched.
+
 Archiving refuses a locked or missing checkout before moving it. It renames the
 checkout into `__archived`, runs `git worktree repair`, and repairs initialized
 submodule gitfiles and `core.worktree` paths. The Git administration directory,

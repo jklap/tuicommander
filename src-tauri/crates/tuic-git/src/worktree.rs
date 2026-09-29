@@ -855,8 +855,53 @@ fn classify_branch_merge(
 ) -> Result<(WorkspaceCommitStatus, Option<&'static str>), String> {
     let default_tip = rev_at(repo, default_branch)?;
     let merged = is_ancestor(repo, tip, &default_tip)?;
-    // A branch standing on the default tip has not itself merged anything.
-    if merged && tip == default_tip {
+    // Ancestry alone cannot distinguish own commits from a branch that merely
+    // followed the default branch. The branch reflog records both its source
+    // and how its ref moved after creation.
+    let reflog = git_cmd(repo)
+        .args([
+            "reflog",
+            "show",
+            "--format=%H%x09%gs",
+            &format!("refs/heads/{branch}"),
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect branch history: {error}"))?
+        .stdout;
+    let mut entries = reflog.lines().collect::<Vec<_>>();
+    let creation = entries
+        .pop()
+        .ok_or("branch creation is absent from reflog")?;
+    let (_, creation_message) = creation
+        .split_once('\t')
+        .ok_or("branch creation has no reflog message")?;
+    let source = creation_message.strip_prefix("branch: Created from ");
+    let from_default = source.is_some_and(|source| {
+        source == "HEAD"
+            || source == default_branch
+            || source == format!("refs/heads/{default_branch}")
+    });
+    let pull_upstream_is_default = entries
+        .iter()
+        .any(|entry| entry.ends_with("\tpull: Fast-forward"))
+        && git_cmd(repo)
+            .args(["config", "--get", &format!("branch.{branch}.merge")])
+            .run()
+            .ok()
+            .is_some_and(|output| output.stdout.trim() == format!("refs/heads/{default_branch}"));
+    let follows_default = entries.iter().all(|entry| {
+        let message = entry.split_once('\t').map(|(_, message)| message);
+        message.is_some_and(|message| {
+            message == format!("merge {default_branch}: Fast-forward")
+                || message == format!("reset: moving to {default_branch}")
+                || (message.starts_with("pull ")
+                    && message.ends_with(&format!(" {default_branch}: Fast-forward")))
+                || (message == "pull: Fast-forward" && pull_upstream_is_default)
+                || (message.starts_with("rebase (finish): refs/heads/")
+                    && message.contains(&format!("refs/heads/{branch} onto ")))
+        })
+    });
+    if merged && from_default && follows_default {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
         Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
@@ -1493,6 +1538,22 @@ fn remove_worktree_internal_with_lock(
             "Worktree directory remains without Git registration: {}",
             worktree.path.display()
         ));
+    }
+    if admin.is_none() {
+        // Only a warm token proves that TUIC previously created this checkout.
+        // Without one, this could be an unrelated directory at the same path.
+        if warm_lock.is_none() {
+            return Err("Cannot remove worktree: path is not a registered worktree".into());
+        }
+        clear_warm(&worktree.path);
+        if !force {
+            return Err(format!(
+                "Worktree directory still exists after removal: {}",
+                worktree.path.display()
+            ));
+        }
+        return std::fs::remove_dir_all(&worktree.path)
+            .map_err(|error| format!("Failed to remove worktree directory: {error}"));
     }
     if has_operation_in_progress(&wt_path_str) {
         return Err("Cannot remove worktree: a Git operation is in progress".into());
@@ -2831,12 +2892,12 @@ pub fn worktree_dirtiness(base_repo: &Path, workspace_id: &str) -> WorktreeDirti
     }
 }
 
-/// The single gate every destructive worktree cleanup passes through.
+/// Shared dirty-state gate for destructive worktree cleanup.
 ///
 /// Both entry points — `merge_and_archive_worktree_impl` and
 /// `finalize_merged_worktree_impl` — call this, so the two cleanup paths cannot
-/// drift apart. `force` is the user's confirmation, arriving from the frontend
-/// after the dialog explained what is about to be destroyed.
+/// drift apart on dirtiness. The app layer also checks lifecycle and live
+/// sessions before automatic cleanup. `force` records the user's confirmation.
 pub fn cleanup_needs_confirmation(action: &str, force: bool, dirt: &WorktreeDirtiness) -> bool {
     let cleans_up = action == "archive" || action == "delete";
     if !cleans_up || force {
@@ -6987,23 +7048,191 @@ branch refs/heads/feat
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
     }
 
-    /// The other side of the same ancestor check: HEAD is behind the tip, so
-    /// every commit it carries is already in the default branch.
+    /// A branch created at an older main tip has no work of its own even after
+    /// main advances. Its removal can still be confirmed explicitly.
     #[test]
-    fn a_workspace_behind_the_default_tip_is_merged() {
+    fn a_workspace_behind_the_default_tip_without_own_commits_is_in_sync() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let worktree = add_worktree(&repo, "trails");
         commit_file(&repo, "moved-on.txt", "default branch advanced\n");
 
         let status = inspect_workspace_lifecycle(&repo, "trails");
 
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert!(worktree.exists());
         let outcome =
             remove_worktree_by_workspace_id(&repo.to_string_lossy(), "trails", true, None, false)
                 .unwrap();
-        assert_eq!(outcome.removal_rule, "ancestry");
+        assert_eq!(outcome.removal_rule, "in_sync");
+    }
+
+    #[test]
+    fn a_branch_with_own_commits_merged_into_main_remains_eligible_for_cleanup() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "completed-feature");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "completed-feature", "--no-edit"])
+            .run()
+            .unwrap();
+        commit_file(&repo, "later.txt", "main advanced\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "completed-feature");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn fast_forward_merge_of_own_commits_is_merged_even_at_the_default_tip() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "fast-forwarded");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "fast-forwarded"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "fast-forwarded");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn branch_fast_forwarded_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "following-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args(["merge", "--ff-only", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "following-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_pulled_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "pulling-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args([
+                "pull",
+                "--ff-only",
+                &repo.to_string_lossy(),
+                &base_branch_of(&repo),
+            ])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "pulling-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_tracking_main_and_pulled_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "tracking-main");
+        git_cmd(&repo)
+            .args(["remote", "add", "origin", &repo.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["fetch", "origin", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args([
+                "branch",
+                "--set-upstream-to",
+                &format!("origin/{}", base_branch_of(&repo)),
+            ])
+            .run()
+            .unwrap();
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree).args(["pull"]).run().unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "tracking-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_pulled_from_non_default_upstream_is_merged_after_integration() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let source = add_worktree(&repo, "source-work");
+        commit_file(&source, "feature.txt", "source work\n");
+        let tracking = add_worktree(&repo, "tracking-source");
+        git_cmd(&repo)
+            .args(["remote", "add", "origin", &repo.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["fetch", "origin", "source-work"])
+            .run()
+            .unwrap();
+        git_cmd(&tracking)
+            .args(["branch", "--set-upstream-to", "origin/source-work"])
+            .run()
+            .unwrap();
+        git_cmd(&tracking).args(["pull"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "source-work"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "tracking-source");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn branch_rebased_to_new_main_without_own_commits_stays_in_sync() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "rebasing-main");
+        commit_file(&repo, "new.txt", "main moved\n");
+        git_cmd(&worktree)
+            .args(["rebase", &base_branch_of(&repo)])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "rebasing-main");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+    }
+
+    #[test]
+    fn branch_created_from_non_default_commits_is_merged_even_without_later_edits() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let source = add_worktree(&repo, "source-branch");
+        commit_file(&source, "source.txt", "source work\n");
+        let derived = workspaces.join("derived");
+        fs::create_dir_all(&workspaces).unwrap();
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "derived",
+                &derived.to_string_lossy(),
+                "source-branch",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "source-branch"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "derived");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
     }
 
     #[test]
@@ -7776,6 +8005,26 @@ branch refs/heads/feat
         );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn unknown_directory_is_not_removed_without_a_warm_token() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let path = workspaces.join("unrelated-directory");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("keep.txt"), "unrelated\n").unwrap();
+        let worktree = WorktreeInfo {
+            name: "unrelated-directory".into(),
+            path: path.clone(),
+            branch: None,
+            base_repo: repo,
+        };
+
+        assert!(remove_worktree_internal(&worktree, true).is_err());
+        assert_eq!(
+            fs::read_to_string(path.join("keep.txt")).unwrap(),
+            "unrelated\n"
+        );
     }
 
     /// Dirtiness is orthogonal to the commit verdict, and that is exactly why
