@@ -24,9 +24,10 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
-On the mobile PWA, **Chat** is the first tab. The repository chosen in the
-header is sent with each message as context; the chat itself is the same one the
-desktop shows. The conversation picker shows the titles of saved sessions;
+On the mobile PWA, **Chat** is the first tab and opens without choosing a
+repository. It uses the same workspace root and saved sessions as desktop.
+A repository in a push link is sent with a message as context, not used as the
+chat root. The conversation picker shows the titles of saved sessions;
 choose one to load its history, or tap **New**. Messages, collapsed tool
 activity and pending permission or form cards use the same ACP stream as desktop.
 If the connection drops, the client resumes from its last received event. A
