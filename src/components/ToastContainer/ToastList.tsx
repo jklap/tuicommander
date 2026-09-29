@@ -11,6 +11,8 @@ interface ToastListProps {
 	onDismiss: (toast: Toast) => void;
 	repoName: (toast: Toast) => string | null;
 	repoAction?: (toast: Toast) => RepoAction | null;
+	/** Px to keep clear on the right, e.g. for a docked panel. */
+	rightInset?: number;
 }
 
 /** Shared toast presentation. Navigation stays in the shell-specific wrapper. */
@@ -21,7 +23,10 @@ export const ToastList: Component<ToastListProps> = (props) => {
 	}
 
 	return (
-		<div class={styles.container}>
+		<div
+			class={styles.container}
+			style={props.rightInset ? { "--toast-right-inset": `${props.rightInset}px` } : undefined}
+		>
 			<For each={toastsStore.toasts}>
 				{(toast) => (
 					<div

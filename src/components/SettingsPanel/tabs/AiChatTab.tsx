@@ -1,7 +1,9 @@
 import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
+import { startEgoLogin } from "../../../services/egoLogin";
 import { appLogger } from "../../../stores/appLogger";
+import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { isEgoCliError } from "../../../types/ego";
 import s from "../Settings.module.css";
@@ -16,21 +18,28 @@ import s from "../Settings.module.css";
  * tab is `ego models --refresh`, which ego makes, and only when a person
  * presses Refresh.
  *
- * Adding a credential is deliberately not here. `ego auth login` is an
- * interactive flow — a browser round trip or a device code — and running it
- * inside a settings panel would mean either driving a terminal from a form or
- * handling a secret on the way past. The tab says which command to run instead.
+ * Adding a credential does not happen in this form either. `ego auth login` is
+ * an interactive flow — a browser round trip, a device code or an API key
+ * prompt — so Login opens a terminal tab that runs it and steps aside: the
+ * person talks to ego directly and no secret passes through here.
  *
  * The in-chat model switch is a different thing and stays where it is: that one
  * is an ACP session option, which changes one conversation. This changes the
  * default every new run starts from.
  */
-export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
+export const AiChatTab: Component<{
+	client?: EgoCliClient;
+	/** Runs `ego auth login PROVIDER` in a terminal tab; `onExit` fires once it ended. */
+	startLogin?: typeof startEgoLogin;
+	/** Closes Settings so the login terminal is visible. */
+	onClose?: () => void;
+}> = (props) => {
 	const client = () => props.client ?? egoCli;
 
 	const [data, setData] = createSignal<EgoProviders | null>(null);
 	const [error, setError] = createSignal<EgoCliError | null>(null);
 	const [busy, setBusy] = createSignal(false);
+	const [loginError, setLoginError] = createSignal<string | null>(null);
 
 	/** Run one ego call, keeping whatever it printed when it fails. */
 	const attempt = async (call: () => Promise<EgoProviders>): Promise<void> => {
@@ -63,6 +72,19 @@ export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
 	onMount(() => {
 		void attempt(() => client().providers(false));
 	});
+
+	const login = (provider: string) => {
+		try {
+			(props.startLogin ?? startEgoLogin)(provider, () => {
+				toastsStore.add("ego login", `ego auth login ${provider} finished`, "info");
+				void attempt(() => client().providers(false));
+			});
+			setLoginError(null);
+			props.onClose?.();
+		} catch (err) {
+			setLoginError(err instanceof Error ? err.message : String(err));
+		}
+	};
 
 	const choose = (slug: string) => {
 		if (!slug || slug === data()?.defaultModel) return;
@@ -197,12 +219,20 @@ export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
 							"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
 						)}
 					</p>
+					<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
 					<For each={data()?.providers}>
 						{(provider) => (
 							<div class={s.group}>
 								<div class={s.credentialsRow}>
 									<strong>{provider.name}</strong>
 									<CredentialBadge credential={provider.credential} />
+									<button
+										class={s.testBtn}
+										aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
+										onClick={() => login(provider.name)}
+									>
+										{t("providers.login", "Login")}
+									</button>
 								</div>
 								<p class={s.availabilityDetail}>
 									<Show
@@ -266,7 +296,7 @@ const CredentialBadge: Component<{ credential: EgoCredential }> = (props) => (
 			</span>
 		</Match>
 		<Match when={props.credential.state === "missing"}>
-			<span class={s.availabilityBad}>{t("providers.credential.missing", "no credential — run ego auth login")}</span>
+			<span class={s.availabilityBad}>{t("providers.credential.missing", "no credential — use Login")}</span>
 		</Match>
 		<Match when={props.credential.state === "unknown"}>
 			<span class={s.hint}>{t("providers.credential.unknown", "ego could not read its credential store")}</span>

@@ -1,5 +1,5 @@
 import { emitTo } from "@tauri-apps/api/event";
-import { type Component, createEffect, createMemo, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
@@ -16,6 +16,7 @@ import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
 import { SessionControls } from "./SessionControls";
 import { Transcript } from "./Transcript";
+import { trackPanelWidth } from "./trackPanelWidth";
 import { createAcpChat } from "./useAcpChat";
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
@@ -55,6 +56,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	// looking at, not the repository's main checkout.
 	const viewed = createMemo(() => props.fsRoot || props.repoPath || null);
 	const chat = createAcpChat(viewed, () => props.visible);
+	// Toasts keep clear of this panel's rendered width (see ToastContainer).
+	let panelEl!: HTMLDivElement;
+	onMount(() => onCleanup(trackPanelWidth(panelEl, (width) => uiStore.setAiChatPanelMeasuredWidth(width))));
 	createEffect(() => aiChatDraft.activate(chat.sessionId() ?? ""));
 	const keyDown = (event: KeyboardEvent) => {
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return;
@@ -122,7 +126,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	};
 
 	return (
-		<div id="ai-chat-panel" class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
+		<div id="ai-chat-panel" ref={panelEl} class={cx(s.panel, !props.visible && s.hidden)} onKeyDown={keyDown}>
 			<PanelResizeHandle panelId="ai-chat-panel" minWidth={300} maxWidth={700} />
 
 			<div class={p.header}>

@@ -27,6 +27,7 @@ import type {
 	AcpSessionConfigOptionValue,
 	AcpSessionId,
 	AcpStreamFrame,
+	EgoCompactResponse,
 } from "../types/acp";
 import { randomUuid } from "../utils/randomId";
 import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
@@ -357,7 +358,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		},
 
 		async compact(connectionId: AcpConnectionId, sessionId: AcpSessionId) {
-			return invoke("acp_session_compact", { connectionId, sessionId, requestId: randomUuid() });
+			return invoke<EgoCompactResponse>("acp_session_compact", { connectionId, sessionId, requestId: randomUuid() });
 		},
 	};
 }

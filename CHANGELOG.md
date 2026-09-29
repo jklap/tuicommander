@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **AI Chat toasts and bubbles** — Toasts keep clear of the docked AI Chat panel and return to their usual corner when it closes or is detached. A short user message no longer shows an empty second line: its Copy button moved outside the bubble.
+- **ego Login from Settings** — Each provider under Settings → AI Chat has a Login button that opens a terminal tab running `ego auth login <provider>`; the key never passes through TUICommander.
+
 - **Safe orphan cleanup countdown** — Clean detached worktrees are removed after a configurable countdown in the Ask dialog. Dirty or untracked worktrees and commits not reachable from a branch require explicit review. Agents can answer the pending dialog through MCP, with a fresh backend safety check before removal.
 
 - **Managed child idle close** — Idle managed agent children close after a configurable delay, while unread mail, background work, keep-open, or a failed background wake keeps them available.
