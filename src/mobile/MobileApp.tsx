@@ -165,7 +165,14 @@ export default function MobileApp() {
 				when={showDetail()}
 				fallback={
 					<>
-						<TopBar notificationCount={questionCount()} isConnected={error() === null} />
+						<TopBar
+							notificationCount={questionCount()}
+							isConnected={error() === null}
+							onNotificationsClick={() => {
+								const waiting = sessions().find((session) => session.state?.awaiting_input);
+								if (waiting) navigateToSession(waiting.session_id);
+							}}
+						/>
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
 							<Switch>

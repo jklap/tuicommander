@@ -47,7 +47,6 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--fg-primary);
-  text-transform: capitalize;
 }
 
 .project {
