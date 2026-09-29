@@ -12,11 +12,13 @@ import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, initApp, locallyCreatedSessions } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
+import { diffTabsStore, SESSION_SCOPE } from "../../stores/diffTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
@@ -39,6 +41,7 @@ function resetStores() {
 	for (const toast of [...toastsStore.toasts]) {
 		toastsStore.remove(toast.id);
 	}
+	diffTabsStore.clearAll();
 }
 
 function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
@@ -2319,6 +2322,142 @@ describe("initApp", () => {
 
 			expect(setActiveGroupSpy).toHaveBeenCalledWith(g1);
 			setActiveGroupSpy.mockRestore();
+		});
+	});
+
+	describe("session-review-changed event (Session Diff unseen badge)", () => {
+		type Payload = { repo_path: string; session_id: string };
+
+		function captureSessionReviewChanged() {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: Payload }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-review-changed") {
+					callback = handler as typeof callback;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		it("flags a matching, open, inactive Session Diff tab as unseen", async () => {
+			const { getCallback } = captureSessionReviewChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const otherId = diffTabsStore.add("/repo", "/repo/other.ts", "M");
+			const sessionTabId = diffTabsStore.addSessionReview("/repo", "sess-1");
+			diffTabsStore.setActive(otherId); // Session Diff tab is now inactive.
+
+			getCallback()!({ payload: { repo_path: "/repo", session_id: "sess-1" } });
+
+			expect(diffTabsStore.get(sessionTabId)?.unseen).toBe(true);
+		});
+
+		it("does nothing when no matching tab is open", async () => {
+			const { getCallback } = captureSessionReviewChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			expect(() => getCallback()!({ payload: { repo_path: "/repo", session_id: "no-such-session" } })).not.toThrow();
+		});
+	});
+
+	describe("agent-edit-observed event (Session Diff auto-open)", () => {
+		type Payload = { tuic_session_id: string | null; claude_session_id: string; repo_path: string };
+
+		function captureAgentEditObserved() {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: Payload }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "agent-edit-observed") {
+					callback = handler as typeof callback;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		afterEach(() => {
+			settingsStore.setSessionDiffAutoOpen("ask");
+		});
+
+		it("off: does nothing", async () => {
+			settingsStore.setSessionDiffAutoOpen("off");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			expect(diffTabsStore.getForRepo("/repo").length).toBe(0);
+			expect(toastsStore.toasts.length).toBe(0);
+		});
+
+		it("ask: shows a toast whose action opens Session Diff Review for that session", async () => {
+			settingsStore.setSessionDiffAutoOpen("ask");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			expect(diffTabsStore.getForRepo("/repo").length).toBe(0);
+			const toast = toastsStore.toasts.find((t) => t.title === "Session made changes");
+			expect(toast).toBeTruthy();
+			expect(toast?.action?.label).toBe("Open Session Diff");
+
+			toast?.action?.onClick();
+			const tab = diffTabsStore
+				.getForRepo("/repo")
+				.find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
+			expect(tab).toBeTruthy();
+			expect(diffTabsStore.state.activeId).toBe(tab?.id);
+		});
+
+		it("auto: opens Session Diff Review directly, without activating it", async () => {
+			settingsStore.setSessionDiffAutoOpen("auto");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const otherId = diffTabsStore.add("/repo", "/repo/other.ts", "M");
+			diffTabsStore.setActive(otherId);
+
+			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			const tab = diffTabsStore
+				.getForRepo("/repo")
+				.find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
+			expect(tab).toBeTruthy();
+			// Not activated — the other tab (open before the event fired) stays active.
+			expect(diffTabsStore.state.activeId).toBe(otherId);
+		});
+
+		it("ask: does not refire when a tab for this repo+session is already open", async () => {
+			settingsStore.setSessionDiffAutoOpen("ask");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			diffTabsStore.addSessionReview("/repo", "sess-1");
+			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			expect(toastsStore.toasts.find((t) => t.title === "Session made changes")).toBeUndefined();
+		});
+
+		it("auto: does not reopen when a tab for this repo+session is already open", async () => {
+			settingsStore.setSessionDiffAutoOpen("auto");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			diffTabsStore.addSessionReview("/repo", "sess-1");
+			const before = diffTabsStore.getForRepo("/repo").length;
+
+			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			expect(diffTabsStore.getForRepo("/repo").length).toBe(before);
 		});
 	});
 });

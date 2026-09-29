@@ -59,6 +59,7 @@ function review(overrides: Partial<SessionReview>): SessionReview {
 		files: [],
 		warnings: [],
 		included_subagents: false,
+		tuic_session_id: null,
 		turns: [],
 		...overrides,
 	};

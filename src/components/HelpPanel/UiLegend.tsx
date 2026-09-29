@@ -10,6 +10,7 @@ import s from "./UiLegend.module.css";
 const GROUP_ORDER: readonly IndicatorGroup[] = [
 	"terminalStatus",
 	"tabType",
+	"tabActivity",
 	"sidebarSymbol",
 	"prBadge",
 	"gitState",

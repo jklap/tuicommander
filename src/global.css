@@ -259,6 +259,10 @@
   --ind-terminal-error: var(--error);
   --ind-anim-terminal-error: tuic-pulse 1.5s ease-in-out infinite;
 
+  /* Tab Activity Dots */
+  --ind-diff-unseen: var(--unseen);
+  --ind-anim-diff-unseen: none;
+
   /* Tab Types — raw RGB triples, consumed inside rgba() */
   --ind-tabtype-diff-rgb: var(--tab-diff-rgb);
   --ind-tabtype-editor-rgb: var(--tab-edit-rgb);

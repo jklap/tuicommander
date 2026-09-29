@@ -9,6 +9,7 @@ import type { EditStep, FileReview, RevertResult, SessionReview, SessionSummary 
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
@@ -239,6 +240,20 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 			return next;
 		});
 	});
+
+	// A subagent step has no PTY of its own — it jumps to the PARENT session's
+	// tab, so this is resolved once from `review().tuic_session_id`, not
+	// derived per-step. A stable function reference (never recreated) so the
+	// `<Show>`-gated badge below never goes stale across a truthy->truthy
+	// value change — only the undefined<->function transition ever happens.
+	const agentTabId = createMemo(() => {
+		const tuicSessionId = review()?.tuic_session_id;
+		return tuicSessionId ? terminalsStore.getTerminalForSession(tuicSessionId) : null;
+	});
+	function handleJumpToAgent() {
+		const id = agentTabId();
+		if (id) navigateToTerminal(id);
+	}
 
 	function handleOpenFile(absPath: string) {
 		const group = review()?.files.find((f) => f.abs_path === absPath);
@@ -476,6 +491,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 						onCopyFile={handleCopyFile}
 						onToggleExpanded={toggleExpanded}
 						onToggleStepsOpen={toggleStepsOpen}
+						onJumpToAgent={agentTabId() ? handleJumpToAgent : undefined}
 						scrollRef={setScrollEl}
 					/>
 				</Show>

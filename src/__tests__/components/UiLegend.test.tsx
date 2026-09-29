@@ -4,7 +4,7 @@ import { UiLegend } from "../../components/HelpPanel/UiLegend";
 import { settingsStore } from "../../stores/settings";
 
 describe("UiLegend", () => {
-	it("renders from the registry — six section headings, no more hand-maintained 'Panels' section", () => {
+	it("renders from the registry — seven section headings, no more hand-maintained 'Panels' section", () => {
 		// The old "Panels" section documented 4 accent colors that no panel
 		// component actually applies (verified by grepping every .css for the
 		// --tab-*-rgb vars during the customization plan's exploration) — it
@@ -15,6 +15,7 @@ describe("UiLegend", () => {
 		expect(headings).toEqual([
 			"Terminal Status Dots",
 			"Tab Types",
+			"Tab Activity Dots",
 			"Sidebar Symbols",
 			"PR Status Badges",
 			"Git Repo Status",
@@ -137,8 +138,8 @@ describe("UiLegend editable mode (Settings → Appearance)", () => {
 
 	it("wraps every row's preview in one clickable button when editable — no more separate per-capability buttons", () => {
 		const { container } = render(() => <UiLegend editable />);
-		// terminalStatus(7) + tabType(6) + sidebarSymbol(7) + prBadge(11) + gitState(6) + diffStat(2) = 39
-		expect(container.querySelectorAll(".previewBtn").length).toBe(39);
+		// terminalStatus(7) + tabType(6) + tabActivity(1) + sidebarSymbol(7) + prBadge(11) + gitState(6) + diffStat(2) = 40
+		expect(container.querySelectorAll(".previewBtn").length).toBe(40);
 		expect(container.querySelectorAll(".editSwatch").length).toBe(0);
 		expect(container.querySelectorAll(".editIconBtn").length).toBe(0);
 		expect(container.querySelectorAll(".editAnimBtn").length).toBe(0);
