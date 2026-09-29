@@ -61,7 +61,8 @@ self.addEventListener("push", (event) => {
   let data = {};
   if (event.data) {
     try {
-      data = event.data.json();
+      const parsed = event.data.json();
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed;
     } catch {
       // Malformed push payload — show generic notification
     }

@@ -45,6 +45,7 @@ across all your repositories: ego runs in `~/Gits`, and the repository on screen
 is sent with each message as context — a hint, never a limit on what ego may
 reach. The header names that repository. Switching repository keeps the same
 tabs and the same conversation, and starts or loads nothing.
+If desktop and mobile open the chat together, they attach to the same running ego.
 
 ego starts when you send the first message or click **+**; opening the panel
 starts nothing. There is one ego for the app: a reloaded window or the phone

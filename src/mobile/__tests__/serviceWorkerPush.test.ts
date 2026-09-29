@@ -73,3 +73,51 @@ it("keeps different session pushes actionable while replacing repeats of one ses
 	}
 	expect(opened.sort()).toEqual(["/mobile/session/a", "/mobile/session/b"]);
 });
+
+it("shows a generic actionable notification for invalid push payloads", async () => {
+	const handlers = new Map<string, (event: unknown) => void>();
+	const notices: Array<{ title: string; body: string; data: { url: string }; close: () => void }> = [];
+	const opened: string[] = [];
+	runInNewContext(readFileSync("public/sw.js", "utf8"), {
+		self: {
+			addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
+			registration: {
+				showNotification: async (title: string, options: Notice) => {
+					notices.push({ title, body: options.body, data: options.data, close: () => undefined });
+				},
+			},
+		},
+		clients: {
+			matchAll: async () => [],
+			openWindow: async (url: string) => { opened.push(url); },
+		},
+	});
+
+	async function dispatch(type: string, fields: object) {
+		const pending: Promise<unknown>[] = [];
+		const handler = handlers.get(type);
+		expect(handler, `${type} listener`).toBeDefined();
+		handler?.({ ...fields, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
+		await Promise.all(pending);
+	}
+
+	const invalidPayloads = [
+		{ name: "missing", data: undefined },
+		{ name: "malformed", data: { json: () => { throw new SyntaxError("bad JSON"); } } },
+		{ name: "null", data: { json: () => null } },
+		{ name: "array", data: { json: () => ["unexpected"] } },
+		{ name: "string", data: { json: () => "unexpected" } },
+		{ name: "number", data: { json: () => 42 } },
+	];
+	for (const [index, { name, data }] of invalidPayloads.entries()) {
+		await dispatch("push", { data });
+		expect(notices, `${name} payload creates a new notification`).toHaveLength(index + 1);
+		const notice = notices.at(-1);
+		expect(notice, `${name} payload shows notification`).toMatchObject({
+			title: "TUICommander", body: "", data: { url: "/mobile" },
+		});
+		if (notice) await dispatch("notificationclick", { notification: notice });
+		expect(opened, `${name} click opens a window`).toHaveLength(index + 1);
+		expect(opened.at(-1), `${name} notification opens mobile`).toBe("/mobile");
+	}
+});

@@ -100,7 +100,9 @@ async fn connect_as_peer(fixture: &Fixture) -> tuicommander_lib::acp::AcpConnect
         .manager
         .connect_with_peer(
             &Fixture::config(),
-            tuicommander_lib::acp::AcpConnectRequest { root: fixture.root() },
+            tuicommander_lib::acp::AcpConnectRequest {
+                root: fixture.root(),
+            },
             PEER.to_owned(),
         )
         .await
@@ -136,6 +138,81 @@ async fn a_peer_that_connects_again_gets_the_ego_it_already_has() {
     fixture
         .manager
         .disconnect(first.connection_id)
+        .await
+        .expect("disconnect");
+}
+
+#[tokio::test]
+async fn simultaneous_connects_for_one_peer_receive_one_ego() {
+    let fixture = Fixture::with("ready");
+    let (first, second) = tokio::join!(connect_as_peer(&fixture), connect_as_peer(&fixture));
+
+    assert_eq!(first.connection_id, second.connection_id);
+    assert_eq!(
+        live(&fixture),
+        1,
+        "one peer must not launch two ego children"
+    );
+    fixture
+        .manager
+        .disconnect(first.connection_id)
+        .await
+        .expect("disconnect");
+}
+
+#[tokio::test]
+async fn simultaneous_connects_for_different_peers_keep_separate_egos() {
+    let fixture = Fixture::with("ready");
+    let config = Fixture::config();
+    let connect = |peer: &'static str| {
+        fixture.manager.connect_with_peer(
+            &config,
+            tuicommander_lib::acp::AcpConnectRequest {
+                root: fixture.root(),
+            },
+            peer.to_owned(),
+        )
+    };
+    let (first, second) = tokio::join!(
+        connect(PEER),
+        connect("550e8400-e29b-41d4-a716-446655440a02")
+    );
+    let first = first.expect("first peer connects");
+    let second = second.expect("second peer connects");
+
+    assert_ne!(first.connection_id, second.connection_id);
+    assert_eq!(live(&fixture), 2);
+    fixture.manager.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn failed_peer_initialize_allows_a_later_connect() {
+    let fixture = Fixture::with("early-eof");
+    let request = || tuicommander_lib::acp::AcpConnectRequest {
+        root: fixture.root(),
+    };
+    assert!(
+        fixture
+            .manager
+            .connect_with_peer(&Fixture::config(), request(), PEER.to_owned())
+            .await
+            .is_err()
+    );
+
+    std::fs::copy(
+        "tests/fixtures/acp/ready.jsonl",
+        fixture.root().join("scenario.jsonl"),
+    )
+    .expect("replace failed agent with a healthy one");
+    let ready = fixture
+        .manager
+        .connect_with_peer(&Fixture::config(), request(), PEER.to_owned())
+        .await
+        .expect("retry after failed initialization");
+    assert_eq!(live(&fixture), 1);
+    fixture
+        .manager
+        .disconnect(ready.connection_id)
         .await
         .expect("disconnect");
 }
