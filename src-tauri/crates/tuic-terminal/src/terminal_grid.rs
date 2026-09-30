@@ -4272,7 +4272,9 @@ mod tests {
             seen.push(grid.get_row_text(0));
         }
         seen.extend((1..rows).map(|r| grid.get_row_text(r)));
-        let expected: Vec<String> = (total - cap - rows..total).map(|i| format!("l{i}")).collect();
+        let expected: Vec<String> = (total - cap - rows..total)
+            .map(|i| format!("l{i}"))
+            .collect();
         assert_eq!(seen, expected);
     }
 
