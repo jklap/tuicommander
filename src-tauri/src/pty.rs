@@ -3615,6 +3615,15 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
     });
 }
 
+/// The live `›` composer row of a Codex screen.
+fn find_codex_prompt_row(rows: &[String]) -> Option<usize> {
+    find_live_prompt_row(rows, |row| {
+        let t = row.trim_start();
+        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
+            && !t.starts_with("\u{203A}\u{203A}")
+    })
+}
+
 /// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
 ///
 /// `find_chrome_cutoff` cannot be used here: Codex separators delimit tool
@@ -3627,11 +3636,7 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
 fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const PROMPT_NEIGHBORHOOD: usize = 6;
 
-    let Some(prompt_idx) = find_live_prompt_row(rows, |row| {
-        let t = row.trim_start();
-        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
-            && !t.starts_with("\u{203A}\u{203A}")
-    }) else {
+    let Some(prompt_idx) = find_codex_prompt_row(rows) else {
         return AgentScreenActivity::Unknown;
     };
     let start = prompt_idx.saturating_sub(PROMPT_NEIGHBORHOOD);
@@ -9553,7 +9558,7 @@ pub(crate) fn flush_pending_injections(
 
 /// Codex can swallow the Enter of a queued command (paste-burst suppression)
 /// and keep the text in its composer. True when the tail of `text` is still on
-/// the tracked screen. Only Codex is probed: an Enter on its empty composer is
+/// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed: an Enter on its empty composer is
 /// a no-op, so a stale echo of already-submitted text costs nothing.
 fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
     let is_codex = state
@@ -9575,13 +9580,19 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
     let tail: String = chars[chars.len().saturating_sub(COMPOSER_TAIL_CHARS)..]
         .iter()
         .collect();
-    !tail.is_empty()
-        && state
-            .grid
-            .vt_log_buffers
-            .get(session_id)
-            .is_some_and(|vt| squash(&vt.lock().screen_rows().join("\n")).contains(&tail))
+    if tail.is_empty() {
+        return false;
+    }
+    state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
+        let rows = vt.lock().screen_rows();
+        squash(&rows.join("\n")).contains(&tail)
+            // A long paste collapses to a placeholder that never shows the text.
+            || find_codex_prompt_row(&rows).is_some_and(|row| rows[row].contains(CODEX_PASTE_PLACEHOLDER))
+    })
 }
+
+/// What Codex shows in its composer in place of a long pasted text.
+const CODEX_PASTE_PLACEHOLDER: &str = "[Pasted Content";
 
 /// Number of trailing characters of a queued command searched for on screen.
 const COMPOSER_TAIL_CHARS: usize = 32;
