@@ -1635,6 +1635,9 @@ pub(super) fn apply_foreground_agent_observation(
             effective.clone()
         };
         let changed = entry.agent_type != next;
+        if changed && fg_is_shell && next.is_none() {
+            snapshot_resumable_session_on_agent_exit(&mut entry);
+        }
         if changed {
             entry.telegram_registration_lifetime = None;
             entry.agent_type = next;
@@ -1682,6 +1685,40 @@ pub(super) fn apply_foreground_agent_observation(
     }
 
     effective
+}
+
+/// The single place a `ResumableSession` snapshot is taken: the moment
+/// `apply_foreground_agent_observation` sees the shell reclaim the foreground
+/// and clears the agent identity — TUIC learning the agent has genuinely
+/// exited (as opposed to merely finishing a turn). Captures "there's a
+/// resumable session, and here's everything needed to resume it" before the
+/// live identity/title trackers are cleared. Title precedence is the
+/// hook-reported `agent_session_title` (`tuic-hook`'s `cctitle` verb) over the
+/// OSC-0-title fallback `agent_osc_title` (`osc_title.rs`'s
+/// `apply_osc_title`). No snapshot for a non-Claude `agent_type` (no other
+/// agent reports a hook-provided session id today) or when no session id was
+/// ever observed.
+fn snapshot_resumable_session_on_agent_exit(entry: &mut crate::state::SessionState) {
+    if entry.agent_type.as_deref() == Some("claude")
+        && let Some(id) = entry.agent_session_id.clone()
+    {
+        let title = entry
+            .agent_session_title
+            .clone()
+            .or_else(|| entry.agent_osc_title.clone());
+        entry.resumable_session = Some(crate::state::ResumableSession {
+            agent_type: "claude".to_string(),
+            session_id: id,
+            title,
+            cwd: entry.agent_session_cwd.clone(),
+            end_reason: entry.agent_session_end_reason.clone(),
+        });
+    }
+    entry.agent_session_id = None;
+    entry.agent_session_title = None;
+    entry.agent_osc_title = None;
+    entry.agent_session_cwd = None;
+    entry.agent_session_end_reason = None;
 }
 
 /// Walk the process tree from `root_pid` and return the deepest descendant PID.

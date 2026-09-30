@@ -184,6 +184,35 @@ pub(crate) fn apply_osc_title(
     title: Option<&str>,
     base_name: &mut Option<Option<String>>,
 ) {
+    let cleaned = title.map(clean_osc_title);
+
+    // Fallback title source for the exit-time resume banner
+    // (`SessionState.agent_osc_title`, read by `snapshot_resumable_session_on_agent_exit`
+    // in pty.rs — only used there when no hook-reported title is set).
+    // Captured independently of `should_skip` below: a custom tab name (or an
+    // active intent title) must not block this from recording Claude's real
+    // title, since a session could be renamed by the user and still need its
+    // ORIGINAL agent-reported title for the resume banner shown after it
+    // exits. Never cleared by a ResetTitle (`title: None`) or an unusable
+    // (empty-after-cleaning) title — this is a running memory of the last
+    // real title seen, not reactive to every repaint.
+    //
+    // Capped the same way `pty.rs`'s `cctitle`/`ccend` OSC 7770 arms cap their
+    // own text: `clean_osc_title` bounds shape (no shell-script/path-looking
+    // titles) but not length, and the raw OSC 0/2 title this receives is only
+    // bounded by the VTE parser's own multi-megabyte raw-buffer cap — without
+    // this, an adversarial title on this path could grow `SessionState` (and
+    // every `session-state-changed` payload) far larger than the capped
+    // hook-reported path ever allows, since both feed the same
+    // `resumable_session.title` sink.
+    if let Some(cleaned_ref) = cleaned.as_deref()
+        && !cleaned_ref.is_empty()
+        && let Some(mut entry) = state.session_maps.session_states.get_mut(session_id)
+        && entry.agent_type.as_deref() == Some("claude")
+    {
+        entry.agent_osc_title = Some(crate::pty::cap_agent_metadata_len(cleaned_ref.to_string()));
+    }
+
     if should_skip(state, session_id) {
         return;
     }
@@ -196,10 +225,9 @@ pub(crate) fn apply_osc_title(
         }
     };
 
-    match title {
+    match cleaned {
         None => restore_base(base_name),
-        Some(raw) => {
-            let cleaned = clean_osc_title(raw);
+        Some(cleaned) => {
             if cleaned.is_empty() {
                 restore_base(base_name);
                 return;
@@ -595,6 +623,45 @@ mod tests {
         );
     }
 
+    /// Security-review finding (2026-09-29): the OSC-0/2 title fallback this
+    /// module captures into `agent_osc_title` feeds the exact same
+    /// `resumable_session.title` sink `pty.rs`'s `cctitle`/`ccend` arms cap at
+    /// `MAX_AGENT_METADATA_TEXT_LEN` — this path must cap identically, or an
+    /// adversarial OSC 0/2 title (bounded upstream only by the VTE parser's
+    /// multi-megabyte raw-buffer cap, not by anything in this module) reaches
+    /// that sink uncapped.
+    #[test]
+    fn agent_osc_title_fallback_is_capped_like_the_hook_reported_path() {
+        let state = fresh_state();
+        insert_bare_session(&state, "s1");
+        state
+            .session_maps
+            .session_states
+            .entry("s1".to_string())
+            .or_insert_with(crate::state::SessionState::default);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".to_string());
+
+        let long_title = "x".repeat(1000);
+        let mut base = None;
+        apply_osc_title(&state, "s1", Some(&long_title), &mut base);
+
+        let captured = state
+            .session_maps
+            .session_states
+            .get("s1")
+            .and_then(|s| s.agent_osc_title.clone());
+        assert_eq!(
+            captured.map(|t| t.chars().count()),
+            Some(crate::pty::MAX_AGENT_METADATA_TEXT_LEN),
+            "agent_osc_title must be capped the same way cctitle/ccend are"
+        );
+    }
+
     #[test]
     fn intent_title_gate_respects_both_global_and_per_agent_setting() {
         let state = fresh_state();
@@ -644,5 +711,77 @@ mod tests {
             .get("s1")
             .map(|s| s.lock().display_name.clone());
         assert_eq!(name, Some(Some("npm test".to_string())));
+    }
+
+    #[test]
+    fn restore_base_on_exit_restores_captured_base_name() {
+        let state = fresh_state();
+        insert_bare_session(&state, "s1");
+        state.set_session_display_name("s1", Some("Terminal 1".into()), false);
+
+        // Capture the base by applying a title
+        let mut base = None;
+        apply_osc_title(&state, "s1", Some("npm test"), &mut base);
+        assert_eq!(base, Some(Some("Terminal 1".to_string())));
+
+        // Verify the display name changed to the OSC title
+        let name_before = state
+            .session_maps
+            .sessions
+            .get("s1")
+            .map(|s| s.lock().display_name.clone());
+        assert_eq!(name_before, Some(Some("npm test".to_string())));
+
+        // Restore on exit should bring back the base name
+        restore_base_on_exit(&state, "s1", &base);
+        let name_after = state
+            .session_maps
+            .sessions
+            .get("s1")
+            .map(|s| s.lock().display_name.clone());
+        assert_eq!(name_after, Some(Some("Terminal 1".to_string())));
+    }
+
+    #[test]
+    fn restore_base_on_exit_respects_custom_names() {
+        let state = fresh_state();
+        insert_bare_session(&state, "s1");
+        state.set_session_display_name("s1", Some("Terminal 1".into()), false);
+
+        // Capture the base by applying a title
+        let mut base = None;
+        apply_osc_title(&state, "s1", Some("npm test"), &mut base);
+        assert_eq!(base, Some(Some("Terminal 1".to_string())));
+
+        // User applies a custom name (display_name_is_custom: true)
+        state.set_session_display_name("s1", Some("My Custom Name".into()), true);
+
+        // restore_base_on_exit must NOT overwrite a custom name
+        restore_base_on_exit(&state, "s1", &base);
+        let name = state
+            .session_maps
+            .sessions
+            .get("s1")
+            .map(|s| s.lock().display_name.clone());
+        assert_eq!(name, Some(Some("My Custom Name".to_string())));
+    }
+
+    #[test]
+    fn restore_base_on_exit_is_noop_when_no_base_was_captured() {
+        let state = fresh_state();
+        insert_bare_session(&state, "s1");
+        state.set_session_display_name("s1", Some("Current Name".into()), false);
+
+        // Never captured a base (base_name is None)
+        let base: Option<Option<String>> = None;
+
+        // Should be a no-op
+        restore_base_on_exit(&state, "s1", &base);
+        let name = state
+            .session_maps
+            .sessions
+            .get("s1")
+            .map(|s| s.lock().display_name.clone());
+        assert_eq!(name, Some(Some("Current Name".to_string())));
     }
 }

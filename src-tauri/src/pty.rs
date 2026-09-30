@@ -1195,6 +1195,26 @@ fn percent_decode_osc_payload(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Hard cap on decoded `cctitle`/`ccend` OSC 7770 payload text, and on the
+/// OSC 0/2 title fallback `osc_title.rs` captures into `agent_osc_title`
+/// (same sink — both feed `resumable_session.title`, so both need the same
+/// bound). This wire carries `tuic-hook`'s own extraction of Claude Code's
+/// stdin JSON, but terminal output is untrusted in general (any process on
+/// the pty can write an OSC 7770 or OSC 0/2 sequence) — a single final byte
+/// cap on the assembled event wouldn't protect anything expensive downstream
+/// here, but this still keeps an unbounded/adversarial title from bloating
+/// `SessionState`'s in-memory snapshot and every `session-state-changed`
+/// payload built from it indefinitely. Truncates on a `char` boundary, never
+/// splitting a multi-byte UTF-8 sequence.
+pub(crate) const MAX_AGENT_METADATA_TEXT_LEN: usize = 256;
+
+pub(crate) fn cap_agent_metadata_len(s: String) -> String {
+    if s.chars().count() <= MAX_AGENT_METADATA_TEXT_LEN {
+        return s;
+    }
+    s.chars().take(MAX_AGENT_METADATA_TEXT_LEN).collect()
+}
+
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
@@ -2985,23 +3005,51 @@ impl ChunkProcessor {
                                 crate::agent_wrap_prompt::request(state, agent, fingerprint);
                             }
                         }
-                        // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
-                        // metadata `tuic-hook` extracted natively from a Claude Code
-                        // hook's stdin JSON (SessionStart/Pre/PostToolUse/
-                        // Notification). Percent-encoded on the wire since these
-                        // carry arbitrary text (paths, tool names, messages) that
-                        // could otherwise contain the OSC param delimiter (`;`) or
-                        // control bytes; decode once here and forward as a generic
-                        // `AgentMetadata` event for the frontend to pick up as
-                        // features consume it (none do yet — see `output_parser.rs`).
-                        "ccsession" => tuic_events.push(ParsedEvent::AgentMetadata {
-                            field: "session_id".to_string(),
-                            value: percent_decode_osc_payload(&payload),
-                        }),
-                        "cwd" => tuic_events.push(ParsedEvent::AgentMetadata {
-                            field: "cwd".to_string(),
-                            value: percent_decode_osc_payload(&payload),
-                        }),
+                        // `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`cctitle`/
+                        // `ccend`: free-text metadata `tuic-hook` extracted natively
+                        // from a Claude Code hook's stdin JSON (SessionStart/Pre/
+                        // PostToolUse/Notification/SessionEnd). Percent-encoded on
+                        // the wire since these carry arbitrary text (paths, tool
+                        // names, messages) that could otherwise contain the OSC
+                        // param delimiter (`;`) or control bytes; decode once here
+                        // and forward as a generic `AgentMetadata` event. `ccsession`/
+                        // `cwd`/`cctitle` are also written synchronously into
+                        // `session_states` (in THIS reader thread, not the async
+                        // accumulator) so `snapshot_resumable_session_on_agent_exit` can
+                        // snapshot the live identity/title into `resumable_session`
+                        // the instant the shell confirms the agent has exited — see
+                        // that function's doc comment.
+                        "ccsession" => {
+                            let decoded = percent_decode_osc_payload(&payload);
+                            if let Some(mut entry) =
+                                state.session_maps.session_states.get_mut(session_id)
+                            {
+                                // A session id that differs from whatever was
+                                // already recorded means a new agent session
+                                // started in this pane — any previously
+                                // snapshotted resumable session is stale.
+                                if entry.agent_session_id.as_deref() != Some(decoded.as_str()) {
+                                    entry.resumable_session = None;
+                                }
+                                entry.agent_session_id = Some(decoded.clone());
+                            }
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "session_id".to_string(),
+                                value: decoded,
+                            });
+                        }
+                        "cwd" => {
+                            let decoded = percent_decode_osc_payload(&payload);
+                            if let Some(mut entry) =
+                                state.session_maps.session_states.get_mut(session_id)
+                            {
+                                entry.agent_session_cwd = Some(decoded.clone());
+                            }
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "cwd".to_string(),
+                                value: decoded,
+                            });
+                        }
                         "transcript" => tuic_events.push(ParsedEvent::AgentMetadata {
                             field: "transcript_path".to_string(),
                             value: percent_decode_osc_payload(&payload),
@@ -3010,6 +3058,44 @@ impl ChunkProcessor {
                             field: "tool_name".to_string(),
                             value: percent_decode_osc_payload(&payload),
                         }),
+                        // Claude Code's own session title — the hook-authoritative
+                        // half of the resume banner's title precedence (the other
+                        // half is the OSC 0 title fallback, see `osc_title.rs`'s
+                        // `apply_osc_title`). Terminal output is untrusted, so the
+                        // decoded title is capped the same defensive way other
+                        // untrusted-escape-sequence text is bounded elsewhere in
+                        // this file (see AGENTS.md's "Every Step of
+                        // Untrusted-Escape-Sequence Processing Needs Its Own Cap").
+                        "cctitle" => {
+                            let decoded =
+                                cap_agent_metadata_len(percent_decode_osc_payload(&payload));
+                            if let Some(mut entry) =
+                                state.session_maps.session_states.get_mut(session_id)
+                            {
+                                entry.agent_session_title = Some(decoded.clone());
+                            }
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "session_title".to_string(),
+                                value: decoded,
+                            });
+                        }
+                        // Claude Code's own SessionEnd `reason` string — recorded
+                        // for diagnostics only (see `AGENTS.md`'s "Agent Session
+                        // Management"); never a gate on whether the resume banner
+                        // shows.
+                        "ccend" => {
+                            let decoded =
+                                cap_agent_metadata_len(percent_decode_osc_payload(&payload));
+                            if let Some(mut entry) =
+                                state.session_maps.session_states.get_mut(session_id)
+                            {
+                                entry.agent_session_end_reason = Some(decoded.clone());
+                            }
+                            tuic_events.push(ParsedEvent::AgentMetadata {
+                                field: "session_end_reason".to_string(),
+                                value: decoded,
+                            });
+                        }
                         "notify" => {
                             let decoded = percent_decode_osc_payload(&payload);
                             // Stashed for the "state" arm's very next iteration —

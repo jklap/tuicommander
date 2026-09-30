@@ -412,6 +412,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 								if (resumeCmd) {
 									terminalsStore.update(id, {
 										pendingResumeCommand: resumeCmd,
+										pendingResumeTitle: terminal.agentSessionTitle ?? null,
+										pendingResumeSource: "restore",
 										agentSessionId: terminal.agentSessionId ?? null,
 									});
 								}

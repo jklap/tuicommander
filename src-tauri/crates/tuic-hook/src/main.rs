@@ -107,8 +107,8 @@ never done on event name alone, since Gemini's own event names can collide with
 Claude's (e.g. "Notification", "SessionEnd").
 
 DERIVATION (Claude Code events, --agent claude):
-    SessionStart          state=busy      scrapes session_id, cwd, transcript_path
-    UserPromptSubmit      state=prompt    busy + "the user submitted a prompt here" (scrollbar tick)
+    SessionStart          state=busy      scrapes session_id, cwd, transcript_path, session_title
+    UserPromptSubmit      state=prompt    busy + "the user submitted a prompt here" (scrollbar tick); scrapes session_title
     PreToolUse            state=busy      scrapes tool_name
     PostToolUse           state=busy      scrapes tool_name
     PostToolUseFailure    (no state)      scrapes tool_name; toolfail=<exit_code, default 1>,
@@ -118,7 +118,7 @@ DERIVATION (Claude Code events, --agent claude):
     ElicitationResult     state=busy      paired retraction for Elicitation
     Stop                  state=idle      scrapes background_tasks
     StopFailure           state=idle      toolfail=1; scrapes background_tasks
-    SessionEnd            state=idle
+    SessionEnd            state=idle      scrapes session_id, cwd, transcript_path, session_title, reason
 An unrecognized or absent `hook_event_name` derives nothing; only explicit flags apply.
 
 FLAGS (override the derived value; freely combinable):
@@ -136,6 +136,8 @@ FLAGS (override the derived value; freely combinable):
     --emit-notify                  Force scraping message.
     --emit-notification-type       Force scraping notification_type.
     --emit-background-tasks        Force scraping background_tasks.
+    --emit-title                   Force scraping session_title.
+    --emit-end-reason              Force scraping reason.
     --version                      Print the version and exit (no TUIC_SESSION needed).
     --help, -h                     Print this message and exit (no TUIC_SESSION needed).
 
@@ -146,7 +148,7 @@ understand, never fail the hook.
 STDIN:
     A JSON object, read in full (bounded to 1 MiB). Fields read: hook_event_name,
     session_id, cwd, transcript_path, tool_name, message, notification_type,
-    exit_code, is_interrupt, background_tasks.
+    exit_code, is_interrupt, background_tasks, session_title, reason.
     Missing, empty, or malformed fields are treated as absent — never an error. A
     payload truncated past the bound loses the whole fire's derivation, not just
     the oversized field.
@@ -161,8 +163,8 @@ ENVIRONMENT:
 WIRE FORMAT:
     ESC ] 7770 ; verb=payload ESC \    (one sequence per verb, one write per fire)
     Free-text payloads (ccsession, cwd, transcript, tool, notify, notifytype,
-    bgtasks) are percent-encoded; state and toolfail are fixed enum/numeric
-    values, emitted verbatim.
+    bgtasks, cctitle, ccend) are percent-encoded; state and toolfail are fixed
+    enum/numeric values, emitted verbatim.
 "#,
         version = env!("CARGO_PKG_VERSION")
     )
@@ -199,6 +201,8 @@ struct ParsedArgs {
     emit_notify: bool,
     emit_notification_type: bool,
     emit_background_tasks: bool,
+    emit_title: bool,
+    emit_end_reason: bool,
 }
 
 /// Hand-rolled, not clap: this is most of the per-fire cost a compiled
@@ -235,6 +239,8 @@ fn parse_args(args: &[String]) -> ParsedArgs {
             "--emit-notify" => out.emit_notify = true,
             "--emit-notification-type" => out.emit_notification_type = true,
             "--emit-background-tasks" => out.emit_background_tasks = true,
+            "--emit-title" => out.emit_title = true,
+            "--emit-end-reason" => out.emit_end_reason = true,
             _ => {} // unrecognized — ignore, don't error
         }
         i += 1;
@@ -321,7 +327,17 @@ struct EventDerivation {
     scrape_message: bool,
     scrape_notification_type: bool,
     scrape_session_metadata: bool,
+    /// Scrapes stdin's `session_title` alone — deliberately separate from
+    /// `scrape_session_metadata` (which covers `session_id`/`cwd`/
+    /// `transcript_path`) because the title can change mid-session (a
+    /// `/rename`) and needs to be re-scraped on `UserPromptSubmit`, an event
+    /// that has no reason to re-scrape the other three.
+    scrape_session_title: bool,
     scrape_background_tasks: bool,
+    /// Scrapes stdin's raw `reason` string on `SessionEnd` — unclassified,
+    /// recorded for diagnostics only (see crate AGENTS.md's rule against
+    /// baking Claude Code's evolving vocabulary into this binary).
+    scrape_end_reason: bool,
     toolfail: DerivedToolfail,
 }
 
@@ -349,13 +365,19 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: true,
+        scrape_session_title: true,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
         // `prompt`, not `busy` (#1388): the receiving side records the
         // scrollbar's user-prompt tick from `state=prompt` alone, so sharing
         // `PreToolUse`'s `busy` would tick every tool call as a prompt too.
+        // `session_title` is re-scraped here (not just SessionStart) so a
+        // mid-session `/rename` reaches the receiving end the very next time
+        // the user submits a prompt — Claude Code's own hook payload carries
+        // the CURRENT title on every fire, not just the first.
         agent: "claude",
         event: "UserPromptSubmit",
         state: Some("prompt"),
@@ -363,7 +385,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: true,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -374,7 +398,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -385,7 +411,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -396,7 +424,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::FromStdinExitCode,
     },
     EventDerivation {
@@ -407,7 +437,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: true,
         scrape_notification_type: true,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -423,7 +455,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -436,7 +470,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: false,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -455,7 +491,9 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: true,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -466,18 +504,28 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_session_title: false,
         scrape_background_tasks: true,
+        scrape_end_reason: false,
         toolfail: DerivedToolfail::Fixed("1"),
     },
     EventDerivation {
+        // Also re-scrapes session_id/cwd/transcript_path (not just at
+        // SessionStart) and the session title, plus the raw `reason` string
+        // — the exit-resume-banner feature's snapshot needs the session's
+        // identity and title available at the exact moment the turn ends,
+        // not just at its start (a long session's title can have changed via
+        // `/rename` since SessionStart fired).
         agent: "claude",
         event: "SessionEnd",
         state: Some("idle"),
         scrape_tool_name: false,
         scrape_message: false,
         scrape_notification_type: false,
-        scrape_session_metadata: false,
+        scrape_session_metadata: true,
+        scrape_session_title: true,
         scrape_background_tasks: false,
+        scrape_end_reason: true,
         toolfail: DerivedToolfail::None,
     },
 ];
@@ -512,6 +560,10 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
         parsed.emit_notification_type || derivation.is_some_and(|d| d.scrape_notification_type);
     let scrape_background_tasks =
         parsed.emit_background_tasks || derivation.is_some_and(|d| d.scrape_background_tasks);
+    let scrape_session_title =
+        parsed.emit_title || derivation.is_some_and(|d| d.scrape_session_title);
+    let scrape_end_reason =
+        parsed.emit_end_reason || derivation.is_some_and(|d| d.scrape_end_reason);
 
     if scrape_session_metadata {
         if let Some(v) = str_field(stdin_json, "session_id") {
@@ -523,6 +575,15 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
         if let Some(v) = str_field(stdin_json, "transcript_path") {
             pairs.push(Emission::encoded("transcript", v));
         }
+    }
+    // `session_title` — Claude Code's own session name (auto-generated, or set
+    // via `/rename`). Scraped separately from the session-metadata trio above:
+    // SessionStart/SessionEnd want it alongside session_id/cwd/transcript_path,
+    // but UserPromptSubmit wants ONLY this (a mid-session `/rename` shows up on
+    // the very next prompt submission's payload), not a redundant re-scrape of
+    // the other three.
+    if scrape_session_title && let Some(v) = str_field(stdin_json, "session_title") {
+        pairs.push(Emission::encoded("cctitle", v));
     }
     if scrape_tool_name && let Some(v) = str_field(stdin_json, "tool_name") {
         pairs.push(Emission::encoded("tool", v));
@@ -556,6 +617,14 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     // for every other opportunistic scrape here.
     if scrape_background_tasks && let Some(v) = background_task_statuses(stdin_json) {
         pairs.push(Emission::encoded("bgtasks", v));
+    }
+
+    // `reason` — Claude Code's own SessionEnd reason string (e.g. "exit",
+    // "other" — not a documented closed set, so scraped raw and unclassified
+    // like `bgtasks`'s statuses above; the receiving end records it for
+    // diagnostics only, never as a gate on whether to show a resume banner).
+    if scrape_end_reason && let Some(v) = str_field(stdin_json, "reason") {
+        pairs.push(Emission::encoded("ccend", v));
     }
 
     // toolfail: an explicit fixed value or `--toolfail-from-stdin` always
@@ -676,6 +745,8 @@ mod tests {
             "--emit-notify".into(),
             "--emit-notification-type".into(),
             "--emit-background-tasks".into(),
+            "--emit-title".into(),
+            "--emit-end-reason".into(),
         ]);
         assert!(a.toolfail_from_stdin);
         assert!(a.emit_session);
@@ -683,6 +754,8 @@ mod tests {
         assert!(a.emit_notify);
         assert!(a.emit_notification_type);
         assert!(a.emit_background_tasks);
+        assert!(a.emit_title);
+        assert!(a.emit_end_reason);
     }
 
     #[test]
@@ -923,6 +996,64 @@ mod tests {
     }
 
     #[test]
+    fn derives_session_title_alongside_session_metadata_for_session_start() {
+        let json = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "abc123",
+            "cwd": "/tmp/proj",
+            "transcript_path": "/tmp/t.jsonl",
+            "session_title": "file-locations",
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(
+            verbs,
+            ["ccsession", "cwd", "transcript", "cctitle", "state"]
+        );
+        assert_eq!(pairs[3].payload, "file-locations");
+    }
+
+    #[test]
+    fn derives_session_title_for_user_prompt_submit_when_present() {
+        // The mechanism a mid-session `/rename` reaches the receiving end
+        // through: Claude Code's own hook payload carries the CURRENT title
+        // on every fire, and UserPromptSubmit re-scrapes it (unlike the other
+        // three session-metadata fields, which only need to be read once).
+        let json = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_title": "renamed-session",
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["cctitle", "state"]);
+        assert_eq!(pairs[0].payload, "renamed-session");
+    }
+
+    #[test]
+    fn session_title_omitted_when_absent_or_empty() {
+        for json in [
+            serde_json::json!({"hook_event_name": "UserPromptSubmit"}),
+            serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_title": ""}),
+        ] {
+            let pairs = build_emissions(&ParsedArgs::default(), &json);
+            assert!(pairs.iter().all(|p| p.verb != "cctitle"), "got: {pairs:?}");
+        }
+    }
+
+    #[test]
+    fn emit_title_flag_forces_the_scrape_without_a_recognized_hook_event_name() {
+        let parsed = ParsedArgs {
+            emit_title: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({"session_title": "manual-title"});
+        let pairs = build_emissions(&parsed, &json);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].verb, "cctitle");
+        assert_eq!(pairs[0].payload, "manual-title");
+    }
+
+    #[test]
     fn derives_busy_and_tool_name_for_pre_and_post_tool_use() {
         for event in ["PreToolUse", "PostToolUse"] {
             let json = serde_json::json!({"hook_event_name": event, "tool_name": "Bash"});
@@ -1089,6 +1220,83 @@ mod tests {
             assert_eq!(pairs[0].verb, "state");
             assert_eq!(pairs[0].payload, "idle");
         }
+    }
+
+    #[test]
+    fn session_end_scrapes_session_metadata_title_and_reason() {
+        // Supersedes the pre-resume-banner characterization test (SessionEnd
+        // used to derive only state=idle). The exit-resume-banner feature
+        // needs the session's identity/title/reason available at the exact
+        // moment the turn ends, so SessionEnd's row now scrapes all of it —
+        // the same session-metadata trio SessionStart scrapes, plus title and
+        // the raw end reason.
+        let json = serde_json::json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "abc123",
+            "cwd": "/tmp/proj",
+            "transcript_path": "/tmp/t.jsonl",
+            "session_title": "file-locations",
+            "reason": "exit",
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(
+            verbs,
+            [
+                "ccsession",
+                "cwd",
+                "transcript",
+                "cctitle",
+                "ccend",
+                "state"
+            ]
+        );
+        assert_eq!(pairs[0].payload, "abc123");
+        assert_eq!(pairs[3].payload, "file-locations");
+        assert_eq!(pairs[4].payload, "exit");
+        assert_eq!(pairs[5].payload, "idle");
+    }
+
+    #[test]
+    fn session_end_with_no_metadata_still_derives_only_state() {
+        // Degrades to the pre-feature shape when the payload carries none of
+        // the optional fields — every scrape is opportunistic, never required.
+        let json = serde_json::json!({"hook_event_name": "SessionEnd"});
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert_eq!(pairs.len(), 1, "got: {pairs:?}");
+        assert_eq!(pairs[0].verb, "state");
+        assert_eq!(pairs[0].payload, "idle");
+    }
+
+    #[test]
+    fn end_reason_omitted_when_absent_or_empty() {
+        for json in [
+            serde_json::json!({"hook_event_name": "SessionEnd"}),
+            serde_json::json!({"hook_event_name": "SessionEnd", "reason": ""}),
+        ] {
+            let pairs = build_emissions(&ParsedArgs::default(), &json);
+            assert!(pairs.iter().all(|p| p.verb != "ccend"), "got: {pairs:?}");
+        }
+    }
+
+    #[test]
+    fn end_reason_not_scraped_for_unrelated_events() {
+        let json = serde_json::json!({"hook_event_name": "Stop", "reason": "exit"});
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert!(pairs.iter().all(|p| p.verb != "ccend"), "got: {pairs:?}");
+    }
+
+    #[test]
+    fn emit_end_reason_flag_forces_the_scrape_without_a_recognized_hook_event_name() {
+        let parsed = ParsedArgs {
+            emit_end_reason: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({"reason": "other"});
+        let pairs = build_emissions(&parsed, &json);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].verb, "ccend");
+        assert_eq!(pairs[0].payload, "other");
     }
 
     #[test]
@@ -1293,6 +1501,8 @@ mod tests {
             "--emit-notify",
             "--emit-notification-type",
             "--emit-background-tasks",
+            "--emit-title",
+            "--emit-end-reason",
             "--version",
             "--help",
             "TUIC_SESSION",
@@ -1326,6 +1536,8 @@ mod tests {
             "exit_code",
             "is_interrupt",
             "background_tasks",
+            "session_title",
+            "reason",
         ] {
             assert!(text.contains(field), "STDIN field list missing {field}");
         }
