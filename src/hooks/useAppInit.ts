@@ -1219,8 +1219,11 @@ export async function initApp(deps: AppInitDeps) {
 					}
 				: {}),
 		});
+		// Mirrors Terminal.tsx's own non-remote branches, which clear this
+		// unconditionally on any exit (agent or plain shell) — only the plugin
+		// notification is agent-specific.
+		terminalsStore.clearAwaitingInput(termId);
 		if (hadAgent) {
-			terminalsStore.clearAwaitingInput(termId);
 			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: session_id, terminalId: termId });
 		}
 

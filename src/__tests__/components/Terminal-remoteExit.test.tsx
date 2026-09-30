@@ -54,14 +54,6 @@ vi.mock("../../invoke", () => ({
 	listen: vi.fn().mockResolvedValue(vi.fn()),
 }));
 
-vi.mock("../../stores/settings", () => ({
-	settingsStore: {
-		state: {
-			appearance: { theme: "dark" },
-			terminal: { copyOnSelect: false },
-		},
-	},
-}));
 
 vi.mock("../../stores/notifications", () => ({
 	notificationsStore: {
@@ -89,7 +81,24 @@ vi.mock("../../components/Sidebar/ComposePanel", () => ({
  * `session-closed` listener for a remote tab, doing only its own local
  * component teardown. These tests exercise ONLY Terminal.tsx's own half in
  * isolation (no `session-closed` event is fired), since that's the side
- * under change here.
+ * under change here. The listener's own half (agentType/resume-banner
+ * clearing, the agent-stopped notification, the auto-close countdown) is
+ * covered separately in `useAppInit.test.ts`.
+ *
+ * No test here mounts BOTH halves together and fires both events against one
+ * shared session — a true combined-ownership integration test. `initApp` is a
+ * real app-startup entry point (theme loading, a 30s snapshot `setInterval`,
+ * ~15 other listeners) with no teardown hook, and getting it to coexist with
+ * a mounted `<Terminal>` under fake timers (needed to avoid leaking that
+ * `setInterval`) turned out to need more mock surface than is worth building
+ * for this: `subscribePty`'s `pty-exit-*` registration never completed under
+ * fake timers in that combination, for a reason not tracked down. Confidence
+ * that the combination is safe rests on the isolation tests above plus
+ * `Terminal.tsx`'s `isRemoteTab` guard: for a remote tab, EVERY store mutation
+ * in the pty-exit callback is now skipped, so firing `session-closed` before,
+ * after, or interleaved with `pty-exit` reaches the exact same code (only
+ * `useAppInit.ts`'s listener ever touches the store), which is what removes
+ * the race rather than narrowing its window.
  */
 describe("Terminal remote-tab exit (subscribePty callback)", () => {
 	function captureExitHandler(sessionId: string) {
@@ -216,3 +225,4 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		expect(terminal?.shellState).toBe("exited");
 	});
 });
+
