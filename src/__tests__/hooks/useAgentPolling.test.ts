@@ -813,6 +813,130 @@ describe("useAgentPolling", () => {
 		});
 	});
 
+	// Issue #119: N Claude tabs in one folder scanning the same mtime-heuristic
+	// directory could collide, resuming into the same conversation. The
+	// pid-registry "Exact" discovery tier (fixed 2026-09-06, commit 9473819c4)
+	// already closes the common case; these tests cover the further hardening
+	// added 2026-09-29 — a hook-reported `agent_session_id` (exact by
+	// construction, no file scan at all) becomes the `exactAgentSessionId`
+	// mirror (main's codex-binding concept, extended to claude) and wins over
+	// disk discovery whenever present; discovery still runs for the launch
+	// command/provider.
+	describe("agentSessionId authority (issue #119)", () => {
+		const catchUpSnapshotClaude = [{ session_id: "sess-1", state: {} }];
+
+		async function captureWindowEvents(): Promise<Map<string, (event: { payload: unknown }) => void>> {
+			const listeners = new Map<string, (event: { payload: unknown }) => void>();
+			const { listen } = await import("@tauri-apps/api/event");
+			vi.mocked(listen).mockImplementation(async (name, handler) => {
+				listeners.set(name, handler as (event: { payload: unknown }) => void);
+				return () => {};
+			});
+			return listeners;
+		}
+
+		it("prefers a hook-reported agent_session_id over disk discovery, which can no longer overwrite it", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshotClaude);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", agentType: "claude" }));
+
+				const { useAgentPolling, detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				const push = listeners.get("session-state-changed");
+
+				push?.({
+					payload: { session_id: "sess-1", state: { agent_type: "claude", agent_session_id: "hook-reported-id" } },
+				});
+
+				expect(store.get(id)?.agentSessionId).toBe("hook-reported-id");
+				expect(store.get(id)?.exactAgentSessionId).toBe("hook-reported-id");
+
+				// Even if disk discovery finds a different (wrong) id, the exact id
+				// wins; the launch command discovery reads stays ground truth.
+				mockInvoke.mockImplementation((cmd: unknown) => {
+					if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
+					if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+					if (cmd === "discover_agent_session") {
+						return Promise.resolve({ sessionId: "wrong-heuristic-id", launchCommand: "claude --resume" });
+					}
+					return Promise.resolve(null);
+				});
+				await detectAgentForTerminal(id, "poll");
+
+				expect(store.get(id)?.agentSessionId).toBe("hook-reported-id");
+				expect(store.get(id)?.agentLaunchCommand).toBe("claude --resume");
+			});
+		});
+
+		it("clears the exact id on an agent-type transition, letting discovery resume for the next agent", async () => {
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", agentType: "claude" }));
+				store.update(id, { agentSessionId: "hook-reported-id", exactAgentSessionId: "hook-reported-id" });
+
+				const { detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				mockInvoke.mockImplementation((cmd: unknown) => {
+					if (cmd === "get_session_foreground_process") return Promise.resolve("codex");
+					if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+					if (cmd === "discover_agent_session") {
+						return Promise.resolve({ sessionId: "codex-discovered-id", launchCommand: null });
+					}
+					return Promise.resolve(null);
+				});
+				await detectAgentForTerminal(id, "busy");
+
+				expect(store.get(id)?.agentType).toBe("codex");
+				expect(store.get(id)?.exactAgentSessionId ?? null).toBeNull();
+				expect(store.get(id)?.agentSessionId).toBe("codex-discovered-id");
+			});
+		});
+
+		it("does not let a stale in-flight discovery result overwrite an id that became authoritative while it was awaiting", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshotClaude);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", agentType: "claude" }));
+
+				const { useAgentPolling, detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				const push = listeners.get("session-state-changed");
+
+				let resolveDiscovery: ((v: { sessionId: string; launchCommand: string | null }) => void) | undefined;
+				mockInvoke.mockImplementation((cmd: unknown) => {
+					if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
+					if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+					if (cmd === "discover_agent_session") {
+						return new Promise((resolve) => {
+							resolveDiscovery = resolve;
+						});
+					}
+					return Promise.resolve(null);
+				});
+
+				// Discovery starts (not yet authoritative) and is left pending.
+				const detectPromise = detectAgentForTerminal(id, "poll");
+				await tick(0);
+				expect(resolveDiscovery, "discover_agent_session must have been called").toBeDefined();
+
+				// The hook-reported push arrives WHILE that discovery is still in flight.
+				push?.({
+					payload: { session_id: "sess-1", state: { agent_type: "claude", agent_session_id: "hook-reported-id" } },
+				});
+				expect(store.get(id)?.exactAgentSessionId).toBe("hook-reported-id");
+
+				// The stale discovery now resolves with a different id — must NOT overwrite.
+				resolveDiscovery?.({ sessionId: "stale-heuristic-id", launchCommand: null });
+				await detectPromise;
+
+				expect(store.get(id)?.agentSessionId).toBe("hook-reported-id");
+			});
+		});
+	});
+
 	describe("timer lifecycle", () => {
 		it("catches up after a terminal receives its backend session id", async () => {
 			const { listen } = await import("@tauri-apps/api/event");
@@ -1181,11 +1305,234 @@ describe("useAgentPolling", () => {
 			expect(store.get(id)?.agentState).toBe("working");
 			expect(store.get(id)?.shellState).toBe("busy");
 		});
+
+		describe("resumable_session (exit-sourced resume banner)", () => {
+			// verifyAndBuildResumeCommand resolves in Rust (`suspended_session_action`
+			// `resolve_resume`, which verifies the id against the agent's storage) —
+			// route by command so a queued one-shot reply can't be consumed by the
+			// wrong call. `verify` stands in for the backend's verification verdict.
+			function resolveResumeReply(args: unknown, ok: boolean): { cmd: string | null; verified: boolean } {
+				const id = (args as { request?: { agentSessionId?: string } } | undefined)?.request?.agentSessionId;
+				return ok ? { cmd: `claude --resume ${id}`, verified: true } : { cmd: null, verified: false };
+			}
+			function routeInvoke(verify: () => Promise<boolean>): void {
+				mockInvoke.mockImplementation((cmd: unknown, args: unknown) => {
+					if (cmd === "list_active_sessions") return Promise.resolve(catchUpSnapshot);
+					if (cmd === "suspended_session_action") return verify().then((ok) => resolveResumeReply(args, ok));
+					return Promise.resolve(undefined);
+				});
+			}
+
+			it("verifies and sets a pendingResumeCommand/title from a resumable_session push", async () => {
+				mockInvoke.mockResolvedValue(catchUpSnapshot);
+				const listeners = await captureWindowEvents();
+
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", cwd: "/repo", agentType: "claude" }));
+
+					const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+					useAgentPolling();
+					await tick(0);
+					const push = listeners.get("session-state-changed");
+
+					routeInvoke(() => Promise.resolve(true));
+					push?.({
+						payload: {
+							session_id: "sess-1",
+							state: {
+								resumable_session: {
+									agent_type: "claude",
+									session_id: "exited-session-id",
+									title: "file-locations",
+									cwd: "/repo",
+									end_reason: "exit",
+								},
+							},
+						},
+					});
+					await vi.waitFor(() => expect(store.get(id)?.pendingResumeSource).toBe("exit"));
+
+					expect(store.get(id)?.pendingResumeCommand).toBe("claude --resume exited-session-id");
+					expect(store.get(id)?.pendingResumeTitle).toBe("file-locations");
+					expect(store.get(id)?.pendingResumeSource).toBe("exit");
+				});
+			});
+
+			it("dedupes on resumeOfferedFor — a repeated identical push never re-verifies", async () => {
+				mockInvoke.mockResolvedValue(catchUpSnapshot);
+				const listeners = await captureWindowEvents();
+
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", cwd: "/repo", agentType: "claude" }));
+
+					const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+					useAgentPolling();
+					await tick(0);
+					const push = listeners.get("session-state-changed");
+					const resumablePayload = {
+						session_id: "sess-1",
+						state: {
+							resumable_session: {
+								agent_type: "claude",
+								session_id: "exited-session-id",
+								title: "file-locations",
+							},
+						},
+					};
+
+					routeInvoke(() => Promise.resolve(true));
+					push?.({ payload: resumablePayload });
+					await vi.waitFor(() => expect(store.get(id)?.pendingResumeCommand).toBe("claude --resume exited-session-id"));
+
+					// User clicks the banner: cleared, but resumeOfferedFor survives.
+					store.update(id, { pendingResumeCommand: null, pendingResumeTitle: null, pendingResumeSource: null });
+					mockInvoke.mockClear();
+					push?.({ payload: resumablePayload });
+					await tick(0);
+
+					expect(mockInvoke).not.toHaveBeenCalledWith("suspended_session_action", expect.anything());
+					expect(store.get(id)?.pendingResumeCommand).toBeNull();
+				});
+			});
+
+			it("leaves no banner when verification returns null", async () => {
+				mockInvoke.mockResolvedValue(catchUpSnapshot);
+				const listeners = await captureWindowEvents();
+
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", cwd: "/repo", agentType: "claude" }));
+
+					const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+					useAgentPolling();
+					await tick(0);
+					const push = listeners.get("session-state-changed");
+
+					routeInvoke(() => Promise.resolve(false)); // session gone
+					push?.({
+						payload: {
+							session_id: "sess-1",
+							state: {
+								resumable_session: { agent_type: "claude", session_id: "gone-session-id", title: null },
+							},
+						},
+					});
+					await vi.waitFor(() =>
+						expect(mockInvoke).toHaveBeenCalledWith("suspended_session_action", expect.anything()),
+					);
+					await tick(0);
+
+					expect(store.get(id)?.pendingResumeCommand).toBeNull();
+				});
+			});
+
+			it("clears an exit-sourced banner when a new agent session starts in the same pane (agentType transition)", async () => {
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", cwd: "/repo", agentType: null }));
+					store.update(id, {
+						pendingResumeCommand: "claude --resume old-id",
+						pendingResumeTitle: "old title",
+						pendingResumeSource: "exit",
+					});
+
+					const { detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+
+					// A different agent (codex) starts running in the same pane —
+					// `resumable_session` (Claude-only) never fires for this, so only
+					// detectAgentForTerminal's own belt-and-suspenders clear can catch it.
+					mockInvoke.mockResolvedValueOnce("codex");
+					await detectAgentForTerminal(id, "busy");
+
+					expect(store.get(id)?.agentType).toBe("codex");
+					expect(store.get(id)?.pendingResumeCommand).toBeNull();
+					expect(store.get(id)?.pendingResumeTitle).toBeNull();
+					expect(store.get(id)?.pendingResumeSource).toBeNull();
+				});
+			});
+
+			it("does NOT clear a restore-sourced banner via the agentType-transition path (only exit-sourced)", async () => {
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", agentType: null }));
+					store.update(id, {
+						pendingResumeCommand: "claude --resume restore-id",
+						pendingResumeTitle: "restored title",
+						pendingResumeSource: "restore",
+					});
+
+					const { detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+					mockInvoke.mockResolvedValueOnce("claude");
+					await detectAgentForTerminal(id, "busy");
+
+					expect(store.get(id)?.agentType).toBe("claude");
+					expect(store.get(id)?.pendingResumeCommand).toBe("claude --resume restore-id");
+					expect(store.get(id)?.pendingResumeSource).toBe("restore");
+				});
+			});
+
+			// Code-review finding (2026-09-29): the belt-and-suspenders clear in
+			// detectAgentForTerminal used to check only `pendingResumeSource ===
+			// "exit"` — but `resumeOfferedFor` is set synchronously the moment a
+			// resumable_session is seen, while `pendingResumeSource` isn't set
+			// until the async verify round-trip resolves. A new agent starting in
+			// that window skipped the clear, and the stale verify later resolved
+			// into a banner for the OLD session shown over the NEW live one.
+			it("does not resurrect a stale banner when a new agent starts while the exit-banner verify is still in flight", async () => {
+				let resolveVerify: ((v: { cmd: string | null; verified: boolean }) => void) | undefined;
+				mockInvoke.mockImplementation((cmd: unknown) => {
+					if (cmd === "list_active_sessions") return Promise.resolve(catchUpSnapshot);
+					if (cmd === "suspended_session_action") {
+						return new Promise<{ cmd: string | null; verified: boolean }>((resolve) => {
+							resolveVerify = resolve;
+						});
+					}
+					if (cmd === "get_session_foreground_process") return Promise.resolve("codex");
+					return Promise.resolve(undefined);
+				});
+				const listeners = await captureWindowEvents();
+
+				await testInScopeAsync(async () => {
+					const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1", cwd: "/repo", agentType: null }));
+
+					const { useAgentPolling, detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+					useAgentPolling();
+					await tick(0);
+					const push = listeners.get("session-state-changed");
+
+					// Exit-banner verification starts — deliberately left pending.
+					push?.({
+						payload: {
+							session_id: "sess-1",
+							state: {
+								resumable_session: { agent_type: "claude", session_id: "exited-id", title: "old title" },
+							},
+						},
+					});
+					await vi.waitFor(() => expect(resolveVerify, "resolve_resume must have been called").toBeDefined());
+					expect(store.get(id)?.resumeOfferedFor).toBe("exited-id");
+					expect(store.get(id)?.pendingResumeSource).toBeNull(); // not yet — verify hasn't resolved
+
+					// A different agent starts running in this same pane BEFORE that verify resolves.
+					await detectAgentForTerminal(id, "busy");
+					expect(store.get(id)?.agentType).toBe("codex");
+					expect(store.get(id)?.resumeOfferedFor).toBeNull();
+
+					// The stale verify resolves — it must NOT resurrect a banner over the new live session.
+					resolveVerify?.({ cmd: "claude --resume exited-id", verified: true });
+					await tick(0);
+
+					expect(store.get(id)?.pendingResumeCommand).toBeNull();
+					expect(store.get(id)?.pendingResumeSource).toBeNull();
+				});
+			});
+		});
 	});
 });
 
 // Catches: recovery snapshots crossing tabs or an omitted clear leaving a stale overlay.
 it("routes and retracts provider recovery in complete backend snapshots", async () => {
+	// Outside the describe's beforeEach: start from fresh modules so a store
+	// instance first imported inside an earlier test's (now disposed) reactive
+	// scope cannot leak a dead session index into this test.
+	vi.resetModules();
 	const { terminalsStore } = await import("../../stores/terminals");
 	const a = terminalsStore.add(makeTerminal({ sessionId: "recover-a" }));
 	const b = terminalsStore.add(makeTerminal({ sessionId: "recover-b" }));

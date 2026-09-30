@@ -8692,6 +8692,84 @@ fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
     }
 }
 
+/// Characterization test, written before the resume-banner-on-exit change:
+/// an empty (but present) `ccsession=` payload still unconditionally emits
+/// an `AgentMetadata` event with an empty `value` — the verb arm decodes and
+/// forwards the payload with no emptiness check of its own, same as every
+/// other free-text metadata verb.
+#[test]
+fn tuic_osc_ccsession_with_empty_payload_still_emits_agent_metadata_with_empty_value() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-metadata-ccsession-empty";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let mut rx = state.event_bus.subscribe();
+    processor.process_chunk("\x1b]7770;ccsession=\x07", &silence, session_id, &state);
+
+    let event = rx
+        .try_recv()
+        .expect("event bus must receive a PtyParsed even for an empty ccsession payload");
+    match event {
+        crate::state::AppEvent::PtyParsed { parsed, .. } => {
+            assert_eq!(
+                parsed.get("type").and_then(|v| v.as_str()),
+                Some("agent-metadata")
+            );
+            assert_eq!(
+                parsed.get("field").and_then(|v| v.as_str()),
+                Some("session_id")
+            );
+            assert_eq!(parsed.get("value").and_then(|v| v.as_str()), Some(""));
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+/// An OSC 7770 verb this build doesn't recognize must be silently ignored —
+/// no panic, no event on the bus — the same "unrecognized is not an error"
+/// contract `tuic-hook`'s own module doc comment promises on the sending
+/// side (a stale/newer binary's future vocabulary must degrade gracefully).
+#[test]
+fn tuic_osc_unknown_verb_is_ignored_without_panicking() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-metadata-unknown-verb";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let mut rx = state.event_bus.subscribe();
+    processor.process_chunk(
+        "\x1b]7770;totallymadeupverb=whatever\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "an unrecognized verb must not emit anything on the event bus"
+    );
+}
+
 #[test]
 fn percent_decode_osc_payload_passes_through_plain_text() {
     assert_eq!(percent_decode_osc_payload("Bash"), "Bash");

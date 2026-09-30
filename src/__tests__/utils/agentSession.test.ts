@@ -157,4 +157,33 @@ describe("verifyAndBuildResumeCommand", () => {
 		mockRpc.mockResolvedValue({ cmd: null, verified: false });
 		expect(await verifyAndBuildResumeCommand("claude", "/repo", "peer", "gone")).toBeNull();
 	});
+
+	// Goose (forced injection) — `agentSessionId` here is the caller's TUIC tab
+	// UUID mirrored in as if it were a discovered id (goose's own discovery
+	// always returns None — SQLite storage, no filesystem scan). Resume
+	// resolution, incl. goose's `session --resume --name <id>` shape and its
+	// fallback to the tab UUID, lives in Rust (`session_resume::resolve`); the
+	// frontend only forwards the context and keeps Rust's verdict.
+	it("forwards goose's tab-UUID session id to Rust and returns its command", async () => {
+		mockRpc.mockResolvedValueOnce({ cmd: "goose session --resume --name tuic-uuid-1", verified: true });
+		const result = await verifyAndBuildResumeCommand("goose", "/tmp/repo", "tuic-uuid-1", "tuic-uuid-1");
+		expect(mockRpc).toHaveBeenCalledWith("suspended_session_action", {
+			cwd: "/tmp/repo",
+			request: {
+				action: "resolve_resume",
+				agentType: "goose",
+				cwd: "/tmp/repo",
+				tuicSession: "tuic-uuid-1",
+				agentSessionId: "tuic-uuid-1",
+				launchCommand: undefined,
+			},
+		});
+		expect(result).toBe("goose session --resume --name tuic-uuid-1");
+	});
+
+	it("returns null when Rust reports goose's session id failed verification (session gone)", async () => {
+		mockRpc.mockResolvedValueOnce({ cmd: null, verified: false });
+		const result = await verifyAndBuildResumeCommand("goose", "/tmp/repo", "tuic-uuid-1", "tuic-uuid-1");
+		expect(result).toBeNull();
+	});
 });

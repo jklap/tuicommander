@@ -49,6 +49,8 @@ export function adoptSuspendedSession(record: SuspendedSession, fontSize: number
 		backgroundWork: false,
 		pendingInitCommand: null,
 		pendingResumeCommand: null,
+		pendingResumeTitle: null,
+		pendingResumeSource: null,
 		tuicSession: record.tuic_session,
 		agentType,
 		agentSessionId: record.agent_session_id,

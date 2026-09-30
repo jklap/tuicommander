@@ -6,10 +6,19 @@ import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
 import { type AgentLifecycleState, type ProviderRecovery, type ShellState, terminalsStore } from "../stores/terminals";
 import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
+import { verifyAndBuildResumeCommand } from "../utils/agentSession";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
+
+type BackendResumableSession = {
+	agent_type: string;
+	session_id: string;
+	title?: string | null;
+	cwd?: string | null;
+	end_reason?: string | null;
+};
 
 type BackendSessionState = {
 	provider_recovery?: ProviderRecovery | null;
@@ -28,6 +37,12 @@ type BackendSessionState = {
 	declared_background_work?: boolean;
 	queued_commands?: number;
 	last_activity_ms?: number;
+	resumable_session?: BackendResumableSession | null;
+	// Hook-reported session id (`tuic-hook`'s `ccsession` verb) — set only for
+	// a hook-instrumented Claude session, exact by construction. See
+	// `applySessionState`'s handling: this is preferred over disk-discovery's
+	// own `agentSessionId` write whenever present.
+	agent_session_id?: string | null;
 };
 
 type SessionLifecycleResponse = {
@@ -104,7 +119,14 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		...(shellState !== undefined ? { shellState } : {}),
 	});
 	applyAgentIdentity(termId, toAgentType(state?.agent_type ?? null));
-	const exactId = state?.agent_type === "codex" ? (state.codex_binding?.session_id ?? null) : null;
+	// Exact, backend-reported agent session id: codex's validated binding, or
+	// claude's hook-reported `agent_session_id` (issue #119's residual gap:
+	// exact by construction, tied to this pty's own OSC stream). It always wins
+	// over whatever disk discovery wrote; absence only retracts the exact mirror
+	// (snapshots are complete), never `agentSessionId` itself, which
+	// `detectAgentForTerminal` clears on an agent-type transition.
+	const exactId =
+		state?.agent_type === "codex" ? (state.codex_binding?.session_id ?? null) : (state?.agent_session_id ?? null);
 	terminalsStore.update(termId, {
 		exactAgentSessionId: exactId,
 		...(exactId ? { agentSessionId: exactId } : {}),
@@ -116,6 +138,61 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 			sessionId,
 		);
 	}
+	applyResumableSession(termId, state?.resumable_session ?? null);
+}
+
+/**
+ * Offer a resume banner for the exit snapshot the backend took the instant it
+ * confirmed a hook-instrumented Claude session exited (`resumable_session` on
+ * `SessionState`, `clear_agent_type_on_confirmed_shell` in pty.rs). Dedups on
+ * `resumeOfferedFor` so a re-published, unchanged snapshot never re-verifies.
+ * The "a later ccsession cleared it" branch is one of two independent clears
+ * for a stale exit banner — see `detectAgentForTerminal`'s own clear for the
+ * other (a differently-typed agent starting next, which never touches
+ * `resumable_session` at all).
+ */
+function applyResumableSession(termId: string, resumable: BackendResumableSession | null): void {
+	const current = terminalsStore.get(termId);
+	if (!current) return;
+	if (!resumable) {
+		if (current.pendingResumeSource === "exit") {
+			terminalsStore.update(termId, {
+				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
+			});
+		}
+		return;
+	}
+	if (current.resumeOfferedFor === resumable.session_id) return;
+	terminalsStore.update(termId, { resumeOfferedFor: resumable.session_id });
+
+	const agentType = toAgentType(resumable.agent_type);
+	if (!agentType) return; // no other agent reports a hook-provided session id today
+
+	verifyAndBuildResumeCommand(
+		agentType,
+		resumable.cwd ?? current.cwd ?? null,
+		current.tuicSession ?? null,
+		resumable.session_id,
+		current.agentLaunchCommand ?? null,
+	)
+		.then((cmd) => {
+			if (!cmd) return;
+			// Terminal may have been removed, or a newer resumable_session may
+			// have superseded this one, while the verify round-trip was in flight.
+			const stillCurrent = terminalsStore.get(termId);
+			if (!stillCurrent || stillCurrent.resumeOfferedFor !== resumable.session_id) return;
+			terminalsStore.update(termId, {
+				pendingResumeCommand: cmd,
+				pendingResumeTitle: resumable.title ?? null,
+				pendingResumeSource: "exit",
+			});
+		})
+		.catch((e) => {
+			appLogger.warn("terminal", "Exit resume command verification failed", { error: String(e) });
+		});
 }
 
 /**
@@ -261,6 +338,39 @@ function applyAgentIdentity(termId: string, agentType: AgentType | null): void {
 			terminalsStore.update(termId, { agentSessionId: null });
 		}
 
+		// A fresh agent starting in this pane makes a lingering exit-sourced
+		// resume banner stale — belt-and-suspenders alongside the
+		// `resumable_session`-driven clear in `applySessionState`, which
+		// only fires for a NEW Claude `ccsession` and would never see (e.g.) a
+		// different agent type launching next in the same pane.
+		//
+		// Re-read the store fresh here (not the `current` snapshot taken
+		// above, which predates the updates just made) and check
+		// `resumeOfferedFor`, not just
+		// `pendingResumeSource === "exit"` — `applyResumableSession` sets
+		// `resumeOfferedFor` synchronously but only sets `pendingResumeSource`
+		// after its own `verifyAndBuildResumeCommand` round-trip resolves.
+		// Checking `pendingResumeSource` alone left a window where a new agent
+		// starting WHILE that verify is still in flight wouldn't clear
+		// `resumeOfferedFor` — the verify's `.then()` re-checks it, found it
+		// unchanged, and went on to show a stale banner for the old (now
+		// superseded) session over the new live one. Clearing on
+		// `resumeOfferedFor !== null` closes that window: the in-flight
+		// verify's own guard (`stillCurrent.resumeOfferedFor !== resumable.session_id`)
+		// then correctly sees it's been cleared and bails out.
+		const freshForClear = terminalsStore.get(termId);
+		if (
+			agentType !== null &&
+			(freshForClear?.pendingResumeSource === "exit" || freshForClear?.resumeOfferedFor != null)
+		) {
+			terminalsStore.update(termId, {
+				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
+			});
+		}
+
 		// Notify start of new agent AFTER updating the store so filtered plugins
 		// for the new type see the event and receive the synthetic shell-state replay.
 		if (agentType !== null && sessId) {
@@ -317,6 +427,9 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 	// Attempt session discovery when an agent is running.
 	// Agents with sessionDiscovery: always re-discover (session ID changes after /clear, /new, etc.).
 	// Agents without sessionDiscovery: nothing to discover.
+	// Discovery still runs when an exact id (`exactAgentSessionId`) is known:
+	// the session id it returns is then ignored (the exact id wins, see the
+	// write below), but its launch command/provider remain ground truth.
 	if (agentType !== null) {
 		const disc = AGENTS[agentType].sessionDiscovery;
 		if (disc) {
@@ -355,7 +468,10 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 						envOverrides: {},
 					},
 				);
-				const exactId = agentType === "codex" ? terminalsStore.get(termId)?.exactAgentSessionId : null;
+				// Re-read fresh right before writing: a hook-reported push can land
+				// during the two awaits above (leaf-pid read, then this discovery call
+				// itself) — an exact id always wins over the heuristic result.
+				const exactId = terminalsStore.get(termId)?.exactAgentSessionId ?? null;
 				const sessionId = exactId ?? found?.sessionId;
 				if (sessionId && sessionId !== terminalsStore.get(termId)?.agentSessionId) {
 					appLogger.debug(

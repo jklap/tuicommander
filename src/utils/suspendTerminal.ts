@@ -84,6 +84,8 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 		standby: false,
 		pendingInitCommand: null,
 		pendingResumeCommand: null,
+		pendingResumeTitle: null,
+		pendingResumeSource: null,
 	});
 	terminalsStore.setSessionId(id, null);
 	return { ok: true };
@@ -100,7 +102,13 @@ export async function resumeTerminal(id: string): Promise<SuspendOutcome> {
 			tuicSession: term.tuicSession,
 		});
 		terminalsStore.setSessionId(id, result.session_id);
-		terminalsStore.update(id, { suspended: false, pendingInitCommand: null, pendingResumeCommand: null });
+		terminalsStore.update(id, {
+			suspended: false,
+			pendingInitCommand: null,
+			pendingResumeCommand: null,
+			pendingResumeTitle: null,
+			pendingResumeSource: null,
+		});
 		return { ok: true };
 	} catch (error) {
 		appLogger.warn("terminal", "Resume failed", { id, error: String(error) });
