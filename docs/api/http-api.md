@@ -1396,14 +1396,25 @@ These three routes are desktop-only — they are registered on `build_router`, n
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
 
+### SSH Discovered Hosts
+
+```
+GET /tunnels/ssh-hosts/discovered
+```
+
+Returns `{ "hosts": [{ "host", "user", "port", "source": "config | known_hosts" }], "hashed_count": n }`:
+non-wildcard `~/.ssh/config` aliases plus plain `~/.ssh/known_hosts` names,
+deduplicated by resolved host and port. Hashed known_hosts entries cannot be
+listed and are only counted. No host is contacted.
+
 ### SSH Host Status
 
 ```
 GET /tunnels/ssh-hosts/status
 ```
 
-Returns deduplicated SSH config hosts as
-`[{ "host": "name", "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+Probes the discovered hosts and returns
+`[{ "host": "name", "port": 22, "auth": "shell | no_shell | auth_failed | unreachable" }]`.
 The probe runs only on request, checks at most four hosts concurrently, uses
 batch authentication with a five-second connect timeout, and caches results for
 60 seconds.
