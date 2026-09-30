@@ -1,1 +1,0 @@
-export { ReferencesPanel } from "./ReferencesPanel";

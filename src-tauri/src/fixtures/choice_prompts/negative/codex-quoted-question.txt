@@ -1,5 +1,0 @@
-Which sample should I use?
-  1. Red
-  2. Blue
-
-  enter submit   ctrl+] skip   ⌥+↓ main prompt

@@ -1,1 +1,0 @@
-export { GeneratorsModal } from "./GeneratorsModal";
