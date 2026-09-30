@@ -8937,16 +8937,23 @@ fn custom_pty_env_skips_invalid_keys_but_applies_valid_ones() {
     );
 }
 
-/// `spawn_session_for_agent` is the shared spawn function behind the
-/// `ai_terminal_drive_agent` MCP tool's `spawn_session` action, scheduled cron
-/// jobs (`ai_agent/scheduler.rs`), and PR-review watcher sessions
-/// (`ai_agent/watcher.rs`) — all three hand the returned session id straight to
-/// something that can write into it immediately, the identical
-/// p10k-wizard-hijack race shape `tmux_routes::materialize`'s gate closes for
-/// the tmux shim. No test anywhere previously called this function against a
-/// real PTY at all, so nothing would have caught a regression here. Proves the
-/// gate is actually wired in, not just that `wait_for_shell_idle` works in
-/// isolation (already covered by `mcp_transport.rs`'s own tests).
+/// `spawn_session_for_agent` is the shared spawn function behind the built-in
+/// agent loop's `spawn_session` tool (`ai_agent::tools` — not reachable by
+/// external MCP clients), scheduled cron jobs (`ai_agent/scheduler.rs`), and
+/// PR-review watcher sessions (`ai_agent/watcher.rs`) — all three hand the
+/// returned session id straight to something that can write into it
+/// immediately, the identical p10k-wizard-hijack race shape
+/// `tmux_routes::materialize`'s gate closes for the tmux shim. No test
+/// anywhere previously called this function against a real PTY at all, so
+/// nothing would have caught a regression here. Proves the gate is actually
+/// wired in, not just that `wait_for_shell_idle` works in isolation (already
+/// covered by `mcp_transport.rs`'s own tests).
+///
+/// Note this function never launches an agent CLI or embeds a prompt — its
+/// callers hand the shell to TUIC's own in-process conversation engine, which
+/// gets its tools from a Rust-native table, never MCP. It cannot hit the
+/// separate MCP handshake readiness race that `mcp_transport.rs`'s
+/// `should_defer_prompt_for_mcp_bind` closes for other spawn paths.
 #[tokio::test]
 async fn spawn_session_for_agent_reaches_idle_before_returning() {
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());

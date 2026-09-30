@@ -870,6 +870,162 @@ the winning value needs to be real). If you add a new PTY-spawn test that reads
 back `PtySession.cwd` after any code path that can give the shell real running
 time, use a real directory for whichever cwd you expect to observe.
 
+## MCP Handshake Readiness Race (`agent action=spawn`, 2026-09-29)
+
+A sibling race to the shell-readiness gate above, but on a completely different signal.
+`mcp__tuicommander__agent action=spawn` used to embed the initial prompt directly in the
+spawned `claude` process's launch argv (same as every other agent type still does) — which
+meant a freshly spawned agent could answer its very first turn *before its own MCP client had
+finished its `initialize` handshake with this server*, seeing zero `mcp__tuicommander__*`
+tools for that turn. Reproduced live: a task designed to answer in ~2s with no tool call saw
+zero tools; the identical spawn given a task that needed real tool calls (and so took longer)
+reliably saw the full tool list, because MCP binding had time to complete first. The race is
+only user-visible for a task trivial enough to never need to consult its tool list — there is
+nothing to notice a missing tool if you never look.
+
+**Fixed by decoupling "launch the process" from "deliver the initial task," scoped to
+`agent_type == "claude"` AND non-print-mode spawns only** (`should_defer_prompt_for_mcp_bind`,
+`handle_agent_with_parent_cwd`'s `"spawn"` arm in `mcp_transport.rs`). Print-mode is one-shot
+with no later delivery opportunity, so its prompt stays in launch argv unchanged; other agent
+types' MCP-tool-availability characteristics were never verified, so they're unchanged too.
+
+**The flag must be threaded into EVERY branch that can produce a claude default-template
+argv, not just one.** A first version of this fix only checked `defer_prompt_for_mcp_bind`
+in the manual branch reached when a caller explicitly passes `binary_path` — a code review
+caught that this left the fix dead for the realistic, undecorated `agent_type: "claude"` call
+(no `binary_path`): that shape resolves `Some(ResolvedRunConfig { args: None, .. })` via
+`resolve_run_config`'s Pass 2 and takes the shared `default_prompt_args`-template branch
+instead, which never read the flag at all. Both of that version's own integration tests
+happened to pass `binary_path` for their stand-in binaries, incidentally routing them into the
+one branch that worked and masking the gap. Fixed at the real choke point: `finalize_spawn_args`
+(and its caller `compose_mcp_spawn_args`/`McpSpawnArgs`) now takes `defer_for_mcp_bind: bool`
+directly and returns TWO independent deferred-prompt slots —
+`(argv, deferred_for_pending_injection, deferred_for_mcp_bind)` — never both `Some` for the same
+spawn, kept separate because they're flushed by two unrelated readiness signals (BUSY→IDLE
+screen detection vs. this MCP bind). If you add a FOURTH way to reach the default-template argv
+shape, thread this flag into it too, or repeat this exact bug.
+
+**`wait_for_mcp_identity_bound` cannot reuse `peer_agents.contains_key(...)` as its
+predicate** — `agent action=spawn` pre-inserts a `PeerAgent` row for every managed child at
+spawn time, before the child process even exists, with `mcp_session_id: String::new()`,
+specifically so the peer is addressable (`list_peers`, `send`) independent of whether its own
+MCP bridge ever connects. That row exists from the very first instant, so `contains_key` alone
+would make the gate a permanent no-op. The real signal is whether `mcp_session_id` has been
+overwritten by a real `apply_initialize_identity` bind. This is a short 50ms poll, not
+event-driven like `wait_for_shell_idle` — `apply_initialize_identity`/`bind_peer_identity_locked`
+are pure `DashMap` writes with no event-bus notification on a fresh bind, so there is nothing
+to subscribe to.
+
+**Delivery reuses `agent action=send`'s own primitives** (`push_agent_inbox` +
+`pty::deliver_notice_to_managed_pty(..., PEER_MAIL_WAKE)` + `pty::settle_terminal_delivery`),
+called directly server-side rather than through the normal caller-identity-resolved `"send"`
+handler — the `"send"` handler's live-SSE-channel fast path and Waiter/orchestrator branches
+are unreachable here anyway (nobody has registered a wait or a channel for a session that
+hasn't started yet). It also replicates `send`'s existence guard: the deferred-delivery task
+re-checks `state.peer_agents.contains_key(...)` under `PEER_IDENTITY_BIND_LOCK` immediately
+before calling `push_agent_inbox`, and skips delivery entirely if the session was killed/retired
+during the up-to-5s wait — a security review's own words: "never file under an identity removed
+a moment later." `from_tuic_session` on the delivered message is the caller's real identity if
+known, or an empty sentinel otherwise — never the recipient's own session id (a self-referential
+"from myself" message this file's `enqueue_state_change_to_parent` already guards against for
+the identical reason).
+
+**The wait runs in a detached `tokio::spawn`, not inline before the tool call returns** —
+`agent action=spawn` must keep returning immediately regardless of how long the identity-bind
+wait takes; do not move it back to an inline `.await` before returning, which would add up to
+`MCP_IDENTITY_BIND_TIMEOUT_MS` (5s) of latency to every affected spawn. Because of this, the
+spawn response's `prompt_delivery` field (set when `prompt_deferred_for_mcp_bind` is true) is
+the only signal a caller gets that the prompt hasn't landed yet — and it explicitly warns that
+a follow-up `agent(action=send)` issued right after spawn is NOT gated on the same wait and can
+arrive in the child's inbox before this original prompt does. This is a known, accepted
+ordering hazard, not a bug: closing it would mean either blocking `spawn` itself on the wait
+(reintroducing the latency this design avoids) or a queueing mechanism bigger than this fix's
+scope.
+
+**A test that mutates `PATH` to make `detect_agent_binary` resolve to a stand-in binary
+(`agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_shape`) is only safe
+under `cargo nextest`'s per-test-process isolation, not plain `cargo test`'s shared-process
+thread model** — a different, unrelated, concurrently running test can transiently observe the
+mutated `PATH` and get routed to the same stand-in binary. Confirmed to cause a real hang during
+development. `check-gate.sh`/CI already run via nextest, so this is safe in the gate that
+matters, but don't run this one test alongside the rest of this file via plain `cargo test`
+without pinning `--test-threads=1` or running it in isolation.
+
+**Also fixed (2026-09-29, second pass): `POST /sessions/agent` and the desktop
+`agent::spawn_agent` command.** Both were originally left as "known unfixed gaps" here; a
+follow-up investigation, done before touching either, found the real picture was worse for one
+and simply wrong for the other:
+
+- `agent_routes::spawn_agent_session` (`POST /sessions/agent`, called from `transportExtended.ts`)
+  had the same prompt-in-argv race AND a more fundamental prerequisite bug: unlike every other
+  session-creating path in this codebase, it never called `bind_pty_identity` — its spawned
+  children got no `$TUIC_SESSION` env var, so if a child's MCP bridge ever connected at all, it
+  bound under a fresh, unrelated UUID, not this PTY's `session_id`. `wait_for_mcp_identity_bound`
+  could never have detected a bind here even with the prompt deferred. Fixed both: added
+  `bind_pty_identity`, and threaded the same deferral (now factored into a shared
+  `spawn_deferred_prompt_delivery` — see below) through this route's argv construction. Also
+  fixed a related latent bug this exposed: the route's common default-to-claude case (no
+  explicit `agent_type`, no `binary_path`) never set `session_state.agent_type` at all, which
+  independent of this fix likely also affected claude-status-signal hooks for this route.
+- `agent::spawn_agent` (the desktop Tauri IPC command, the parity counterpart of the HTTP route
+  above per this file's IPC/HTTP Parity rule) already called `bind_pty_identity` correctly — only
+  the prompt-in-argv race applied. Fixed the same way, reusing the same shared helper. Also had
+  the identical `session_state.agent_type`/`hook_instrumented` gap as the HTTP route, but worse:
+  this command never inserted a `SessionState` for its own sessions AT ALL (confirmed by a
+  repo-wide grep for `session_states.insert`/`.entry()` — no hit anywhere in `agent.rs`), so
+  `deliver_notice_to_managed_pty`'s wake path was unreachable for every desktop-spawned agent
+  until this pass. Fixed by inserting one, same shape as the HTTP route's.
+  **Test-coverage asymmetry, on purpose:** `agent_routes::spawn_agent_session` (an axum HTTP
+  handler) got full end-to-end test coverage for this fix because it's trivially callable from a
+  `#[tokio::test]`. `agent::spawn_agent` takes a `tauri::AppHandle` and `tauri::State`, and this
+  codebase has never once tested a `#[tauri::command]` function directly (no `tauri::test`
+  usage anywhere, feature not even enabled) — standing up that scaffolding for one fix was
+  judged disproportionate. Its correctness rests on: the identical, fully-tested
+  `should_defer_prompt_for_mcp_bind`/`spawn_deferred_prompt_delivery` functions it now shares
+  with the other two paths, a `cargo check`/full existing-test-suite pass showing no regression,
+  and the manual `to-test.md` item for a real `make dev`-restarted UI spawn. If this command
+  ever needs direct unit tests, that's the point to introduce `tauri::test` scaffolding — not
+  bolted on here.
+
+The inline deferred-delivery logic that used to live only inside `handle_agent_with_parent_cwd`'s
+`"spawn"` arm is now `pub(crate) fn spawn_deferred_prompt_delivery` (`mcp_transport.rs`, next to
+`wait_for_mcp_identity_bound`) — all three spawn paths call the same function rather than each
+reimplementing the wait/lock/push/deliver/settle sequence. `should_defer_prompt_for_mcp_bind` is
+`pub(crate)` for the same reason.
+
+**Fixed same day: `agent::spawn_agent`'s caller-supplied `pty_config.env` could silently
+override `bind_pty_identity`'s own `TUIC_SESSION`/`TUIC_CONFIG_DIR`.** A security review of the
+fix above (not a finding against it — flagged as a separate, pre-existing item) found the
+per-key env loop for "feature flags configured in Settings → Agents" ran AFTER
+`bind_pty_identity`/`inject_worktree_env` in the spawn closure. `CommandBuilder::env` takes the
+last write for a given key, so a caller-supplied flag named `TUIC_SESSION` would win, letting a
+caller rebind another live session's identity out from under it via `bind_peer_identity_locked`.
+Only reachable via this app's own Tauri IPC (already fully privileged in this codebase's threat
+model, not network-reachable) — not exploitable by an outside party, but a real footgun for a
+future Settings feature that lets a value reach this map less deliberately. Fixed by moving the
+`spawn_pty_config.env` loop to run BEFORE `bind_pty_identity`/`inject_worktree_env`, so TUIC's
+own identity/worktree env is always authoritative regardless of what's in that map. No new test
+— this is inside the same untested `#[tauri::command]` closure described above; verified via
+`cargo check` + the existing (unaffected) `agent.rs`/`pty.rs` test suites passing unchanged.
+
+**`pty::spawn_session_for_agent` never had this race at all — the entry that used to be here
+calling it a "known unfixed gap" was simply wrong, not conservative.** That function only opens
+a bare shell; it never launches an agent CLI or embeds a prompt. Its real callers
+(`ai_agent/scheduler.rs`'s cron jobs, `ai_agent/watcher.rs`'s PR-review sessions) hand that shell
+to TUIC's own in-process conversation engine (`ai_agent::conversation_engine`), which calls the
+model API directly from Rust and gets its tools from a Rust-native table
+(`ai_agent::tools::tool_definitions`) — never MCP. There is no MCP handshake to race against, so
+the zero-tools race is structurally impossible on that path. The `ai_terminal_drive_agent` MCP
+tool has no `spawn_session` action reachable by external callers either (only `drive_agent`/
+`send_input`, and only against a session that already exists) — the previous entry's framing of
+"the `ai_terminal_drive_agent` MCP tool's `spawn_session` action" as a caller was itself
+mistaken. `drive_agent` typing `claude "task"` into an arbitrary existing shell could
+theoretically hit an equivalent race, but that's a generic property of "any caller can type any
+shell command," not a fixable spawn point — there's no structured prompt/args to defer, and no
+single owned call site to fix. If this is ever reported against `drive_agent` specifically, that
+is a different, harder problem than anything this fix's mechanism can address — start by reading
+`ai_agent/tools.rs`'s `exec_drive_agent`, not by looking for a spawn-path gap here.
+
 ## Agent Session Management
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:

@@ -8,6 +8,44 @@
 
 # To Test
 
+## `agent action=spawn` defers a Claude prompt until MCP identity binds (2026-09-29) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, use `mcp__tuicommander__agent action=spawn` with `agent_type: "claude"`, no `print_mode`, and a deliberately trivial, no-tool-needed prompt (e.g. "Reply with literally just the word ALIVE, no tool calls.") several times in a row. Confirm the spawned session reliably reports having live `mcp__tuicommander__*` tools (e.g. ask it to list its own `mcp__` tools) instead of intermittently seeing zero — this is the exact race reproduced live in the session that motivated this fix (a fast-answering agent could see its own MCP handshake still in flight).
+- [ ] [HUMAN] Confirm `agent action=spawn` itself still returns immediately (no added latency) — the wait for MCP identity binding happens in a detached background task, not before the tool call returns.
+- [ ] [HUMAN] Spawn a normal, real-task Claude agent (something that needs at least one tool call) and confirm it behaves exactly as before — the deferred-delivery path should be invisible for real work, since MCP binding reliably completes well before a real task's first tool-call attempt.
+- [ ] [HUMAN] Spawn with explicit `args` (e.g. `args: ["--verbose", "{prompt}"]`), and separately via a named run config whose own `args` are configured in Settings → Agents, and confirm both still deliver the prompt directly in the launch argv, unchanged — this fix is deliberately scoped to the plain `agent_type: "claude"` (no explicit `args`, no run config that defines its own `args`) shape only. A run config that matches by name but defines no `args` of its own (the ordinary passthrough case) IS covered by the fix, same as omitting `binary_path` entirely.
+- [ ] Delete this section once verified — the mechanism has full unit + real-spawn test coverage (`mcp_http/mcp_transport.rs`: `wait_for_mcp_identity_bound_*`, `finalize_claude_defers_for_mcp_bind_when_requested`, `agent_spawn_defers_claude_prompt_until_mcp_identity_binds`, `agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_shape`, `agent_spawn_does_not_defer_a_print_mode_claude_prompt`); these items are for live confirmation only.
+
+## `POST /sessions/agent` + desktop `spawn_agent` command close the same MCP handshake race (2026-09-29) — **Rust, needs a `make dev` restart**
+
+Follow-up to the entry above: the same race, closed for two more spawn paths that were
+originally left as "known unfixed gaps" — turned out one (`POST /sessions/agent`) was worse
+than described (it never set `$TUIC_SESSION` at all) and the other (`pty::spawn_session_for_agent`,
+used by cron/PR-review) never actually had this race in the first place (see
+`src-tauri/AGENTS.md`'s updated section — no action needed there).
+
+- [ ] [HUMAN] After restarting `make dev`, trigger `POST /sessions/agent` directly (no
+  frontend needed): `curl -s -X POST http://127.0.0.1:9877/sessions/agent -H 'Content-Type:
+  application/json' -d '{"prompt": "Reply with literally just the word ALIVE, no tool calls."}'`
+  against the running test instance. Confirm the response includes a `prompt_delivery` field
+  (proving the prompt was deferred), and that the resulting session — once its own MCP bridge
+  connects — reliably reports having live `mcp__tuicommander__*` tools rather than intermittently
+  seeing zero.
+- [ ] [HUMAN] Confirm the same curl call returns immediately (no added latency from the
+  identity-bind wait, which runs detached).
+- [ ] [HUMAN] From the desktop app's UI, spawn an agent tab the normal way (the path that calls
+  the `spawn_agent` Tauri command) with a similarly trivial prompt, and confirm the same
+  reliability — this path has no automated test today (see `src-tauri/AGENTS.md`'s
+  "Test-coverage asymmetry, on purpose" note for why).
+- [ ] [HUMAN] Spawn a normal, real-task agent through both paths (something needing at least one
+  tool call) and confirm both behave exactly as before — invisible for real work.
+- [ ] Delete this section once verified — `agent_routes.rs` has full unit + real-child-process
+  test coverage (`spawn_agent_session_defers_claude_prompt_until_mcp_identity_binds`,
+  `spawn_agent_session_does_not_defer_a_print_mode_claude_prompt`,
+  `spawn_agent_session_binds_tuic_session_identity_on_the_real_child`); the desktop command does
+  not (see the asymmetry note above) — leave that one `[HUMAN]` item in place even after the
+  others are checked off, until it's actually been verified live.
+
 ## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of

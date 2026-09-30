@@ -11604,14 +11604,22 @@ pub(crate) async fn spawn_session_for_agent(
     // Shell-readiness gate, same shape and rationale as
     // `tmux_routes::materialize`'s (see `plans/p10k-wizard-hijack-agent-pane-spawn-race.md`):
     // every caller of this function hands the returned session id straight to
-    // something that can write into it immediately — the `ai_terminal_drive_agent`
-    // MCP tool's `spawn_session` followed by `send_input`/`send_key`/`drive_agent`,
-    // a scheduled cron job's autonomous conversation, or a PR-review watcher's
-    // fired rule — all of which are the identical "raw keystrokes can land while
-    // the shell is still sourcing .zshrc" race, just via a different caller than
-    // the tmux shim. Bounded, event-driven, fail-open: proceeds anyway if the
-    // shell never reaches SHELL_IDLE within the bound, rather than hanging every
-    // caller of this function forever.
+    // something that can write into it immediately — the built-in agent loop's
+    // own `spawn_session` tool (`ai_agent::tools`, followed by `send_input`/
+    // `send_key`/`drive_agent`; NOT reachable by external MCP clients, only by
+    // TUIC's in-process conversation engine), a scheduled cron job's autonomous
+    // conversation, or a PR-review watcher's fired rule — all of which are the
+    // identical "raw keystrokes can land while the shell is still sourcing
+    // .zshrc" race, just via a different caller than the tmux shim. Bounded,
+    // event-driven, fail-open: proceeds anyway if the shell never reaches
+    // SHELL_IDLE within the bound, rather than hanging every caller of this
+    // function forever.
+    //
+    // This is a DIFFERENT race from the MCP handshake readiness race (see
+    // `mcp_transport.rs`'s `should_defer_prompt_for_mcp_bind` doc comment) — this
+    // function never launches an agent CLI or embeds a prompt, so the MCP race
+    // cannot occur here at all. Do not conflate the two; a prior version of this
+    // comment (and `src-tauri/AGENTS.md`) incorrectly did.
     crate::mcp_http::mcp_transport::wait_for_shell_idle(
         state,
         &session_id,
