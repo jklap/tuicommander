@@ -1050,7 +1050,7 @@ a real ssh process.
       gets genuine untagged Text frames, byte for byte the old framing. What is still
       open here is the **frontend's** choice not to ask on a local connection, which no
       HTTP probe can see.)_
-- [ ] Resize the remote terminal, scroll it, and let the agent repaint a full screen. No stale rows, no torn frames — a mis-ordered inflate would show as rows from an older screen surviving under a newer one.
+- [ ] Resize the remote terminal, scroll it, and let the agent repaint a full screen. No stale rows, no torn frames — a mis-ordered inflate would show as rows from an older screen surviving under a newer one. _(NOT VERIFIED 2026-09-29: blocked — Needs a Remote Machines connection to a tuic-remote daemon, resize+scroll and an agent full-screen repaint compared row by row for stale content; not feasible in this web session (no agent CLI, canvas rows not in DOM, no screenshots).)_
 - [x] `curl` the daemon's log after a remote session: no `WsTransport could not decode a compressed frame` lines. One would mean the tags disagree.
       _(verified 2026-09-20: zero occurrences in the daemon log after the remote,
       loopback and untagged runs above, and the client decoded every deflated frame it
@@ -1071,7 +1071,7 @@ none of this is live in a running `make dev`. The collector is unit-tested
 against event sequences and the frontend against a double; what no test reaches
 is a real ego process, which is every item below.
 
-- [ ] With **ego executable** empty, a prompt saved with `executionMode: "api"` is listed but disabled, and hovering it says ego is not configured and names *General* then *AI Providers*.
+- [x] With **ego executable** empty, a prompt saved with `executionMode: "api"` is listed but disabled, and hovering it says ego is not configured and names *General* then *AI Providers*. _(verified 2026-09-29: Created prompt via Settings>Smart Prompts, Execution Mode=api, toolbar placement; ego empty: Smart Prompts dropdown item has class itemDisabled, opacity 0.5, title 'ego is not configured - name the binary in Settings > General, then pick a model in Settings > AI Chat' (says AI Chat, not AI Providers).)_
 - [ ] With ego configured but no repository or terminal open, the same prompt is disabled and says ego needs a working directory. _(NOT VERIFIED 2026-09-29: Needs ego configured to see the disabled-with-reason state (ego binary/account))_
 - [ ] With a real ego and a repository open, run an `api` prompt whose output target is the clipboard. The clipboard must hold ego's final text, trimmed, with no reasoning in it. _(NOT VERIFIED 2026-09-29: Needs a real ego and model provider producing the final text into the clipboard.)_
 - [ ] While it runs: `ps ax | grep ego` shows exactly one extra process, and it is gone within a second of the answer arriving. Run the prompt three times — no ego process accumulates. _(NOT VERIFIED 2026-09-29: Needs ego binary running Smart Prompts api mode (ps ax | grep ego).)_
@@ -1085,9 +1085,9 @@ The backend (`ego_cli.rs`, `/ego/*`) is new Rust, so none of this is live in a
 running `make dev`. Every check below also needs a real ego binary: the tests
 prove the join and the failure shapes against a double, never against ego.
 
-- [ ] With **Experimental Features** off, the Settings nav has no *AI Providers* entry and searching for "default model" finds nothing. Turn it on: the tab appears.
-- [ ] With **ego executable** empty, open the tab. It must name the field to fill (General → AI Chat), not render an empty list, and launch nothing.
-- [ ] Point the setting at a path that does not exist. The tab must say the executable could not be *started* — a different message from "not configured" — and show what the OS reported.
+- [x] With **Experimental Features** off, the Settings nav has no *AI Providers* entry and searching for "default model" finds nothing. Turn it on: the tab appears. _(verified 2026-09-29: Experimental off: nav lacks AI tab, search 'default model' -> 'No settings match your search.'. Enabled via General checkbox: nav gains 'AI Chat' (item says 'AI Providers': renamed) and search 'default model' -> 'AI Chat > Default Model'. Web UI :9880.)_
+- [ ] With **ego executable** empty, open the tab. It must name the field to fill (General → AI Chat), not render an empty list, and launch nothing. _(FAILED 2026-09-29: browser mode shows raw 'HttpRpcError: RPC ego_providers failed: 409 {code:notConfigured...}' because isEgoCliError (src/types/ego.ts:54) rejects HttpRpcError, so the Match in AiChatTab never fires. Desktop not checked. Story 1286-dc3c)_
+- [ ] Point the setting at a path that does not exist. The tab must say the executable could not be *started* — a different message from "not configured" — and show what the OS reported. _(FAILED 2026-09-29: browser mode shows raw 'HttpRpcError ... 424 {code:launchFailed...}' instead of 'could not be started'; same cause. Story 1286-dc3c)_
 - [ ] With a real ego: the provider rows must match `ego doctor --json`, the model list `ego models --json`, and the picker's selection `ego config ls --json`'s `model`. _(NOT VERIFIED 2026-09-29: Needs real ego (`ego doctor/models/config ls --json`) to compare against.)_
 - [ ] Change the default model, then `ego config ls --json` in a terminal: the new value must be there, quoted. Restart TUICommander — the tab must still show it. (This is the criterion no test can reach: ego holds it, TUIC does not.) _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 - [ ] Press **Refresh from providers** and watch the network (or ego's own logs): the refresh must be the only outbound call, and opening the tab must make none. _(NOT VERIFIED 2026-09-29: Needs ego provider refresh and network observation of real providers.)_
@@ -1099,7 +1099,7 @@ prove the join and the failure shapes against a double, never against ego.
 Everything below is proven against a test double at the IPC boundary. What no
 test can reach is the live process: these are the checks that need one.
 
-- [ ] With **ego executable** empty, open the panel: it must say ACP is not configured, show no input box, and launch nothing.
+- [x] With **ego executable** empty, open the panel: it must say ACP is not configured, show no input box, and launch nothing. _(verified 2026-09-29: ego empty, status-bar AI Chat button: panel text 'ACP is not configured. Set the ego executable in Settings to start a conversation.'; 0 visible textarea/input in panel. No spawn attributable (only ego pid seen was Boss's cwd ~/Gits, not ours).)_
 - [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes. _(NOT VERIFIED 2026-09-29: Needs real ego streaming a turn with reasoning and tool calls.)_
 - [ ] Let ego ask for permission. The buttons must be the ones ego published, and answering must clear the card in every open window — not only the one that answered. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_
 - [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there. _(NOT VERIFIED 2026-09-29: Needs real ego processes (ps ax | grep ego) per repo root.)_
@@ -1240,17 +1240,17 @@ bell so an unattended run leaves the offers waiting instead of discarding them.
 Behaviour is covered by `worktreeSwitchPrompt.test.ts`; what tests cannot see is
 how it renders and whether it interrupts anything.
 
-- [ ] Have an MCP client call `repo worktree_create`. A toast appears with the
+- [ ] Have an MCP client call `repo worktree_create`. A toast appears with the _(NOT VERIFIED 2026-09-29: partial — MCP repo worktree_create branch agbw1: toast DOM 'repo | Worktree "agbw1" created | repo__wt/agbw1 | Switch' at +2s; no new dialog (only pre-existing Progress dialog), no countdown text. Typing uninterrupted NOT checked (agent-browser keys do not reach page). Toast still present ~30s later in hidden tab.)_
   repo badge, `Worktree "<branch>" created`, the `repo__wt/branch` subtitle and a
   **Switch** button. Nothing blocks, no dialog, no countdown, and typing in the
   focused terminal is uninterrupted.
-- [ ] Ignore the toast until it fades, then open the bell: the
+- [x] Ignore the toast until it fades, then open the bell: the _(verified 2026-09-29: After toast, bell (31 notification(s)) popover row 'Worktree: agbw1 / just now · repo__wt/agbw1', cursor pointer; click switched header from repo/main to repo/agbw1 and closed the popover. (Toast timing/fade not observed: it persisted in the hidden tab.))_
   `Worktree: <branch>` row under WORKTREES is clickable and switches to it.
-- [ ] Create a worktree while a plain shell is the active tab, then click
+- [ ] Create a worktree while a plain shell is the active tab, then click _(NOT VERIFIED 2026-09-29: partial — Plain shell tab active on agbw1; MCP created agbw2, clicked Switch on toast: header repo/agbw1 -> repo/agbw2, tab list now 'agbw2 1' (a new tab opened; no move of the old tab observed). PTY cwd not readable (web-created tabs absent from GET /sessions), so cd not confirmed.)_
   **Switch**: the tab moves to the new branch and `cd`s into the worktree.
-- [ ] Repeat with a *running agent* as the active tab: the worktree opens in its
+- [ ] Repeat with a *running agent* as the active tab: the worktree opens in its _(NOT VERIFIED 2026-09-29: blocked — Needs a running agent-typed tab (all agents NOT FOUND in instance); shell tab stand-in cannot exercise the agent branch.)_
   own terminal and the agent's tab stays on its branch and CWD.
-- [ ] **Rust change — needs `make dev` restart** (#728-bc76). `create_worktree`
+- [x] **Rust change — needs `make dev` restart** (#728-bc76). `create_worktree` _(verified 2026-09-29: Fresh build. '+' Add worktree dialog branch agbw3 Create: sidebar row 'agbw3', no 'undefined' row, log 'addTerminalToWorkspace agbw3 += term-16'; MCP worktree_create returns workspace_id 'agbw1' and row keyed agbw1 with terminals. Remove x -> popover 'Remove workspace?' Remove: row gone, git worktree list has no agbw3.)_
   now returns `workspace_id`, and the frontend keys the new sidebar row by it.
   Against an unrestarted backend that field is `undefined`, so the row lands
   under the key `"undefined"`. After a restart: create a worktree from the "+"
@@ -1290,7 +1290,7 @@ live agent-frame check cannot be replayed.
 
 Requires a `make dev` restart — the change is in `src-tauri/src/config.rs`.
 
-- [ ] With two windows open on the same config, work in a repo so its diff counts
+- [ ] With two windows open on the same config, work in a repo so its diff counts _(NOT VERIFIED 2026-09-29: partial — Emulated second window through HTTP PUT deltas: rename, add repo, group, active-repo persisted; UI rename persisted (repo-uirn) while repo diffstat was changing; only 2 'Failed to fetch' error logs, no 'repository configuration conflict'. Sidebar reorder not exercised.)_
   keep moving (an agent committing is enough). Rename another repo, reorder the
   sidebar, add a repo. Each must persist. Before, `GET /logs` showed a stream of
   `Repository changes were not saved` / `repository configuration conflict`, and
@@ -1301,21 +1301,21 @@ Requires a `make dev` restart — the change is in `src-tauri/src/config.rs`.
   agents committing throughout — `?level=error` returns **0 entries**, and
   neither `Repository changes were not saved` nor `repository configuration
   conflict` appears anywhere in the 1000-entry buffer at any level.)_
-- [ ] Rename the same repo in two windows without reloading either: this must
+- [ ] Rename the same repo in two windows without reloading either: this must _(NOT VERIFIED 2026-09-29: blocked — Needs a stale second window: backend broadcast converges the client within ~3s, so a stale-baseline same-repo rename race could not be produced in one tab.)_
   STILL conflict. The exemption covers counts, not intent.
-- [ ] The sidebar diff counts keep updating — the exemption must not make them
+- [x] The sidebar diff counts keep updating — the exemption must not make them _(verified 2026-09-29: Added file with git add -N in fx/repo: sidebar main row showed '+1 -0 Tracked line changes' within 5s and disk additions=1.)_
   unwritable.
 
 ## A parked tab names the repo to register
 
 Frontend only; Vite HMR picks it up.
 
-- [ ] Have an agent spawn a child via MCP in a worktree of a repo that is NOT
+- [x] Have an agent spawn a child via MCP in a worktree of a repo that is NOT _(verified 2026-09-29: MCP session create cwd=fx/agb/ur__wt/b1 (unregistered repo ur): toast 'Tab parked outside your repos | Nothing claims "<...>/fx/agb"... register the repo' + Register button (wording differs from item). GET /logs warn names 'register ".../fx/agb/ur"'. Plain session, not agent spawn.)_
   registered (`<repo>__wt/<branch>`). A toast appears: *Tab parked in the wrong
   repo — nothing claims "<repo root>"*. The log warning names the same path.
-- [ ] Reconnecting many sessions from that one repo raises ONE toast, not one
+- [x] Reconnecting many sessions from that one repo raises ONE toast, not one _(verified 2026-09-29: 4 MCP sessions in ur__wt/b1 (8 warn log lines) -> exactly 1 toast element in DOM; after page reload (sessions re-adopted) again 1 toast. Caveat: sessions were later auto-closed by the client reload.)_
   per session.
-- [ ] Register that repo: the parked tab moves to it by itself, and the active
+- [ ] Register that repo: the parked tab moves to it by itself, and the active _(NOT VERIFIED 2026-09-29: partial — Clicked toast Register: repo 'ur' appeared in sidebar (rows main,b1), toast gone. Header switched repo/agbw2 -> ur/main (maybe Register's own activation, cannot separate). Parked tab moving not observed: the parked sessions had been closed after reload.)_
   repo does NOT change under you while the tab moves.
 
 ## An exited tab says so instead of going black
@@ -1325,13 +1325,13 @@ build: `term-100` ("GitHub state", exited agent in a deleted worktree) renders
 one `terminal-exited-notice`, the other 15 tabs render none. What is left is the
 visual check.
 
-- [ ] Click an exited tab (grey dot). The panel shows a centred, muted *Session
+- [ ] Click an exited tab (grey dot). The panel shows a centred, muted *Session _(NOT VERIFIED 2026-09-29: blocked — Web-created tabs never got a PTY (GET /sessions unchanged: 3; tabs 'main N'), and MCP-created remote sessions are removed from the UI on exit; no exited (grey dot) tab could be produced.)_
   ended* / *The process exited and its output was released. Close this tab to
   remove it.* — not a black void.
-- [ ] Open a brand-new terminal: the notice must NOT flash before the PTY
+- [ ] Open a brand-new terminal: the notice must NOT flash before the PTY _(NOT VERIFIED 2026-09-29: partial — Clicked New Tab '+' and sampled DOM every 50ms for 5s (97 samples): .exitedTitle count 0, no 'Session ended' text. The exited-tab half (notice appears) not observed.)_
   spawns. A new tab also has a null sessionId; only `shellState === "exited"`
   may show the notice.
-- [ ] Let an agent finish in a background tab: the tab keeps its grey dot and
+- [ ] Let an agent finish in a background tab: the tab keeps its grey dot and _(NOT VERIFIED 2026-09-29: blocked — No agent CLI; exited tabs cannot be produced in this web session (remote-session tabs are removed on exit).)_
   its name, and the panel shows the notice when you switch to it.
 
 ## Repository saves converge across windows
@@ -1340,29 +1340,29 @@ visual check.
 frontend half is HMR-only, but `repositories-changed` is emitted by the backend,
 so nothing happens until the Rust process is rebuilt.
 
-- [ ] Open the desktop app and a browser at `http://localhost:9876/`. Rename a
+- [ ] Open the desktop app and a browser at `http://localhost:9876/`. Rename a _(NOT VERIFIED 2026-09-29: partial — Second client emulated with HTTP PUT /config/repositories delta (rename repo ur -> ur-renamed): browser tab sidebar showed the new name within 3s with no reload. Reverse direction (UI rename -> other client) only checked as disk write (config displayName 'repo-uirn'). No desktop client.)_
   repo in the browser. The desktop sidebar shows the new name without a reload,
   and vice versa.
-- [ ] Add a repo in one client: it appears in the other, in the right sidebar
+- [x] Add a repo in one client: it appears in the other, in the right sidebar _(verified 2026-09-29: HTTP PUT delta adding repo ur2 (repos + repoOrder append): browser sidebar chip UR2 appeared after 3s at the end, matching repoOrder position. Emulated other client via API; no second browser tab.)_
   position.
-- [ ] Remove a repo with no terminals open in one client: it disappears from the
+- [x] Remove a repo with no terminals open in one client: it disappears from the _(verified 2026-09-29: HTTP PUT delta removing repo ur2 (no terminals): sidebar chip UR2 disappeared within 3s; config no longer lists it.)_
   other.
-- [ ] Remove a repo that has open terminals in the other client: that client
+- [x] Remove a repo that has open terminals in the other client: that client _(verified 2026-09-29: Client had tabs main 1..3 on repo ur; HTTP PUT removed ur from disk: client kept header ur-renamed/main, the sidebar chip/rows (main, b1) and all 3 tabs. Other client emulated via API.)_
   KEEPS the repo and its tabs (they must not be orphaned), and the repo is still
   visible in the sidebar — not just present in memory.
-- [ ] Remove a worktree/branch in one client while the other has a terminal open
+- [ ] Remove a worktree/branch in one client while the other has a terminal open _(NOT VERIFIED 2026-09-29: partial — DELETE /worktrees/agbw2 (deleteBranch) while browser had tab 'agbw2 1': log 'Worktree removed - pruned sidebar row agbw2'; row AND tab both disappeared (item expects both to stay). Disk-only delta removing ur main workspace: row+3 tabs stayed. Unclear if agbw2 tab had a live PTY.)_
   on that exact branch: the branch row and its tabs stay in the other client.
-- [ ] Rename a repo in one client while the other has that same repo open and
+- [x] Rename a repo in one client while the other has that same repo open and _(verified 2026-09-29: While a script appended lines to fx/repo (git add -N, diffstat moving), HTTP PUT delta renamed repo -> repo-api: sidebar shows REPO-API and disk displayName repo-api with additions 6 written by the client; no error log. Other client emulated via API.)_
   actively changing (edit a file so the diffstat moves): the rename still lands.
-- [ ] Group a repo in one client, then delete the group there: the other client
+- [x] Group a repo in one client, then delete the group there: the other client _(verified 2026-09-29: HTTP PUT group grpagb (AGBGRP) holding ur: sidebar groupSection AGBGRP appeared; then deleting group + moving ur to repoOrder: groupSection gone, ur listed ungrouped, no empty accordion. Emulated other client.)_
   loses the group and shows the repo ungrouped, with no empty accordion left.
-- [ ] Switch the active repo in one client: the other client's focus does NOT
+- [x] Switch the active repo in one client: the other client's focus does NOT _(verified 2026-09-29: HTTP PUT changed disk activeRepoPath ur -> fx/repo -> ur2 (emulated other client). The browser's store (__TUIC__.store('repositories').activeRepoPath) stayed on '.../fx/agb/ur' while disk said ur2, and sidebar Fetch acted on the client's own active repo. Focus did not move.)_
   move.
-- [ ] After any of the above, rename a *different* repo in the client that
+- [x] After any of the above, rename a *different* repo in the client that _(verified 2026-09-29: After API changes (rename/add/remove ur, ur2), renamed repo in the receiving UI via Repo Settings 'Custom name...': disk displayName repo-uirn, ur removal NOT reverted (disk has only fx/repo then), no new 'Repository changes were not saved' with conflict (only 2 older 'Failed to fetch' entries).)_
   received the change. `GET http://localhost:9876/logs?level=error` shows no
   `Repository changes were not saved`, and the first client's change is still
   there — the receiver must not have reverted it.
-- [ ] Toggle something that writes no change (re-save the same value): the other
+- [ ] Toggle something that writes no change (re-save the same value): the other _(NOT VERIFIED 2026-09-29: partial — 3 no-op PUT deltas (before==after): /logs grew by 1 entry ('pty Tombstone reaped'), no repositories/load_repositories entries. No log line names load_repositories anyway, so client re-read is not directly observable.)_
   client must not re-read. `GET /logs` shows no burst of `load_repositories`.
 
 ## Auto-retry on Claude Code's prose 5xx message
@@ -1429,7 +1429,7 @@ The active backend now includes `get_codex_usage_stats` and `GET /codex/stats`.
 - [ ] **Rate Limits** section shows the account windows first with plain `5h` / _(NOT VERIFIED 2026-09-29: Needs real Codex account rate-limit data)_
   `7d` names, then the per-model windows prefixed with the model name. A window
   at 100% is red, ≥70% amber, below that normal.
-- [ ] **Tokens per Day** renders one bar per day; hovering a bar shows the date
+- [ ] **Tokens per Day** renders one bar per day; hovering a bar shows the date _(NOT VERIFIED 2026-09-29: partial — Dashboard reachable only via the status-bar Codex ticker of a codex agent tab (no agent CLI) so not rendered. GET /codex/stats has 49 daily buckets, min 3,937,882 vs peak 2,988,540,050 tokens; code barHeightPercent = max(2, round(t/peak*100)) gives a 2% sliver; bar title '<date>: <n> tokens' (CodexUsageDashboard.tsx:222-227).)_
   and the token count. The tallest bar is the busiest day, and a near-zero day
   is still visible as a sliver rather than invisible.
 - [ ] **Insights** shows the fields the official App Server supplies (lifetime _(NOT VERIFIED 2026-09-29: Needs real Codex account/App Server for Insights fields.)_
@@ -1583,9 +1583,9 @@ What is left genuinely needs eyes on a real agent:
   **Rust — will not hot-reload.** Verify after the next `make dev`: launch
   `c2` in a real repo tab, no `^[[?6c` above the banner, and the DA/colour
   queries still get answered (`ESC]11;?` still reports `11;rgb:…`).
-- [ ] Switch to a light theme, then repeat the query: the reported colour
+- [ ] Switch to a light theme, then repeat the query: the reported colour _(NOT VERIFIED 2026-09-29: blocked — No theme picker in web Settings (checked previous batch) and theme cannot be switched without editing config; OSC 10/11 colour reply after theme change not testable.)_
   follows the theme (the frontend republishes on remeasure).
-- [ ] Only one publish per real theme change — `GET /logs` shows no burst of
+- [ ] Only one publish per real theme change — `GET /logs` shows no burst of _(NOT VERIFIED 2026-09-29: partial — Patched window.fetch to log '/theme-colors' and resized the viewport 4 times (1200x700, 900x800, 1100x850, 1440x900) with ~30 tabs: 0 theme-colors requests and 0 new /logs entries. The web client may not publish at all, so a real 'one publish per change' was not observed.)_
   palette traffic when resizing the window with several tabs open.
 - [x] `curl -X POST http://localhost:9876/terminal/theme-colors -H 'content-type: application/json' -d '{"foreground":[255,0,0],"background":[0,255,0],"cursor":[0,0,255]}'` _(verified 2026-09-29: POST /terminal/theme-colors returned {ok:true}; an OSC 10/11/12 query in a session shell (osc.py) changed from cccccc/1e1e1e/cccccc to ff0000/00ff00/0000ff)_
   returns `{"ok":true}` and changes what the query above reports. (Port corrected
@@ -1604,7 +1604,7 @@ behaviour.
 - [ ] Click **Authorize**, then **Cancel** before completing consent: the row _(NOT VERIFIED 2026-09-29: Needs a real upstream MCP OAuth server to reach 'Awaiting authorization' and complete/cancel consent in a browser.)_
   leaves "Awaiting authorization…" immediately and Authorize works again on the
   next click (no queue built up behind it).
-- [ ] Click **Authorize** and then do nothing for >5 minutes. The row returns to
+- [ ] Click **Authorize** and then do nothing for >5 minutes. The row returns to _(NOT VERIFIED 2026-09-29: blocked — Needs a mock OAuth upstream MCP server plus >5 min wait; not set up within time-box.)_
   **Authorize to connect** (`needs_auth`) on its own, and
   `GET http://localhost:9876/logs?source=mcp_oauth` shows
   `Cleaned up expired OAuth flows` naming the upstream. It must not stay stuck
@@ -1622,14 +1622,14 @@ behaviour.
 Frontend only (`Terminal.tsx`) — Vite HMR picks it up, no `make dev` restart
 needed. Canvas painting is not observable over HTTP, so these need eyes.
 
-- [ ] Switch back and forth between two busy terminal tabs. The returning tab
+- [ ] Switch back and forth between two busy terminal tabs. The returning tab _(NOT VERIFIED 2026-09-29: blocked — Trusted and DOM clicks on terminal tabs do not switch tabs in this web session (known limit); also 'busy tab' repaint flash not visible without screenshots.)_
   shows its content immediately with no blank flash. Previously every switch ran
   `resubscribe()` + `refresh()`, which cleared the grid and repainted it
   (paint → wipe → paint).
 - [ ] Detach a tab into a floating window, then close that window to reattach. _(NOT VERIFIED 2026-09-29: blocked — Desktop-only: detach tab to floating window and reattach needs native window interaction on the validate instance (maccontrol targets orchestrator, not this instance).)_
   The reattached tab still paints live output and scrolls — the grid channel is
   resubscribed on this path, which is the only path that still resubscribes.
-- [ ] Open a terminal in a split pane, collapse the pane to zero width, leave it
+- [ ] Open a terminal in a split pane, collapse the pane to zero width, leave it _(NOT VERIFIED 2026-09-29: blocked — Split pane creation/collapse needs drag/keyboard interactions that do not work in this web session.)_
   collapsed for a minute. `GET http://localhost:9876/logs?source=terminal` shows
   one `Container stayed zero-size for 120 frames` warning and CPU stays flat.
   Previously that container kept a `requestAnimationFrame` loop re-arming every
@@ -1652,17 +1652,17 @@ needed. Canvas painting is not observable over HTTP, so these need eyes.
 
 ## Settings search (story 684-35a8, frontend — Vite HMR picks it up)
 
-- [ ] Open Settings. A "Search settings" box now sits at the top of the left nav.
+- [ ] Open Settings. A "Search settings" box now sits at the top of the left nav. _(NOT VERIFIED 2026-09-29: partial — Only measured at default nav 180px: search input 155px wide, 12px font, padding 24/22px, placeholder 'Search settings' fits (scrollWidth<=clientWidth). Nav resize handle drag via agent-browser mouse did not change width, so 140/280px not tested; no screenshot.)_
   Check it reads well at the narrowest (140 px) and widest (280 px) nav widths —
   the box shares the nav's resize handle area, and only the DOM is covered by
   tests, not the rendering.
-- [ ] Type `relay`. The tab body is replaced by a result list; each row shows the
+- [ ] Type `relay`. The tab body is replaced by a result list; each row shows the _(NOT VERIFIED 2026-09-29: partial — Dark theme only (no theme picker in web UI): search 'relay' rows have label + trail 'Remote Access > Cloud Relay'; trail color rgb(115,115,115) on bg rgb(30,30,30) = ~3.5:1 contrast. Light theme not checked; no screenshot.)_
   setting on top and a `Tab › Section` trail underneath. Confirm the trail is
   legible against the panel background in both light and dark themes.
-- [ ] Click the "Relay Server URL" result. Services & MCP opens and the view
+- [x] Click the "Relay Server URL" result. Services & MCP opens and the view _(verified 2026-09-29: Settings search 'relay', clicked 'Relay Server URL' result (Remote Access > Cloud Relay): active nav 'Remote Access', label at y=722 of 900 viewport, height 14 (field in view). Scroll animation not observed.)_
   scrolls to that field. The smooth-scroll animation itself is not observable
   over the DOM — confirm it lands on the field, not at the top of the tab.
-- [ ] Search a Dictation setting (e.g. `whisper`) in the desktop app: it appears.
+- [ ] Search a Dictation setting (e.g. `whisper`) in the desktop app: it appears. _(NOT VERIFIED 2026-09-29: partial — Browser :9880: search 'whisper' returns 'Whisper Model > Voice > Speech recognition' (NOT 'No settings match'): the Voice tab is present in web mode now, so item premise is outdated. Desktop half not checked.)_
   In browser mode (`http://localhost:9876/`) the Dictation tab is absent, so the
   same query must return "No settings match your search."
 
@@ -1672,18 +1672,18 @@ Free-mode and terminals-first drag reorder across tab kinds never worked: the
 cross-kind order list had no writer, so the reorder call always returned early.
 The DOM order is covered by tests; a real pointer drag in the WebView is not.
 
-- [ ] Settings → Appearance → Tab Ordering → **Free**. Open a terminal, a diff and
+- [ ] Settings → Appearance → Tab Ordering → **Free**. Open a terminal, a diff and _(NOT VERIFIED 2026-09-29: blocked — Free-mode drag of diff/terminal/markdown tabs needs HTML5 drag-and-drop; D&D is Boss-approval territory and agent-browser mouse drag has not worked in this session (sidebar/nav handle drags did nothing). Setting 'Tab Ordering' exists with options Grouped by Type/Terminals First/Free (default grouped).)_
   a markdown tab. Drag the diff tab onto the left half of the terminal tab: it must
   land before the terminal and stay there. Repeat dragging the terminal to the right
   half of the markdown tab.
-- [ ] Still in Free mode, open a new terminal after a drag. It must appear at the
+- [ ] Still in Free mode, open a new terminal after a drag. It must appear at the _(NOT VERIFIED 2026-09-29: blocked — Needs a prior drag in Free mode; D&D not drivable here.)_
   end without disturbing the order you dragged.
-- [ ] Switch to **Terminals First**. Terminals stay leftmost. Drag the markdown tab
+- [ ] Switch to **Terminals First**. Terminals stay leftmost. Drag the markdown tab _(NOT VERIFIED 2026-09-29: blocked — Needs a drag of the markdown tab onto the diff tab (D&D not drivable here).)_
   onto the diff tab — the two non-terminal tabs must swap, and the terminals must
   not move.
-- [ ] Switch to **Grouped by Type** (the default). Ordering must be unchanged from
+- [ ] Switch to **Grouped by Type** (the default). Ordering must be unchanged from _(NOT VERIFIED 2026-09-29: blocked — Drag within kinds not drivable; only confirmed default tab_ordering is Grouped by Type (Appearance select value grouped-by-type).)_
   before this story: kinds stay grouped, and dragging only reorders within a kind.
-- [ ] Close a tab you dragged, then reopen one. No ghost position: the reopened tab
+- [ ] Close a tab you dragged, then reopen one. No ghost position: the reopened tab _(NOT VERIFIED 2026-09-29: partial — Set Free (config tab_ordering_mode=free), closed tab 'Foo', opened New Tab: new tab 'main 4' at the end of the list. No dragged tab was involved (D&D not drivable), so 'no ghost position' after a drag is untested. Mode restored to grouped-by-type.)_
   appears at the end, not at the closed tab's old slot.
 
 ## Corrupt `config.json` is preserved, state-lane depth is reported (story `712-e1d2`, Rust — needs `make dev` restart)
@@ -1760,7 +1760,7 @@ on a socket the peer never answers.
 The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
 `index.lock` sweep asks `lsof` who owns the lock before trusting the age rule.
 
-- [ ] The sidebar repo badge still shows clean / dirty / conflict correctly:
+- [ ] The sidebar repo badge still shows clean / dirty / conflict correctly: _(NOT VERIFIED 2026-09-29: partial — GET /repo/info status vs git status: clean, ' M'->dirty, staged 'M '->dirty, UU conflict->conflict, abort->clean (~5s cache lag). Sidebar row: dirty +1 -0, conflict +4 -0, staged-only change showed NO +/- (observation). No distinct sidebar conflict marker seen. Fixture restored.)_
   edit a file, stage it, create a merge conflict, then clean up. Each state must
   match what `git status` reports.
 - [ ] Start a long `git add` or `git stash` in a large repo from a TUIC terminal _(NOT VERIFIED 2026-09-29: partial — Live lock: TUIC-terminal process held 500B .git/index.lock (python, not git add/stash) ~50s; /repo/info,files,branches,diff-stats and POST /repo/stage ran (stage failed 'File exists') and lock stayed. After holder exited, next stage removed the stale lock (ok). Real long git add/stash not run.)_
@@ -1783,7 +1783,7 @@ The stats refresh now queries the process table ONCE per refresh and walks each
 session's subtree out of that shared map, instead of forking `ps` per session.
 Rust does not hot-reload, so this needs a `make dev` restart to load.
 
-- [ ] With several sessions open (at least one running a nested command such as
+- [x] With several sessions open (at least one running a nested command such as _(verified 2026-09-29: 3 MCP sessions in ur2, one running sh -c 'sleep 40; sleep 41'. GET /process/stats and the Process Manager modal (palette > Process Manager) list shell 706d0311 pid 80056 (2.4 MB) plus child 'sleep' pid 80058 with 1.1 MB RSS; every session listed with non-zero RSS. Depth only 2 levels.)_
   `cargo test` or a `sh -c 'sleep 30'`), open the process manager and confirm
   each session still lists its child AND its descendants, with non-zero RSS.
 
@@ -1817,9 +1817,9 @@ subcommand allowlist (`git_routes.rs:251-267`): `reset` comes back **HTTP 400**
 `Git subcommand "reset" is not allowed via HTTP`. The items below are the
 remaining behavioural checks.
 
-- [ ] Desktop, normal path: fetch/pull/push from the Git panel still work and
+- [ ] Desktop, normal path: fetch/pull/push from the Git panel still work and _(NOT VERIFIED 2026-09-29: partial — Web UI sidebar Fetch on repo ur (origin = local bare): log '[Notify] completion - git fetch succeeded', origin/* branches appeared. Failure path NOT observed: with origin set to /nonexistent, later Fetch clicks (DOM click, 6s watch) produced no toast and no log at all (possible bug or click not reaching handler; not diagnosed). Pull/Push not tried.)_
   still report failures the way they did before. No visible change expected.
-- [ ] Browser mode (`http://localhost:9876/`): do a fetch on a repo whose
+- [ ] Browser mode (`http://localhost:9876/`): do a fetch on a repo whose _(NOT VERIFIED 2026-09-29: partial — Browser mode (:9880) Fetch on a repo with reachable local bare remote succeeded (git fetch succeeded notify, origin refs present). Desktop comparison not possible; second Fetch runs with a broken remote gave no feedback.)_
   remote is reachable. It should behave exactly as on desktop.
 - [x] Slow/dead remote: point a throwaway repo at an unroutable remote and _(verified 2026-09-29: POST /repo/run-git {fetch origin} on throwaway repo: remote http://127.0.0.1:9899 (mute TCP listener) -> after 180s 'Failed to execute git: git timed out after 180.0s and was killed', success=false. Unroutable 10.255.255.1 failed earlier at 75s by OS connect timeout ('Couldn't connect'), so it does not reach the deadline on this net.)_
   fetch. It must give up after ~180s with a `git timed out` message, not hang
@@ -1833,14 +1833,14 @@ that ships a message catalog. Only `en.json` exists today, so the list has one
 entry ("English"). Frontend-only change, so Vite HMR loads it, but the rendering
 cannot be checked from a test.
 
-- [ ] Open Settings → General and confirm the Language select sits directly under
+- [ ] Open Settings → General and confirm the Language select sits directly under _(NOTE 2026-09-29: superseded — GeneralTab.tsx:143 hides the Language select when AVAILABLE_LOCALES.length<=1 (only 'en' catalog); rewrite the expectation)_
   the "General" heading, above Shell, with the same field styling as the IDE and
   update-channel selects (label, control width, hint line).
 - [ ] Confirm the option reads "English" and the hint reads "Language of the _(NOTE 2026-09-29: partial evidence only — Language hint present at en.json:299 and GeneralTab.tsx:149 ('Language of the TUICommander interface'); option label check by inspecting GeneralTab.)_
   TUICommander interface".
-- [ ] Type "language" in the Settings search box and confirm the result reads
+- [ ] Type "language" in the Settings search box and confirm the result reads _(NOT VERIFIED 2026-09-29: partial — Search 'language' lists 'Language > General > General' (text matches) and click succeeds, but the General tab renders no Language field (hidden, 1 locale), so nothing to scroll to: stale search entry for a hidden control.)_
   `General › General` and scrolls to the field when selected.
-- [ ] The single option is by design: only locales that ship a catalog are
+- [ ] The single option is by design: only locales that ship a catalog are _(NOTE 2026-09-29: moot — the picker is already hidden with one locale (GeneralTab.tsx:143); the item says it stays visible)_
   offered, and listing others would show English under a foreign name. The
   control stays visible so the docs that already promise it stay true. Say if
   you would rather it were hidden until a second catalogue lands.
@@ -1892,10 +1892,10 @@ counter: `row-text?row=0` returns `"358"`, and 502 − 24 − 120 = 358 exactly.
 That is the whole mechanism the two items below sit on; only the wheel/scrollbar
 *rendering* still needs eyes.
 
-- [ ] Open the web UI (browser, not the desktop app) on a session with
+- [ ] Open the web UI (browser, not the desktop app) on a session with _(NOT VERIFIED 2026-09-29: blocked — Terminal tabs cannot be switched in this web session (native/trusted/DOM-dispatched clicks on the MCP-created tab 'PTY: Session 7' left main 4 active), so no visible canvas to wheel/drag. Server side: POST scroll-to-offset 100 and scroll -10 on a 303-line session returned ok but scroll-info display_offset stayed 0 (no subscribed viewer).)_
   scrollback and scroll with the wheel and by dragging the scrollbar: the
   viewport must move, not just the thumb.
-- [ ] With that browser attached, close the same terminal's tab in the desktop
+- [ ] With that browser attached, close the same terminal's tab in the desktop _(NOT VERIFIED 2026-09-29: blocked — Needs a browser-attached scrolling session plus closing the tab in a desktop instance (maccontrol, no desktop client here) and tab switching does not work in this web session.)_
   app. The browser must keep scrolling — the unsubscribe no longer drops the
   session's scroll target.
 
