@@ -11917,6 +11917,103 @@ fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
     assert!(!uncertain, "the retry's Working screen confirms the turn");
 }
 
+/// Real Codex 0.159 PTY capture (2026-09-30): a 1967-character brief typed into
+/// a fresh composer collapses to `[Pasted Content 1967 chars]`. The first Enter
+/// (200 ms after the text, as `CODEX_ENTER_GAP` does) is swallowed and the
+/// placeholder stays in the composer; a bare Enter 5 s later submits and Codex
+/// prints `Working` 0.18 s after it. The composer never shows the text, so the
+/// retry must recognise the placeholder as the queued text.
+#[cfg(unix)]
+#[test]
+fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+
+    let bytes = agent_prompt_fixture("codex-0.159-long-brief-swallowed-enter.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("valid capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let records = capture.records;
+    let inputs: Vec<usize> = (0..records.len())
+        .filter(|&i| records[i].direction == Input)
+        .collect();
+    // Ctrl-U, brief, first Enter, second Enter.
+    assert_eq!(inputs.len(), 4);
+    let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
+    let second_enter = inputs[3];
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-long-brief-swallowed-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in &records[..inputs[0]] {
+        assert_eq!(record.direction, Output);
+        vt.process(&record.data);
+    }
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
+        for record in records[range].iter().filter(|r| r.direction == Output) {
+            reader.process_chunk(&String::from_utf8_lossy(&record.data), &silence, sid, &state);
+        }
+    };
+    let mut seen = Vec::new();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
+        for expected in [b"\x15".as_slice(), brief.as_bytes(), b"\r"] {
+            let write = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(write, expected);
+            seen.push(write);
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        replay(&mut reader, inputs[0]..second_enter);
+        if let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10)) {
+            seen.push(retry);
+            replay(&mut reader, second_enter..records.len());
+        }
+    });
+
+    assert_eq!(
+        seen.iter().filter(|w| w.as_slice() == b"\r").count(),
+        2,
+        "the placeholder in the composer gets exactly one retry Enter"
+    );
+    assert!(
+        !silence.lock().injection_delivery_uncertain,
+        "the retry's Working screen confirms the turn"
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok())
+            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+        "no false failure toast"
+    );
+}
+
 /// A retained composer that ignores the retry too stays uncertain; there is no
 /// second retry.
 #[cfg(unix)]
