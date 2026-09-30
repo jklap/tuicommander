@@ -25,6 +25,7 @@ const {
 	mockReorderGroups,
 	mockToggleBranchTabsCollapsed,
 	mockNavigateToTerminal,
+	mockOpenUrl,
 } = vi.hoisted(() => ({
 	mockToggleExpanded: vi.fn(),
 	mockToggleCollapsed: vi.fn(),
@@ -47,7 +48,10 @@ const {
 	mockReorderGroups: vi.fn(),
 	mockToggleBranchTabsCollapsed: vi.fn(),
 	mockNavigateToTerminal: vi.fn(),
+	mockOpenUrl: vi.fn(),
 }));
+
+vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: mockOpenUrl }));
 
 // Mock stores before importing the component
 vi.mock("../../stores/repositories", () => ({
@@ -2284,6 +2288,59 @@ describe("Sidebar", () => {
 					text: "/path/to/repo",
 					label: undefined,
 				});
+			});
+		});
+
+		describe("context menu Open in GitHub (#1323-71b1)", () => {
+			const openInGitHub = async (branchName: string) => {
+				mockInvoke.mockImplementation(async (cmd: string) =>
+					cmd === "get_remote_url" ? "git@github.com:acme/agent2.git" : undefined,
+				);
+				setRepos({
+					"/repo1": makeRepo({
+						workspaces: {
+							b: {
+								workspaceId: "b",
+								branchName,
+								isMain: false,
+								worktreePath: "/wt/b",
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(container.querySelector(".branchItem")!, { clientX: 1, clientY: 1 });
+				const labelEls = () => Array.from(container.querySelectorAll(".menu .label"));
+				// The remote URL resolves asynchronously; the item appears once it has.
+				await vi.waitFor(() => expect(labelEls().map((l) => l.textContent)).toContain("Open in GitHub"));
+				const item = labelEls().find((l) => l.textContent === "Open in GitHub")!;
+				const labels = labelEls().map((l) => l.textContent);
+				fireEvent.click(item.closest(".item") ?? item);
+				return labels;
+			};
+
+			afterEach(() => mockInvoke.mockReset().mockResolvedValue(undefined));
+
+			it("opens the PR URL, not the tree or repo root, for a branch with a PR", async () => {
+				mockGetPrStatus.mockReturnValue({
+					state: "OPEN",
+					number: 1143,
+					title: "t",
+					url: "https://github.com/acme/agent2/pull/1143",
+				});
+				const labels = await openInGitHub("POC-00001/installed-app");
+				expect(mockOpenUrl).toHaveBeenCalledExactlyOnceWith("https://github.com/acme/agent2/pull/1143");
+				expect(labels).not.toContain("Open PR");
+			});
+
+			it("opens the branch tree URL for a branch without a PR", async () => {
+				await openInGitHub("POC-00001/installed-app");
+				expect(mockOpenUrl).toHaveBeenCalledExactlyOnceWith(
+					"https://github.com/acme/agent2/tree/POC-00001%2Finstalled-app",
+				);
 			});
 		});
 
