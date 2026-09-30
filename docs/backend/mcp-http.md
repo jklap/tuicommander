@@ -298,6 +298,7 @@ client. Full request/response shapes in `docs/api/http-api.md`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/acp/workspace` | The AI Chat workspace root (`acp_workspace_root`) |
 | `POST` | `/acp/connections` | Launch the configured ego and initialize |
 | `GET` `DELETE` | `/acp/connections/:id` | Snapshot / disconnect |
 | `POST` | `/acp/connections/:id/kill` | Kill the child |

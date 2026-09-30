@@ -124,9 +124,8 @@ import type {
 } from "../../types/acp";
 
 const ROOT = "/repo/tuicommander";
-const HOME = "/home/boss";
 /** Where every chat runs: the whole workspace, never one repository. */
-const CHAT_ROOT = "/home/boss/Gits";
+const CHAT_ROOT = "/srv/chat-workspace";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
 const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
@@ -260,7 +259,7 @@ beforeEach(() => {
 	window.history.replaceState(null, "", "/");
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "load_config") return { ai_chat_sessions: {} };
-		if (command === "get_home_directory") return HOME;
+		if (command === "acp_workspace_root") return CHAT_ROOT;
 		return undefined;
 	});
 	sequence = 0;
@@ -491,7 +490,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -516,7 +515,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("keeps a file link's line and column when opening the resolved file", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path")
 				return { absolute_path: "/repo/tuicommander/src/main.ts", is_directory: false };
 			return undefined;
@@ -535,7 +534,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("reveals a resolved directory link in the file browser", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -555,7 +554,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -600,7 +599,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens web links externally and file links through the terminal file opener", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -627,7 +626,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("makes a bare source path clickable only after the backend resolves it", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -655,7 +654,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens links in a user message through the same URL and file handlers", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -674,7 +673,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("keeps a failed file lookup inside the panel without opening a path", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") throw new Error("resolver unavailable");
 			return undefined;
 		});
@@ -763,7 +762,7 @@ describe("AIChatPanel: one chat across repositories", () => {
 	it("does not replay a conversation the running ego already has attached", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: SESSION } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.connect.mockImplementation(async () => {
@@ -1776,7 +1775,7 @@ describe("AIChatPanel: durable conversations", () => {
 		const saved: Record<string, string> = {};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "save_config")
 				Object.assign(
 					saved,
@@ -1838,7 +1837,7 @@ describe("AIChatPanel: durable conversations", () => {
 	it("loads the saved conversation after a fresh document opens", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: "prior-session" } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.listSessions.mockResolvedValue({

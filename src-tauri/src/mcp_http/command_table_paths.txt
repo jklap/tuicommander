@@ -23,6 +23,7 @@
 /acp/connections/x/sessions/x/resume
 /acp/connections/x/sessions/x/resume-turn
 /acp/one-shot
+/acp/workspace
 /agent/claude-project-dir
 /agent/discover-session
 /agent/open-in-custom
