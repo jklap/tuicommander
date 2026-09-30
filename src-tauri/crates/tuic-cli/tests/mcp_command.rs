@@ -97,11 +97,15 @@ fn run_with_stub_delay(
     let with_health = args.first() != Some(&"mcp");
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for index in 0..(if external { 3 } else { 2 }) + usize::from(with_health) {
+        let total = (if external { 3 } else { 2 }) + usize::from(with_health) + 1;
+        for index in 0..total {
             let (mut stream, _) = listener.accept().unwrap();
             requests.push(read_request(&mut stream));
             let protocol_index = index.saturating_sub(usize::from(with_health));
-            let body = if with_health && index == 0 {
+            let body = if index + 1 == total {
+                // The CLI's DELETE /mcp that releases its protocol session.
+                String::new()
+            } else if with_health && index == 0 {
                 r#"{"ok":true}"#.to_string()
             } else if protocol_index == 0 {
                 r#"{"jsonrpc":"2.0","result":{}}"#.to_string()
@@ -409,6 +413,48 @@ fn mcp_reports_payload_error_on_stderr_with_failure_exit() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Recipient not found"));
 }
 
+/// Catches: every CLI call leaving its MCP protocol session behind (324k
+/// fresh initializes were never deleted on 2026-09-29/30).
+#[test]
+fn mcp_deletes_its_protocol_session_after_the_call() {
+    let (output, requests) = run_with_stub(
+        &["mcp", "session", "{}"],
+        None,
+        Some("peer-1"),
+        "{\"a\":1}",
+        false,
+    );
+    assert!(output.status.success());
+    let (headers, _) = requests.last().unwrap();
+    assert!(headers[0].starts_with("DELETE /mcp HTTP/1.1"), "{headers:?}");
+    assert!(
+        headers
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("mcp-session-id: test-session\r\n")),
+        "{headers:?}"
+    );
+}
+
+/// Catches: a storm that cannot be traced to a process because the CLI never
+/// sends its pid.
+#[test]
+fn mcp_initialize_names_the_cli_process() {
+    let (_, requests) = run_with_stub(
+        &["mcp", "session", "{}"],
+        None,
+        Some("peer-1"),
+        "{\"a\":1}",
+        false,
+    );
+    let prefix = "x-tuic-client-pid: ";
+    let pid = requests[0]
+        .0
+        .iter()
+        .find_map(|line| line.to_ascii_lowercase().strip_prefix(prefix).map(str::to_owned))
+        .expect("initialize carries x-tuic-client-pid");
+    assert!(pid.trim().parse::<u32>().is_ok(), "{pid:?}");
+}
+
 #[test]
 fn mcp_sends_managed_identity_header() {
     let (output, requests) = run_with_stub(
@@ -419,7 +465,7 @@ fn mcp_sends_managed_identity_header() {
         false,
     );
     assert!(output.status.success());
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert!(requests.iter().all(|(headers, _)| {
         headers
             .iter()

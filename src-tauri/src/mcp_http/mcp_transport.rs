@@ -395,6 +395,18 @@ fn link_pending_children_to_parent(
 /// HTTP header the bridge asserts to declare its TUIC peer identity. A PTY
 /// agent inherits it from its tab; ACP-hosted ego receives a host-issued UUID.
 pub(super) const TUIC_SESSION_HEADER: &str = "x-tuic-session";
+/// Pid of the bridge or CLI process that sent the request, logged on initialize.
+pub(super) const CLIENT_PID_HEADER: &str = "x-tuic-client-pid";
+
+/// The pid a client reported, or `""`. Digits only: the value reaches the log
+/// verbatim, so anything else is dropped rather than written.
+pub(super) fn client_pid_header(headers: &HeaderMap) -> &str {
+    headers
+        .get(CLIENT_PID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty() && v.len() <= 10 && v.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or("")
+}
 
 /// Bind an MCP session to a TUIC peer identity: upsert `peer_agents`
 /// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
@@ -6830,6 +6842,7 @@ pub(super) async fn mcp_post(
                 client = client_name.unwrap_or("unknown"),
                 mcp_session = %session_id,
                 tuic_session = tuic_session_header.unwrap_or(""),
+                client_pid = client_pid_header(&headers),
                 presented_session = match &init_kind {
                     InitializeKind::Reconnected { presented } => presented.as_str(),
                     _ => "",
@@ -7949,6 +7962,22 @@ mod tests {
     #[cfg(unix)]
     use crate::OutputRingBuffer;
     use base64::Engine;
+
+    /// Catches: a storm that cannot be traced to a process (no pid logged), or a
+    /// client-supplied header written to the log verbatim (log injection).
+    #[test]
+    fn client_pid_is_logged_only_when_it_is_a_plain_pid() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(CLIENT_PID_HEADER, value.parse().unwrap());
+            headers
+        };
+        assert_eq!(client_pid_header(&with("4242")), "4242");
+        assert_eq!(client_pid_header(&with("42 INFO forged")), "");
+        assert_eq!(client_pid_header(&with("")), "");
+        assert_eq!(client_pid_header(&with("12345678901")), "");
+        assert_eq!(client_pid_header(&HeaderMap::new()), "");
+    }
 
     fn upstream_passthrough_result() -> serde_json::Value {
         serde_json::json!({
