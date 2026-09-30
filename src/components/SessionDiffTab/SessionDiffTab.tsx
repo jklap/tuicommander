@@ -14,11 +14,13 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
+import type { DiffListNavHandle } from "../shared/diffListNav";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
-import { buildRows, type SessionReviewMode } from "./buildRows";
+import { buildRows, rowIndexForStepIndex, type SessionReviewMode } from "./buildRows";
 import { SessionDiffList } from "./SessionDiffList";
 import s from "./SessionDiffTab.module.css";
 import { SessionPicker } from "./SessionPicker";
+import { TurnPicker } from "./TurnPicker";
 
 export interface SessionDiffTabProps {
 	tabId: string;
@@ -50,6 +52,8 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	const [includeSubagents, setIncludeSubagents] = createSignal(true);
 	const [expandedFiles, setExpandedFiles] = createSignal<Set<string>>(new Set());
 	const [openStepFiles, setOpenStepFiles] = createSignal<Set<string>>(new Set());
+	const [collapsedSteps, setCollapsedSteps] = createSignal<Set<string>>(new Set());
+	const [listHandle, setListHandle] = createSignal<DiffListNavHandle | null>(null);
 
 	const [revertTarget, setRevertTarget] = createSignal<RevertTarget | null>(null);
 	const [revertConfirmVisible, setRevertConfirmVisible] = createSignal(false);
@@ -119,6 +123,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 			setReview(null);
 			setReviewError(null);
 			setOpenStepFiles(new Set<string>());
+			setCollapsedSteps(new Set<string>());
 			setWarningsDismissed(false);
 			scrollEl()?.scrollTo({ top: 0 });
 		}
@@ -180,7 +185,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	const rows = createMemo(() => {
 		const r = review();
 		if (!r) return [];
-		return buildRows(r, viewMode(), expandedFiles(), openStepFiles());
+		return buildRows(r, viewMode(), expandedFiles(), openStepFiles(), collapsedSteps());
 	});
 
 	function changeViewMode(next: SessionReviewMode) {
@@ -206,6 +211,35 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 			else next.add(absPath);
 			return next;
 		});
+	}
+	function toggleStepCollapsed(toolUseId: string) {
+		setCollapsedSteps((prev) => {
+			const next = new Set(prev);
+			if (next.has(toolUseId)) next.delete(toolUseId);
+			else next.add(toolUseId);
+			return next;
+		});
+	}
+
+	/** Jumps to a specific step by its (backend-assigned, snapshot-stable)
+	 *  `step_index` — used by both the `^`/`v` same-file buttons and the turn
+	 *  picker. Only meaningful in chronological mode, where rows are steps
+	 *  1:1; `rowIndexForStepIndex` returns `null` in by-file mode, where
+	 *  there's no single row that "is" a given step. */
+	function handleJumpToStep(stepIndex: number) {
+		const idx = rowIndexForStepIndex(rows(), stepIndex);
+		if (idx !== null) listHandle()?.scrollToIndex(idx, { align: "center" });
+	}
+
+	/** `<`/`>` toolbar buttons — step to the adjacent ROW, which is a step in
+	 *  chronological mode and a file in by-file mode; the list's own nav
+	 *  handle doesn't need to know which. */
+	function goToAdjacentRow(delta: number) {
+		const handle = listHandle();
+		const total = rows().length;
+		if (!handle || total === 0) return;
+		const next = Math.min(Math.max(handle.currentIndex() + delta, 0), total - 1);
+		handle.scrollToIndex(next, { align: "center" });
 	}
 
 	// Default every file to expanded the first time a session's review
@@ -436,6 +470,31 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 				>
 					Chronological
 				</button>
+				<Show when={viewMode() === "chronological"}>
+					<TurnPicker turns={review()?.turns ?? []} steps={review()?.steps ?? []} onSelect={handleJumpToStep} />
+				</Show>
+				<button
+					type="button"
+					class={s.iconBtn}
+					onClick={() => goToAdjacentRow(-1)}
+					disabled={rows().length === 0 || (listHandle()?.currentIndex() ?? 0) <= 0}
+					title={viewMode() === "chronological" ? "Previous change" : "Previous file"}
+				>
+					<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M10 3l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+					</svg>
+				</button>
+				<button
+					type="button"
+					class={s.iconBtn}
+					onClick={() => goToAdjacentRow(1)}
+					disabled={rows().length === 0 || (listHandle()?.currentIndex() ?? 0) >= rows().length - 1}
+					title={viewMode() === "chronological" ? "Next change" : "Next file"}
+				>
+					<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+					</svg>
+				</button>
 				<label class={s.checkboxLabel}>
 					<input
 						type="checkbox"
@@ -491,8 +550,11 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 						onCopyFile={handleCopyFile}
 						onToggleExpanded={toggleExpanded}
 						onToggleStepsOpen={toggleStepsOpen}
+						onToggleStepCollapsed={toggleStepCollapsed}
+						onJumpToStep={handleJumpToStep}
 						onJumpToAgent={agentTabId() ? handleJumpToAgent : undefined}
 						scrollRef={setScrollEl}
+						ref={setListHandle}
 					/>
 				</Show>
 				<Show when={searchVisible()}>

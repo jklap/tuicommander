@@ -1,10 +1,11 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { type DiffFileSection, DiffViewer } from "../ui/DiffViewer";
 import s from "./diffFileList.module.css";
+import type { DiffListNavHandle } from "./diffListNav";
 
 /** Reconstruct the raw diff string for a single file section. */
 export function sectionToRawDiff(section: DiffFileSection): string {
@@ -110,6 +111,9 @@ export interface DiffFileListProps {
 	 */
 	collapsedKeys?: ReadonlySet<string>;
 	onToggleCollapsed?: (key: string) => void;
+	/** Imperative nav handle (`scrollToIndex`/`currentIndex`) for a caller's
+	 *  own `<`/`>` file-to-file toolbar buttons. */
+	ref?: (handle: DiffListNavHandle) => void;
 }
 
 /**
@@ -158,6 +162,17 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 		estimateSize: () => 320,
 		overscan: 3,
 		getItemKey: (i) => keys()[i] ?? i,
+	});
+
+	const [currentIndex, setCurrentIndex] = createSignal(0);
+	createEffect(() => {
+		const items = virtualizer.getVirtualItems();
+		if (items.length > 0) setCurrentIndex(items[0].index);
+	});
+	props.ref?.({
+		scrollToIndex: (index, opts) => virtualizer.scrollToIndex(index, { align: opts?.align ?? "auto" }),
+		currentIndex,
+		rowCount: () => props.files.length,
 	});
 
 	return (
