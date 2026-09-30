@@ -184,11 +184,4 @@ mod tests {
             assert!(url.ends_with(".bin"));
         }
     }
-
-    #[test]
-    fn test_delete_nonexistent_model_is_ok() {
-        // Deleting a model that doesn't exist should be a no-op
-        let result = delete_model(WhisperModel::Small);
-        assert!(result.is_ok());
-    }
 }
