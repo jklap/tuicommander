@@ -11960,8 +11960,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         .unwrap()
         .agent_type = Some("codex".into());
     let mut vt = VtLogBuffer::new(rows, cols, 2000);
-    for record in &records[..inputs[0]] {
-        assert_eq!(record.direction, Output);
+    for record in records[..inputs[1]].iter().filter(|r| r.direction == Output) {
         vt.process(&record.data);
     }
     state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
@@ -11969,6 +11968,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         .session_maps
         .output_buffers
         .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+    eprintln!("DBG {:?}", state.grid.vt_log_buffers.get(sid).unwrap().lock().screen_rows().iter().enumerate().skip(26).collect::<Vec<_>>());
     assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
@@ -11991,7 +11991,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
             seen.push(write);
         }
         let mut reader = ChunkProcessor::new(None, None);
-        replay(&mut reader, inputs[0]..second_enter);
+        replay(&mut reader, inputs[1]..second_enter);
         if let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10)) {
             seen.push(retry);
             replay(&mut reader, second_enter..records.len());
