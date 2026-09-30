@@ -38,15 +38,15 @@ if [ -e "$marker" ]; then
 fi
 
 # Catches: 1269 regressing, bin fixtures not built before their consumers.
-run -p tuicommander --lib -E 'test(=mcp_proxy::stdio_client::tests::is_alive_returns_false_after_process_exits) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service)'
+run -p tuicommander --no-default-features --lib -E 'test(=mcp_proxy::stdio_client::tests::is_alive_returns_false_after_process_exits) | test(=state::tests::live_acp_permission_reaches_one_subscribed_push_service)'
 [ -e "$marker" ] || { echo "fixture-bins setup did not run for a fixture consumer" >&2; cat "$work/run.log" >&2; exit 1; }
 rm -f "$marker"
 
 # Catches: the stdio_client group dropped from the filter while state.rs stays.
-run -p tuicommander --lib -E 'test(/^mcp_proxy::stdio_client::tests::/)'
+run -p tuicommander --no-default-features --lib -E 'test(/^mcp_proxy::stdio_client::tests::/)'
 [ -e "$marker" ] || { echo "fixture-bins setup did not run for stdio_client tests" >&2; exit 1; }
 rm -f "$marker"
 
 # Catches: the filter widened to the whole lib binary.
-run -p tuicommander --lib -E 'test(=state::worktree_event_payloads::the_created_payload_spells_its_wire_fields)'
+run -p tuicommander --no-default-features --lib -E 'test(=state::worktree_event_payloads::the_created_payload_spells_its_wire_fields)'
 [ ! -e "$marker" ] || { echo "fixture-bins setup ran for a lib run with no consumer" >&2; exit 1; }
