@@ -11526,11 +11526,7 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let session_id = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !output.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let actual = std::fs::read_to_string(&output).expect("child writes its environment");
+        let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await;
         assert_eq!(
             actual,
             format!("/caller|{session_id}|parent-peer|caller|present|2")
@@ -11550,12 +11546,8 @@ mod tests {
             "spawn failed: {unparented}"
         );
         let unparented_id = unparented["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !output.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
         assert_eq!(
-            std::fs::read_to_string(&output).unwrap(),
+            wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await,
             format!("/run|{unparented_id}||run|present|1")
         );
     }
@@ -11633,6 +11625,46 @@ mod tests {
             .spawn()
             .unwrap();
         let content = wait_for_file_content(&output, std::time::Duration::from_secs(2));
+        assert_eq!(
+            content, "ready",
+            "must wait past the truncate-then-delayed-write window, not read the empty file"
+        );
+    }
+
+    /// The async twin of `wait_for_file_content`, for `#[tokio::test]` sites
+    /// that poll a spawned agent's output file (story 1283-cbce).
+    async fn wait_for_file_content_async(
+        path: &std::path::Path,
+        timeout: std::time::Duration,
+    ) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            if !content.is_empty() || std::time::Instant::now() >= deadline {
+                return content;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_for_file_content_async_survives_a_truncate_then_delayed_write() {
+        let root = tempfile::Builder::new()
+            .prefix("mcp-wait-file-async-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let output = root.path().join("delayed");
+        let command = format!(
+            ": > '{0}'; sleep 0.2; printf 'ready' >> '{0}'",
+            output.display()
+        );
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .spawn()
+            .unwrap();
+        let content = wait_for_file_content_async(&output, std::time::Duration::from_secs(2)).await;
         assert_eq!(
             content, "ready",
             "must wait past the truncate-then-delayed-write window, not read the empty file"
@@ -21857,12 +21889,12 @@ mod tests {
             .find(|row| row.session_id == sid)
             .unwrap();
         assert_eq!(row.tuic_session.as_deref(), Some(sid));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv);
-        let prompt = std::fs::read_to_string(&submitted);
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
+        let prompt =
+            wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         let output = handle_session(
             &state,
             &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
@@ -21885,7 +21917,7 @@ mod tests {
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let actual = actual.expect("agent must record launch argv");
+        assert!(!actual.is_empty(), "agent must record launch argv");
         let expected = format!(
             "projects.{}.trust_level=\"trusted\"",
             serde_json::to_string(&cwd.to_string_lossy()).unwrap()
@@ -21899,7 +21931,7 @@ mod tests {
             "launch must scope trust to the new cwd: {actual}"
         );
         assert!(
-            prompt.as_deref().unwrap_or_default().contains("say READY"),
+            prompt.contains("say READY"),
             "spawn prompt must be submitted: prompt={prompt:?}; queued={queued}; shell={shell:?}; idle_confirmed={idle_confirmed:?}; blocked={blocked}; output={output}"
         );
         assert!(!root.path().join("codex-config/config.toml").exists());
@@ -21945,17 +21977,13 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !argv.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let actual = std::fs::read_to_string(&argv);
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(5)).await;
         handle_session(
             &state,
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let actual = actual.expect("agent must record launch argv");
+        assert!(!actual.is_empty(), "agent must record launch argv");
         assert!(
             !actual.contains("trust_level"),
             "opt-out must preserve Codex trust behavior: {actual}"
@@ -22019,12 +22047,12 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
-        let prompt = std::fs::read_to_string(&submitted).unwrap_or_default();
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
+        let prompt =
+            wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         handle_session(
             &state,
             &serde_json::json!({"action":"kill", "session_id":sid}),
@@ -22095,10 +22123,7 @@ mod tests {
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !argv.exists() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(5)).await;
         let output = loop {
             let output = handle_session(
                 &state,
@@ -22162,11 +22187,7 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !accepted.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let task = std::fs::read_to_string(&accepted);
+        let task = wait_for_file_content_async(&accepted, std::time::Duration::from_secs(5)).await;
         let output = handle_session(
             &state,
             &serde_json::json!({"action":"output", "session_id":sid, "format":"raw", "limit": 4096}),
@@ -22178,7 +22199,12 @@ mod tests {
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let task = task.unwrap_or_else(|error| panic!("managed child must pass trust dialog without manual input: {error}; armed={armed}; keys={:?}; output={output}", std::fs::read_to_string(&observed_keys)));
+        if task.is_empty() {
+            panic!(
+                "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
+                std::fs::read_to_string(&observed_keys)
+            );
+        }
         assert!(
             task.contains("say READY"),
             "spawn prompt must remain submitted: {task}"

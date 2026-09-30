@@ -808,6 +808,14 @@ mod tests {
     /// `CARGO_BIN_EXE_*` exists for integration tests, and these are unit tests
     /// inside the lib, so the path is derived: a unit-test binary lives in
     /// `<target>/<profile>/deps/` and the package's binaries one level up.
+    ///
+    /// Cargo builds a package's binaries only when an integration test or a
+    /// bench is selected, so plain `cargo test --lib`/`cargo nextest run --lib`
+    /// leaves this one unbuilt. The nextest `fixture-bins-unix`/`-windows`
+    /// setup scripts (`.config/nextest.toml`) build it once before the run
+    /// starts; building it here on demand used to race under nextest, which
+    /// runs one process per test (ten nested `cargo build`s hit the same
+    /// cargo lock and each waited out its own 120s timeout).
     fn fixture_server() -> PathBuf {
         let mut dir = std::env::current_exe().expect("the test binary's own path");
         dir.pop();
@@ -818,30 +826,12 @@ mod tests {
             "tuic-mcp-fixture-server{}",
             std::env::consts::EXE_SUFFIX
         ));
-        if !exe.exists() {
-            // Cargo builds a package's binaries only when an integration test
-            // or a bench is selected, so `cargo test --lib` leaves this one
-            // unbuilt. Build it rather than fail on the caller's flag.
-            build_fixture_server();
-        }
         assert!(
             exe.exists(),
             "{} was not built; it is a [[bin]] of this package",
             exe.display(),
         );
         exe
-    }
-
-    fn build_fixture_server() {
-        static BUILT: std::sync::Once = std::sync::Once::new();
-        BUILT.call_once(|| {
-            let status = std::process::Command::new(env!("CARGO"))
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .args(["build", "--bin", "tuic-mcp-fixture-server"])
-                .status()
-                .expect("run cargo to build the fixture server");
-            assert!(status.success(), "building the fixture server failed");
-        });
     }
 
     /// A config that runs the fixture MCP server in one of its named scenarios.

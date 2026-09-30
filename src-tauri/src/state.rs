@@ -8200,6 +8200,9 @@ mod tests {
             )
             .unwrap();
         }
+        // The nextest `fixture-bins-unix`/`-windows` setup scripts
+        // (`.config/nextest.toml`) build this [[bin]] once before the run
+        // starts; `cargo nextest run --lib` never builds it on its own.
         let executable = std::env::current_exe()
             .unwrap()
             .parent()

@@ -159,6 +159,7 @@ bench = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
+cc = "1"
 
 [dependencies]
 tuic-terminal = { path = "crates/tuic-terminal" }
@@ -219,6 +220,8 @@ hex = "0.4"
 ring = "0.17"
 dirs = "6"
 tauri-plugin-dialog = { version = "2.7", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+notify-rust = { version = "4.18", optional = true }
 # Direct, because the file pickers must run inside OUR main-thread closure — see
 # native_dialog.rs. Version and features are copied from tauri-plugin-dialog's own
 # rfd dependency on purpose: a mismatch forks the lockfile into two rfd builds.
@@ -308,6 +311,8 @@ desktop = [
     "dep:tauri-build",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-notification",
+    "dep:mac-notification-sys",
     "dep:rfd",
     "dep:tauri-plugin-single-instance",
     "dep:tauri-plugin-window-state",
@@ -332,6 +337,7 @@ tokio-console = ["console-subscriber"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
+mac-notification-sys = { version = "0.6.15", optional = true }
 objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSDictionary", "NSString", "NSValue"], optional = true }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "block2"], optional = true }
 block2 = { version = "0.6", optional = true }
