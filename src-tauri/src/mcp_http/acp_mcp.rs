@@ -818,6 +818,34 @@ mod tests {
         );
     }
 
+    /// ego refuses to admit a server whose `resources/list` omits the
+    /// 2026-07-28 result envelope (#1318-abd7): `session/new` fails with
+    /// "MCP server `tuicommander`: server configuration is invalid". Every
+    /// resource result on this channel must carry all three fields, exactly as
+    /// `tools/list` does.
+    #[tokio::test]
+    async fn every_resource_result_carries_the_result_envelope() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+
+        for (method, params) in [
+            ("resources/list", None),
+            ("resources/read", object(json!({ "uri": WORKSPACE_URI }))),
+            ("resources/subscribe", object(json!({ "uri": INBOX_URI }))),
+            ("resources/unsubscribe", object(json!({ "uri": INBOX_URI }))),
+        ] {
+            let result = host
+                .message(&id, method.to_owned(), params)
+                .await
+                .expect(method);
+            assert_eq!(result["resultType"], "complete", "{method}: {result}");
+            assert_eq!(result["ttlMs"], 0, "{method}: {result}");
+            assert_eq!(result["cacheScope"], "private", "{method}: {result}");
+        }
+    }
+
     #[test]
     fn the_workspace_names_every_repo_and_the_one_being_viewed() {
         let state = test_state();
