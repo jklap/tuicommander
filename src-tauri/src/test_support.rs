@@ -7,6 +7,15 @@ pub(crate) use tuic_test_support::{
     test_temp_root,
 };
 
+/// Scratch dir short enough to bind a Unix socket whatever the checkout path.
+#[cfg(unix)]
+pub(crate) fn short_socket_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("s")
+        .tempdir_in(short_socket_test_temp_root())
+        .expect("short socket test dir")
+}
+
 /// Snapshot the fake SSH PID and any direct children before tunnel teardown.
 #[cfg(unix)]
 pub(crate) fn fake_ssh_processes(marker: &std::path::Path) -> Vec<i32> {
