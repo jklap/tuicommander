@@ -7580,6 +7580,23 @@ impl ChunkProcessor {
                             {
                                 state.claude_session_map.remove(&old_claude_id);
                             }
+                            // The reverse case: this claude_session_id may already be
+                            // claimed by a DIFFERENT TUIC session (e.g. two tabs racing
+                            // to resume the same transcript, or attacker-supplied PTY
+                            // output claiming an id another live session already owns).
+                            // That other session's own `tuic_to_claude_session` entry
+                            // would otherwise go stale, pointing at an id this map is
+                            // about to reassign — clear it so it can't later be used to
+                            // wrongly evict THIS session's mapping on close.
+                            if let Some(prev_owner) =
+                                state.claude_session_map.get(&claude_session_id)
+                                && *prev_owner != session_id
+                            {
+                                let prev_owner = prev_owner.clone();
+                                state
+                                    .tuic_to_claude_session
+                                    .remove_if(&prev_owner, |_, v| *v == claude_session_id);
+                            }
                             state
                                 .claude_session_map
                                 .insert(claude_session_id.clone(), session_id.to_string());
@@ -8783,9 +8800,17 @@ fn retire_peer_identity(state: &AppState, tuic_session: &str) {
 /// **A new per-session map belongs in one of these two functions and nowhere else.**
 fn remove_live_session_state(session_id: &str, state: &AppState) {
     // Reverse-map removal keeps this O(1) instead of scanning
-    // `claude_session_map` for a matching value.
+    // `claude_session_map` for a matching value. Guarded by an equality check
+    // on removal, not a blind `.remove(&claude_session_id)`: if two TUIC
+    // sessions ever reported the SAME claude_session_id (last-write-wins on
+    // insert — see the `ccsession` OSC handler above), `claude_session_map`
+    // now points at whichever session claimed it most recently, which may not
+    // be this one. Without this check, closing the STALE claimant would wipe
+    // out the CURRENT, still-valid mapping for the other, still-live session.
     if let Some((_, claude_session_id)) = state.tuic_to_claude_session.remove(session_id) {
-        state.claude_session_map.remove(&claude_session_id);
+        state
+            .claude_session_map
+            .remove_if(&claude_session_id, |_, v| v == session_id);
     }
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final

@@ -170,6 +170,45 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("sessionDiffAutoOpen hydrate fallback", () => {
+		it("normalizes an unrecognized on-disk value to the safe 'ask' default, never 'auto'", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					mcp_server_enabled: false,
+					ide: "vscode",
+					default_font_size: 13,
+					// A garbage/corrupted value (hand-edited config.json, a future
+					// removed value, etc.) must never silently resolve to "auto" —
+					// that would auto-open a tab with no user opt-in.
+					session_diff_auto_open: "garbage-value",
+				});
+				await store.hydrate();
+				expect(store.state.sessionDiffAutoOpen).toBe("ask");
+			});
+		});
+
+		it("preserves a valid on-disk 'off'/'auto' value", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					mcp_server_enabled: false,
+					ide: "vscode",
+					default_font_size: 13,
+					session_diff_auto_open: "auto",
+				});
+				await store.hydrate();
+				expect(store.state.sessionDiffAutoOpen).toBe("auto");
+			});
+		});
+	});
+
 	describe("setIde()", () => {
 		it("updates IDE preference in state", () => {
 			testInScope(() => {
