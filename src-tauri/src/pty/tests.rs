@@ -13911,6 +13911,73 @@ fn tuic_osc_unknown_verb_is_ignored_without_panicking() {
     );
 }
 
+/// A TUIC session that reports a SECOND, different `ccsession` value (a
+/// `claude --resume` into a new session id, an agent restart, or — since
+/// this is PTY output, i.e. attacker-controlled input — a crafted OSC 7770
+/// sequence a `cat`'d file could emit repeatedly) must not leave the FIRST
+/// claude_session_id permanently mapped in `AppState::claude_session_map`.
+/// Before the fix, only `tuic_to_claude_session` was ever overwritten;
+/// `claude_session_map` accumulated one entry per distinct value forever,
+/// bounded only by how many different ids a single long-lived terminal
+/// happened to emit over its life.
+#[test]
+fn ccsession_retires_the_previous_claude_session_mapping_for_the_same_tuic_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-ccsession-retire";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-first\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-first")
+            .map(|v| v.clone()),
+        Some(session_id.to_string())
+    );
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-second\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-second")
+            .map(|v| v.clone()),
+        Some(session_id.to_string()),
+        "the new mapping must be present"
+    );
+    assert!(
+        state.claude_session_map.get("claude-first").is_none(),
+        "the superseded claude_session_id must be evicted, not left leaking forever"
+    );
+    assert_eq!(
+        state
+            .tuic_to_claude_session
+            .get(session_id)
+            .map(|v| v.clone()),
+        Some("claude-second".to_string())
+    );
+}
+
 #[test]
 fn percent_decode_osc_payload_passes_through_plain_text() {
     assert_eq!(percent_decode_osc_payload("Bash"), "Bash");

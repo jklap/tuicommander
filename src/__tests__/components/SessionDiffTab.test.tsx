@@ -851,6 +851,35 @@ describe("SessionDiffTab", () => {
 			}
 		});
 
+		it("unmounting mid-flash clears the pending fade timer instead of leaking it", async () => {
+			vi.useFakeTimers();
+			try {
+				const handlers = captureListenHandlers();
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }),
+				);
+				const { unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+				await vi.advanceTimersByTimeAsync(0);
+				h.navVisibleIndices = new Set([0]);
+
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r2", cumulative_patch: "changed" })] }),
+				);
+				handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+				await vi.advanceTimersByTimeAsync(0);
+
+				const pendingTimers = vi.getTimerCount();
+				expect(pendingTimers).toBeGreaterThan(0);
+				unmount();
+				// Every timer flashFiles() scheduled must be cleared on unmount, not
+				// just the component's own reactive roots torn down — a fade timer
+				// left running would call setFlashKeys on a disposed signal.
+				expect(vi.getTimerCount()).toBeLessThan(pendingTimers);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("file mode: a changed file that's off-screen is held behind a 'Refresh (N)' pill until clicked", async () => {
 			const handlers = captureListenHandlers();
 			h.getSessionReview.mockResolvedValue(review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }));
