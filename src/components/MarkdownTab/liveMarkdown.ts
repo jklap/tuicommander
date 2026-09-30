@@ -1,5 +1,5 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { ensureSyntaxTree, type LanguageSupport, syntaxTree } from "@codemirror/language";
+import type { LanguageSupport } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import {
 	Annotation,
@@ -69,8 +69,6 @@ export function liveLineSeparator(text: string): Extension {
 
 interface LiveValue {
 	decorations: DecorationSet;
-	/** Markdown marks currently hidden (heading, emphasis, code, link syntax). */
-	marks: Range[];
 	/** Tweak syntax, always hidden and atomic. */
 	tweakRegions: Range[];
 	tweakAtomic: DecorationSet;
@@ -79,19 +77,9 @@ interface LiveValue {
 }
 
 const hide = Decoration.replace({});
-const HEADING = /^ATXHeading([1-6])$/;
-
-/** Lines (1-based, inclusive) touched by any selection range. */
-function selectedLineSpans(state: EditorState): Range[] {
-	return state.selection.ranges.map((r) => ({
-		from: state.doc.lineAt(r.from).number,
-		to: state.doc.lineAt(r.to).number,
-	}));
-}
 
 function buildLive(state: EditorState): LiveValue {
-	const doc = state.doc;
-	const source = doc.toString();
+	const source = state.doc.toString();
 	const { spans, standalone } = findTweakSyntax(source);
 	const tweakRegions: Range[] = [...spans.flatMap((s) => [s.begin, s.end]), ...standalone].sort(
 		(a, b) => a.from - b.from,
@@ -109,83 +97,19 @@ function buildLive(state: EditorState): LiveValue {
 			);
 		}
 	}
-
-	const marks: Range[] = [];
-	const selected = selectedLineSpans(state);
-	const revealed = (from: number, to: number) => {
-		const a = doc.lineAt(from).number;
-		const b = doc.lineAt(to).number;
-		return selected.some((l) => l.from <= b && a <= l.to);
-	};
-	const overlapsTweak = (from: number, to: number) => tweakRegions.some((r) => from < r.to && r.from < to);
-	const hideMark = (from: number, to: number) => {
-		if (overlapsTweak(from, to)) return;
-		marks.push({ from, to });
-		decos.push(hide.range(from, to));
-	};
-
-	const tree = ensureSyntaxTree(state, doc.length, 50) ?? syntaxTree(state);
-	tree.iterate({
-		enter: (ref) => {
-			const heading = HEADING.exec(ref.name);
-			if (heading) {
-				decos.push(Decoration.line({ class: `cm-live-h${heading[1]}` }).range(doc.lineAt(ref.from).from));
-				if (!revealed(ref.from, ref.to)) {
-					const mark = ref.node.getChild("HeaderMark");
-					if (mark) hideMark(mark.from, doc.sliceString(mark.to, mark.to + 1) === " " ? mark.to + 1 : mark.to);
-				}
-				return;
-			}
-			const styleClass = INLINE_STYLE[ref.name];
-			if (styleClass) decos.push(Decoration.mark({ class: styleClass }).range(ref.from, ref.to));
-			const markName = INLINE_MARK[ref.name];
-			if (markName && !revealed(ref.from, ref.to)) {
-				for (const mark of ref.node.getChildren(markName)) hideMark(mark.from, mark.to);
-			}
-			if (ref.name === "Link") {
-				const linkMarks = ref.node.getChildren("LinkMark");
-				if (linkMarks.length < 2) return;
-				decos.push(Decoration.mark({ class: "cm-live-link" }).range(linkMarks[0].to, linkMarks[1].from));
-				if (!revealed(ref.from, ref.to)) {
-					hideMark(linkMarks[0].from, linkMarks[0].to);
-					hideMark(linkMarks[1].from, ref.to);
-				}
-			}
-		},
-	});
-
-	return { decorations: Decoration.set(decos, true), marks, tweakRegions, tweakAtomic, spans, standalone };
+	return { decorations: Decoration.set(decos, true), tweakRegions, tweakAtomic, spans, standalone };
 }
-
-const INLINE_STYLE: Record<string, string> = {
-	Emphasis: "cm-live-em",
-	StrongEmphasis: "cm-live-strong",
-	Strikethrough: "cm-live-strike",
-	InlineCode: "cm-live-code",
-};
-const INLINE_MARK: Record<string, string> = {
-	Emphasis: "EmphasisMark",
-	StrongEmphasis: "EmphasisMark",
-	Strikethrough: "StrikethroughMark",
-	InlineCode: "CodeMark",
-};
 
 const liveField = StateField.define<LiveValue>({
 	create: buildLive,
 	update(value, tr) {
-		if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState)) return buildLive(tr.state);
-		return value;
+		return tr.docChanged ? buildLive(tr.state) : value;
 	},
 	provide: (f) => EditorView.decorations.from(f, (v) => v.decorations),
 });
 
 export function liveDecorations(state: EditorState): DecorationSet {
 	return state.field(liveField).decorations;
-}
-
-/** Markdown syntax marks hidden right now (off the cursor lines). */
-export function liveHiddenRanges(state: EditorState): Range[] {
-	return state.field(liveField).marks;
 }
 
 /** Tweak comment syntax: hidden regardless of the cursor, and atomic. */
@@ -279,16 +203,11 @@ const tweakGuard = EditorState.transactionFilter.of((tr): TransactionSpec | read
 	return { changes: safe, annotations: Transaction.userEvent.of(event), scrollIntoView: true };
 });
 
+/**
+ * The preview's look, read from the same tokens as `markdown-content.css`
+ * (a test compares the two). Headings are line decorations, so the rule under h1/h2 spans the line.
+ */
 const liveTheme = EditorView.baseTheme({
-	".cm-live-h1": { fontSize: "1.6em", fontWeight: "700" },
-	".cm-live-h2": { fontSize: "1.4em", fontWeight: "700" },
-	".cm-live-h3": { fontSize: "1.2em", fontWeight: "700" },
-	".cm-live-h4, .cm-live-h5, .cm-live-h6": { fontWeight: "700" },
-	".cm-live-strong": { fontWeight: "700" },
-	".cm-live-em": { fontStyle: "italic" },
-	".cm-live-strike": { textDecoration: "line-through" },
-	".cm-live-code": { fontFamily: "var(--font-mono)", background: "var(--bg-tertiary)", borderRadius: "3px" },
-	".cm-live-link": { color: "var(--accent)", textDecoration: "underline" },
 	".tweak-highlight": {
 		background: "color-mix(in srgb, var(--tweak-highlight) 25%, transparent)",
 		borderBottom: "1.5px solid color-mix(in srgb, var(--tweak-highlight) 70%, transparent)",
@@ -296,7 +215,7 @@ const liveTheme = EditorView.baseTheme({
 	".tweak-highlight:hover": { background: "color-mix(in srgb, var(--tweak-highlight) 40%, transparent)" },
 });
 
-/** Live-preview extension: hidden marks, tweak presentation, atomic markers, edit guard. */
+/** Tweak-comment presentation for the block editor: hidden atomic markers, highlight, edit guard. */
 export function liveMarkdown(): Extension {
 	return [
 		liveField,

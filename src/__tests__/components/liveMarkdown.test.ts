@@ -14,7 +14,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	addTweakCommentAtSelection,
 	liveDecorations,
-	liveHiddenRanges,
 	liveLineSeparator,
 	liveMarkdown,
 	liveModeSupported,
@@ -62,39 +61,6 @@ function assertBalanced(doc: string) {
 	expect(begins).toBe(ends);
 	expect(parseInlineTweakComments(doc).length).toBe(begins);
 }
-
-describe("marks hidden off the cursor line", () => {
-	const DOC = "# Title\n\nsome **bold** and `code` and [link](http://x.io) and *it*\n\nlast";
-
-	it("hides heading, emphasis, inline code and link marks on other lines", () => {
-		// catches: marks left visible everywhere (no live effect)
-		const s = stateOf(DOC, DOC.length);
-		expect(texts(s, liveHiddenRanges(s)).sort()).toEqual(
-			["# ", "**", "**", "*", "*", "`", "`", "[", "](http://x.io)"].sort(),
-		);
-	});
-
-	it("shows every mark on the line holding the cursor", () => {
-		// catches: decorations hiding text being edited
-		const at = DOC.indexOf("bold");
-		const s = stateOf(DOC, at);
-		const hidden = texts(s, liveHiddenRanges(s));
-		expect(hidden).toEqual(["# "]);
-	});
-
-	it("shows marks on every line touched by a multi-line selection", () => {
-		// catches: only the head line revealed
-		const s = stateOf(DOC, 0, DOC.indexOf("bold"));
-		expect(liveHiddenRanges(s)).toEqual([]);
-	});
-
-	it("keeps fenced-code fences and text visible", () => {
-		// catches: hiding fence marks of code blocks
-		const doc = "```js\nconst a = 1;\n```\n\nend";
-		const s = stateOf(doc, doc.length);
-		expect(liveHiddenRanges(s)).toEqual([]);
-	});
-});
 
 describe("lossless round trip", () => {
 	const WITH_TWEAK = `${CONVENTION_HEADER}# T\n\nx ${inline("c1", "word", "note **b**")} y\n\n- [~] item\n`;
