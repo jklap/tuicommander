@@ -1,11 +1,11 @@
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { terminalsStore } from "../stores/terminals";
-import { getShellFamily, sendCommand } from "./sendCommand";
+import { sendCommand } from "./sendCommand";
 
 /** Send text to a specific PTY session as a command, routed through the
  *  canonical `sendCommand` (agent-aware split Enter for Ink raw mode,
- *  bracketed-paste for multi-line, Windows-native Ctrl-U skip).
+ *  bracketed-paste for multi-line).
  *
  *  Uses the smart `invoke` wrapper so it works in both Tauri and browser modes.
  *  Bypassing `sendCommand` (raw `write_pty` text + "\r") submits in browser
@@ -13,8 +13,7 @@ import { getShellFamily, sendCommand } from "./sendCommand";
  *  to-back IPC writes land in one PTY read chunk and Ink swallows the Enter. */
 export async function sendTextToSession(sessionId: string, text: string, submit = true): Promise<void> {
 	const agentType = terminalsStore.getAgentTypeForSession(sessionId);
-	const shellFamily = await getShellFamily(sessionId);
-	await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, shellFamily, submit);
+	await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, submit);
 }
 
 /** Send text to the currently-active terminal as a command.

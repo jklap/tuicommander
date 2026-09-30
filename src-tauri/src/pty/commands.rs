@@ -510,23 +510,6 @@ pub(crate) fn get_shell_state(
         })
 }
 
-/// Return the classified shell family for a PTY session.
-/// Lets the frontend pick the correct control sequences (e.g. Ctrl-U as
-/// line-kill for POSIX readline vs. literal-char on cmd.exe/PowerShell)
-/// without re-deriving the classification on every keystroke.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) fn get_session_shell_family(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-) -> Option<ShellFamily> {
-    state
-        .session_maps
-        .sessions
-        .get(&session_id)
-        .map(|entry| classify_shell(&entry.lock().shell))
-}
-
 /// Enable or disable VT100 diff rendering for a PTY session.
 /// Resize a PTY session
 #[cfg(feature = "desktop")]

@@ -44,7 +44,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 		notesStore.markUsed(note.id);
 		try {
 			// Route through the canonical sendCommand helper (split Enter for Ink
-			// raw mode, bracketed-paste for multi-line, Windows-native Ctrl-U skip).
+			// raw mode, bracketed-paste for multi-line).
 			await sendCommand((data) => retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data })), note.text);
 		} catch (err) {
 			appLogger.error("network", `Ideas send failed: ${err instanceof Error ? err.message : String(err)}`);

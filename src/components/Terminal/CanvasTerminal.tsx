@@ -21,7 +21,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
-import { getShellFamily, sendCommand, shouldAutoSubmitSuggestion } from "../../utils/sendCommand";
+import { sendCommand, shouldAutoSubmitSuggestion } from "../../utils/sendCommand";
 import { switchToTerminalBySession } from "../../utils/switchToTerminalBySession";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
@@ -375,7 +375,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			},
 			sendText: async (text, autoSubmitAllowed) => {
 				const agentType = terminalsStore.getAgentTypeForSession(props.sessionId);
-				const shellFamily = await getShellFamily(props.sessionId);
 				const submit = autoSubmitAllowed && shouldAutoSubmitSuggestion(agentType, text);
 				await sendCommand(
 					async (data) => {
@@ -383,7 +382,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					},
 					text,
 					agentType,
-					shellFamily,
 					submit,
 				);
 			},

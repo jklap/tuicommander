@@ -49,7 +49,7 @@ pub struct PtySession {
     pub display_name: Option<String>,                   // UI/agent/intent title
     pub display_name_is_custom: bool,                   // Explicit user rename wins over OSC/intent
     pub is_remote: bool,                                // Created through HTTP/MCP, not the desktop UI
-    pub shell: String,                                  // Resolved spawn command, kept for shell-family classification
+    pub shell: String,                                  // Resolved spawn command, used to confirm a real shell foreground
 }
 ```
 

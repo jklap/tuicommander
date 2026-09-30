@@ -1740,7 +1740,8 @@ pub struct PtySession {
     pub is_remote: bool,
     /// Resolved shell command used to spawn the PTY (e.g. "/bin/zsh",
     /// "C:\\Program Files\\Git\\bin\\bash.exe", "wsl.exe -d Ubuntu").
-    /// Kept so `get_session_shell_family` can classify without re-resolving.
+    /// Used by `clear_agent_type_on_confirmed_shell` to confirm a real shell
+    /// foreground without re-resolving.
     pub shell: String,
 }
 

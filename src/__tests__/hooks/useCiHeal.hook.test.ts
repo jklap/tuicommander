@@ -21,7 +21,6 @@ const h = vi.hoisted(() => {
 		toastAdd: vi.fn(),
 		invoke: vi.fn().mockResolvedValue("raw ci log"),
 		sendCommand: vi.fn().mockResolvedValue(undefined),
-		getShellFamily: vi.fn().mockResolvedValue("zsh"),
 	};
 });
 
@@ -59,7 +58,7 @@ vi.mock("../../stores/terminals", () => ({
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: h.toastAdd } }));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));
-vi.mock("../../utils/sendCommand", () => ({ sendCommand: h.sendCommand, getShellFamily: h.getShellFamily }));
+vi.mock("../../utils/sendCommand", () => ({ sendCommand: h.sendCommand }));
 vi.mock("../../transport", () => ({ rpc: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../i18n", () => ({ t: (_k: string, fallback: string) => fallback }));
 
@@ -87,7 +86,6 @@ describe("useCiHeal budget + re-entry guard", () => {
 		h.invoke.mockClear();
 		h.invoke.mockResolvedValue("raw ci log");
 		h.sendCommand.mockClear();
-		h.getShellFamily.mockClear();
 		createRoot((d) => {
 			dispose = d;
 			useCiHeal();

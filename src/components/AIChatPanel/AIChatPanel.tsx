@@ -18,7 +18,7 @@ import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { createThrottled } from "../../utils/createThrottled";
-import { getShellFamily, sendCommand } from "../../utils/sendCommand";
+import { sendCommand } from "../../utils/sendCommand";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
@@ -407,7 +407,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			return;
 		}
 		const resolvedRef = termRef;
-		const shellFamily = await getShellFamily(sessionId);
 		const lines = code.trim().split("\n");
 		for (const line of lines) {
 			await sendCommand(
@@ -417,7 +416,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				},
 				line,
 				agentType,
-				shellFamily,
 			);
 		}
 	};

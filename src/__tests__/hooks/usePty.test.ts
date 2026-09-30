@@ -171,17 +171,13 @@ describe("usePty", () => {
 
 	describe("sendCommand()", () => {
 		it("uses the central command helper to insert reviewable text without Enter", async () => {
-			mockInvoke.mockImplementation(async (command: string) => {
-				if (command === "get_session_shell_family") return "posix";
-				return undefined;
-			});
+			mockInvoke.mockResolvedValue(undefined);
 
 			await pty.sendCommand("sess-review", "review this prompt", "codex", false);
 
-			expect(mockInvoke).toHaveBeenCalledWith("get_session_shell_family", { sessionId: "sess-review" });
 			expect(mockInvoke).toHaveBeenCalledWith("write_pty", {
 				sessionId: "sess-review",
-				data: "\x15review this prompt",
+				data: "review this prompt",
 			});
 			expect(mockInvoke).not.toHaveBeenCalledWith("write_pty", {
 				sessionId: "sess-review",

@@ -285,12 +285,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { enabled: args.enabled, session_id: args.sessionId ?? null },
 		}),
 	},
-	get_session_shell_family: {
-		map: (args) => ({
-			method: "GET",
-			path: `/sessions/${args.sessionId}/shell-family`,
-		}),
-	},
 	get_shell_state: {
 		map: (args) => ({
 			method: "GET",

@@ -1,7 +1,7 @@
 import { appLogger } from "../stores/appLogger";
 import { dictationStore } from "../stores/dictation";
 import { terminalsStore } from "../stores/terminals";
-import { getShellFamily, sendCommand } from "../utils/sendCommand";
+import { sendCommand } from "../utils/sendCommand";
 
 /** Transcription result from the Rust backend */
 interface TranscribeResponse {
@@ -162,8 +162,7 @@ export function useDictation(deps: DictationDeps) {
 			try {
 				const writeFn = (data: string) => deps.pty.write(targetSessionId, data);
 				if (autoSend) {
-					const shellFamily = await getShellFamily(targetSessionId);
-					await sendCommand(writeFn, text, active.agentType, shellFamily);
+					await sendCommand(writeFn, text, active.agentType);
 				} else {
 					await writeFn(text);
 				}

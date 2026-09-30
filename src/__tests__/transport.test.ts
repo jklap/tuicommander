@@ -515,7 +515,6 @@ describe("transport", () => {
 				["get_dictation_config", {}, "GET", "/dictation/config"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
-				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
 			])("maps %s to %s %s", (command, args, method, path) => {
 				const result = mapCommandToHttp(command as string, args as Record<string, unknown>);
 				expect(result.method).toBe(method);

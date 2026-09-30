@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { resetPlatformCache } from "../../platform";
+import { describe, expect, it } from "vitest";
 import {
 	AGENT_ENTER_GAP_MS,
 	containsShellMetacharacters,
@@ -19,114 +18,49 @@ function makeRecorder() {
 	return { writeFn, calls };
 }
 
-/**
- * Replace navigator.platform for the duration of a test so isWindows()
- * returns the expected value. Restored via afterEach.
- *
- * The cache reset is not optional: `detectPlatform` answers from the UA string
- * once and remembers, because the platform cannot change while the app runs.
- * Swapping `navigator.platform` without clearing it leaves the answer from
- * whichever test ran first, which makes the outcome depend on file order.
- */
-function setPlatform(value: string) {
-	Object.defineProperty(navigator, "platform", {
-		value,
-		configurable: true,
-	});
-	resetPlatformCache();
-}
-
 describe("sendCommand", () => {
-	const originalPlatform = navigator.platform;
-
-	afterEach(() => {
-		setPlatform(originalPlatform);
+	it("never sends a leading Ctrl-U prefix, for an agent session", async () => {
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "ls", "claude");
+		expect(calls).toEqual(["ls", "\r"]);
 	});
 
-	it("always sends Ctrl-U prefix when an agent is attached (ignores shellFamily)", async () => {
-		setPlatform("Win32");
+	it("never sends a leading Ctrl-U prefix, for a plain shell", async () => {
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "ls", "claude", "windows-native");
-		expect(calls).toEqual(["\x15ls", "\r"]);
-	});
-
-	it("sends Ctrl-U for POSIX shellFamily even when running on Windows (git-bash regression)", async () => {
-		setPlatform("Win32");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "ls", null, "posix");
-		expect(calls).toEqual(["\x15ls", "\r"]);
-	});
-
-	it("skips Ctrl-U for windows-native shellFamily when no agent", async () => {
-		setPlatform("Win32");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "dir", null, "windows-native");
-		expect(calls).toEqual(["dir", "\r"]);
-	});
-
-	it("falls back to platform heuristic for unknown shellFamily on Windows (skip)", async () => {
-		setPlatform("Win32");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "echo hi", null, "unknown");
-		expect(calls).toEqual(["echo hi", "\r"]);
-	});
-
-	it("falls back to platform heuristic for unknown shellFamily on macOS (send Ctrl-U)", async () => {
-		setPlatform("MacIntel");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "ls", null, "unknown");
-		expect(calls).toEqual(["\x15ls", "\r"]);
-	});
-
-	it("falls back to platform heuristic when shellFamily omitted on macOS", async () => {
-		setPlatform("MacIntel");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "ls");
-		expect(calls).toEqual(["\x15ls", "\r"]);
-	});
-
-	it("falls back to platform heuristic when shellFamily omitted on Windows", async () => {
-		setPlatform("Win32");
-		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "dir");
-		expect(calls).toEqual(["dir", "\r"]);
+		await sendCommand(writeFn, "ls", null);
+		expect(calls).toEqual(["ls", "\r"]);
 	});
 
 	it("wraps multi-line text in bracketed paste sequences", async () => {
-		setPlatform("MacIntel");
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "line1\nline2", null, "posix");
-		expect(calls).toEqual(["\x15\x1b[200~line1\nline2\x1b[201~", "\r"]);
+		await sendCommand(writeFn, "line1\nline2", null);
+		expect(calls).toEqual(["\x1b[200~line1\nline2\x1b[201~", "\r"]);
 	});
 
 	it("does not wrap single-line text in bracketed paste", async () => {
-		setPlatform("MacIntel");
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "single line", null, "posix");
-		expect(calls).toEqual(["\x15single line", "\r"]);
+		await sendCommand(writeFn, "single line", null);
+		expect(calls).toEqual(["single line", "\r"]);
 	});
 
-	it("sends Enter as a separate write regardless of prefix decision", async () => {
-		setPlatform("MacIntel");
+	it("sends Enter as a separate write", async () => {
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "foo", null, "posix");
+		await sendCommand(writeFn, "foo", null);
 		expect(calls.length).toBe(2);
 		expect(calls[1]).toBe("\r");
 	});
 
 	it("withholds the trailing Enter when submit is false", async () => {
-		setPlatform("MacIntel");
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "rm -rf /", null, "posix", false);
-		// Text is typed (with Ctrl-U prefix) but NOT executed — user must press Enter.
-		expect(calls).toEqual(["\x15rm -rf /"]);
+		await sendCommand(writeFn, "rm -rf /", null, false);
+		// Text is typed but NOT executed — user must press Enter.
+		expect(calls).toEqual(["rm -rf /"]);
 	});
 
 	it("submits by default (submit omitted) — backward compatible", async () => {
-		setPlatform("MacIntel");
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "ls", null, "posix");
-		expect(calls).toEqual(["\x15ls", "\r"]);
+		await sendCommand(writeFn, "ls", null);
+		expect(calls).toEqual(["ls", "\r"]);
 	});
 
 	/**
@@ -136,55 +70,49 @@ describe("sendCommand", () => {
 	 * of submitting — the suggestion is typed but never sent.
 	 */
 	it("separates the Enter from the payload in TIME when an agent is attached", async () => {
-		setPlatform("MacIntel");
 		const stamps: number[] = [];
 		const writeFn = async (): Promise<void> => {
 			stamps.push(performance.now());
 		};
-		await sendCommand(writeFn, "run the tests", "codex", "posix");
+		await sendCommand(writeFn, "run the tests", "codex");
 		expect(stamps.length).toBe(2);
 		// setTimeout never fires early; allow a small scheduler tolerance.
 		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
 	});
 
 	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {
-		setPlatform("MacIntel");
 		const stamps: number[] = [];
 		const writeFn = async (): Promise<void> => {
 			stamps.push(performance.now());
 		};
-		await sendCommand(writeFn, "ls", null, "posix");
+		await sendCommand(writeFn, "ls", null);
 		expect(stamps[1] - stamps[0]).toBeLessThan(AGENT_ENTER_GAP_MS);
 	});
 
 	/**
-	 * pi (0.83.0) accepts BOTH shapes — verified live against a real pi PTY:
-	 * a single combined `text\r` write submits, and so does the split
-	 * Ctrl-U + text / gap / CR sequence this function emits. Ctrl-U is consumed
-	 * as a line-kill, never echoed literally. So pi needs no special-casing: it
-	 * takes the same agent path as every other agent. This pins that — a future
-	 * "optimization" that routes pi around the gap would be a silent regression
-	 * on the agents that DO need it, for no gain on pi.
+	 * pi (0.83.0) accepts a plain `text\r` write and submits — verified live
+	 * against a real pi PTY. So pi needs no special-casing: it takes the same
+	 * agent path (gapped Enter, no prefix) as every other agent. This pins
+	 * that — a future "optimization" that routes pi around the gap would be a
+	 * silent regression on the agents that DO need it, for no gain on pi.
 	 */
-	it("routes pi through the standard agent path (Ctrl-U + gapped Enter)", async () => {
-		setPlatform("MacIntel");
+	it("routes pi through the standard agent path (gapped Enter, no prefix)", async () => {
 		const stamps: number[] = [];
 		const calls: string[] = [];
 		const writeFn = async (data: string): Promise<void> => {
 			calls.push(data);
 			stamps.push(performance.now());
 		};
-		await sendCommand(writeFn, "say only the word OK", "pi", "posix");
-		expect(calls).toEqual(["\x15say only the word OK", "\r"]);
+		await sendCommand(writeFn, "say only the word OK", "pi");
+		expect(calls).toEqual(["say only the word OK", "\r"]);
 		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
 	});
 
 	it("does not delay when the Enter is withheld", async () => {
-		setPlatform("MacIntel");
 		const started = performance.now();
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "run the tests", "codex", "posix", false);
-		expect(calls).toEqual(["\x15run the tests"]);
+		await sendCommand(writeFn, "run the tests", "codex", false);
+		expect(calls).toEqual(["run the tests"]);
 		expect(performance.now() - started).toBeLessThan(AGENT_ENTER_GAP_MS);
 	});
 });

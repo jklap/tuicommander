@@ -83,7 +83,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "send_input",
-            "description": "Send a command to the terminal. Uses Ctrl-U prefix to clear any existing input, then types the command and presses Enter. Safe for both shells and Ink-based agents.",
+            "description": "Send a command to the terminal. Types the command, then presses Enter in a separate write. Safe for both shells and Ink-based agents.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -594,17 +594,16 @@ fn map_key(name: &str) -> Result<(String, Option<SafeKey>), String> {
 // ── Safe PTY write ────────────────────────────────────────────
 
 /// Write to a PTY session — replicates sendCommand semantics from TypeScript.
-/// Ctrl-U prefix clears existing input, then text, then \r on separate write.
+/// Text, then \r on a separate write.
 fn safe_pty_write(state: &AppState, session_id: &str, command: &str) -> Result<(), String> {
     let writer = state
         .pty_writer(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     let mut writer = writer.lock();
 
-    // Write 1: Ctrl-U + command text
-    let payload = format!("\x15{command}");
+    // Write 1: command text
     writer
-        .write_all(payload.as_bytes())
+        .write_all(command.as_bytes())
         .map_err(|e| format!("PTY write failed: {e}"))?;
     writer
         .flush()

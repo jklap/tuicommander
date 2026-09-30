@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-const { mockTerminals, mockSendCommand, mockGetShellFamily, mockInvoke, mockAppLogger } = vi.hoisted(() => ({
+const { mockTerminals, mockSendCommand, mockInvoke, mockAppLogger } = vi.hoisted(() => ({
 	mockTerminals: {
 		getAgentTypeForSession: vi.fn(() => null as string | null),
 		getActive: vi.fn(),
 	},
 	mockSendCommand: vi.fn().mockResolvedValue(undefined),
-	mockGetShellFamily: vi.fn().mockResolvedValue("posix"),
 	mockInvoke: vi.fn().mockResolvedValue(undefined),
 	mockAppLogger: { error: vi.fn() },
 }));
@@ -16,21 +15,18 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: mockAppLogger }));
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
 vi.mock("../../utils/sendCommand", () => ({
 	sendCommand: mockSendCommand,
-	getShellFamily: mockGetShellFamily,
 }));
 
 import { sendTextToActiveTerminal, sendTextToSession } from "../../utils/sendToActiveTerminal";
 
 describe("sendTextToSession", () => {
-	it("looks up the agent type and shell family, then routes through sendCommand with a write_pty writer", async () => {
+	it("looks up the agent type, then routes through sendCommand with a write_pty writer", async () => {
 		mockTerminals.getAgentTypeForSession.mockReturnValue("claude");
-		mockGetShellFamily.mockResolvedValue("posix");
 
 		await sendTextToSession("s1", "ls -la", true);
 
 		expect(mockTerminals.getAgentTypeForSession).toHaveBeenCalledWith("s1");
-		expect(mockGetShellFamily).toHaveBeenCalledWith("s1");
-		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "ls -la", "claude", "posix", true);
+		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "ls -la", "claude", true);
 
 		// The writer passed to sendCommand must invoke() write_pty for this session.
 		const calls = mockSendCommand.mock.calls;
@@ -41,7 +37,7 @@ describe("sendTextToSession", () => {
 
 	it("defaults submit to true when omitted", async () => {
 		await sendTextToSession("s2", "echo hi");
-		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "echo hi", expect.anything(), "posix", true);
+		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "echo hi", expect.anything(), true);
 	});
 });
 
@@ -72,7 +68,7 @@ describe("sendTextToActiveTerminal", () => {
 
 		await sendTextToActiveTerminal("hello");
 
-		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "hello", expect.anything(), "posix", true);
+		expect(mockSendCommand).toHaveBeenCalledWith(expect.any(Function), "hello", expect.anything(), true);
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 		expect(focus).toHaveBeenCalled();
 	});

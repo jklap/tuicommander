@@ -596,100 +596,6 @@ fn osc7_invalid_percent_encoding() {
     assert!(parse_osc7_cwd("file:///home/%GG").is_err());
 }
 
-// --- classify_shell tests (story 1274-2e38) ---
-
-#[test]
-fn classify_shell_bare_posix_basenames() {
-    for s in [
-        "sh", "bash", "zsh", "fish", "dash", "ksh", "ash", "tcsh", "csh", "mksh",
-    ] {
-        assert_eq!(classify_shell(s), ShellFamily::Posix, "{s}");
-    }
-}
-
-#[test]
-fn classify_shell_absolute_posix_paths() {
-    for s in [
-        "/bin/bash",
-        "/usr/bin/zsh",
-        "/opt/homebrew/bin/fish",
-        "/usr/local/bin/sh",
-    ] {
-        assert_eq!(classify_shell(s), ShellFamily::Posix, "{s}");
-    }
-}
-
-#[test]
-fn classify_shell_windows_native() {
-    for s in [
-        "cmd",
-        "cmd.exe",
-        "C:\\Windows\\System32\\cmd.exe",
-        "powershell",
-        "powershell.exe",
-        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-        "pwsh",
-        "pwsh.exe",
-    ] {
-        assert_eq!(classify_shell(s), ShellFamily::WindowsNative, "{s}");
-    }
-}
-
-/// Critical regression case for story 1274-2e38: Git Bash / Cygwin / MSYS
-/// ship `bash.exe` on Windows and DO support Ctrl-U. Classifying by host
-/// OS would wrongly skip the prefix here; classifying by shell basename
-/// correctly keeps them in the Posix family.
-#[test]
-fn classify_shell_git_bash_on_windows_is_posix() {
-    for s in [
-        "bash.exe",
-        "C:\\Program Files\\Git\\bin\\bash.exe",
-        "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-        "C:/Program Files/Git/bin/bash.exe",
-        "C:\\cygwin64\\bin\\bash.exe",
-        "C:\\msys64\\usr\\bin\\bash.exe",
-    ] {
-        assert_eq!(classify_shell(s), ShellFamily::Posix, "{s}");
-    }
-}
-
-#[test]
-fn classify_shell_wsl_is_posix() {
-    for s in [
-        "wsl",
-        "wsl.exe",
-        "wsl.exe -d Ubuntu",
-        "C:\\Windows\\System32\\wsl.exe",
-    ] {
-        assert_eq!(classify_shell(s), ShellFamily::Posix, "{s}");
-    }
-}
-
-#[test]
-fn classify_shell_case_insensitive() {
-    assert_eq!(classify_shell("BASH.EXE"), ShellFamily::Posix);
-    assert_eq!(classify_shell("Cmd.Exe"), ShellFamily::WindowsNative);
-    assert_eq!(classify_shell("PowerShell.exe"), ShellFamily::WindowsNative);
-}
-
-#[test]
-fn classify_shell_ignores_trailing_arguments() {
-    // Arguments after the first whitespace must not affect classification.
-    assert_eq!(classify_shell("bash --login"), ShellFamily::Posix);
-    assert_eq!(
-        classify_shell("powershell.exe -NoProfile"),
-        ShellFamily::WindowsNative
-    );
-}
-
-#[test]
-fn classify_shell_unknown_for_other_binaries() {
-    // Intentionally unknown — callers should fall back to a safe default.
-    for s in ["python", "node", "/usr/bin/env", "", "   "] {
-        assert_eq!(classify_shell(s), ShellFamily::Unknown, "{s:?}");
-    }
-}
-
 // --- TurnEvidence / EvidenceRank / decide() tests ---
 //
 // `record_busy`/`record_idle`/`record_awaiting`/`force_idle` are the rank-gate
@@ -11380,7 +11286,7 @@ fn agent_submission_claim_prevents_concurrent_peer_splicing() {
     assert_eq!(peer, PtyDelivery::Queued);
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}atomic command\r",
+        "atomic command\r",
         "the peer payload must not land between the split payload and Enter"
     );
     assert_eq!(
@@ -11424,7 +11330,7 @@ fn agent_submission_writer_lock_prevents_raw_input_splicing() {
     assert!(matches!(submitted, AgentSubmissionWrite::Complete { .. }));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}atomic command\rraw input",
+        "atomic command\rraw input",
         "a raw writer may follow the submission but cannot land before its Enter"
     );
 }
@@ -11466,7 +11372,7 @@ fn flush_hands_the_enter_gap_to_the_injection_worker_not_the_caller() {
     }
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}wake up\r",
+        "wake up\r",
         "the deferred injection must be byte-identical to the inline one"
     );
     assert_eq!(
@@ -11874,8 +11780,8 @@ fn list_and_remove_expose_every_parked_entry() {
 }
 
 /// The idle path, end to end against a real PTY: an idle agent gets the text
-/// typed and submitted at once (Ctrl-U prefix, CR in a separate write), so
-/// enqueueing costs nothing when there is no turn to protect.
+/// typed and submitted at once (CR in a separate write), so enqueueing costs
+/// nothing when there is no turn to protect.
 #[cfg(unix)]
 #[test]
 fn enqueue_types_immediately_when_agent_is_idle() {
@@ -11887,7 +11793,7 @@ fn enqueue_types_immediately_when_agent_is_idle() {
     assert_eq!((outcome.typed, outcome.queued), (true, 0));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}ship it\r"
+        "ship it\r"
     );
 }
 
@@ -11910,7 +11816,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
     assert_eq!((outcome.typed, outcome.queued), (false, 1));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
-        "\u{15}first\r",
+        "first\r",
         "the older command is the one that reached the composer"
     );
     assert_eq!(
@@ -13066,9 +12972,9 @@ fn flush_keeps_pending_while_question_confident() {
 }
 
 #[test]
-fn injection_payload_single_line_ctrl_u_only() {
-    // Single-line: Ctrl-U prefix clears pending input; no paste wrapper.
-    assert_eq!(injection_payload("hello"), "\x15hello");
+fn injection_payload_single_line_is_unwrapped_text() {
+    // Single-line: no prefix, no paste wrapper — just the text as-is.
+    assert_eq!(injection_payload("hello"), "hello");
 }
 
 #[test]
@@ -13078,7 +12984,7 @@ fn injection_payload_multiline_bracketed_paste() {
     // separately-written CR a genuine Enter (story 091, verified live).
     assert_eq!(
         injection_payload("line1\nline2"),
-        "\x15\x1b[200~line1\nline2\x1b[201~"
+        "\x1b[200~line1\nline2\x1b[201~"
     );
 }
 

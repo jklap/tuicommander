@@ -642,13 +642,21 @@ This replaced the previous `maybe_reset_tuic_session` approach, which wrote `exp
 
 A debounce (`last_session_conflict_mark`) prevents creating multiple flag files within a short window for the same session.
 
-## Ctrl-U Prefix Handling
-
-Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
+## Command Injection Writes
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. Handles Ink raw-mode split writes.
-- `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
+- `sendCommand(fn, text)` — full command: text + `\r`, the CR on a separate write so Ink-based agents (Claude Code, Codex, etc.) treat it as a real Enter keypress instead of a newline swallowed into the composer.
+- `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
+
+This used to prepend `\x15` (Ctrl-U) before the text, to clear any stale input
+already in the prompt. Removed everywhere it was auto-sent (this write path,
+the AI agent tool, tuic-cli): Ink-based agents don't reliably treat a bundled
+Ctrl-U+text write as a discrete "clear line" keypress — the byte landed as
+literal, invisible content instead, corrupting the injected text (surfacing in
+Claude Code as "Removed 1 invisible character" on the first Enter, requiring a
+second Enter to actually submit). Known tradeoff: injecting into a POSIX shell
+prompt that already has stale text typed into it no longer clears that text
+first — the injected text is appended after it instead.
 
 Never write `text + "\r"` directly to a PTY — see `src/AGENTS.md`.
 
@@ -683,7 +691,7 @@ enum TerminalMode {
 `depth` is a counter for nested alt-screen pushes (e.g. `less` invoked from inside `vim`). Known app hints — matched heuristically from nearby screen rows — include `vim`, `nvim`, `htop`, `btop`, `lazygit`, `less`, `tmux`, `claude`, and others. The mode is surfaced on `SessionState.terminal_mode` and used by:
 - `ai_terminal_get_context` — tells the model it's in a TUI so it prefers `send_key` + `wait_for` over line-oriented `send_input`.
 - `SessionKnowledgeBar` — renders a `TUI` badge and accumulates `tui_apps_seen`.
-- The agent safety layer — blocks Ctrl-U prefix injection while a TUI app is in the foreground.
+- The agent safety layer — blocks command injection while a TUI app is in the foreground.
 
 ## Silence-Based Question Detection
 
@@ -851,7 +859,7 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
-spans Ctrl-U, optional bracketed paste, the 50 ms scheduling gap, and CR, so
+spans optional bracketed paste, the 50 ms scheduling gap, and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
 

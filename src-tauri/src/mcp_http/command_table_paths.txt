@@ -305,7 +305,6 @@
 /sessions/x/queue/x
 /sessions/x/resize
 /sessions/x/resume
-/sessions/x/shell-family
 /sessions/x/shell-state
 /sessions/x/terminal/cursor-line
 /sessions/x/terminal/hyperlink
