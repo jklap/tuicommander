@@ -19828,7 +19828,7 @@ fn codex_old_prompt_four_rows_above_the_bottom_is_not_ready() {
     );
 }
 
-fn codex_state_showing(sid: &str, lines: &[&str]) -> std::sync::Arc<crate::state::AppState> {
+fn codex_state_showing(sid: &str, lines: &[&str]) -> crate::state::AppState {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, sid, SHELL_IDLE);
     state
