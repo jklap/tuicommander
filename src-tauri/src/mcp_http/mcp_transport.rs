@@ -12819,6 +12819,116 @@ mod tests {
         assert!(!state.mcp.to_session.contains_key("mcp-primary"));
     }
 
+    /// Critic 1148. `tuic` now sends DELETE when every CLI call ends, so the last
+    /// (often only) protocol session of a PTY identity is torn down after each
+    /// command. The reaper keeps an identity with a live PTY addressable
+    /// (`peer_identity_is_reapable`); DELETE must not destroy what the reaper
+    /// keeps. Catches: mail for a live terminal deleted after every `tuic agent
+    /// send` run from that terminal, so a reply finds no peer and no inbox.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ending_the_only_cli_session_of_a_live_pty_keeps_its_peer_and_mail() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-cli-owner", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-cli-owner");
+        apply_initialize_identity(&state, "mcp-cli-call", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-cli-call");
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "msg-reply".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "reply to the CLI caller".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        end_mcp_session(&state, "mcp-cli-call").await;
+
+        assert!(
+            state.peer_agents.contains_key(TEST_UUID_A),
+            "a PTY that is still alive must stay addressable after its CLI session ends"
+        );
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-reply")),
+            "mail for a live terminal must survive the CLI call that opened the session"
+        );
+        assert!(!state.mcp.to_session.contains_key("mcp-cli-call"));
+    }
+
+    /// Critic 1148. The CLI sends DELETE from Drop and cannot know whether the
+    /// reaper or an earlier DELETE already removed the session. Catches: a
+    /// repeated or unknown-session DELETE removing a different session's state.
+    #[tokio::test]
+    async fn repeated_and_unknown_deletes_leave_other_sessions_alone() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-gone", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-gone");
+        apply_initialize_identity(&state, "mcp-stays", Some(TEST_UUID_B));
+        live_mcp_session(&state, "mcp-stays");
+
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-never-existed").await;
+        let response = mcp_delete(State(Arc::clone(&state)), HeaderMap::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert!(state.mcp.sessions.contains_key("mcp-stays"));
+        assert!(state.peer_agents.contains_key(TEST_UUID_B));
+        assert!(state.mcp.to_session.contains_key("mcp-stays"));
+        assert!(!state.peer_agents.contains_key(TEST_UUID_A));
+    }
+
+    /// Critic 1148. The pid header is client-controlled and reaches the log.
+    /// Catches: a validator using `char::is_numeric` or a length check on the
+    /// wrong side, letting signs, hex, exponents, whitespace, non-ASCII or
+    /// multi-line values through, or dropping a legitimate 10-digit pid.
+    #[test]
+    fn client_pid_header_accepts_only_ascii_digit_runs_up_to_ten() {
+        let value = |bytes: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                CLIENT_PID_HEADER,
+                axum::http::HeaderValue::from_bytes(bytes).unwrap(),
+            );
+            headers
+        };
+        assert_eq!(client_pid_header(&value(b"4294967295")), "4294967295");
+        assert_eq!(client_pid_header(&value(b"1")), "1");
+        for rejected in [
+            &b"+123"[..],
+            b"-1",
+            b"0x1f",
+            b"1e5",
+            b"12 34",
+            b" 123",
+            b"123 ",
+            b"12\t34",
+            b"12\"34",
+            b"\xef\xbc\x91\xef\xbc\x92",
+            b"\xff",
+            b"1\x7f",
+        ] {
+            assert_eq!(
+                client_pid_header(&value(rejected)),
+                "",
+                "{:?} must not reach the log",
+                String::from_utf8_lossy(rejected)
+            );
+        }
+        let mut two = HeaderMap::new();
+        two.append(CLIENT_PID_HEADER, "111".parse().unwrap());
+        two.append(CLIENT_PID_HEADER, "222".parse().unwrap());
+        assert_eq!(client_pid_header(&two), "111");
+    }
+
     #[test]
     fn register_renames_auto_bound_caller_without_hijack_rejection() {
         // After the initialize auto-bind, the SAME mcp session may still call
