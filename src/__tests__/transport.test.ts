@@ -817,6 +817,13 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps the discovered SSH hosts listing", () => {
+			expect(mapCommandToHttp("list_discovered_ssh_hosts", {})).toMatchObject({
+				method: "GET",
+				path: "/tunnels/ssh-hosts/discovered",
+			});
+		});
+
 		it("maps detect_agents to GET /agents", () => {
 			const result = mapCommandToHttp("detect_agents", {});
 			expect(result.method).toBe("GET");

@@ -105,6 +105,11 @@ pub(crate) fn list_ssh_config_hosts() -> Vec<String> {
 }
 
 #[tauri::command]
+pub(crate) fn list_discovered_ssh_hosts() -> Result<super::discovery::DiscoveredHosts, String> {
+    super::commands::load_discovered_hosts()
+}
+
+#[tauri::command]
 pub(crate) async fn probe_ssh_config_hosts() -> Result<Vec<super::commands::SshHostStatus>, String>
 {
     super::commands::probe_ssh_config_hosts().await

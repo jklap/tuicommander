@@ -3,9 +3,12 @@ import { appLogger } from "../../../../stores/appLogger";
 import {
 	type ConnectionState,
 	type DeployMode,
+	type DiscoveredSshHost,
+	type DiscoveredSshHosts,
 	type RemoteConnection,
 	type RemoteTransport,
 	remoteConnectionsStore,
+	type SshAgentInfo,
 	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
 import s from "../../Settings.module.css";
@@ -78,6 +81,22 @@ export function emptyRemoteForm() {
 	};
 }
 
+/** Probe state of a discovered host, matched by host and port. */
+export function discoveredHostAuth(host: DiscoveredSshHost, statuses: SshHostStatus[]): SshHostStatus["auth"] | null {
+	return statuses.find((st) => st.host === host.host && st.port === host.port)?.auth ?? null;
+}
+
+/** Add-form state prefilled from a discovered host. */
+export function formFromDiscoveredHost(host: DiscoveredSshHost) {
+	return {
+		...emptyRemoteForm(),
+		name: host.host,
+		sshHost: host.host,
+		sshPort: host.port ?? 22,
+		sshUser: host.user ?? "",
+	};
+}
+
 export const RemoteMachinesPanel: Component = () => {
 	const [showAdd, setShowAdd] = createSignal(false);
 	const [form, setForm] = createSignal(emptyRemoteForm());
@@ -88,11 +107,22 @@ export const RemoteMachinesPanel: Component = () => {
 	const [passwordStored, setPasswordStored] = createSignal(false);
 	const [sshHosts, setSshHosts] = createSignal<SshHostStatus[]>([]);
 	const [probingHosts, setProbingHosts] = createSignal(false);
+	const [discovered, setDiscovered] = createSignal<DiscoveredSshHosts>({ hosts: [], hashed_count: 0 });
+	const [agentInfo, setAgentInfo] = createSignal<SshAgentInfo | null>(null);
 	const [serviceBusyId, setServiceBusyId] = createSignal<string | null>(null);
 	const [updateErrors, setUpdateErrors] = createSignal<Record<string, string>>({});
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
+		// Reads ~/.ssh/config and known_hosts and asks ssh-add; no host is contacted.
+		remoteConnectionsStore
+			.discoverSshHosts()
+			.then(setDiscovered)
+			.catch((e) => appLogger.error("settings", "Failed to discover SSH hosts", { error: String(e) }));
+		remoteConnectionsStore
+			.sshAgentInfo()
+			.then(setAgentInfo)
+			.catch((e) => appLogger.error("settings", "Failed to list SSH agent keys", { error: String(e) }));
 	});
 
 	function connectionList(): ConnectionState[] {
@@ -466,6 +496,67 @@ export const RemoteMachinesPanel: Component = () => {
 					>
 						{showAdd() ? "−" : "+"}
 					</button>
+				</div>
+			</div>
+
+			{/* Discovered SSH hosts */}
+			<div class={s.group}>
+				<Show when={agentInfo()}>
+					{(info) => (
+						<p
+							class={s.hint}
+							style={{ margin: "0 0 6px", color: info().keys.length === 0 ? "var(--warning)" : undefined }}
+							role={info().keys.length === 0 ? "alert" : undefined}
+						>
+							{info().keys.length === 0
+								? "No SSH agent identities loaded: key-based connections will fail authentication. Add a key with ssh-add."
+								: `SSH agent keys loaded (${info().keys.length}): ${info()
+										.keys.map((k) => k.comment || k.fingerprint)
+										.join(", ")}`}
+						</p>
+					)}
+				</Show>
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+					<span style={{ "font-weight": 500, "font-size": "13px" }}>
+						Discovered SSH hosts ({discovered().hosts.length})
+					</span>
+					<button class={s.textBtn} type="button" onClick={probeHosts} disabled={probingHosts()}>
+						{probingHosts() ? "Probing..." : "Probe hosts"}
+					</button>
+				</div>
+				<Show when={discovered().hashed_count > 0}>
+					<p class={s.hint} style={{ margin: "4px 0 0" }}>
+						{discovered().hashed_count} known_hosts entries are hashed and cannot be listed.
+					</p>
+				</Show>
+				<div style={{ "max-height": "220px", "overflow-y": "auto", "margin-top": "6px" }}>
+					<For each={discovered().hosts}>
+						{(host) => {
+							const auth = () => discoveredHostAuth(host, sshHosts());
+							return (
+								<button
+									type="button"
+									class={s.textBtn}
+									title="Prefill the Add form with this host"
+									style={{ display: "flex", width: "100%", "justify-content": "space-between", gap: "8px" }}
+									onClick={() => {
+										setForm(formFromDiscoveredHost(host));
+										setShowAdd(true);
+										setError("");
+									}}
+								>
+									<span style={{ "font-family": "monospace", "font-size": "11px" }}>
+										{host.user ? `${host.user}@` : ""}
+										{host.host}
+										{host.port ? `:${host.port}` : ""}
+									</span>
+									<span style={{ "font-size": "11px", color: "var(--text-dimmed)" }}>
+										{auth() ? auth()?.replaceAll("_", " ") : host.source === "config" ? "ssh config" : "known_hosts"}
+									</span>
+								</button>
+							);
+						}}
+					</For>
 				</div>
 			</div>
 

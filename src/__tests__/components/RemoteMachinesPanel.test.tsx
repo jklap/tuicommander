@@ -21,8 +21,19 @@ const { actions, connections } = vi.hoisted(() => ({
 		),
 		updateAndRestart: vi.fn(() => Promise.resolve()),
 		probeSshHosts: vi.fn<
-			() => Promise<Array<{ host: string; auth: "shell" | "no_shell" | "auth_failed" | "unreachable" }>>
+			() => Promise<
+				Array<{ host: string; port: number | null; auth: "shell" | "no_shell" | "auth_failed" | "unreachable" }>
+			>
 		>(() => Promise.resolve([])),
+		discoverSshHosts: vi.fn<
+			() => Promise<{
+				hosts: Array<{ host: string; user: string | null; port: number | null; source: "config" | "known_hosts" }>;
+				hashed_count: number;
+			}>
+		>(() => Promise.resolve({ hosts: [], hashed_count: 0 })),
+		sshAgentInfo: vi.fn<
+			() => Promise<{ keys: Array<{ fingerprint: string; comment: string; key_type: string }>; agent_type: string }>
+		>(() => Promise.resolve({ keys: [{ fingerprint: "SHA256:abc", comment: "boss@mac", key_type: "ED25519" }], agent_type: "SSH Agent" })),
 		removeConnection: vi.fn(() => Promise.resolve()),
 	},
 	connections: {} as Record<string, unknown>,
@@ -214,8 +225,8 @@ describe("RemoteMachinesPanel", () => {
 
 	it("lists probed host states while keeping the SSH host input free-form", async () => {
 		actions.probeSshHosts.mockResolvedValueOnce([
-			{ host: "shell-host", auth: "shell" },
-			{ host: "git-only", auth: "no_shell" },
+			{ host: "shell-host", port: null, auth: "shell" },
+			{ host: "git-only", port: null, auth: "no_shell" },
 		]);
 		const { getByTitle, getByText, getByPlaceholderText, container } = render(() => <RemoteMachinesPanel />);
 		fireEvent.click(getByTitle("Add remote machine"));
@@ -231,5 +242,47 @@ describe("RemoteMachinesPanel", () => {
 		const hostInput = getByPlaceholderText("Host (e.g. 192.168.1.100)") as HTMLInputElement;
 		fireEvent.input(hostInput, { target: { value: "other.example" } });
 		expect(hostInput.value).toBe("other.example");
+	});
+
+	it("lists discovered hosts without opening the Add form, with hashed count and no probe until asked", async () => {
+		actions.discoverSshHosts.mockResolvedValueOnce({
+			hosts: [
+				{ host: "vps", user: "boss", port: null, source: "config" },
+				{ host: "10.0.0.5", user: null, port: 2222, source: "known_hosts" },
+			],
+			hashed_count: 7,
+		});
+		const { findByText, getByText } = render(() => <RemoteMachinesPanel />);
+		expect(await findByText("boss@vps")).toBeTruthy();
+		expect(getByText("10.0.0.5:2222")).toBeTruthy();
+		expect(getByText("7 known_hosts entries are hashed and cannot be listed.")).toBeTruthy();
+		expect(actions.probeSshHosts).not.toHaveBeenCalled();
+
+		actions.probeSshHosts.mockResolvedValueOnce([
+			{ host: "vps", port: null, auth: "shell" },
+			{ host: "10.0.0.5", port: 2222, auth: "auth_failed" },
+		]);
+		fireEvent.click(getByText("Probe hosts"));
+		expect(await findByText("auth failed")).toBeTruthy();
+		expect(getByText("shell")).toBeTruthy();
+	});
+
+	it("prefills the Add form with host, user and port from a discovered host", async () => {
+		actions.discoverSshHosts.mockResolvedValueOnce({
+			hosts: [{ host: "vps", user: "boss", port: 2222, source: "config" }],
+			hashed_count: 0,
+		});
+		const { findByText, getByPlaceholderText, container } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(await findByText("boss@vps:2222"));
+		expect((getByPlaceholderText("Host (e.g. 192.168.1.100)") as HTMLInputElement).value).toBe("vps");
+		expect((getByPlaceholderText("SSH user") as HTMLInputElement).value).toBe("boss");
+		expect((getByPlaceholderText("Name (e.g. dev-server, staging)") as HTMLInputElement).value).toBe("vps");
+		expect((container.querySelector('input[type="number"]') as HTMLInputElement).value).toBe("2222");
+	});
+
+	it("warns when the SSH agent holds no identities", async () => {
+		actions.sshAgentInfo.mockResolvedValueOnce({ keys: [], agent_type: "Not available" });
+		const { findByRole } = render(() => <RemoteMachinesPanel />);
+		expect((await findByRole("alert")).textContent).toContain("No SSH agent identities loaded");
 	});
 });

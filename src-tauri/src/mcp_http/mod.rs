@@ -841,6 +841,10 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/audit/{id}", get(commands::get_tunnel_audit))
         .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
         .route(
+            "/ssh-hosts/discovered",
+            get(commands::list_discovered_ssh_hosts_http),
+        )
+        .route(
             "/ssh-hosts/status",
             get(commands::probe_ssh_config_hosts_http),
         )

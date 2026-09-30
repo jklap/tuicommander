@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::discovery::{self, ConfigHost, DiscoveredHost, DiscoveredHosts};
 use super::profile::TunnelProfile;
 use super::storage::ProfileStore;
 use crate::AppState;
@@ -161,12 +162,13 @@ pub(crate) enum HostAuth {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SshHostStatus {
     pub(crate) host: String,
+    pub(crate) port: Option<u16>,
     pub(crate) auth: HostAuth,
 }
 
 struct ProbeCacheEntry {
     stored_at: Instant,
-    hosts: Vec<String>,
+    hosts: Vec<DiscoveredHost>,
     statuses: Vec<SshHostStatus>,
 }
 
@@ -185,6 +187,13 @@ pub(crate) fn load_ssh_config_hosts() -> Result<Vec<String>, String> {
 }
 
 fn parse_ssh_config_hosts(path: &FsPath) -> Result<Vec<String>, String> {
+    Ok(parse_ssh_config_entries(path)?
+        .into_iter()
+        .map(|entry| entry.alias)
+        .collect())
+}
+
+fn parse_ssh_config_entries(path: &FsPath) -> Result<Vec<ConfigHost>, String> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -194,15 +203,57 @@ fn parse_ssh_config_hosts(path: &FsPath) -> Result<Vec<String>, String> {
     let config = ssh2_config::SshConfig::default()
         .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS)
         .map_err(|error| format!("failed to parse SSH config: {error}"))?;
-    Ok(config
+    let aliases: BTreeSet<&str> = config
         .get_hosts()
         .iter()
         .flat_map(|host| &host.pattern)
-        .filter(|clause| !clause.negated && clause.pattern != "*")
-        .map(|clause| clause.pattern.clone())
-        .collect::<BTreeSet<_>>()
+        .filter(|clause| !clause.negated && !discovery::is_wildcard(&clause.pattern))
+        .map(|clause| clause.pattern.as_str())
+        .collect();
+    Ok(aliases
         .into_iter()
+        .map(|alias| {
+            let params = config.query(alias);
+            ConfigHost {
+                alias: alias.to_string(),
+                hostname: params.host_name,
+                user: params.user,
+                port: params.port,
+            }
+        })
         .collect())
+}
+
+fn known_hosts_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts"))
+}
+
+fn read_known_hosts(path: &FsPath) -> Result<discovery::KnownHosts, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(discovery::parse_known_hosts(&text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(format!("failed to read known_hosts: {error}")),
+    }
+}
+
+pub(crate) fn load_discovered_hosts() -> Result<DiscoveredHosts, String> {
+    let config = match ssh_config_path() {
+        Some(path) => parse_ssh_config_entries(&path)?,
+        None => Vec::new(),
+    };
+    let known = match known_hosts_path() {
+        Some(path) => read_known_hosts(&path)?,
+        None => Default::default(),
+    };
+    Ok(discovery::merge_discovered(config, known))
+}
+
+/// GET /tunnels/ssh-hosts/discovered — config aliases plus known_hosts names.
+pub(crate) async fn list_discovered_ssh_hosts_http() -> Response {
+    match load_discovered_hosts() {
+        Ok(discovered) => (StatusCode::OK, Json(serde_json::json!(discovered))).into_response(),
+        Err(error) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
 }
 
 /// GET /tunnels/ssh-hosts — parse ~/.ssh/config and return host aliases.
@@ -221,14 +272,14 @@ pub(crate) async fn probe_ssh_config_hosts_http() -> Response {
 }
 
 pub(crate) async fn probe_ssh_config_hosts() -> Result<Vec<SshHostStatus>, String> {
-    let hosts = load_ssh_config_hosts()?;
+    let hosts = load_discovered_hosts()?.hosts;
     let cache = SSH_PROBE_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
     probe_cached(cache, hosts, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await
 }
 
 async fn probe_cached(
     cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
-    hosts: Vec<String>,
+    hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Result<Vec<SshHostStatus>, String> {
@@ -249,37 +300,52 @@ async fn probe_cached(
 }
 
 async fn probe_hosts_with_binary(
-    hosts: Vec<String>,
+    hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Vec<SshHostStatus> {
     use futures_util::StreamExt;
     futures_util::stream::iter(hosts.into_iter().map(|host| async move {
-        let auth = probe_host_with_binary(&host, binary, timeout).await;
-        SshHostStatus { host, auth }
+        let auth =
+            probe_host_with_binary(&host.host, host.probe_port(), binary, timeout).await;
+        SshHostStatus {
+            host: host.host,
+            port: host.port,
+            auth,
+        }
     }))
     .buffer_unordered(SSH_PROBE_CONCURRENCY)
     .collect()
     .await
 }
 
-fn probe_args(host: &str) -> Vec<String> {
-    vec![
+fn probe_args(host: &str, port: Option<u16>) -> Vec<String> {
+    let mut args = vec![
         "-o".into(),
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=5".into(),
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
-        host.to_string(),
-        "true".into(),
-    ]
+    ];
+    if let Some(port) = port {
+        args.push("-p".into());
+        args.push(port.to_string());
+    }
+    args.push(host.to_string());
+    args.push("true".into());
+    args
 }
 
-async fn probe_host_with_binary(host: &str, binary: &FsPath, timeout: Duration) -> HostAuth {
+async fn probe_host_with_binary(
+    host: &str,
+    port: Option<u16>,
+    binary: &FsPath,
+    timeout: Duration,
+) -> HostAuth {
     let mut command = tokio::process::Command::new(binary);
     command
-        .args(probe_args(host))
+        .args(probe_args(host, port))
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -388,7 +454,7 @@ mod tests {
     #[test]
     fn ssh_hosts_probe_uses_the_noninteractive_bounded_command() {
         assert_eq!(
-            probe_args("vps"),
+            probe_args("vps", None),
             vec![
                 "-o",
                 "BatchMode=yes",
@@ -423,19 +489,19 @@ mod tests {
         );
 
         assert_eq!(
-            probe_host_with_binary("host", &shell, Duration::from_secs(1)).await,
+            probe_host_with_binary("host", None, &shell, Duration::from_secs(1)).await,
             HostAuth::Shell
         );
         assert_eq!(
-            probe_host_with_binary("host", &no_shell, Duration::from_secs(1)).await,
+            probe_host_with_binary("host", None, &no_shell, Duration::from_secs(1)).await,
             HostAuth::NoShell
         );
         assert_eq!(
-            probe_host_with_binary("host", &auth, Duration::from_secs(1)).await,
+            probe_host_with_binary("host", None, &auth, Duration::from_secs(1)).await,
             HostAuth::AuthFailed
         );
         assert_eq!(
-            probe_host_with_binary("host", &timeout, Duration::from_millis(50)).await,
+            probe_host_with_binary("host", None, &timeout, Duration::from_millis(50)).await,
             HostAuth::Unreachable
         );
     }
@@ -450,7 +516,12 @@ mod tests {
             "echo 'Permission denied' >&2; exit 255",
             "echo Permission denied 1>&2& exit /b 255",
         );
-        let hosts = vec!["cached".to_string()];
+        let hosts = vec![DiscoveredHost {
+            host: "cached".to_string(),
+            user: None,
+            port: None,
+            source: discovery::HostSource::Config,
+        }];
 
         let first = probe_cached(&cache, hosts.clone(), &shell, Duration::from_secs(1))
             .await

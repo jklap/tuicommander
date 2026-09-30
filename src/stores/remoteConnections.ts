@@ -23,8 +23,27 @@ export interface RemoteConnection {
 
 export type DeployMode = "never" | "on_connect" | "installed";
 
+export interface DiscoveredSshHost {
+	host: string;
+	user: string | null;
+	port: number | null;
+	source: "config" | "known_hosts";
+}
+
+export interface DiscoveredSshHosts {
+	hosts: DiscoveredSshHost[];
+	/** known_hosts entries with hashed names: present on disk, not listable. */
+	hashed_count: number;
+}
+
+export interface SshAgentInfo {
+	keys: { fingerprint: string; comment: string; key_type: string }[];
+	agent_type: string;
+}
+
 export interface SshHostStatus {
 	host: string;
+	port: number | null;
 	auth: "shell" | "no_shell" | "auth_failed" | "unreachable";
 }
 
@@ -270,6 +289,14 @@ function createRemoteConnectionsStore() {
 			if (!current) return;
 			await invoke("uninstall_remote_daemon", { id });
 			setState("connections", id, "connection", "deploy", "on_connect");
+		},
+
+		async discoverSshHosts(): Promise<DiscoveredSshHosts> {
+			return (await invoke<DiscoveredSshHosts>("list_discovered_ssh_hosts")) ?? { hosts: [], hashed_count: 0 };
+		},
+
+		async sshAgentInfo(): Promise<SshAgentInfo> {
+			return (await invoke<SshAgentInfo>("list_ssh_agent_keys")) ?? { keys: [], agent_type: "" };
 		},
 
 		async probeSshHosts(): Promise<SshHostStatus[]> {

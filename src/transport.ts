@@ -2036,6 +2036,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
 	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
 	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
+	list_discovered_ssh_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/discovered" }) },
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
