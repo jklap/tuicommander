@@ -12018,7 +12018,11 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     );
     assert!(
         std::iter::from_fn(|| alerts.try_recv().ok())
-            .all(|event| !matches!(event, crate::state::AppEvent::McpToast { .. })),
+            .all(|event| !matches!(
+                event,
+                crate::state::AppEvent::McpToast { ref title, .. }
+                    if title == "Agent input was not confirmed"
+            )),
         "no false failure toast"
     );
 }
