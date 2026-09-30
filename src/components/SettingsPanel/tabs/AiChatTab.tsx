@@ -5,7 +5,7 @@ import { startEgoLogin } from "../../../services/egoLogin";
 import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
-import { isEgoCliError } from "../../../types/ego";
+import { asEgoCliError } from "../../../types/ego";
 import s from "../Settings.module.css";
 
 /**
@@ -51,8 +51,9 @@ export const AiChatTab: Component<{
 			// An ego failure is rendered with its own words. Anything else is a
 			// transport fault and is reported as one rather than dressed up as a
 			// refusal ego never made.
-			if (isEgoCliError(err)) {
-				setError(err);
+			const egoError = asEgoCliError(err);
+			if (egoError) {
+				setError(egoError);
 			} else {
 				appLogger.error("config", "ego command failed without an ego error", err);
 				setError({

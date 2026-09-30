@@ -436,8 +436,8 @@ export function useRepository() {
 		return await invoke<boolean | null>("pending_orphan_cleanup_answer", { repoPath });
 	}
 
-	async function clearOrphanCleanup(repoPath: string): Promise<void> {
-		await invoke("clear_orphan_cleanup", { repoPath });
+	async function clearOrphanCleanup(repoPath: string, kept: boolean): Promise<void> {
+		await invoke("clear_orphan_cleanup", { repoPath, kept });
 	}
 
 	/** Remove a detached-HEAD worktree by path (no branch to look up). */

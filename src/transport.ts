@@ -133,10 +133,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },
 	get_model_info: { map: () => ({ method: "GET", path: "/dictation/models" }) },
 	download_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.modelName } }),
 	},
 	delete_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.modelName } }),
 	},
 	get_speech_assets: { map: () => ({ method: "GET", path: "/dictation/speech/assets" }) },
 	download_speech_asset: {
@@ -1562,7 +1562,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup/pending?repoPath=${p("repoPath")}` }),
 	},
 	clear_orphan_cleanup: {
-		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath } }),
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/orphan-cleanup/clear",
+			body: { repoPath: args.repoPath, kept: args.kept },
+		}),
 	},
 	remove_orphan_worktree: {
 		map: (args) => ({
@@ -2587,24 +2591,18 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	}
 	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
 
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), 30_000);
-
+	// No client-side deadline: Tauri invoke() has none, and a fixed cap here cut
+	// backend calls that own a longer deadline (ego initialize: 60 s) with
+	// "signal is aborted" instead of the backend's own message.
 	const init: RequestInit = {
 		method: mapping.method,
 		headers: { "Content-Type": "application/json" },
-		signal: controller.signal,
 	};
 	if (mapping.body !== undefined) {
 		init.body = JSON.stringify(mapping.body);
 	}
 
-	let resp: Response;
-	try {
-		resp = await fetch(url, init);
-	} finally {
-		clearTimeout(timeoutId);
-	}
+	const resp = await fetch(url, init);
 	if (!resp.ok) {
 		if (resp.status === 404 && mapping.notFoundAsNull) {
 			return null as T;
