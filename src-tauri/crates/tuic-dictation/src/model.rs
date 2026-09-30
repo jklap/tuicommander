@@ -184,4 +184,28 @@ mod tests {
             assert!(url.ends_with(".bin"));
         }
     }
+
+    #[test]
+    fn deleting_a_model_that_is_not_there_is_a_no_op() {
+        // Catches dropping the `path.exists()` guard: remove_file would fail with NotFound.
+        // The override keeps the run off the real models dir.
+        let root = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(root.path().to_path_buf());
+        assert_eq!(delete_model(WhisperModel::Small), Ok(()));
+    }
+
+    #[test]
+    fn deleting_a_present_model_removes_only_that_file() {
+        // Catches delete_model returning Ok without removing, or removing the wrong file.
+        let root = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(root.path().to_path_buf());
+        std::fs::create_dir_all(models_dir()).unwrap();
+        std::fs::write(model_path(WhisperModel::Small), b"x").unwrap();
+        std::fs::write(model_path(WhisperModel::SmallEn), b"y").unwrap();
+
+        assert_eq!(delete_model(WhisperModel::Small), Ok(()));
+
+        assert!(!model_path(WhisperModel::Small).exists());
+        assert!(model_path(WhisperModel::SmallEn).exists());
+    }
 }
