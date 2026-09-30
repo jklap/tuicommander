@@ -57,19 +57,20 @@ pub(super) async fn list_sessions_http(
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
-    let result = crate::session_review::list_review_sessions_impl(q.path, q.limit, q.include_counts, None)
-        .await
-        .map(|mut sessions| {
-            // Populated here, not inside `session_review.rs`: that module is a
-            // pure disk reader with no `AppState` access — see
-            // `SessionSummary::tuic_session_id`'s doc comment. The desktop
-            // Tauri command (`list_review_sessions`) does the identical
-            // override itself now, at its own transport boundary.
-            for s in &mut sessions {
-                s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
-            }
-            sessions
-        });
+    let result =
+        crate::session_review::list_review_sessions_impl(q.path, q.limit, q.include_counts, None)
+            .await
+            .map(|mut sessions| {
+                // Populated here, not inside `session_review.rs`: that module is a
+                // pure disk reader with no `AppState` access — see
+                // `SessionSummary::tuic_session_id`'s doc comment. The desktop
+                // Tauri command (`list_review_sessions`) does the identical
+                // override itself now, at its own transport boundary.
+                for s in &mut sessions {
+                    s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
+                }
+                sessions
+            });
     json_result(result)
 }
 
@@ -224,11 +225,14 @@ mod tests {
         std::fs::write(&abs_file, "a\n").unwrap();
         let session_id = seed_transcript_under_home(home.path(), &repo_path, &abs_file);
 
-        let list_response = list_sessions_http(State(test_state()), Query(SessionListQuery {
-            path: repo_path.clone(),
-            limit: None,
-            include_counts: None,
-        }))
+        let list_response = list_sessions_http(
+            State(test_state()),
+            Query(SessionListQuery {
+                path: repo_path.clone(),
+                limit: None,
+                include_counts: None,
+            }),
+        )
         .await;
         assert_eq!(list_response.status(), axum::http::StatusCode::OK);
         let list_json = json_body(list_response).await;
@@ -241,15 +245,18 @@ mod tests {
              $HOME fallback, got: {list_json}"
         );
 
-        let review_response = get_review_http(State(test_state()), Query(SessionReviewQuery {
-            path: repo_path,
-            session_id,
-            include_subagents: None,
-            ignore_leading_ws: false,
-            ignore_trailing_ws: false,
-            ignore_ws_amount: false,
-            ignore_case: false,
-        }))
+        let review_response = get_review_http(
+            State(test_state()),
+            Query(SessionReviewQuery {
+                path: repo_path,
+                session_id,
+                include_subagents: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
+            }),
+        )
         .await;
         assert_eq!(review_response.status(), axum::http::StatusCode::OK);
         let review_json = json_body(review_response).await;
@@ -294,7 +301,10 @@ mod tests {
             .iter()
             .find(|s| s["session_id"] == serde_json::Value::String(session_id.clone()))
             .expect("seeded session in list");
-        assert_eq!(seeded["tuic_session_id"], serde_json::Value::String("tuic-42".to_string()));
+        assert_eq!(
+            seeded["tuic_session_id"],
+            serde_json::Value::String("tuic-42".to_string())
+        );
 
         let review_response = get_review_http(
             State(state),
@@ -310,31 +320,40 @@ mod tests {
         )
         .await;
         let review_json = json_body(review_response).await;
-        assert_eq!(review_json["tuic_session_id"], serde_json::Value::String("tuic-42".to_string()));
+        assert_eq!(
+            review_json["tuic_session_id"],
+            serde_json::Value::String("tuic-42".to_string())
+        );
     }
 
     #[tokio::test]
     async fn list_sessions_http_rejects_a_relative_path() {
-        let response = list_sessions_http(State(test_state()), Query(SessionListQuery {
-            path: "relative/path".to_string(),
-            limit: None,
-            include_counts: None,
-        }))
+        let response = list_sessions_http(
+            State(test_state()),
+            Query(SessionListQuery {
+                path: "relative/path".to_string(),
+                limit: None,
+                include_counts: None,
+            }),
+        )
         .await;
         assert_ne!(response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
     async fn get_review_http_rejects_a_relative_path() {
-        let response = get_review_http(State(test_state()), Query(SessionReviewQuery {
-            path: "relative/path".to_string(),
-            session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
-            include_subagents: None,
-            ignore_leading_ws: false,
-            ignore_trailing_ws: false,
-            ignore_ws_amount: false,
-            ignore_case: false,
-        }))
+        let response = get_review_http(
+            State(test_state()),
+            Query(SessionReviewQuery {
+                path: "relative/path".to_string(),
+                session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
+                include_subagents: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
+            }),
+        )
         .await;
         assert_ne!(response.status(), axum::http::StatusCode::OK);
     }

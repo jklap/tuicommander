@@ -5814,7 +5814,8 @@ mod tests {
 
     #[test]
     fn ui_prefs_diff_soft_wrap_defaults_to_false_for_a_prefs_file_predating_it() {
-        let loaded: UIPrefsConfig = serde_json::from_str(r#"{"diff_view_mode":"unified"}"#).unwrap();
+        let loaded: UIPrefsConfig =
+            serde_json::from_str(r#"{"diff_view_mode":"unified"}"#).unwrap();
         assert!(!loaded.diff_soft_wrap);
     }
 
