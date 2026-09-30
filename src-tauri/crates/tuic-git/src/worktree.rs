@@ -2686,7 +2686,7 @@ pub fn branch_integrations_with_pr(
     let mut results = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    results.sort_by_key(|(branch, _)| branches.iter().position(|listed| listed == branch));
+    results.sort_by_key(|(branch, _)| branches.iter().position(|listed| listed == *branch));
     results.into_iter().map(|(_, result)| result).collect()
 }
 
