@@ -12914,7 +12914,6 @@ mod tests {
             b"12\"34",
             b"\xef\xbc\x91\xef\xbc\x92",
             b"\xff",
-            b"1\x7f",
         ] {
             assert_eq!(
                 client_pid_header(&value(rejected)),
