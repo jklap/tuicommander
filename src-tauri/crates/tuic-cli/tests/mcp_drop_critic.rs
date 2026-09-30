@@ -124,6 +124,8 @@ fn run(
                 } else {
                     reply(&mut stream, "200 OK", "", false);
                 }
+            } else if method == "GET" {
+                reply(&mut stream, "200 OK", "{}", false);
             } else if body.contains("\"initialize\"") {
                 match mode {
                     Mode::InitFails => reply(&mut stream, "500 Internal Server Error", "", false),
@@ -160,7 +162,10 @@ fn run(
 }
 
 fn methods(seen: &[Seen]) -> Vec<&str> {
-    seen.iter().map(|s| s.method.as_str()).collect()
+    seen.iter()
+        .map(|s| s.method.as_str())
+        .filter(|m| *m != "GET")
+        .collect()
 }
 
 /// Catches: Drop sending the DELETE without the session id, the PTY identity or
@@ -174,7 +179,7 @@ fn one_delete_follows_the_call_and_names_session_identity_and_pid() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(methods(&seen), ["POST", "POST", "DELETE"]);
-    let delete = &seen[2];
+    let delete = seen.iter().find(|s| s.method == "DELETE").unwrap();
     assert_eq!(
         delete.header("mcp-session-id").as_deref(),
         Some("test-session")
