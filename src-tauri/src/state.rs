@@ -3079,7 +3079,10 @@ impl AppState {
 
     /// The TUIC PTY session currently running `claude_session_id`, if any —
     /// see `claude_session_map`'s doc comment for how this is populated.
-    pub(crate) fn tuic_session_for_claude_session(&self, claude_session_id: &str) -> Option<String> {
+    pub(crate) fn tuic_session_for_claude_session(
+        &self,
+        claude_session_id: &str,
+    ) -> Option<String> {
         self.claude_session_map
             .get(claude_session_id)
             .map(|e| e.clone())

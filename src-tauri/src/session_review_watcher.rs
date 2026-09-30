@@ -47,7 +47,10 @@ pub(crate) struct SessionWatchEntry {
 type WatchKey = (String, String);
 
 fn watch_key(project_dir: &Path, session_id: &str) -> WatchKey {
-    (project_dir.to_string_lossy().to_string(), session_id.to_string())
+    (
+        project_dir.to_string_lossy().to_string(),
+        session_id.to_string(),
+    )
 }
 
 /// Start (or add a subscriber to) watching `session_id`'s transcript and
@@ -83,8 +86,12 @@ pub(crate) fn watch_session_review_internal(
     // uncanonicalized path if the directory doesn't exist (e.g. in a test
     // that intentionally exercises the not-found error), matching every
     // other best-effort `.canonicalize().ok()` fallback in this codebase.
-    let project_dir_owned = project_dir.canonicalize().unwrap_or_else(|_| project_dir.to_path_buf());
-    let session_subdir_owned = session_subdir.canonicalize().unwrap_or_else(|_| session_subdir.clone());
+    let project_dir_owned = project_dir
+        .canonicalize()
+        .unwrap_or_else(|_| project_dir.to_path_buf());
+    let session_subdir_owned = session_subdir
+        .canonicalize()
+        .unwrap_or_else(|_| session_subdir.clone());
     let transcript_name_owned = transcript_name.clone();
     let session_id_owned = session_id.to_string();
     let repo_path_owned = repo_path.to_string();
@@ -212,7 +219,11 @@ pub(crate) fn watch_session_review_internal(
 /// Drop this subscriber's reference; tears the watcher down once the last
 /// one unwatches. Also clears `announced_edit_sessions` for this session at
 /// that point, so a later re-watch announces its next first change again.
-pub(crate) fn unwatch_session_review_internal(project_dir: &Path, session_id: &str, state: &Arc<AppState>) {
+pub(crate) fn unwatch_session_review_internal(
+    project_dir: &Path,
+    session_id: &str,
+    state: &Arc<AppState>,
+) {
     let key = watch_key(project_dir, session_id);
     let mut should_remove = false;
     if let Some(entry) = state.session_review_watchers.get(&key) {
@@ -241,8 +252,9 @@ pub(crate) fn watch_session_review(
 ) -> Result<(), String> {
     crate::session_review::validate_session_id(&session_id)?;
     let state = app_handle.state::<Arc<AppState>>();
-    let project_dir = crate::session_review::project_dir_for(&repo_path, claude_config_dir.as_deref())
-        .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+    let project_dir =
+        crate::session_review::project_dir_for(&repo_path, claude_config_dir.as_deref())
+            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
     watch_session_review_internal(&project_dir, &session_id, &repo_path, &state)
 }
 
@@ -256,8 +268,9 @@ pub(crate) fn unwatch_session_review(
 ) -> Result<(), String> {
     crate::session_review::validate_session_id(&session_id)?;
     let state = app_handle.state::<Arc<AppState>>();
-    let project_dir = crate::session_review::project_dir_for(&repo_path, claude_config_dir.as_deref())
-        .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
+    let project_dir =
+        crate::session_review::project_dir_for(&repo_path, claude_config_dir.as_deref())
+            .ok_or_else(|| "Could not determine Claude project directory".to_string())?;
     unwatch_session_review_internal(&project_dir, &session_id, &state);
     Ok(())
 }
@@ -305,7 +318,12 @@ mod tests {
         watch_session_review_internal(project_dir, "session-a", "/repo", &state).unwrap();
         let key = watch_key(project_dir, "session-a");
         assert_eq!(
-            state.session_review_watchers.get(&key).unwrap().ref_count.load(Ordering::Relaxed),
+            state
+                .session_review_watchers
+                .get(&key)
+                .unwrap()
+                .ref_count
+                .load(Ordering::Relaxed),
             2
         );
 
@@ -333,10 +351,14 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(AppEvent::SessionReviewChanged { session_id, .. })) if session_id == "session-a" => {
+                Ok(Ok(AppEvent::SessionReviewChanged { session_id, .. }))
+                    if session_id == "session-a" =>
+                {
                     saw_review_changed = true;
                 }
-                Ok(Ok(AppEvent::AgentEditObserved { claude_session_id, .. })) if claude_session_id == "session-a" => {
+                Ok(Ok(AppEvent::AgentEditObserved {
+                    claude_session_id, ..
+                })) if claude_session_id == "session-a" => {
                     saw_edit_observed += 1;
                 }
                 _ => {}
@@ -346,20 +368,27 @@ mod tests {
             }
         }
         assert!(saw_review_changed, "expected a SessionReviewChanged event");
-        assert_eq!(saw_edit_observed, 1, "AgentEditObserved must fire exactly once per session");
+        assert_eq!(
+            saw_edit_observed, 1,
+            "AgentEditObserved must fire exactly once per session"
+        );
 
         // A second write must NOT fire AgentEditObserved again.
         fs::write(&transcript, "{\"type\":\"user\"}\n{\"type\":\"user\"}\n").unwrap();
         let deadline = std::time::Instant::now() + Duration::from_millis(800);
         while std::time::Instant::now() < deadline {
-            if let Ok(Ok(AppEvent::AgentEditObserved { claude_session_id, .. })) =
-                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            if let Ok(Ok(AppEvent::AgentEditObserved {
+                claude_session_id, ..
+            })) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
                 && claude_session_id == "session-a"
             {
                 saw_edit_observed += 1;
             }
         }
-        assert_eq!(saw_edit_observed, 1, "AgentEditObserved must not re-fire on a later change");
+        assert_eq!(
+            saw_edit_observed, 1,
+            "AgentEditObserved must not re-fire on a later change"
+        );
         let _ = wait_for(|| true, Duration::from_millis(1)); // keep tmp alive to this point
     }
 
@@ -370,7 +399,9 @@ mod tests {
         fs::write(project_dir.join("session-a.jsonl"), "").unwrap();
         let state = make_test_state();
 
-        state.announced_edit_sessions.insert("session-a".to_string(), ());
+        state
+            .announced_edit_sessions
+            .insert("session-a".to_string(), ());
         watch_session_review_internal(project_dir, "session-a", "/repo", &state).unwrap();
         unwatch_session_review_internal(project_dir, "session-a", &state);
         assert!(!state.announced_edit_sessions.contains_key("session-a"));
@@ -381,8 +412,12 @@ mod tests {
         let state = make_test_state();
         assert_eq!(state.tuic_session_for_claude_session("claude-1"), None);
 
-        state.claude_session_map.insert("claude-1".to_string(), "tuic-1".to_string());
-        state.tuic_to_claude_session.insert("tuic-1".to_string(), "claude-1".to_string());
+        state
+            .claude_session_map
+            .insert("claude-1".to_string(), "tuic-1".to_string());
+        state
+            .tuic_to_claude_session
+            .insert("tuic-1".to_string(), "claude-1".to_string());
         assert_eq!(
             state.tuic_session_for_claude_session("claude-1"),
             Some("tuic-1".to_string())
