@@ -8,6 +8,7 @@ const ptyMocks = vi.hoisted(() => ({
 const terminalMocks = vi.hoisted(() => ({
 	openComposeWithText: vi.fn(),
 	isComposeOpen: vi.fn(() => false),
+	focus: vi.fn(),
 }));
 
 const mockInvoke = vi.hoisted(() => vi.fn());
@@ -59,7 +60,11 @@ vi.mock("../../stores/terminals", () => ({
 			id: "terminal-1",
 			sessionId: "session-1",
 			agentType: "codex",
-			ref: { openComposeWithText: terminalMocks.openComposeWithText, isComposeOpen: terminalMocks.isComposeOpen },
+			ref: {
+				openComposeWithText: terminalMocks.openComposeWithText,
+				isComposeOpen: terminalMocks.isComposeOpen,
+				focus: terminalMocks.focus,
+			},
 		}),
 	},
 }));
@@ -150,6 +155,17 @@ describe("PromptDrawer auto-execute", () => {
 		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
 		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("session-1", "Do the custom task", "codex", true);
 		expect(terminalMocks.openComposeWithText).not.toHaveBeenCalled();
+	});
+
+	it("moves DOM focus back to the terminal after injecting, so a manual Enter reaches the PTY without clicking first", async () => {
+		const { container } = render(() => <PromptDrawer />);
+		const row = createPromptThroughEditor(container, "Run custom prompt", "Do the custom task", true);
+
+		fireEvent.click(row, { detail: 1 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
+		expect(terminalMocks.focus).toHaveBeenCalledOnce();
 	});
 
 	it("blocks a Send-immediately inject prompt when canExecute rejects it (e.g. agent busy), instead of writing straight to the PTY", async () => {
