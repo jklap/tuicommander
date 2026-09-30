@@ -899,7 +899,7 @@ mod tests {
         let page = store.list("/p", &ProgressListInput::default()).unwrap();
         let wire = serde_json::to_value(&page).unwrap();
         assert_eq!(wire["total"], 75);
-        assert_eq!(page.entries.len(), 10, "default response must be bounded");
+        assert_eq!(page.entries.len(), 8, "default response must be bounded");
         assert!(
             wire["nextCursor"].is_number(),
             "remaining history needs a cursor"
@@ -1286,7 +1286,7 @@ mod tests {
 
         let first = store.list("/p", &ProgressListInput::default()).unwrap();
         assert_eq!(first.total, 12);
-        assert_eq!(first.entries.len(), 10);
+        assert_eq!(first.entries.len(), 8);
         let older = store
             .list(
                 "/p",
@@ -1302,7 +1302,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),
-            vec!["known 1", "known 0"]
+            vec!["known 3", "known 2", "known 1", "known 0"]
         );
         assert_eq!(older.next_cursor, None);
     }
