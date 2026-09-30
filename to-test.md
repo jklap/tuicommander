@@ -4400,3 +4400,7 @@ or credential is touched.
 ## Git panel Log tab layout (story 1263-7d7d)
 
 - [ ] [VISUAL] After `make dev`, open the Git panel Log tab on tuicommander main and compare with `~/Gits/.tmp/boss/log-tab/`: rows next to a narrow graph section have no wide empty gap before the subject; expanding a commit shows the full message without a hover tooltip, ref badges clip with an ellipsis instead of covering the subject, and rows below the expanded one move down at once with their graph dots. _(NOT VERIFIED 2026-09-29: partial — Web UI Git panel Log tab on fx/repo (not tuicommander main; no boss screenshots compared): subject starts 20px from row left (no wide gap); expanding 'ignore more' grows row 48->107px, rows below shift down 201->260 and 249->308 in one step, full message shown in commitBody, row has no title tooltip; refBadge computed text-overflow: ellipsis. Graph)_
+
+## Branch integration proofs (story 1295-a2ce)
+
+- [ ] After Boss restarts `make dev` or rebuilds the release, query `repo action=branch_integrations` and `repo action=branch_integration` on throwaway fixtures and confirm the new proof fields are available. Check that an integrated squash branch appears in the branch panel and sidebar, and a content-based proof requires an archive of the current tip before safe deletion. Automated real-Git lifecycle, MCP and deletion checks passed; the installed process has not been restarted to load this Rust change.
