@@ -43,6 +43,7 @@ reattach-terminal
 remote-connection-status
 repo-changed
 repositories-changed
+review-sessions-changed
 screenshot-request
 session-accent-color-changed
 session-closed

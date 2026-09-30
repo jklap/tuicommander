@@ -125,7 +125,13 @@ export const DiffViewer: Component<DiffViewerProps> = (props) => {
 	// A new diff (e.g. this instance's row moved to a different/updated file)
 	// should re-truncate rather than keep showing a stale "expanded" choice
 	// made about a previous diff.
-	createEffect(on(() => props.diff, () => setExpandedTruncated(false), { defer: true }));
+	createEffect(
+		on(
+			() => props.diff,
+			() => setExpandedTruncated(false),
+			{ defer: true },
+		),
+	);
 
 	// Build a DiffFile instance from the raw unified diff string.
 	// DiffFile.createInstance expects hunks as an array of diff strings.
@@ -141,39 +147,36 @@ export const DiffViewer: Component<DiffViewerProps> = (props) => {
 	const [parseError, setParseError] = createSignal(false);
 
 	createEffect(
-		on(
-			effectiveDiff,
-			(diff) => {
-				if (!diff.trim()) {
-					setDiffFile(undefined);
-					setParseError(false);
-					return;
-				}
-				try {
-					const fileName = extractFileName(diff);
-					const df = DiffFile.createInstance({
-						oldFile: { fileName },
-						newFile: { fileName },
-						hunks: [diff],
-					});
-					df.init();
-					// Build BOTH modes up front — do not "optimize" this to the active mode
-					// only. DiffView merely branches on `diffViewMode` and reads pre-built
-					// line data; an unbuilt mode renders blank when the user toggles
-					// split↔unified. Both builders are idempotent and the build pass is the
-					// cheap half (init() does the parse+highlight). See @git-diff-view
-					// solid/dist/...mjs InternalDiffView. (perf pass 2026-06-07)
-					df.buildSplitDiffLines();
-					df.buildUnifiedDiffLines();
-					setDiffFile(df);
-					setParseError(false);
-				} catch (err) {
-					appLogger.error("git", "Failed to parse diff for rendering", err);
-					setDiffFile(undefined);
-					setParseError(true);
-				}
-			},
-		),
+		on(effectiveDiff, (diff) => {
+			if (!diff.trim()) {
+				setDiffFile(undefined);
+				setParseError(false);
+				return;
+			}
+			try {
+				const fileName = extractFileName(diff);
+				const df = DiffFile.createInstance({
+					oldFile: { fileName },
+					newFile: { fileName },
+					hunks: [diff],
+				});
+				df.init();
+				// Build BOTH modes up front — do not "optimize" this to the active mode
+				// only. DiffView merely branches on `diffViewMode` and reads pre-built
+				// line data; an unbuilt mode renders blank when the user toggles
+				// split↔unified. Both builders are idempotent and the build pass is the
+				// cheap half (init() does the parse+highlight). See @git-diff-view
+				// solid/dist/...mjs InternalDiffView. (perf pass 2026-06-07)
+				df.buildSplitDiffLines();
+				df.buildUnifiedDiffLines();
+				setDiffFile(df);
+				setParseError(false);
+			} catch (err) {
+				appLogger.error("git", "Failed to parse diff for rendering", err);
+				setDiffFile(undefined);
+				setParseError(true);
+			}
+		}),
 	);
 
 	return (

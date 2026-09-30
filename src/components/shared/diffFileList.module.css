@@ -92,3 +92,22 @@
 .fileDiff {
   border-bottom: 1px solid var(--border);
 }
+
+/* Live-update flash: a file's cumulative diff just changed while it was
+ * already visible in the viewport — briefly highlight it and fade back to
+ * normal so the reader can eyeball what just changed without hunting for it.
+ * `--diff-flash` is scoped to `.flash` itself (not :root) since it's only
+ * ever read by its own keyframes. */
+.flash {
+  --diff-flash: color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: diffFlash 1.5s ease-out;
+}
+
+@keyframes diffFlash {
+  from {
+    background-color: var(--diff-flash);
+  }
+  to {
+    background-color: transparent;
+  }
+}

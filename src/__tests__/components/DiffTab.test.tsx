@@ -20,7 +20,11 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../components/ui/DiffViewer", () => ({
-	DiffViewer: (props: { diff: string }) => <div data-testid="diff-stub">{props.diff}</div>,
+	DiffViewer: (props: { diff: string; wrap?: boolean; maxLines?: number }) => (
+		<div data-testid="diff-stub" data-wrap={String(props.wrap ?? false)} data-max-lines={String(props.maxLines ?? 0)}>
+			{props.diff}
+		</div>
+	),
 }));
 // BranchDiffScrollView fetches its own diffs via useRepository/getDiff and
 // renders through the (also mocked) shared DiffFileList — stubbed here so
@@ -44,6 +48,7 @@ vi.mock("../../components/DiffTab/BranchDiffScrollView", () => ({
 
 import { DiffTab } from "../../components/DiffTab/DiffTab";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 
 const REPO = "/repo";
@@ -235,5 +240,51 @@ describe("DiffTab discard confirm defaults to Cancel (regression)", () => {
 		const src = readFileSync(path.resolve(__dirname, "../../components/DiffTab/DiffTab.tsx"), "utf-8");
 		const dialogBlock = src.slice(src.indexOf("<ConfirmDialog"), src.indexOf("<ConfirmDialog") + 400);
 		expect(dialogBlock).toContain('defaultButton="cancel"');
+	});
+});
+
+describe("DiffTab diff-options wiring", () => {
+	beforeEach(() => {
+		h.invoke.mockReset();
+		h.invoke.mockResolvedValue("diff --git a/f.ts b/f.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n");
+	});
+
+	it("mounts the shared diff-options popover in its toolbar", async () => {
+		const { getByTestId } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />);
+		await settle();
+		expect(getByTestId("diff-options-trigger")).toBeTruthy();
+	});
+
+	it("passes soft-wrap and the truncate-lines setting through to DiffViewer", async () => {
+		uiStore.setDiffSoftWrap(true);
+		settingsStore.setSessionDiffTruncateLines(150);
+		try {
+			const { getByTestId } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />);
+			await settle();
+			expect(getByTestId("diff-stub").dataset.wrap).toBe("true");
+			expect(getByTestId("diff-stub").dataset.maxLines).toBe("150");
+		} finally {
+			uiStore.setDiffSoftWrap(false);
+			settingsStore.setSessionDiffTruncateLines(300);
+			uiStore._testCancelPendingSave();
+			settingsStore._testCancelPendingSave();
+		}
+	});
+
+	it("re-fetches the file diff when a whitespace/case diff option changes", async () => {
+		render(() => <DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />);
+		await settle();
+		const initial = callsTo("get_file_diff").length;
+
+		settingsStore.setDiffIgnoreCase(true);
+		try {
+			await settle();
+			expect(callsTo("get_file_diff").length).toBe(initial + 1);
+			const lastCall = callsTo("get_file_diff").at(-1) as [string, { options: unknown }];
+			expect(lastCall[1].options).toMatchObject({ ignoreCase: true });
+		} finally {
+			settingsStore.setDiffIgnoreCase(false);
+			settingsStore._testCancelPendingSave();
+		}
 	});
 });

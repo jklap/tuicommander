@@ -3634,9 +3634,7 @@ describe("initApp", () => {
 			expect(notice?.repoPath).toBe("/repo");
 
 			notice?.onClick?.();
-			const tab = diffTabsStore
-				.getForRepo("/repo")
-				.find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
+			const tab = diffTabsStore.getForRepo("/repo").find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
 			expect(tab).toBeTruthy();
 			expect(diffTabsStore.state.activeId).toBe(tab?.id);
 		});
@@ -3652,9 +3650,7 @@ describe("initApp", () => {
 
 			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
 
-			const tab = diffTabsStore
-				.getForRepo("/repo")
-				.find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
+			const tab = diffTabsStore.getForRepo("/repo").find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1");
 			expect(tab).toBeTruthy();
 			// Not activated — the other tab (open before the event fired) stays active.
 			expect(diffTabsStore.state.activeId).toBe(otherId);

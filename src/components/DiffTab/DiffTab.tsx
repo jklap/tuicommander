@@ -7,10 +7,13 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
+import { diffOptionsFromSettings } from "../../utils/diffOptionsFromSettings";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { DiffOptionsMenu } from "../shared/DiffOptionsMenu";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
@@ -111,12 +114,14 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		onCleanup(() => diffTabsStore.clearHandle(props.tabId));
 	});
 
-	// Load file diff when props change or the repo revision bumps (git index/HEAD changed)
+	// Load file diff when props change, the repo revision bumps (git index/HEAD
+	// changed), or a whitespace/case diff option changes.
 	let diffGen = 0;
 	createEffect(() => {
 		const repoPath = props.repoPath;
 		const filePath = props.filePath;
 		const scope = props.scope;
+		const options = diffOptionsFromSettings();
 		void (repoPath ? repositoriesStore.getRevision(repoPath) : 0);
 
 		if (!repoPath || !filePath) {
@@ -132,7 +137,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		const gen = ++diffGen;
 		(async () => {
 			try {
-				const diffContent = await repo.getFileDiff(repoPath, filePath, scope, props.untracked);
+				const diffContent = await repo.getFileDiff(repoPath, filePath, scope, props.untracked, options);
 				if (gen !== diffGen) return;
 				setDiff(diffContent);
 			} catch (err) {
@@ -406,7 +411,8 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 						</svg>
 					</button>
 				</Show>
-				<div style={{ "margin-left": "auto" }}>
+				<div style={{ "margin-left": "auto", display: "flex", "align-items": "center", gap: "4px" }}>
+					<DiffOptionsMenu />
 					<button
 						class={s.modeBtn}
 						onClick={() => editorTabsStore.add(props.repoPath, props.filePath)}
@@ -477,6 +483,8 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 						<DiffViewer
 							diff={diff()}
 							mode={mode()}
+							wrap={uiStore.state.diffSoftWrap}
+							maxLines={settingsStore.state.sessionDiffTruncateLines}
 							contentRef={(el: HTMLElement) => {
 								contentRef = el;
 								lineSelection.setContentRef(el);
