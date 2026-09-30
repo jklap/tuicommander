@@ -110,7 +110,6 @@ uncapping the server.
 | `POST` | `/sessions/:id/write` | Write data to session |
 | `POST` | `/sessions/:id/resize` | Resize session terminal |
 | `GET` | `/sessions/:id/output` | Read session output (ring buffer) |
-| `GET` | `/sessions/:id/shell-family` | Shell classification (`posix`/`windows-native`/`unknown`, or `null`) so the client picks the right control sequences |
 | `POST` | `/sessions/:id/pause` | Pause session output |
 | `POST` | `/sessions/:id/resume` | Resume session output |
 | `PUT` | `/sessions/:id/accent-color` | Set/clear a session's accent color |
@@ -796,7 +795,7 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 `session action=submit session_id=<id> input=<command>` is the managed-agent
 command surface. It accepts only a confirmed-idle agent with an empty composer,
-never queues, and keeps the PTY writer locked across Ctrl-U, bracketed paste for
+never queues, and keeps the PTY writer locked across bracketed paste for
 multiline input, the 50 ms raw-mode scheduling gap, and Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
@@ -856,8 +855,8 @@ marker and reserves `idle` for an unclassified ready state.
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
 so slash-mode tracking stays identical for MCP and remote web clients. When a
 combined text + Enter request targets a prefill-only agent such as Codex or
-OpenCode, MCP uses the legacy framed injection sequence (Ctrl-U, bracketed paste
-for multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
+OpenCode, MCP uses the legacy framed injection sequence (bracketed paste for
+multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
 including Claude's established input path, retain raw pair semantics. This
 legacy combined form remains write-only; new managed automation uses
 `action=submit` for the bounded receipt.

@@ -1007,67 +1007,6 @@ pub(crate) fn resolve_shell(override_shell: Option<String>) -> String {
     crate::cli::expand_tilde(&shell)
 }
 
-/// Which family of shell is running inside a PTY.
-///
-/// Used by the frontend to decide whether control characters like Ctrl-U are
-/// honoured (POSIX readline) or echoed literally (`cmd.exe`, PowerShell).
-/// Classifying by the shell command rather than by host OS is the whole point
-/// of story 1274-2e38: Git Bash, Cygwin, MSYS and WSL all run on Windows yet
-/// support Ctrl-U, so a host-OS check alone is wrong.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum ShellFamily {
-    /// POSIX shell with readline semantics: sh, bash, zsh, fish, dash, ksh,
-    /// and friends — including WSL (spawns a Linux shell) and Git Bash /
-    /// Cygwin / MSYS (bash compiled for Windows).
-    Posix,
-    /// Native Windows shell that treats Ctrl-U as a literal character:
-    /// cmd.exe, PowerShell, pwsh.
-    WindowsNative,
-    /// Shell basename didn't match any known set. Callers should fall back to
-    /// the safer default for their host (on Windows: skip Ctrl-U; on
-    /// Unix: send it).
-    Unknown,
-}
-
-/// Classify a shell command string (as passed to `portable_pty`) into a
-/// [`ShellFamily`]. Pure function — no I/O, no env lookups — so it's easy to
-/// test against the set of strings the UI actually produces.
-///
-/// Parses the leading binary path first (supports Windows paths with spaces
-/// like `C:\Program Files\Git\bin\bash.exe`), then matches the basename
-/// case-insensitively with any `.exe` suffix stripped.
-pub(crate) fn classify_shell(cmd: &str) -> ShellFamily {
-    let trimmed = cmd.trim().trim_matches('"');
-    // Locate the binary portion: if there's a case-insensitive `.exe`, take
-    // everything up to and including it; otherwise split on first whitespace.
-    // This keeps `C:\Program Files\...\bash.exe` intact while still trimming
-    // trailing args like `wsl.exe -d Ubuntu`.
-    let exe = match trimmed.to_ascii_lowercase().find(".exe") {
-        Some(idx) => &trimmed[..idx + ".exe".len()],
-        None => trimmed.split_whitespace().next().unwrap_or(""),
-    };
-    let filename = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
-    let stem = filename
-        .strip_suffix(".exe")
-        .or_else(|| filename.strip_suffix(".EXE"))
-        .or_else(|| filename.strip_suffix(".Exe"))
-        .unwrap_or(filename)
-        .to_ascii_lowercase();
-
-    match stem.as_str() {
-        // POSIX shells (same set we pattern-match elsewhere in pty.rs)
-        "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "ash" | "tcsh" | "csh" | "mksh" => {
-            ShellFamily::Posix
-        }
-        // WSL spawns a Linux shell — readline semantics apply.
-        "wsl" => ShellFamily::Posix,
-        // Native Windows shells: Ctrl-U is not line-kill.
-        "cmd" | "powershell" | "pwsh" => ShellFamily::WindowsNative,
-        _ => ShellFamily::Unknown,
-    }
-}
-
 /// How long the agent must be silent after printing a `?`-ending line before
 /// we treat it as a question waiting for input. 10s is long enough to avoid
 /// false positives from AI agents that pause while thinking between API calls.
@@ -9672,17 +9611,28 @@ pub(crate) fn write_agent_submission_to_pty(
     }
 }
 
-/// Build the first write of an injection: Ctrl-U clears any pending input, and
-/// multiline text rides inside a bracketed paste (ESC[200~ … ESC[201~) so the
-/// TUI keeps embedded newlines as paste content and the trailing CR (sent as a
-/// separate write) lands as a real Enter keypress. Mirrors the frontend
-/// `sendCommand.ts` recipe exactly — raw multiline text merely PREFILLS
-/// codex/claude without submitting (verified live, story 091).
+/// Build the first write of an injection: multiline text rides inside a
+/// bracketed paste (ESC[200~ … ESC[201~) so the TUI keeps embedded newlines as
+/// paste content and the trailing CR (sent as a separate write) lands as a
+/// real Enter keypress. Mirrors the frontend `sendCommand.ts` recipe exactly —
+/// raw multiline text merely PREFILLS codex/claude without submitting
+/// (verified live, story 091).
+///
+/// No leading Ctrl-U: it used to clear any stale/partial input already sitting
+/// in the prompt, but Ink-based agents (Codex, Claude Code) don't reliably
+/// treat a bundled Ctrl-U+text write as a discrete "clear line" keypress — the
+/// byte lands as literal, invisible content instead, corrupting the injected
+/// text. Removed everywhere it was auto-sent (this function, the frontend
+/// `sendCommand.ts`, the AI agent tool, tuic-cli) rather than given its own
+/// delayed write, per an explicit decision to accept the tradeoff: injecting
+/// into a POSIX shell prompt with stale text already typed no longer clears
+/// it first, so the injected text is appended after whatever was already
+/// there instead.
 fn injection_payload(text: &str) -> String {
     if text.contains('\n') {
-        format!("\x15\x1b[200~{text}\x1b[201~")
+        format!("\x1b[200~{text}\x1b[201~")
     } else {
-        format!("\x15{text}")
+        text.to_string()
     }
 }
 

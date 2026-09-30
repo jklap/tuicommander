@@ -50,7 +50,7 @@ describe("CommandWidget", () => {
 		await waitFor(() => {
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",
-				data: "\x15/compact",
+				data: "/compact",
 			});
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",
@@ -69,7 +69,7 @@ describe("CommandWidget", () => {
 		await waitFor(() => {
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",
-				data: "\x15/model opus",
+				data: "/model opus",
 			});
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",

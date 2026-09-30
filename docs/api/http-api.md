@@ -348,7 +348,6 @@ state explain" section for the full payload shape.
 
 ```
 GET  /sessions/:id/shell-state                         -> { "state": "busy"|"idle"|null }
-GET  /sessions/:id/shell-family                        -> "posix"|"windows-native"|"unknown"|null
 GET  /sessions/:id/last-prompt                         -> { "prompt": string|null }
 GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
@@ -368,13 +367,6 @@ bytes it started as. The desktop `terminal_styled_rows` command returns the same
 payload raw (`tauri::ipc::Response`), and `rpcImpl` decides between
 `arrayBuffer()` and `json()` on the content-type alone. An empty body means "no
 such session or range" — a valid empty chunk, not an error.
-
-`shell-family` classifies the session's shell so the client picks the right control
-sequences (Ctrl-U is line-kill under POSIX readline, a literal character on
-`cmd.exe`/PowerShell). It answers the bare value, **not** a `{field}` wrapper,
-because `get_session_shell_family` returns `Option<ShellFamily>` bare over IPC and
-`src/utils/sendCommand.ts` reads both transports with the same code. An unknown
-session is `null`, which is the same "fall back to the host default" answer.
 
 Read-only PTY/terminal state mirroring the desktop Tauri commands (story 062). The
 `{field}`-wrapped responses are unwrapped by the frontend transport to match the

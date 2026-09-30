@@ -428,7 +428,7 @@ Displays slash command menu items detected from the terminal.
 1. User taps item → `onSelect(command)` callback
 2. Parent sets `inputPrefill` signal with `{ text, seq }` counter
 3. CommandInput receives prefill, sets textarea value, focuses
-4. Also sends `Ctrl-U + text` to PTY so terminal shows it
+4. Also sends the text to the PTY so the terminal shows it
 5. User reviews, optionally edits, presses Enter to submit
 
 ### SessionDetailScreen — Orchestration

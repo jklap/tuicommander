@@ -623,7 +623,7 @@ export interface PluginHost {
 
 	/**
 	 * Send user input to an agent session with correct Enter handling.
-	 * Uses Ctrl-U + text, then \r in a separate write for Ink-based agents
+	 * Sends text, then \r in a separate write for Ink-based agents
 	 * (Claude Code, Codex, etc.) that swallow \r when bundled with text.
 	 * Falls back to a single write for shell sessions.
 	 * Requires "pty:write" capability.

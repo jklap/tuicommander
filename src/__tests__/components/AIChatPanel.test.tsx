@@ -108,7 +108,6 @@ vi.mock("../../stores/appLogger", () => ({
 
 vi.mock("../../utils/sendCommand", () => ({
 	sendCommand: vi.fn(),
-	getShellFamily: vi.fn(() => "posix"),
 }));
 
 vi.mock("../../stores/ui", () => ({

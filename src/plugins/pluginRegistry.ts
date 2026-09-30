@@ -18,7 +18,7 @@ import { isTauri } from "../transport";
 import { handleOpenUrl } from "../utils/openUrl";
 import { randomId } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
-import { getShellFamily, sendCommand } from "../utils/sendCommand";
+import { sendCommand } from "../utils/sendCommand";
 import { dashboardRegistry } from "./dashboardRegistry";
 import { fileIconRegistry } from "./fileIconRegistry";
 import { filePreviewRegistry } from "./filePreviewRegistry";
@@ -535,8 +535,7 @@ function createPluginRegistry() {
 					);
 					return;
 				}
-				const shellFamily = await getShellFamily(sessionId);
-				await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType, shellFamily);
+				await sendCommand((data) => invoke("write_pty", { sessionId, data }), text, agentType);
 			},
 
 			async readSessionOutput(sessionId: string, maxLines?: number): Promise<string> {

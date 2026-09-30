@@ -35,7 +35,6 @@ vi.mock("../../utils/clipboard", () => ({
 }));
 vi.mock("../../utils/hotkey", () => ({ keyFor: (action: string) => action }));
 vi.mock("../../utils/sendCommand", () => ({
-	getShellFamily: vi.fn().mockResolvedValue("posix"),
 	sendCommand: vi.fn().mockResolvedValue(undefined),
 }));
 

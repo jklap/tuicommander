@@ -339,7 +339,7 @@ plus a Tauri-side query for the per-session knowledge store.
 | Tool | Args | Description |
 |------|------|-------------|
 | `read_screen` | `session_id, lines?` | Read visible terminal text (default 50 lines). Secrets redacted. |
-| `send_input` | `session_id, command` | Send a text command to the PTY (Ctrl-U prefix + \\r). |
+| `send_input` | `session_id, command` | Send a text command to the PTY (text, then \\r on a separate write). |
 | `send_key` | `session_id, key` | Send a special key (enter, tab, ctrl+c, escape, arrows). |
 | `wait_for` | `session_id, pattern?, timeout_ms?, stability_ms?` | Wait for regex match or screen stability. |
 | `get_state` | `session_id` | Structured session metadata (shell_state, cwd, terminal_mode). |

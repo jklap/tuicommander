@@ -24,10 +24,7 @@ describe("SuggestChips", () => {
 		expect(buttons[2].textContent).toBe("Deploy");
 	});
 
-	it("sends command via sendCommand (Ctrl-U+text then Enter) on click", async () => {
-		// agentType forces the Ctrl-U-prefix branch regardless of host platform
-		// detection in the test environment (sendCommand skips Ctrl-U on native
-		// Windows shells only when no agent is detected).
+	it("sends command via sendCommand (text then Enter) on click", async () => {
 		const { container } = render(() => <SuggestChips sessionId="s1" items={["Run tests"]} agentType="claude" />);
 		const button = container.querySelector("button")!;
 		await fireEvent.click(button);
@@ -36,7 +33,7 @@ describe("SuggestChips", () => {
 		// the payload's read(). A microtask flush no longer reaches the 2nd write.
 		await new Promise((r) => setTimeout(r, AGENT_ENTER_GAP_MS + 20));
 		expect(rpc).toHaveBeenCalledTimes(2);
-		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "\x15Run tests" });
+		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "Run tests" });
 		expect(rpc).toHaveBeenNthCalledWith(2, "write_pty", { sessionId: "s1", data: "\r" });
 	});
 

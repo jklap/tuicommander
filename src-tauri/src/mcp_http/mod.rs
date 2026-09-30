@@ -836,10 +836,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/explain-state", get(session::explain_state))
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
-        .route(
-            "/sessions/{id}/shell-family",
-            get(session::get_session_shell_family),
-        )
         .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
         .route(
             "/sessions/{id}/input-buffer",
@@ -5799,7 +5795,6 @@ mod tests {
             ("POST", "/system/notification-sound"),
             ("GET", "/system/relay-status"),
             ("GET", "/system/check-update"),
-            ("GET", "/sessions/probe-session/shell-family"),
             ("POST", "/worktrees/run-script"),
         ];
 

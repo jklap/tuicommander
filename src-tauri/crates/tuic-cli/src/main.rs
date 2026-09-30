@@ -791,9 +791,9 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
 
 fn agent_send_parts(message: &str) -> (String, &'static str) {
     let payload = if message.contains('\n') {
-        format!("\x15\x1b[200~{message}\x1b[201~")
+        format!("\x1b[200~{message}\x1b[201~")
     } else {
-        format!("\x15{message}")
+        message.to_string()
     };
     (payload, "\r")
 }
@@ -1709,9 +1709,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_send_separates_framed_payload_from_enter() {
+    fn agent_send_separates_payload_from_enter() {
         let (payload, enter) = agent_send_parts("report complete");
-        assert_eq!(payload, "\x15report complete");
+        assert_eq!(payload, "report complete");
         assert!(!payload.contains('\r'));
         assert_eq!(enter, "\r");
     }
@@ -1719,7 +1719,7 @@ mod tests {
     #[test]
     fn agent_send_bracket_pastes_multiline_before_separate_enter() {
         let (payload, enter) = agent_send_parts("line one\nline two");
-        assert_eq!(payload, "\x15\x1b[200~line one\nline two\x1b[201~");
+        assert_eq!(payload, "\x1b[200~line one\nline two\x1b[201~");
         assert_eq!(enter, "\r");
     }
 

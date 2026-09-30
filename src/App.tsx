@@ -126,7 +126,7 @@ import { navigateToTerminal } from "./utils/navigateToTerminal";
 import { assignTabToActiveGroup, initPaneTabAssignment } from "./utils/paneTabAssign";
 import { pathBasename } from "./utils/pathUtils";
 import { randomId } from "./utils/randomId";
-import { getShellFamily, sendCommand } from "./utils/sendCommand";
+import { sendCommand } from "./utils/sendCommand";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
 const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
@@ -583,9 +583,8 @@ const App: Component = () => {
 		// Route through sendCommand (never raw text+\r) so the Enter registers
 		// even when the active terminal is an Ink-based agent in raw mode.
 		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
-		const shellFamily = await getShellFamily(sessionId);
 		try {
-			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily);
+			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType);
 			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
 		} catch (err) {
 			appLogger.error(

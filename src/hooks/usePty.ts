@@ -2,7 +2,7 @@ import { appLogger } from "../stores/appLogger";
 import { rpc } from "../transport";
 import type { OrchestratorStats, PtyConfig } from "../types";
 import { randomId } from "../utils/randomId";
-import { clearShellFamilyCache, getShellFamily, sendCommand as sendCommandUtil } from "../utils/sendCommand";
+import { sendCommand as sendCommandUtil } from "../utils/sendCommand";
 import { locallyCreatedSessions } from "./useAppInit";
 
 /** Pre-generate a session id for a create and register it locally BEFORE the
@@ -131,8 +131,7 @@ export function usePty() {
 
 	/** Send or insert text through the central agent-aware command path. */
 	async function sendCommand(sessionId: string, text: string, agentType?: string | null, submit = true): Promise<void> {
-		const shellFamily = await getShellFamily(sessionId);
-		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily, submit);
+		await sendCommandUtil((data) => write(sessionId, data), text, agentType, submit);
 	}
 
 	/** Hand a command to the backend's idle gate instead of typing it now: it is
@@ -175,7 +174,6 @@ export function usePty() {
 
 	/** Close a PTY session */
 	async function close(sessionId: string, cleanupWorktree: boolean = false): Promise<void> {
-		clearShellFamilyCache(sessionId);
 		await rpc("close_pty", { sessionId, cleanupWorktree });
 	}
 

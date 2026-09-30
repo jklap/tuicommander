@@ -3372,8 +3372,8 @@ fn handle_session(
                 .and_then(|s| s.agent_type.clone());
 
             // Submitting text to a prefill-only agent is not a generic text+key
-            // pair. Codex/OpenCode require Ctrl-U framing, bracketed paste for
-            // multiline prompts, and a real scheduling gap before CR. Reuse the
+            // pair. Codex/OpenCode require bracketed paste for multiline
+            // prompts and a real scheduling gap before CR. Reuse the
             // peer-injection recipe without changing Claude's working input path.
             if !text.is_empty() && uses_agent_command_injection(agent_type.as_deref(), key_seq) {
                 if let Err(e) = crate::pty::write_agent_command_to_pty(state, session_id, text) {
@@ -9180,7 +9180,7 @@ mod tests {
         );
         assert_eq!(
             bytes.lock().unwrap().as_slice(),
-            b"\x15inspect the repository\r"
+            b"inspect the repository\r"
         );
         assert_eq!(
             state
@@ -9215,7 +9215,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15no child output\r");
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"no child output\r");
         assert_eq!(
             state
                 .session_maps
@@ -9291,7 +9291,7 @@ mod tests {
 
         assert_eq!(response["status"], "acknowledged");
         assert_eq!(response["turn_epoch"], 1);
-        assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15/clear\r");
+        assert_eq!(bytes.lock().unwrap().as_slice(), b"/clear\r");
         assert!(
             !state
                 .session_maps

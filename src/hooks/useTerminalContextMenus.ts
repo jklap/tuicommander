@@ -14,7 +14,7 @@ import { rowAnchoredBlocks, terminalsStore } from "../stores/terminals";
 import { buildAgentLaunchCommand } from "../utils/agentSession";
 import { writeClipboardAsync } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
-import { getShellFamily, sendCommand } from "../utils/sendCommand";
+import { sendCommand } from "../utils/sendCommand";
 import type { useAgentDetection } from "./useAgentDetection";
 import type { useGitOperations } from "./useGitOperations";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -40,13 +40,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		if (!active?.ref || !active.sessionId) return;
 		const agentSessionId = agentType === "claude" ? null : (active.tuicSession ?? null);
 		const finalCommand = buildAgentLaunchCommand(command, agentSessionId, agentType);
-		const shellFamily = await getShellFamily(active.sessionId);
-		await sendCommand(
-			(data) => invoke("write_pty", { sessionId: active.sessionId, data }),
-			finalCommand,
-			null,
-			shellFamily,
-		);
+		await sendCommand((data) => invoke("write_pty", { sessionId: active.sessionId, data }), finalCommand, null);
 		terminalsStore.update(active.id, {
 			name: AGENTS[agentType].name,
 			nameIsCustom: true,

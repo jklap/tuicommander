@@ -87,8 +87,9 @@ glyph **and** the `|` separator it sits on so every spinner frame collapses to o
 | Clear to line start | `ctrl+u` (`tui.editor.deleteToLineStart`) |
 | Interrupt | `ctrl+c` (`app.clear`) |
 
-`sendCommand`'s agent path (Ctrl-U prefix, 50ms gap, separate `\r`) is correct for pi as-is —
-`ctrl+u` is a real binding, so the prefix is consumed rather than echoed.
+`sendCommand`'s agent path (text, 50ms gap, separate `\r`) is correct for pi as-is —
+verified live against a real pi PTY: a plain `text\r` write submits, so pi needs no
+special-casing.
 
 ## Not yet observed
 
