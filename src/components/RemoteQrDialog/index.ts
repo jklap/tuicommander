@@ -1,1 +1,0 @@
-export { RemoteQrDialog } from "./RemoteQrDialog";
