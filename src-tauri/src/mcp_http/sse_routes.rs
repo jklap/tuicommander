@@ -577,6 +577,27 @@ mod tests {
         assert_eq!(body["parent_session"], "tuic-parent");
     }
 
+    /// Characterization test, written before the origin-tracking change lands:
+    /// today the `session-created` wire payload carries no `is_remote` key at
+    /// all — the frontend listener hardcodes `isRemote: true` instead of
+    /// reading it from this event. Once the field is added, this flips to
+    /// asserting the value round-trips.
+    #[test]
+    fn session_created_payload_has_no_is_remote_key_yet() {
+        let event = AppEvent::SessionCreated {
+            session_id: "session-1".into(),
+            cwd: None,
+            agent_type: None,
+            display_name: None,
+            parent_session: None,
+        };
+        let body = event_payload(&event);
+        assert!(
+            body.get("is_remote").is_none(),
+            "SessionCreated payload should not carry is_remote yet: {body}"
+        );
+    }
+
     #[test]
     fn pty_description_changed_has_matching_sse_name_and_payload() {
         let event = AppEvent::PtyDescriptionChanged {
