@@ -1200,10 +1200,25 @@ pub(crate) fn pending_orphan_cleanup_answer(
         .and_then(|entry| entry.answer)
 }
 
+/// End a client's cleanup dialog. A Keep stays on the shared entry as `answer =
+/// Some(false)` so other clients polling it close their own dialog instead of
+/// counting down to a removal; anything else drops the entry.
+pub(crate) fn clear_orphan_cleanup_internal(state: &AppState, repo_path: &str, kept: bool) {
+    if kept && let Some(mut entry) = state.pending_orphan_cleanup.get_mut(repo_path) {
+        entry.answer = Some(false);
+        return;
+    }
+    state.pending_orphan_cleanup.remove(repo_path);
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String) {
-    state.pending_orphan_cleanup.remove(&repo_path);
+pub(crate) fn clear_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    kept: bool,
+) {
+    clear_orphan_cleanup_internal(&state, &repo_path, kept);
 }
 
 #[cfg(feature = "desktop")]
@@ -1248,6 +1263,82 @@ mod tests {
     use tuic_git::test_fixtures::{
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
+
+    fn pending_cleanup(state: &AppState, repo: &str) {
+        state.pending_orphan_cleanup.insert(
+            repo.to_string(),
+            PendingOrphanCleanup {
+                paths: vec!["/wt/a".into()],
+                answer: None,
+            },
+        );
+    }
+
+    fn pending_answer(state: &AppState, repo: &str) -> Option<bool> {
+        state
+            .pending_orphan_cleanup
+            .get(repo)
+            .and_then(|entry| entry.answer)
+    }
+
+    // Catches: clear deleting the entry after a Keep, so a second client that shows the
+    // same dialog polls null, keeps counting down and removes the worktree (1289-27f8).
+    #[test]
+    fn clearing_a_kept_cleanup_leaves_the_keep_visible_to_other_clients() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Catches: a non-Keep clear leaving a stale entry behind that answers later dialogs.
+    #[test]
+    fn clearing_a_finished_cleanup_removes_the_entry() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", false);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: a Keep for a dialog nobody registered must not invent a pending entry.
+    #[test]
+    fn keeping_without_a_pending_cleanup_creates_nothing() {
+        let state = crate::state::tests_support::make_test_app_state();
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: two clients both end in Keep; the second must not flip the answer back.
+    #[test]
+    fn keeping_twice_stays_kept() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Attack: a kept entry is per repo and a new dialog starts unanswered again.
+    #[test]
+    fn keep_does_not_leak_to_another_repo_or_to_the_next_dialog() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        pending_cleanup(&state, "/other");
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        assert_eq!(pending_answer(&state, "/other"), None);
+
+        pending_cleanup(&state, "/repo"); // what begin_orphan_cleanup does for a new dialog
+
+        assert_eq!(pending_answer(&state, "/repo"), None);
+    }
 
     #[cfg(unix)]
     #[test]

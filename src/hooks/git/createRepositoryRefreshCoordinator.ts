@@ -43,7 +43,7 @@ interface RepositoryRefreshCoordinatorDeps {
 		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
-		clearOrphanCleanup: (repoPath: string) => Promise<void>;
+		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
 		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
@@ -525,7 +525,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes
 		orphanDialogOpen = true;
-		let confirmed: boolean;
+		let confirmed: boolean | undefined;
 		let poll: ReturnType<typeof setInterval> | undefined;
 		let dialogActive = true;
 		try {
@@ -563,7 +563,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			dialogActive = false;
 			if (poll) clearInterval(poll);
 			try {
-				await deps.repo.clearOrphanCleanup(repoPath);
+				// A Keep stays on the backend so other clients showing this dialog
+				// see it instead of counting down to a removal.
+				await deps.repo.clearOrphanCleanup(repoPath, confirmed === false);
 			} finally {
 				orphanDialogOpen = false;
 			}
