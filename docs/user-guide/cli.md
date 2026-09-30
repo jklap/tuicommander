@@ -287,9 +287,11 @@ after a `Buffered` line. The CLI validates this current report contract through
 `message_id`, `delivered`, and `delivery_path`; it does not require the removed
 `accepted` compatibility field.
 
-`tuic agent type` keeps the agent-safe framing: the text and the Enter are sent
-as **separate** PTY writes, because a raw-mode Ink TUI treats a combined
-`text\r` as a prefill and leaves it unsent. `tuic send` does not do this.
+`tuic agent type` keeps the agent-safe framing: a Ctrl-U (clear pending input),
+the text and the Enter are sent as **separate** PTY writes a short gap apart,
+because a raw-mode Ink TUI treats a combined `text\r` as a prefill and leaves it
+unsent, and Claude Code strips a Ctrl-U bundled into the text as an invisible
+character. `tuic send` does not do this.
 
 `tuic agent send` uses `$TUIC_SESSION` when it runs inside a TUICommander
 session. Outside one, it registers a headerless external caller for the MCP
