@@ -253,13 +253,47 @@ auto-consolidation tab-strip filter this store also serves.
 
 **The sidebar pill is one-way, not a toggle.** Clicking it always means
 "switch to `MANUAL_SCOPE`'s view" — it forces `setScope(MANUAL_SCOPE)` then
-`activate()` if not already active. It never deactivates. The *only* way to
-leave the manual Global Workspace view is clicking an ordinary terminal or
-branch row in the sidebar (`navigateToTerminal.ts`, `createBranchSelectionCoordinator.ts`'s
-`handleBranchSelectInner`), both of which now check `isManualWorkspaceActive()`
-first and call `deactivate()` before proceeding. Confirmed directly with Boss:
-do not reintroduce a deactivate-on-click path on the pill or its matching
-`toggle-global-workspace` keyboard shortcut.
+`activate()` if not already active. It never deactivates. Clicking an
+ordinary terminal or branch row in the **sidebar** always exits the manual
+Global Workspace view, even if the clicked terminal happens to already be
+promoted into it — a sidebar row click is a deliberate "go look at this
+repo/branch" action, never a within-workspace tab switch.
+`navigateToTerminal.ts` (sidebar terminal rows, plus every other caller
+that isn't the main TabBar — notifications, Activity Dashboard, Session Diff,
+next/prev-terminal shortcuts) and `createBranchSelectionCoordinator.ts`'s
+`handleBranchSelectInner` (sidebar branch rows) both check
+`isManualWorkspaceActive()` unconditionally and call `deactivate()` before
+proceeding, with no exception for already-promoted ids. Confirmed directly
+with Boss: do not reintroduce a deactivate-on-click path on the pill or its
+matching `toggle-global-workspace` keyboard shortcut, and do not make
+`navigateToTerminal.ts` itself promoted-id-aware — see the next paragraph for
+why that distinction lives one layer up instead.
+
+**The main TabBar's own tab clicks are a separate path that must NOT
+deactivate, and the fix lives in `useTerminalLifecycle.ts`, not
+`navigateToTerminal.ts`.** Found 2026-09-30 from a live user report: clicking
+*any* tab while the manual Global Workspace was showing switched the user out
+of it entirely. `handleTerminalSelect` (`useTerminalLifecycle.ts`, wired to
+the main `TabBar`'s tab clicks) called `navigateToTerminal(id)` for every
+plain terminal id — but while the workspace is showing, its tab strip renders
+exactly `globalWorkspaceStore.getPromotedIds()` (`TabBar.tsx`'s
+`activeTerminals()`), so every tab visible there is already a member, and
+`navigateToTerminal`'s unconditional `deactivate()` fired on every single
+click. An initial attempt fixed this by making `navigateToTerminal.ts` itself
+skip `deactivate()` whenever the id is in `getPromotedIds()` — wrong, because
+that function is *also* the sidebar's click handler, and a sidebar row click
+must always exit regardless of promoted status (see previous paragraph) — a
+promoted terminal can still appear in its branch's sidebar tab list. The
+correct fix special-cases only the TabBar path: `handleTerminalSelect` checks
+`globalWorkspaceStore.isManualWorkspaceActive() &&
+globalWorkspaceStore.getPromotedIds().includes(id)` itself and, when true,
+just switches the active tab/pane group directly (mirroring
+`activateInPaneGroup`'s existing pattern) instead of calling
+`navigateToTerminal` at all — leaving `navigateToTerminal.ts` completely
+unchanged from its original always-deactivate behavior. Any future caller of
+`navigateToTerminal` that renders its own filtered-to-`getPromotedIds()` tab
+strip (not a plain "go to any terminal" action) needs this same
+caller-side special case, not a change to the shared function.
 
 **Re-asserting the correct scope after an imperative exit needs an imperative
 call, not just the reactive effect.** `useWorktreeConsolidation()`'s second

@@ -37,6 +37,7 @@ const {
 
 	const mockGlobalWorkspaceStore = {
 		isManualWorkspaceActive: vi.fn(() => false),
+		getPromotedIds: vi.fn<() => string[]>(() => []),
 		deactivate: vi.fn(),
 	};
 
@@ -70,6 +71,7 @@ describe("navigateToTerminal", () => {
 		mockPaneLayoutStore.getGroupForTab.mockReturnValue(null);
 		mockTerminalsStore.get.mockReturnValue({ ref: { focus: mockFocus } });
 		mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(false);
+		mockGlobalWorkspaceStore.getPromotedIds.mockReturnValue([]);
 		vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
 			cb(0);
 			return 0;
@@ -170,6 +172,21 @@ describe("navigateToTerminal", () => {
 			navigateToTerminal("t1");
 
 			expect(mockGlobalWorkspaceStore.deactivate).not.toHaveBeenCalled();
+		});
+
+		it("deactivates even when navigating to a terminal that's already promoted into the workspace", () => {
+			// A sidebar row click is a deliberate "go look at this repo/branch"
+			// action, not a within-workspace tab switch — always exits, unlike
+			// the main TabBar's own tab clicks (handled separately in
+			// useTerminalLifecycle.ts, which never calls this function for a
+			// promoted tab).
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockGlobalWorkspaceStore.getPromotedIds.mockReturnValue(["t1", "t2"]);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).toHaveBeenCalledOnce();
+			expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
 		});
 
 		it("re-syncs the active repo's scope even when the repo doesn't change (same-repo click while manual workspace is active)", () => {

@@ -4,6 +4,7 @@ import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { diffTabsStore } from "../stores/diffTabs";
 import { editorTabsStore } from "../stores/editorTabs";
+import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { mdTabsStore } from "../stores/mdTabs";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { currentBranchKey, repositoriesStore } from "../stores/repositories";
@@ -495,6 +496,17 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 		} else if (id.startsWith("edit-")) {
 			editorTabsStore.setActive(id);
 			activateInPaneGroup(id, "editor");
+		} else if (globalWorkspaceStore.isManualWorkspaceActive() && globalWorkspaceStore.getPromotedIds().includes(id)) {
+			// This is the main TabBar's own tab strip while the manual Global
+			// Workspace is showing — it renders exactly getPromotedIds(), so
+			// selecting one of its own tabs is a within-workspace tab switch,
+			// not a "go look at this repo/branch" action. Must NOT route through
+			// navigateToTerminal(), which always deactivates the workspace — that
+			// behavior is correct for sidebar rows (see navigateToTerminal.ts)
+			// but wrong here, since every tab visible in this strip is already
+			// a member.
+			terminalsStore.setActive(id);
+			activateInPaneGroup(id, "terminal");
 		} else {
 			navigateToTerminal(id);
 		}
