@@ -408,7 +408,15 @@ What's NOT machine-verifiable:
       synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
       and the chronological view's step order both look right, including at
       least one session with a subagent edit and one with a file the session
-      created.
+      created. **Backend half confirmed 2026-09-30** via a direct `GET
+      /repo/session-review` call (real session, this repo, no UI): step order
+      was chronological, the grouped-by-file view produced a correct cumulative
+      unified diff with matching additions/deletions counts,
+      `base_source: "backup"` resolved correctly against a real file-history
+      backup, and `in_repo: false` correctly flagged an out-of-repo file. Still
+      open: the actual tab rendering (visual), and this specific sample had no
+      subagent edit or session-created file — needs a session with those to
+      close fully.
 - [ ] Drag-select lines in a rendered step/file diff and send a comment — confirm
       it lands in the terminal in the same format the regular Diff tab's
       selection-comment feature produces.
