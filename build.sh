@@ -23,6 +23,10 @@ SIGN="${SIGN:-yes}"
 CHECK_SIGNING="${CHECK_SIGNING:-yes}"
 UPDATE_PLUGINS="${UPDATE_PLUGINS:-yes}"
 
+BUILD_PATH="src-tauri/target/release/bundle/macos"
+APP_PATH="$BUILD_PATH/TUICommander.app"
+DMG_PATH=" src-tauri/target/release/bundle/dmg/"
+
 if [ -n "$RUN_ALL" ]; then
     # Typecheck
     pnpm exec tsc --noEmit
@@ -105,7 +109,7 @@ if [ -n "$BUILD" ]; then
     /usr/libexec/PlistBuddy \
         -c "Add :LSEnvironment dict" \
         -c "Add :LSEnvironment:RUST_LOG string 'info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug'" \
-        src-tauri/target/release/bundle/macos/TUICommander.app/Contents/Info.plist
+        "$APP_PATH/Contents/Info.plist"
 
     echo -e "${GREEN}Restoring version files${OFF}"
     diff_check() {
@@ -123,8 +127,6 @@ if [ -n "$BUILD" ]; then
     diff_check "src-tauri/Cargo.lock"
     diff_check "src-tauri/Cargo.toml"
     diff_check "src-tauri/tauri.conf.json"
-
-    open src-tauri/target/release/bundle/
 fi
 
 if [ -n "$SIGN" ]; then
@@ -133,11 +135,11 @@ if [ -n "$SIGN" ]; then
     codesign \
         --force \
         --deep \
-        --sign $APPLE_SIGNING_IDENTITY \
+        --sign "$APPLE_SIGNING_IDENTITY" \
         --identifier "com.tuic.commander" \
-        --entitlements src-tauri/Entitlements.plist \
+        --entitlements "src-tauri/Entitlements.plist" \
         --options runtime \
-        src-tauri/target/release/bundle/macos/TUICommander.app
+        "$APP_PATH"
     if [ $? -ne 0 ]; then
         echo -e "  ${BOLD_RED}codesign failed${OFF}"
         exit 1
@@ -149,7 +151,7 @@ if [ -n "$CHECK_SIGNING" ]; then
     codesign \
         --verify \
         --verbose \
-        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        "$APP_PATH" 2>&1 \
         | grep --color=always -E 'valid on disk|satisfies its Designated Requirement|$'
     if [ $? -ne 0 ]; then
         echo -e "  ${BOLD_RED}codesign failed${OFF}"
@@ -164,7 +166,7 @@ if [ -n "$CHECK_SIGNING" ]; then
         --xml \
         --requirements - \
         --verbose=4 \
-        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        "$APP_PATH" 2>&1 \
         | grep --color=always -E 'CodeDirectory.*|Signature.*|$'
     if [ $? -ne 0 ]; then
         echo -e "  ${BOLD_RED}codesign failed${OFF}"
@@ -176,7 +178,7 @@ if [ -n "$CHECK_SIGNING" ]; then
         --display \
         --check-notarization \
         -vvv \
-        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        "$APP_PATH" 2>&1 \
         | grep --color=always -E 'CodeDirectory.*|$'
     if [ $? -ne 0 ]; then
         echo -e "  ${BOLD_RED}codesign failed${OFF}"
@@ -187,7 +189,7 @@ if [ -n "$CHECK_SIGNING" ]; then
     spctl \
         --assess \
         --verbose \
-        src-tauri/target/release/bundle/macos/TUICommander.app 2>&1 \
+        "$APP_PATH" 2>&1 \
         | grep --color=always -E 'rejected|$'
     if [ $? -ne 0 ] && [ "$APPLE_SIGNING_IDENTITY" != '-' ]; then
         # we only care about the Gatekeeper check if it's not a local dev signing
@@ -196,10 +198,10 @@ if [ -n "$CHECK_SIGNING" ]; then
     fi
 
     # spot checks, all should be good, only report if not
-    { codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic && \
-        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-bridge && \
-        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-hook && \
-        codesign --verify src-tauri/target/release/bundle/macos/TUICommander.app/Contents/MacOS/tuic-remote ; \
+    { codesign --verify "$APP_PATH/Contents/MacOS/tuic" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-bridge" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-hook" && \
+        codesign --verify "$APP_PATH/Contents/MacOS/tuic-remote" ; \
     } || { echo "Unable to verify status of all sidecar code-signing"; exit 1; }
 fi
 
@@ -224,6 +226,12 @@ if [ -n "$UPDATE_PLUGINS" ]; then
         examples/plugins/report-watcher \
         --exclude "main.test.js" \
         ~/Library/Application\ Support/com.tuic.commander/plugins/
+fi
+
+if [ -n "$BUILD" ]; then
+    open "src-tauri/target/release/bundle/"
+    mv "$APP_PATH" "$BUILD_PATH/TUICommander_${NIGHTLY}.app"
+    #mv "$DMG_PATH/TUICommander_${NIGHTLY}_aarch64.dmg" .
 fi
 
 exit 0
