@@ -228,38 +228,6 @@ than a missed check.
 > WebView gets the same change over Vite HMR. If a browser check of a frontend fix
 > shows nothing, check `dist/index.html`'s mtime before blaming the code.
 
-## The 2026-09-06 reset (story `664-94db`)
-
-339 open items, 65 commits, 90 days, 12 things ever closed. Nearly all of it was
-"after a `make dev` restart" checks whose restart had already happened, unrecorded
-— so they were never re-run and never deleted. The 249 items predating 09-04 were
-worked through the ladder and closed out. What is left is the 09-04/09-05 wave,
-which the running binary genuinely does not contain, and a short tail of checks
-that need a human body.
-
-Evidence that closed the bulk, all measured against the running 09-03 binary:
-
-- `GET :9876/sessions`, 15 live sessions: 14 classify (`claude` ×13, `codex` ×1),
-  11 idle / 3 working, and **zero** reporting `shell_state: idle` while
-  `agent_state: working`. That count was 11 of 14 before the `started_with_agent`
-  window (`pty.rs:2321`) — it is the whole "agent sessions reach idle" section,
-  measured rather than argued.
-- `GET :9876/logs?limit=3000`: **zero** `config write refused` lines, and
-  `save_checked` with its stamp guard is gone from the tree.
-- `repositories.json`: 37 repos, 3 groups, 37 `repoOrder` entries, `P42` and `ego`
-  both present, plain shape with no `{id, before, after}` envelope. The 08-21
-  restore held.
-- `npx vitest run`: 381 files, 5738 tests, all green.
-- ~~`cargo nextest` could NOT run: an in-flight edit elsewhere in the tree leaves
-  `pty.rs:23285` calling `OutputRingBuffer::snapshot`, which does not exist.~~
-  **Resolved 2026-09-07 — this note is discharged, do not act on it.** The tree
-  compiles: no caller of `OutputRingBuffer::snapshot` remains in `pty.rs`, and the
-  full suite ran green — `cargo nextest run --lib` **4934 passed / 0 failed /
-  14 skipped**, `vitest run` **5919 passed / 0 failed** across 392 files, plus
-  `clippy --all-targets -- -D warnings` clean and
-  `cargo build --bin tuic-remote --no-default-features` building. So the Rust
-  claims below are no longer read-only inferences; the suite backs them.
-
 ## Idle watchers stop stalling the event loop (2026-09-05, **Rust change — needs `make dev` restart**) — story `674-78a8`
 
 The idle classifier now runs in its own task, gated by the rule cooldown and a
