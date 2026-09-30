@@ -1677,18 +1677,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// physical line keeps its key for life — no stale row aliases onto a new one
 		// after the scrollback cap rotates. Also pump a live render if a gesture is active.
 		//
-		// During a fast gesture the backend frame trails the live scroll position by
-		// several lines, so its rows are keyed to a lagging displayOffset. Seeding them
-		// then would overwrite cache entries the smooth renderer is currently painting
-		// (brief flicker / wrong overscan). Only seed when at rest or when the backend
-		// has caught up to our integer offset.
+		// Seed on every frame, also while the backend trails the gesture: a row is keyed
+		// by its eviction-stable absolute index, so a lagging frame still says what
+		// each of its rows holds NOW. Skipping it left the rows an agent rewrites in
+		// place (spinner, status, live region) painting their old text for as long
+		// as the gesture ran (#1264-89c8).
 		// The gesture offset is relative to the history bottom: move it with the
 		// output first, so the cache render and the seed below stay on the same lines.
 		if (scroll.followHistory(historyGrowth, frame.historySize, frame.displayOffset)) scheduleScrollFlush();
-		if (scroll.position == null || frame.displayOffset === Math.floor(scroll.position)) {
-			const base = frame.historyBase + frame.historySize - frame.displayOffset;
-			scroll.cacheRows(frame.rows.map((row) => ({ abs: base + row.index, row })));
-		}
+		const base = frame.historyBase + frame.historySize - frame.displayOffset;
+		scroll.cacheRows(frame.rows.map((row) => ({ abs: base + row.index, row })));
 		if (scroll.acceptSettledFrame(frame.displayOffset)) {
 			// Backend reached the snapped line — hand off to normal rendering
 			// seamlessly (the cache render already shows this exact frame).

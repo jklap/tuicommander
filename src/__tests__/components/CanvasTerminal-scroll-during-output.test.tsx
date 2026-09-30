@@ -113,6 +113,30 @@ function paintedLines(): string[] {
 	});
 }
 
+/** A pane with a real box and a canvas whose every call is a no-op, so cached-row paints run. */
+function layOutPane() {
+	vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+		new Proxy(
+			{},
+			{
+				get: (_t, prop) =>
+					prop === "measureText" ? () => ({ width: 8, fontBoundingBoxAscent: 10, fontBoundingBoxDescent: 3 }) : vi.fn(),
+			},
+		) as unknown as CanvasRenderingContext2D,
+	);
+	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+		width: 800,
+		height: 1000,
+		top: 0,
+		left: 0,
+		right: 800,
+		bottom: 1000,
+		x: 0,
+		y: 0,
+		toJSON: () => ({}),
+	});
+}
+
 function sentOffsets(): number[] {
 	return invoke.mock.calls
 		.filter(([cmd]) => cmd === "terminal_scroll_to_offset")
@@ -207,28 +231,7 @@ describe("CanvasTerminal scroll gesture during output", () => {
 			return styledRange(args.start ?? 0, args.count ?? 0, historySize() + ROWS, historySize(), textOf);
 		});
 		paintGrid.mockClear();
-		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
-			new Proxy(
-				{},
-				{
-					get: (_t, prop) =>
-						prop === "measureText"
-							? () => ({ width: 8, fontBoundingBoxAscent: 10, fontBoundingBoxDescent: 3 })
-							: vi.fn(),
-				},
-			) as unknown as CanvasRenderingContext2D,
-		);
-		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-			width: 800,
-			height: 1000,
-			top: 0,
-			left: 0,
-			right: 800,
-			bottom: 1000,
-			x: 0,
-			y: 0,
-			toJSON: () => ({}),
-		});
+		layOutPane();
 		const view = render(() => <CanvasTerminal sessionId="scroll-1264-live" terminalId="scroll-1264-live" />);
 		try {
 			await waitFor(() => expect(frameSink.current).not.toBeNull());
@@ -267,6 +270,43 @@ describe("CanvasTerminal scroll gesture during output", () => {
 			const start = truth().indexOf(lines[0]);
 			expect(start).toBeGreaterThanOrEqual(0);
 			expect(lines).toEqual(truth().slice(start, start + lines.length));
+		} finally {
+			view.unmount();
+		}
+	});
+
+	// catches: frames that rewrite live rows in place while the backend still lags
+	// the gesture are not seeded, so the cache keeps painting the spinner/status
+	// text the row held before the rewrite.
+	it("paints a live row rewritten in place while the gesture is still running", async () => {
+		let spinner = "S1";
+		const textOf = (abs: number) => (abs < 100 ? `H${abs}` : abs === 102 ? spinner : `V${abs}`);
+		invoke.mockImplementation(async (cmd: string, args: { start?: number; count?: number }) => {
+			if (cmd !== "terminal_styled_rows") return undefined;
+			return styledRange(args.start ?? 0, args.count ?? 0, 100 + ROWS, 100, textOf);
+		});
+		paintGrid.mockClear();
+		layOutPane();
+		const view = render(() => <CanvasTerminal sessionId="scroll-1264-inplace" terminalId="scroll-1264-inplace" />);
+		try {
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame({ historySize: 100, displayOffset: 0, textOf }));
+			const canvas = view.container.querySelector('canvas[tabindex="0"]');
+			if (!canvas) throw new Error("terminal canvas not mounted");
+
+			wheel(canvas, -80);
+			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("terminal_styled_rows"));
+			await new Promise((r) => setTimeout(r, 20));
+
+			// The agent redraws its spinner row. History does not grow, and the
+			// backend has not reached the gesture offset yet (offset 0 != position).
+			spinner = "S2";
+			frameSink.current?.(fullFrame({ historySize: 100, displayOffset: 0, textOf }));
+			await new Promise((r) => setTimeout(r, 100));
+
+			const lines = paintedLines();
+			expect(lines).toContain("S2");
+			expect(lines).not.toContain("S1");
 		} finally {
 			view.unmount();
 		}
