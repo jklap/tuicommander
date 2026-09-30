@@ -170,6 +170,8 @@ pub(crate) fn bind_pty_identity(
     // Manually typed Claude inherits the same per-agent preference as TUIC spawns.
     if crate::agent_hook_launch::prevents_alt_screen("claude") {
         cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+        // The agent view is a separate full-screen renderer with its own switch.
+        cmd.env("CLAUDE_CODE_DISABLE_AGENT_VIEW", "1");
     }
     cmd.env(
         "TUIC_CONFIG_DIR",
@@ -5604,6 +5606,10 @@ struct ChunkProcessor {
     last_vt_log_total: usize,
     /// Report a TUIC-managed agent entering alternate screen only once per PTY.
     alt_screen_warned: bool,
+    /// The startup toast fires only for an alternate-screen entry before this instant.
+    startup_deadline: std::time::Instant,
+    /// The startup toast is shown once per PTY.
+    alt_screen_toasted: bool,
     /// Command text captured on OSC 133 C — used when the matching D arrives
     /// to build a `CommandOutcome`. Cleared after D.
     pending_command: Option<String>,
@@ -5638,12 +5644,73 @@ struct ChunkProcessor {
     screen_buf: Vec<String>,
 }
 
+/// A terminal that enters the alternate screen this soon after spawn is treated
+/// as starting there; later entries are ordinary full-screen apps (vim, less).
+const ALT_SCREEN_STARTUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Toast attributed to `session_id`, on the desktop window and the event bus.
+fn emit_session_toast(
+    state: &AppState,
+    session_id: &str,
+    title: &str,
+    message: String,
+    level: &str,
+) {
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        let _ = app.emit(
+            "mcp-toast",
+            serde_json::json!({
+                "title": title,
+                "message": message,
+                "level": level,
+                "sound": null,
+                "origin_session_id": session_id,
+            }),
+        );
+    }
+    let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
+        title: title.into(),
+        message: Some(message),
+        level: level.into(),
+        sound: None,
+        origin_repo_path: None,
+        origin_session_id: Some(session_id.into()),
+    });
+}
+
+fn alt_screen_toast_message(label: &str, agent_type: Option<&str>) -> String {
+    let fix = match agent_type {
+        Some("claude") => {
+            "Set CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 and CLAUDE_CODE_DISABLE_AGENT_VIEW=1 (or disableAgentView in settings)."
+        }
+        Some("codex" | "grok") => "Start it with --no-alt-screen.",
+        Some("opencode") => "Start it with --mini.",
+        _ => "Check the program for a no-alternate-screen option.",
+    };
+    format!(
+        "{label} switched to the alternate screen at startup. This breaks native scrollback and TUIC agent state detection. {fix}"
+    )
+}
+
 impl ChunkProcessor {
     fn should_warn_alt_screen(&mut self, agent_type: Option<&str>, alt_screen: bool) -> bool {
         if agent_type.is_none() || !alt_screen || self.alt_screen_warned {
             return false;
         }
         self.alt_screen_warned = true;
+        true
+    }
+
+    /// True once per PTY, when the screen is alternate on the first startup-window chunk that shows it.
+    fn should_toast_alt_screen(&mut self, alt_screen: bool) -> bool {
+        if !alt_screen
+            || self.alt_screen_toasted
+            || std::time::Instant::now() > self.startup_deadline
+        {
+            return false;
+        }
+        self.alt_screen_toasted = true;
         true
     }
 
@@ -5667,6 +5734,8 @@ impl ChunkProcessor {
             last_cursor_up_n: 0,
             last_vt_log_total: 0,
             alt_screen_warned: false,
+            startup_deadline: std::time::Instant::now() + ALT_SCREEN_STARTUP_WINDOW,
+            alt_screen_toasted: false,
             pending_command: None,
             pending_command_started: None,
             tuic_session,
@@ -6005,6 +6074,7 @@ impl ChunkProcessor {
         // dedup markers) borrow-checkable; it is put back at the end.
         let mut screen_buf = std::mem::take(&mut self.screen_buf);
         let mut unexpected_alt_screen = false;
+        let mut startup_alt_screen = false;
         let mut choice_changed_rows = Vec::new();
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
@@ -6034,6 +6104,7 @@ impl ChunkProcessor {
             let total = vt.total_lines();
             unexpected_alt_screen =
                 self.should_warn_alt_screen(agent_type.as_deref(), vt.is_alternate_screen());
+            startup_alt_screen = self.should_toast_alt_screen(vt.is_alternate_screen());
             let hist = vt.grid_history_size();
             let intent_origin = vt.grid_screen_origin();
             // Did this chunk produce real output, or merely repaint rows that were
@@ -6302,6 +6373,22 @@ impl ChunkProcessor {
             if let Err(error) = accept_managed_claude_trust_dialog(state, session_id) {
                 tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
             }
+        }
+
+        if startup_alt_screen {
+            let label = state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .and_then(|entry| entry.lock().display_name.clone())
+                .unwrap_or_else(|| session_id.to_string());
+            emit_session_toast(
+                state,
+                session_id,
+                "Terminal is on the alternate screen",
+                alt_screen_toast_message(&label, agent_type.as_deref()),
+                "warn",
+            );
         }
 
         if unexpected_alt_screen {
@@ -9655,27 +9742,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         let message = format!(
             "Do not retype this message. Check the agent transcript and composer; if the text remains in the composer, press Enter once. {reason}"
         );
-        #[cfg(feature = "desktop")]
-        if let Some(ref app) = *state.app_handle.read() {
-            let _ = app.emit(
-                "mcp-toast",
-                serde_json::json!({
-                    "title": title,
-                    "message": message,
-                    "level": "error",
-                    "sound": null,
-                    "origin_session_id": session_id,
-                }),
-            );
-        }
-        let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
-            title: title.into(),
-            message: Some(message),
-            level: "error".into(),
-            sound: None,
-            origin_repo_path: None,
-            origin_session_id: Some(session_id.into()),
-        });
+        emit_session_toast(state, session_id, title, message, "error");
     }
     tracing::info!(
         session_id,
