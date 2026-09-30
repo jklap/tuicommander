@@ -1487,6 +1487,102 @@ describe("initApp", () => {
 		});
 	});
 
+	// Regression coverage for the tab-name/accent-color ping-pong: both
+	// listeners must apply the event via terminalsStore's non-echoing
+	// applyBackendRename/applyBackendAccentColor, never a plain update() call
+	// that would re-trigger set_session_name/set_session_accent_color and
+	// bounce back to the backend. See terminals.renameEchoGuard.test.ts for
+	// the store-level half of this same invariant.
+	describe("session-renamed event", () => {
+		function captureSessionRenamed() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string; is_custom: boolean } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("applies a backend rename without echoing back to the backend", async () => {
+			const getCb = captureSessionRenamed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-rename" }));
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-rename", name: "claude · resume", is_custom: false } });
+
+			expect(terminalsStore.get(id)?.name).toBe("claude · resume");
+			expect(terminalsStore.get(id)?.nameIsCustom).toBe(false);
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_name", expect.anything());
+		});
+
+		it("is a no-op for a session with no bound terminal", async () => {
+			const getCb = captureSessionRenamed();
+			const deps = createMockDeps();
+			await initApp(deps);
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-unknown", name: "hello", is_custom: false } });
+
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_name", expect.anything());
+		});
+	});
+
+	describe("session-accent-color-changed event", () => {
+		function captureAccentColorChanged() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; color?: string | null } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-accent-color-changed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("applies a real accent color without echoing back to the backend", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-accent" }));
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-accent", color: "blue" } });
+
+			expect(terminalsStore.get(id)?.accentColor).toBe("blue");
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+
+		it("a null color clears it", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-accent-clear" }));
+			terminalsStore.update(id, { accentColor: "blue" }, { echo: false });
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-accent-clear", color: null } });
+
+			expect(terminalsStore.get(id)?.accentColor).toBeNull();
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+
+		it("is a no-op for a session with no bound terminal", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-unknown", color: "blue" } });
+
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+	});
+
 	it("refreshes all branch stats", async () => {
 		const deps = createMockDeps();
 		await initApp(deps);
