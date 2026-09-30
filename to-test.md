@@ -7542,3 +7542,30 @@ test can't produce.
   7108 Rust tests passed / 16 skipped, vitest, plugin tests, both audits). That result does NOT
   carry over: after the replay onto main it has not been run against this series at all —
   per-pick replay checks were targeted only.
+
+## Tab-name / accent-color rename-echo ping-pong (2026-09-30, frontend-only)
+
+`session-renamed` and `session-accent-color-changed` are now applied through
+`terminalsStore.applyBackendRename`/`applyBackendAccentColor` (`{ echo: false }`) instead of a
+plain `update()`, so a backend-pushed name or color is never echoed back to
+`set_session_name`/`set_session_accent_color`. On this tree the accent color could loop
+(`set_session_accent_color` re-emits every change); `set_session_name` never emits, so a name
+echo was only a redundant round trip. Unit-tested (`terminals.renameEchoGuard.test.ts`,
+`useAppInit.test.ts` listener tests, `osc_title::a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles`).
+
+- [ ] **The frontend's echo-suppression, live against a real running debug instance.** Start a
+  debug instance with an explicit `TUIC_APP_INSTANCE=<id>` (on this tree `make dev` does not
+  derive one per checkout), enable its HTTP server, create a throwaway session with its tab open
+  in the WebView, then drive two tmux-shim `set-option ... pane-border-style` calls with
+  different colors in quick succession while sampling `/events`: expect exactly two
+  `session-accent-color-changed` events and no further ones (an echoing frontend would make
+  `set_session_accent_color` re-emit). (A name echo is not observable this way:
+  `set_session_name` never emits on this tree.)
+  _(Verified on the pre-rebase `wip` branch only, against its own rename-emitting backend:
+  exactly 2 `session-renamed` events for 2 direct calls, zero phantom echoes. Re-verify on the
+  rebased tree.)_
+- [ ] **Reproducing the trigger from a REAL OSC-emitting process** (a live shell/agent whose
+  title changes, not a direct `PUT /name` call) still needs a human check: open a real terminal
+  tab, run a real agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its
+  title changes and then reverts, and confirm the tab title/accent border settle immediately
+  with no flicker.

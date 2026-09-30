@@ -829,14 +829,21 @@ function createTerminalsStore() {
 			// Sync display name and its origin so reconnect can distinguish a
 			// user-protected rename from a transient OSC/intent title.
 			//
-			// Guarded to only fire when the value actually changed: the backend's
-			// `session-renamed` event (tmux `select-pane -T`, OSC titles) flows
-			// through this same `update()`, and echoing it straight back
-			// unconditionally used to re-trigger the backend's own emit of that
-			// same event — an unbounded ping-pong on every OSC title repaint and
-			// every tmux rename, not just once. The backend now also no-ops an
-			// unchanged rename, but this guard avoids the round trip in the first
-			// place rather than relying solely on that backstop.
+			// This echo is for FRONTEND-ORIGINATED renames only (TabBar's rename
+			// UI, ApplicationOverlays, intentTitle) — the backend's own
+			// `session-renamed`/`session-accent-color-changed` events must go
+			// through `applyBackendRename`/`applyBackendAccentColor` instead,
+			// which pass `{ echo: false }` specifically so they never reach here.
+			// Echoing a backend-pushed accent color is a real ping-pong: two
+			// backend writes racing (A then B) each look like a genuine change
+			// to whichever side receives them next, and `set_session_accent_color`
+			// re-emits every change — forever. `set_session_name` never emits
+			// (backend renames go through `rename_session_from_backend`), so a
+			// name echo cannot loop, but it is still a redundant round trip that
+			// can briefly write a stale name back over a newer one.
+			// The unchanged-value check below (`prevName`/`prevIsCustom`) is a
+			// second, independent guard against re-echoing a genuine no-op call —
+			// it does not by itself stop the race above.
 			const nextIsCustom = state.terminals[id]?.nameIsCustom ?? false;
 			const nextAccentColor = state.terminals[id]?.accentColor ?? null;
 			// `{ echo: false }` skips both echoes below entirely — for a write
@@ -904,6 +911,26 @@ function createTerminalsStore() {
 		/** Drop an alias retained for a session that closed before any tab bound it. */
 		forgetPendingAlias(sessionId: string): void {
 			pendingAliases.delete(sessionId);
+		},
+
+		/** Apply a `session-renamed` event straight from the backend. Never echoes
+		 *  back via `update()`'s `set_session_name` sync — a `session-renamed`
+		 *  payload IS the backend's authoritative state, so there's nothing to
+		 *  round-trip. See `update()`'s echo-guard comment for the ping-pong this
+		 *  prevents. */
+		applyBackendRename(sessionId: string, name: string, isCustom: boolean): void {
+			const termId = sessionToTerminal.get(sessionId);
+			if (!termId || !has(termId)) return;
+			actions.update(termId, { name, nameIsCustom: isCustom }, { echo: false });
+		},
+
+		/** Apply a `session-accent-color-changed` event straight from the backend.
+		 *  Same non-echoing shape as `applyBackendRename`, for the identical
+		 *  ping-pong reason — see `update()`'s echo-guard comment. */
+		applyBackendAccentColor(sessionId: string, color: string | null): void {
+			const termId = sessionToTerminal.get(sessionId);
+			if (!termId || !has(termId)) return;
+			actions.update(termId, { accentColor: color }, { echo: false });
 		},
 
 		/** Record the repo that owns this terminal (null = no registered repo does).

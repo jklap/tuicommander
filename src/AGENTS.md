@@ -629,3 +629,35 @@ resolves to the wrong tree when a worktree is focused" (see also `executeSmartPr
 mechanism — `resolvePromptTreeIn`/`repoOwnership.ts` — for a different set of callers).
 Before adding a new handler that opens something scoped to "the current repo," check
 whether it needs `gitOps.activeWorktreePath()` first.
+
+## A Store Method Fed By a Backend Push Event Must Never Reuse The Same Write Path a Local User Action Uses, If That Path Echoes Back
+
+Found 2026-09-30 from a live report: a session's tab name (and its accent-color border) could
+flicker between two values on the order of 10k+ times/second, driving sustained high CPU.
+`terminalsStore.update()`'s `name`/`accentColor` echo already had an unchanged-value guard — but
+that guard only stops a *value repeating*, not two backend writes racing each other. The trigger:
+the backend can legitimately emit two events close together (e.g. two tmux `set-option ...
+*-border-style` calls, or an OSC title followed by the restore to the base name) — call them A
+then B. A listener that feeds both into the same `update()` a local rename/recolor uses echoes
+each change back (`set_session_name`/`set_session_accent_color`). Because A and B are different
+values, each hop looks like a genuine change to whichever side receives it next. On this tree
+`set_session_accent_color` re-emits every change, so the accent color can bounce forever;
+`set_session_name` never emits (backend renames go through `AppState::rename_session_from_backend`),
+so a name echo cannot loop, but it is still a redundant round trip that can briefly write a stale
+name back over a newer one.
+
+**The fix is not a better guard on the shared write path — it's a second, non-echoing path for
+backend-pushed events.** `applyBackendRename`/`applyBackendAccentColor` (`terminals.ts`) apply a
+`session-renamed`/`session-accent-color-changed` event via `update(id, data, { echo: false })`
+(the option the auto-close countdown's cosmetic "(5s)" name suffix already used). There is nothing
+to synchronize back: the event already IS the backend's authoritative state. `useAppInit.ts`'s two
+listeners call these instead of a plain `update()`. The frontend-originated paths (TabBar,
+`ApplicationOverlays.tsx`, `intentTitle.ts`) are unaffected — they still echo a real local rename.
+
+**The general rule: before wiring a `listen(EVENT)` handler to a store method that echoes any of
+its writes back to the backend, ask whether `EVENT` is itself backend-originated.** If it is, the
+handler needs its own non-echoing entry point (or an explicit `{ echo: false }` at the call
+site) — never the same method a local user action calls, no matter how good that method's own
+unchanged-value guard is: a guard comparing against "what the store currently holds" cannot tell
+a stale echo of its own prior write from a second, different backend write that arrived while the
+first echo was still in flight.

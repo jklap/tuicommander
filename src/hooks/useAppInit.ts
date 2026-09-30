@@ -953,11 +953,13 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
-	// An MCP rename starts in the backend; the IPC echo that update() sends
-	// back does not emit, so this cannot loop.
+	// An MCP rename starts in the backend and is applied here without an IPC
+	// echo; even an echo could not loop, since `set_session_name` never emits.
 	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
-		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
-		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
+		// Never echoed back to the backend — a `session-renamed` payload IS the
+		// backend's authoritative state. See `applyBackendRename`'s doc comment.
+		const { session_id, name, is_custom } = event.payload;
+		terminalsStore.applyBackendRename(session_id, name, is_custom);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
 	// `session action=suspend` waits for this tab's verdict. A client without the tab stays
@@ -993,11 +995,12 @@ export async function initApp(deps: AppInitDeps) {
 
 	// The tmux compatibility shim's `set-option ... window-style|
 	// pane-border-style|pane-active-border-style` (Claude Code's per-teammate
-	// `--agent-color`) resolves to this — see `mcp_http::tmux_routes`.
+	// `--agent-color`) resolves to this — see `mcp_http::tmux_routes`. Never
+	// echoed back, for the same reason `session-renamed` above isn't — see
+	// `applyBackendAccentColor`'s doc comment.
 	listen<{ session_id: string; color?: string | null }>("session-accent-color-changed", (event) => {
 		const { session_id, color } = event.payload;
-		const termId = terminalsStore.getTerminalForSession(session_id);
-		if (termId) terminalsStore.update(termId, { accentColor: color ?? null });
+		terminalsStore.applyBackendAccentColor(session_id, color ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register session-accent-color-changed listener", err));
 
 	// The tmux compatibility shim's `select-layout tiled`/`main-vertical`
