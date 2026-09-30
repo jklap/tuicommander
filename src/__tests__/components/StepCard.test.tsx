@@ -128,4 +128,115 @@ describe("StepCard", () => {
 			expect(getByText("subagent")).toBeTruthy();
 		});
 	});
+
+	describe("collapse caret", () => {
+		it("clicking anywhere on the header toggles collapse", () => {
+			const onToggleCollapsed = vi.fn();
+			const { container } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+					onToggleCollapsed={onToggleCollapsed}
+				/>
+			));
+			(container.querySelector('[role="button"]') as HTMLElement).click();
+			expect(onToggleCollapsed).toHaveBeenCalledOnce();
+		});
+
+		it("action buttons (copy/revert/open-at-line) don't also trigger collapse", () => {
+			const onToggleCollapsed = vi.fn();
+			const onCopyStep = vi.fn();
+			const { getByTitle } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={onCopyStep}
+					onToggleCollapsed={onToggleCollapsed}
+				/>
+			));
+			getByTitle("Copy this step's diff").click();
+			expect(onCopyStep).toHaveBeenCalledOnce();
+			expect(onToggleCollapsed).not.toHaveBeenCalled();
+		});
+
+		it("hides the diff body when collapsed", () => {
+			const { queryByTestId } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					collapsed
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+				/>
+			));
+			expect(queryByTestId("diff-stub")).toBeNull();
+		});
+
+		it("shows the diff body when not collapsed (default)", () => {
+			const { queryByTestId } = render(() => (
+				<StepCard step={STEP} mode="unified" onOpenAtLine={() => {}} onRevertStep={() => {}} onCopyStep={() => {}} />
+			));
+			expect(queryByTestId("diff-stub")).not.toBeNull();
+		});
+	});
+
+	describe("same-file jump buttons (^/v)", () => {
+		it("renders neither button when showFilePath is false, even with handlers supplied", () => {
+			const { queryByTitle } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+					onJumpPrev={() => {}}
+					onJumpNext={() => {}}
+				/>
+			));
+			expect(queryByTitle("Jump to the earlier change to this file")).toBeNull();
+			expect(queryByTitle("Jump to the later change to this file")).toBeNull();
+		});
+
+		it("hides a button when its handler is undefined (no earlier/later touch)", () => {
+			const { queryByTitle, getByTitle } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					showFilePath
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+					onJumpNext={() => {}}
+				/>
+			));
+			expect(queryByTitle("Jump to the earlier change to this file")).toBeNull();
+			expect(getByTitle("Jump to the later change to this file")).toBeTruthy();
+		});
+
+		it("clicking a jump button calls its handler and does not toggle collapse", () => {
+			const onJumpPrev = vi.fn();
+			const onToggleCollapsed = vi.fn();
+			const { getByTitle } = render(() => (
+				<StepCard
+					step={STEP}
+					mode="unified"
+					showFilePath
+					onOpenAtLine={() => {}}
+					onRevertStep={() => {}}
+					onCopyStep={() => {}}
+					onJumpPrev={onJumpPrev}
+					onToggleCollapsed={onToggleCollapsed}
+				/>
+			));
+			getByTitle("Jump to the earlier change to this file").click();
+			expect(onJumpPrev).toHaveBeenCalledOnce();
+			expect(onToggleCollapsed).not.toHaveBeenCalled();
+		});
+	});
 });
