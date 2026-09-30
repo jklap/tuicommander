@@ -11976,8 +11976,6 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
         for record in records[range].iter().filter(|r| r.direction == Output) {
             reader.process_chunk(&String::from_utf8_lossy(&record.data), &silence, sid, &state);
-            let k = agent_submission_ack_kind(&state, sid);
-            if k != "terminal_output" { eprintln!("DBG kind={k} busy={:?}", silence.lock().busy_source_is("hook-busy")); }
         }
     };
     let mut seen = Vec::new();
@@ -11993,13 +11991,22 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         }
         let mut reader = ChunkProcessor::new(None, None);
         replay(&mut reader, inputs[1]..second_enter);
-        if let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10)) {
-            seen.push(retry);
-            replay(&mut reader, second_enter..records.len());
+        // The terminal also answers the agent's queries through the PTY writer
+        // during the replay; only the retry Enter ends the wait.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(write) = received.recv_timeout(left) else {
+                break;
+            };
+            let is_retry = write == b"\r";
+            seen.push(write);
+            if is_retry {
+                replay(&mut reader, second_enter..records.len());
+                break;
+            }
         }
     });
 
-    eprintln!("DBG seen={:?}", seen.iter().map(|w| w.len()).collect::<Vec<_>>());
     assert_eq!(
         seen.iter().filter(|w| w.as_slice() == b"\r").count(),
         2,
