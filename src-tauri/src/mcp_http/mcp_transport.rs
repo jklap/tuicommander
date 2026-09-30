@@ -6720,6 +6720,20 @@ fn request_is_modern_lifecycle(headers: &HeaderMap, body: &serde_json::Value) ->
         .is_some_and(|version| version == MODERN_PROTOCOL_VERSION)
 }
 
+/// 2026-07-28 makes a list result a *cache* entry: `resultType` says the page
+/// is the whole list, and `ttlMs`/`cacheScope` say how long it may be held. ego
+/// refuses to admit a server whose `tools/list` omits any of the three —
+/// measured 2026-09-19, the handshake and the list both succeeded and
+/// `session/new` still answered "the supplied MCP servers could not be
+/// admitted" (#783-3c1b); `resources/list` did the same (#1318-abd7). Same
+/// values as `server/discover`: the tool surface moves with upstream connects
+/// and config toggles, so nothing here is cacheable.
+pub(crate) fn add_result_envelope(result: &mut serde_json::Value) {
+    result["resultType"] = serde_json::json!("complete");
+    result["ttlMs"] = serde_json::json!(0);
+    result["cacheScope"] = serde_json::json!("private");
+}
+
 /// Agree on a protocol revision: the client's own when we support it, otherwise
 /// [`DEFAULT_PROTOCOL_VERSION`]. Echoing an unsupported version back would be a
 /// promise we cannot keep; answering our own version to a client that named a
@@ -6974,20 +6988,10 @@ pub(super) async fn mcp_post(
             let tools =
                 merged_tool_definitions(&state, list_session_id, request_meta_client_name(&body));
             let mut result = serde_json::json!({ "tools": tools });
-            // 2026-07-28 makes a list result a *cache* entry: `resultType`
-            // says the page is the whole list, and `ttlMs`/`cacheScope` say
-            // how long it may be held. ego refuses to admit a server whose
-            // `tools/list` omits any of the three — measured 2026-09-19, the
-            // handshake and the list both succeeded and `session/new` still
-            // answered "the supplied MCP servers could not be admitted"
-            // (#783-3c1b). Same values as `server/discover`: the tool surface
-            // moves with upstream connects and config toggles, so nothing here
-            // is cacheable. Withheld from the legacy revision, which has no
-            // such fields and no reader for them.
+            // Withheld from the legacy revision, which has no such fields and
+            // no reader for them.
             if request_is_modern_lifecycle(&headers, &body) {
-                result["resultType"] = serde_json::json!("complete");
-                result["ttlMs"] = serde_json::json!(0);
-                result["cacheScope"] = serde_json::json!("private");
+                add_result_envelope(&mut result);
             }
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
