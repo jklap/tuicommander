@@ -682,4 +682,70 @@ mod tests {
         assert_eq!(selected.version, "0.0.1");
         assert_eq!(selected.binary.path, sibling);
     }
+
+    /// A directory at the sibling path must not pass as a built binary.
+    #[tokio::test]
+    async fn same_target_sibling_that_is_a_directory_names_the_build_command() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let sibling = config.path().join("tuic-remote");
+        std::fs::create_dir(&sibling).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &sibling,
+            None,
+        )
+        .await
+        .expect_err("a directory is not a sibling binary");
+
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
+    }
+
+    /// A sibling built with default features refuses to report its identity;
+    /// the error must say how to rebuild it, not only that the probe failed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn same_target_sibling_needing_no_default_features_names_the_build_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let sibling = config.path().join("tuic-remote");
+        std::fs::write(
+            &sibling,
+            "#!/bin/sh\necho 'requires --no-default-features' >&2\nexit 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &sibling,
+            None,
+        )
+        .await
+        .expect_err("default-feature sibling cannot serve the update");
+
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
+    }
 }
