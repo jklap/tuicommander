@@ -146,7 +146,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	const [hovered, setHovered] = createSignal(false);
 	const repoName = () => repositoriesStore.getRepoForTerminal(props.id);
 	const repoColor = () => {
-		if (!props.showWorkspaceMetadata || !globalWorkspaceStore.isActive()) return undefined;
+		if (!props.showWorkspaceMetadata || !globalWorkspaceStore.isManualWorkspaceActive()) return undefined;
 		const path = repositoriesStore.getRepoPathForTerminal(props.id);
 		return path ? getRepoColor(path) : undefined;
 	};
@@ -293,7 +293,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					/>
 				)}
 				<PanePositionIcon tabId={props.id} rects={props.paneRects} />
-				<Show when={props.showWorkspaceMetadata && isPromoted() && !globalWorkspaceStore.isActive()}>
+				<Show when={props.showWorkspaceMetadata && isPromoted() && !globalWorkspaceStore.isManualWorkspaceActive()}>
 					<button
 						class={s.globeIcon}
 						title={t("tabBar.removeFromWorkspace", "Remove from Global Workspace")}
@@ -308,7 +308,11 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 				<Show when={props.quickSwitcherActive && props.index < 9}>
 					<span class={s.shortcutBadge}>{keyFor(`switch-tab-${props.index + 1}`)}</span>
 				</Show>
-				<Show when={props.showWorkspaceMetadata && hovered() && globalWorkspaceStore.isActive() && repoName()}>
+				<Show
+					when={
+						props.showWorkspaceMetadata && hovered() && globalWorkspaceStore.isManualWorkspaceActive() && repoName()
+					}
+				>
 					<span class={s.repoOverlay}>{repoName()}</span>
 				</Show>
 				<button

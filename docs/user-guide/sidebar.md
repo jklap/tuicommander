@@ -149,6 +149,35 @@ When you have many repos open, hide the ones you aren't using right now.
 
 Click the **filter icon** in the toolbar (next to the sidebar collapse button) to show only repositories that have at least one open terminal. The icon turns accent-colored while the filter is on, and a banner at the top of the sidebar shows how many repos are shown out of the total — click it (or "Show all") to clear the filter. The filter is session-only and resets when you restart.
 
+## Global Workspace
+
+A cross-repo view of terminals you've explicitly hand-picked — useful for keeping an eye on a
+few sessions from different repos at once, without switching between them.
+
+### Adding a terminal
+
+Right-click a tab (or its row in the Activity Dashboard) and choose **Add to Global
+Workspace**. A globe icon appears on the tab, and a **Global Workspace** entry appears in the
+sidebar with a count of how many terminals are in it.
+
+### Viewing it
+
+Click the **Global Workspace** sidebar entry to show all of them together in one pane. This is
+one-way — clicking the entry again does nothing while it's already showing. To leave, click any
+ordinary terminal or branch in the sidebar tree; that always exits Global Workspace and shows
+whatever's appropriate for that repo instead.
+
+### Removing a terminal
+
+Right-click the tab (or its row in the Activity Dashboard) and choose **Remove from Global
+Workspace** — or click the globe icon directly on its tab. This only removes it from the view;
+it does **not** close the terminal. Closing a terminal's tab (the `×`, or exiting its shell)
+always does a real close, whether or not it's in Global Workspace.
+
+This is separate from a repo's own **"consolidate worktrees"** setting (Settings → Repo &
+Worktree), which automatically shows all of one repo's worktree branches together — that's
+per-repo and automatic, not something you add terminals to by hand.
+
 ## Quick Branch Switcher
 
 Switch branches by number without the mouse:
