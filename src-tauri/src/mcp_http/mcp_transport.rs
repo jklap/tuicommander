@@ -156,7 +156,8 @@ use super::mcp_transport_peer::retire_repaired_phantom_identity;
 use super::mcp_transport_peer::takeover_rejection_report;
 #[cfg(test)]
 use super::mcp_transport_peer::task_owner_identity;
-use super::mcp_transport_peer::{apply_initialize_identity, identity_from_client_ancestry};
+pub(super) use super::mcp_transport_peer::apply_initialize_identity;
+use super::mcp_transport_peer::identity_from_client_ancestry;
 #[cfg(test)]
 use super::mcp_transport_session_agent::INFERRED_PTY_DESCRIPTION_MAX_CHARS;
 #[cfg(test)]
@@ -211,6 +212,8 @@ use super::mcp_transport_session_agent::resolve_spawn_pty_description;
 pub(super) use super::mcp_transport_session_agent::session_output;
 #[cfg(test)]
 use super::mcp_transport_session_agent::session_wait_met;
+pub(crate) use super::mcp_transport_session_agent::should_defer_prompt_for_mcp_bind;
+pub(crate) use super::mcp_transport_session_agent::spawn_deferred_prompt_delivery;
 #[cfg(test)]
 use super::mcp_transport_session_agent::spawn_response;
 #[cfg(test)]
@@ -221,6 +224,8 @@ use super::mcp_transport_session_agent::suspend_refusal;
 use super::mcp_transport_session_agent::translate_special_key;
 #[cfg(test)]
 use super::mcp_transport_session_agent::uses_agent_command_injection;
+#[cfg(test)]
+use super::mcp_transport_session_agent::wait_for_mcp_identity_bound;
 pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.

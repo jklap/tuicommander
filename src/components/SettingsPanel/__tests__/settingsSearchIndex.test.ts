@@ -98,11 +98,13 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target. The per-agent "Prefer TUICommander agent
 	// spawning" and "Prefer TUICommander messaging" toggles sit in that same
-	// collapsed card.
+	// collapsed card, as does the "If your shell already defines its own
+	// <agent> function" wrap-user-function select (runtime label naming the
+	// agent).
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 2, orphans: 20 },
+	agents: { dynamic: 3, orphans: 20 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },

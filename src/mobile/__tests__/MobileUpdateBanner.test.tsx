@@ -59,6 +59,10 @@ vi.mock("../useVersionCheck", () => ({
 	useVersionCheck: () => ({ updateAvailable: () => true, serverDown: () => false, applyUpdate: vi.fn() }),
 }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
+vi.mock("../../stores/agentWrapPrompt", () => ({
+	subscribeAgentWrapPrompt: () => Promise.resolve(() => {}),
+	pendingAgentWrapPrompts: () => [],
+}));
 
 beforeEach(async () => {
 	await Promise.all([
