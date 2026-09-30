@@ -1,41 +1,82 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isOverSpan, linkClaimsPress } from "../../../components/Terminal/canvasTerminalLinks";
+import {
+	createLinkPressTracker,
+	isOverSpan,
+	linkClaimsPress,
+	linkCovers,
+	spanAt,
+} from "../../../components/Terminal/canvasTerminalLinks";
 
-/**
- * Claude Code's fullscreen mode reports the mouse, and a bare name such as
- * `followups.md` in its output was underlined (verification is independent of
- * mouse mode) while the click did nothing: the press went to the app and the
- * hover probe that feeds the click never ran.
- */
-describe("links under mouse reporting", () => {
+describe("link spans and presses", () => {
 	const spans = [{ colStart: 6, colEnd: 18 }];
 
-	it("claims a left press on an underlined span instead of forwarding it to the app", () => {
+	// Catches: an off-by-one at colEnd that underlines one cell more than it opens.
+	it("treats colEnd as exclusive", () => {
 		expect(isOverSpan(spans, 6)).toBe(true);
 		expect(isOverSpan(spans, 17)).toBe(true);
-		expect(linkClaimsPress(0, isOverSpan(spans, 10))).toBe(true);
-	});
-
-	it("keeps the right button on the link menu and the middle button with the app", () => {
-		expect(linkClaimsPress(2, true)).toBe(true);
-		expect(linkClaimsPress(1, true)).toBe(false);
-	});
-
-	it("forwards a press beside the span, so the app keeps every other click", () => {
 		expect(isOverSpan(spans, 5)).toBe(false);
 		expect(isOverSpan(spans, 18)).toBe(false);
 		expect(isOverSpan(undefined, 10)).toBe(false);
-		expect(linkClaimsPress(0, isOverSpan(spans, 30))).toBe(false);
+		expect(spanAt(spans, 10)).toBe(spans[0]);
 	});
 
-	it("probes the hover target while the app has mouse reporting on", () => {
-		const source = readFileSync(join(process.cwd(), "src/components/Terminal/CanvasTerminal.tsx"), "utf8");
-		const start = source.indexOf("const onMouseMove = (e: MouseEvent) => {");
-		const end = source.indexOf("if (currentFrame.mouseMode >= 3) {", start);
-		expect(start).toBeGreaterThan(-1);
-		expect(end).toBeGreaterThan(start);
-		expect(source.slice(start, end)).toMatch(/scheduleLinkProbe\(e\)/);
+	it("keeps the right button on the link menu and the middle button with the app", () => {
+		expect(linkClaimsPress(0, true)).toBe(true);
+		expect(linkClaimsPress(2, true)).toBe(true);
+		expect(linkClaimsPress(1, true)).toBe(false);
+		expect(linkClaimsPress(0, false)).toBe(false);
+	});
+
+	it("matches a resolved link to a cell on any of its wrapped rows", () => {
+		const link = {
+			row: 3,
+			colStart: 70,
+			colEnd: 80,
+			spans: [
+				{ row: 3, colStart: 70, colEnd: 80 },
+				{ row: 4, colStart: 0, colEnd: 5 },
+			],
+		};
+		expect(linkCovers(link, 4, 2)).toBe(true);
+		expect(linkCovers(link, 4, 5)).toBe(false);
+		expect(linkCovers(link, 5, 2)).toBe(false);
+		expect(linkCovers({ row: 1, colStart: 2, colEnd: 4 }, 1, 3)).toBe(true);
+	});
+});
+
+describe("link press tracker", () => {
+	const span = { colStart: 6, colEnd: 18 };
+
+	// Catches: a drag-select that ends on a path opening it, because no press ever claimed it.
+	it("opens nothing for a release whose press was not on a span", () => {
+		const t = createLinkPressTracker();
+		t.begin(0, 0, undefined);
+		expect(t.isClaimed()).toBe(false);
+		expect(t.release(0, 10)).toBeNull();
+	});
+
+	// Catches: a press dragged off its span still opening the link.
+	it("opens nothing when the release leaves the claimed span or row", () => {
+		const t = createLinkPressTracker();
+		t.begin(0, 0, span);
+		expect(t.release(0, 30)).toBeNull();
+		t.begin(0, 0, span);
+		expect(t.release(1, 10)).toBeNull();
+	});
+
+	it("returns the claim once for a release on the same span", () => {
+		const t = createLinkPressTracker();
+		t.begin(0, 0, span);
+		expect(t.isClaimed()).toBe(true);
+		expect(t.release(0, 10)).toEqual({ row: 0, span });
+		expect(t.release(0, 10)).toBeNull();
+	});
+
+	// Catches: a right or middle press leaving a left claim from an earlier press alive.
+	it("forgets the previous claim on any other press", () => {
+		const t = createLinkPressTracker();
+		t.begin(0, 0, span);
+		t.begin(2, 0, span);
+		expect(t.isClaimed()).toBe(false);
 	});
 });
