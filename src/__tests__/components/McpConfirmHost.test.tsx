@@ -64,4 +64,17 @@ describe("McpConfirmHost", () => {
 		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 		expect(mockRpc).toHaveBeenCalledWith("mcp_confirm_response", { requestId: "r1", confirmed: false });
 	});
+
+	it("Escape collapses to the same confirmed:false as an explicit Cancel click", async () => {
+		// Found via a test-coverage audit (2026-09-25):
+		// the component's own doc comment already documents this ("Cancel is
+		// the safe answer for the overlay click and Escape"), and ConfirmDialog
+		// wires Escape to onClose via registerModal — but nothing here proved
+		// it before this test.
+		const { findByText } = render(() => <McpConfirmHost />);
+		emitRequest();
+		await findByText("Force push?");
+		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+		expect(mockRpc).toHaveBeenCalledWith("mcp_confirm_response", { requestId: "r1", confirmed: false });
+	});
 });
