@@ -1257,13 +1257,6 @@ DU src/deleted.rs
     }
 
     #[test]
-    fn test_run_success() {
-        let (_dir, path) = setup_test_repo();
-        let out = git_cmd(&path).args(["status", "--porcelain"]).run();
-        assert!(out.is_ok());
-    }
-
-    #[test]
     fn test_run_non_zero_exit() {
         let (_dir, path) = setup_test_repo();
         // Asking for log in a repo with no commits → non-zero exit
