@@ -225,20 +225,19 @@ function createGlobalWorkspaceStore() {
 		},
 
 		/**
-		 * Promote a terminal to the global workspace.
+		 * Promote a terminal to the (manually hand-picked) global workspace.
 		 * Adds it as a tab to the active group (no auto-split).
 		 *
-		 * `scopeKey` defaults to whatever scope is current, which is right for a
-		 * user clicking promote — they mean the workspace in front of them. A
-		 * caller promoting on the user's behalf must name the scope instead:
-		 * `useWorktreeConsolidation` swaps the current scope to a repo path when
-		 * consolidation is on, so an unnamed promote would land a tab in a
-		 * different bucket depending on which repo was active — the exact
-		 * ambient-state dependency that parking an unowned tab here exists to
-		 * remove. `assignSessionToRepoBranch` passes MANUAL_SCOPE for that reason.
+		 * Always targets `MANUAL_SCOPE`, regardless of whatever scope is
+		 * currently ambient (e.g. a repo's own auto-consolidation scope while
+		 * that repo is focused) — there is exactly one workspace a user can
+		 * add to or remove from by choice. This used to default to "whatever
+		 * scope is current," which meant promoting the same terminal while
+		 * viewing two different repos could land it in two different buckets;
+		 * hardcoding `MANUAL_SCOPE` removes that ambient dependency entirely.
 		 */
-		promote(termId: string, scopeKey: string = scope): boolean {
-			const ws = workspace(scopeKey);
+		promote(termId: string): boolean {
+			const ws = workspace(MANUAL_SCOPE);
 			if (ws.promoted.has(termId)) return true;
 
 			const updated = addTerminalToLayout(ws.layout, termId);
@@ -250,9 +249,12 @@ function createGlobalWorkspaceStore() {
 			return true;
 		},
 
-		/** Remove a terminal from the global workspace. Auto-deactivates when empty. */
+		/** Remove a terminal from the manual global workspace. Auto-deactivates
+		 *  when empty. Always targets `MANUAL_SCOPE` — see `promote`'s doc
+		 *  comment; this is what makes "remove" reliable regardless of which
+		 *  scope happens to be ambient at the moment of the click. */
 		unpromote(termId: string): void {
-			const ws = workspace();
+			const ws = workspace(MANUAL_SCOPE);
 			if (!ws.promoted.has(termId)) return;
 			ws.promoted.delete(termId);
 
@@ -262,22 +264,24 @@ function createGlobalWorkspaceStore() {
 
 			bumpPromoted();
 
-			if (isActive() && ws.promoted.size === 0) {
+			if (this.isManualWorkspaceActive() && ws.promoted.size === 0) {
 				autoDeactivate();
 			} else {
 				syncToPaneStore();
 			}
 		},
 
-		/** Check if a terminal is promoted */
+		/** Check if a terminal is manually promoted. Always checks `MANUAL_SCOPE`
+		 *  — see `promote`'s doc comment. */
 		isPromoted(termId: string): boolean {
 			promotedVersion(); // subscribe
-			return workspace().promoted.has(termId);
+			return workspace(MANUAL_SCOPE).promoted.has(termId);
 		},
 
-		/** Toggle promote/unpromote a terminal */
+		/** Toggle promote/unpromote a terminal. Always targets `MANUAL_SCOPE` —
+		 *  see `promote`'s doc comment. */
 		togglePromote(termId: string): void {
-			if (workspace().promoted.has(termId)) {
+			if (workspace(MANUAL_SCOPE).promoted.has(termId)) {
 				this.unpromote(termId);
 			} else {
 				this.promote(termId);
@@ -374,6 +378,19 @@ function createGlobalWorkspaceStore() {
 			return scope;
 		},
 
+		/** Whether the *manually hand-promoted* workspace is the one currently
+		 *  showing — as opposed to some repo's auto-consolidated worktree view,
+		 *  which also drives `isActive()` but isn't "Global Workspace" as a
+		 *  user-facing concept. This is the single canonical check every "is the
+		 *  manual Global Workspace showing" consumer should use (the sidebar
+		 *  pill's badge/highlight, the repo-name hover overlay, the globe-icon
+		 *  redundancy guards) instead of duplicating `isActive() && getScope()
+		 *  === MANUAL_SCOPE` at each call site. */
+		isManualWorkspaceActive(): boolean {
+			promotedVersion(); // subscribe
+			return isActive() && scope === MANUAL_SCOPE;
+		},
+
 		/** Point the store at another workspace, swapping the visible layout when
 		 *  one is on screen. */
 		setScope(key: string): void {
@@ -391,6 +408,19 @@ function createGlobalWorkspaceStore() {
 		getScopeMembers(key: string): string[] {
 			promotedVersion(); // subscribe
 			return [...workspace(key).promoted];
+		},
+
+		/** Manually-promoted ids that are still actually live in
+		 *  `terminalsStore`. A promoted id can outlive the terminal it names if
+		 *  the normal `onTerminalRemoved` cleanup path never fires for it —
+		 *  filtered here, at the reader, per `src/AGENTS.md`'s prescription
+		 *  ("filter by liveness in the specific reader that needs it, not by
+		 *  mutating `promoted`"). This is what the sidebar badge/visibility and
+		 *  the `toggle-global-workspace` shortcut both key off, instead of the
+		 *  raw (possibly ghost-inflated) `promoted` set. */
+		getLiveManualMembers(): string[] {
+			promotedVersion(); // subscribe
+			return [...workspace(MANUAL_SCOPE).promoted].filter((id) => terminalsStore.get(id) !== undefined);
 		},
 
 		/** Layout of a scope without switching to it. */
@@ -440,7 +470,14 @@ import { registerDebugSnapshot } from "./debugRegistry";
 registerDebugSnapshot("globalWorkspace", () => {
 	return {
 		isActive: globalWorkspaceStore.isActive(),
+		scope: globalWorkspaceStore.getScope(),
+		isManualWorkspaceActive: globalWorkspaceStore.isManualWorkspaceActive(),
+		// Ambient-scope-relative — whichever scope is currently `scope` above,
+		// same as what TabBar reads to filter its tab strip.
 		promotedTerminals: globalWorkspaceStore.getPromotedIds(),
+		// Always MANUAL_SCOPE, filtered to terminalsStore-live ids — what the
+		// sidebar badge actually shows.
+		liveManualMembers: globalWorkspaceStore.getLiveManualMembers(),
 		layout: globalWorkspaceStore.getLayout(),
 	};
 });

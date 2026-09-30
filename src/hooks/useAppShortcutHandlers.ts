@@ -8,7 +8,7 @@ import { commandPaletteStore } from "../stores/commandPalette";
 import { diffTabsStore } from "../stores/diffTabs";
 import { editorTabsStore } from "../stores/editorTabs";
 import { errorLogStore } from "../stores/errorLog";
-import { globalWorkspaceStore } from "../stores/globalWorkspace";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { mcpPopupStore } from "../stores/mcpPopup";
 import { mdTabsStore } from "../stores/mdTabs";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
@@ -154,13 +154,19 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		toggleBranchesTab: () => (uiStore.isDetached("git") ? togglePanel("git") : uiStore.toggleGitPanelOnTab("branches")),
 		toggleAiChatPanel: () => togglePanel("ai-chat"),
 		toggleMcpPopup: mcpPopupStore.toggle,
+		// One-way, matching the sidebar pill (GlobalWorkspaceEntry.tsx): always
+		// means "show the manual Global Workspace," never deactivates. The only
+		// way to leave it is clicking a terminal within a repo in the sidebar.
 		toggleGlobalWorkspace: () => {
-			if (!globalWorkspaceStore.hasPromoted()) return;
-			const repoPath = repositoriesStore.state.activeRepoPath;
-			const repo = repoPath ? repositoriesStore.state.repositories[repoPath] : null;
-			const key = repoPath && repo?.activeWorkspaceId ? paneLayoutKey(repoPath, repo.activeWorkspaceId) : undefined;
-			if (globalWorkspaceStore.isActive()) globalWorkspaceStore.deactivate(key);
-			else globalWorkspaceStore.activate(key);
+			if (globalWorkspaceStore.isManualWorkspaceActive()) return;
+			if (globalWorkspaceStore.getLiveManualMembers().length === 0) return;
+			globalWorkspaceStore.setScope(MANUAL_SCOPE);
+			if (!globalWorkspaceStore.isActive()) {
+				const repoPath = repositoriesStore.state.activeRepoPath;
+				const repo = repoPath ? repositoriesStore.state.repositories[repoPath] : null;
+				const key = repoPath && repo?.activeWorkspaceId ? paneLayoutKey(repoPath, repo.activeWorkspaceId) : undefined;
+				globalWorkspaceStore.activate(key);
+			}
 		},
 		toggleDiffScroll: () => {
 			const repoPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath;
