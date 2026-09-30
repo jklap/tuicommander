@@ -183,9 +183,16 @@ describe("NotificationManager", () => {
 			expect(manager.getConfig().volume).toBe(0);
 		});
 
-		it("setSoundEnabled updates specific sound", () => {
+		it("setSoundEnabled updates specific sound and leaves the others on", () => {
 			manager.setSoundEnabled("question", false);
 			expect(manager.getConfig().sounds.question).toBe(false);
+			expect(manager.getConfig().sounds.warning).toBe(true);
+		});
+
+		it("getConfig returns a copy, so callers cannot mutate the live config", () => {
+			const config = manager.getConfig();
+			config.volume = 0.99;
+			expect(manager.getConfig().volume).toBe(0.5);
 		});
 
 		it("updateConfig merges config", () => {

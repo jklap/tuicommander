@@ -22,10 +22,6 @@ describe("agents", () => {
 		expect(MCP_SUPPORT.api).toBe(false);
 	});
 
-	it("AGENT_DISPLAY has an entry for 'api'", () => {
-		expect(AGENT_DISPLAY.api).toBeDefined();
-	});
-
 	it("all AGENT_TYPES have corresponding entries in AGENTS, MCP_SUPPORT, and AGENT_DISPLAY", () => {
 		for (const type of AGENT_TYPES) {
 			expect(AGENTS[type], `AGENTS.${type}`).toBeDefined();
