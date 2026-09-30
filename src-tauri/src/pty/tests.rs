@@ -16278,6 +16278,144 @@ fn tuic_osc_unknown_verb_is_ignored_without_panicking() {
     );
 }
 
+/// A TUIC session that reports a SECOND, different `ccsession` value (a
+/// `claude --resume` into a new session id, an agent restart, or — since
+/// this is PTY output, i.e. attacker-controlled input — a crafted OSC 7770
+/// sequence a `cat`'d file could emit repeatedly) must not leave the FIRST
+/// claude_session_id permanently mapped in `AppState::claude_session_map`.
+/// Before the fix, only `tuic_to_claude_session` was ever overwritten;
+/// `claude_session_map` accumulated one entry per distinct value forever,
+/// bounded only by how many different ids a single long-lived terminal
+/// happened to emit over its life.
+#[test]
+fn ccsession_retires_the_previous_claude_session_mapping_for_the_same_tuic_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-ccsession-retire";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-first\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-first")
+            .map(|v| v.clone()),
+        Some(session_id.to_string())
+    );
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-second\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-second")
+            .map(|v| v.clone()),
+        Some(session_id.to_string()),
+        "the new mapping must be present"
+    );
+    assert!(
+        state.claude_session_map.get("claude-first").is_none(),
+        "the superseded claude_session_id must be evicted, not left leaking forever"
+    );
+    assert_eq!(
+        state
+            .tuic_to_claude_session
+            .get(session_id)
+            .map(|v| v.clone()),
+        Some("claude-second".to_string())
+    );
+}
+
+/// Feeds one `ccsession` report through the real chunk path for `session_id`.
+fn report_ccsession(state: &crate::AppState, session_id: &str, claude_session_id: &str) {
+    if !state.session_maps.silence_states.contains_key(session_id) {
+        agent_session(state, session_id, SHELL_IDLE);
+        state.grid.vt_log_buffers.insert(
+            session_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+    }
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    ChunkProcessor::new(None, None).process_chunk(
+        &format!("\x1b]7770;ccsession={claude_session_id}\x07"),
+        &silence,
+        session_id,
+        state,
+    );
+}
+
+/// Closing a PTY session drops its Claude-session mapping AND the Session Diff
+/// "first edit announced" mark for that Claude session — `announced_edit_sessions`
+/// is otherwise only cleared by a last unwatch.
+#[test]
+fn closing_a_session_drops_its_claude_mapping_and_announced_mark() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "close-claude-map";
+    report_ccsession(&state, sid, "claude-x");
+    state
+        .announced_edit_sessions
+        .insert("claude-x".to_string(), ());
+
+    cleanup_session(sid, &state, "closed");
+
+    assert!(state.claude_session_map.get("claude-x").is_none());
+    assert!(state.tuic_to_claude_session.get(sid).is_none());
+    assert!(!state.announced_edit_sessions.contains_key("claude-x"));
+}
+
+/// A second tab that resumed the same Claude session owns its mapping: neither
+/// the first tab moving on to another Claude session nor the first tab closing
+/// may drop it (or its announced mark).
+#[test]
+fn a_mapping_another_tab_took_over_survives_the_first_tab() {
+    let state = crate::state::tests_support::make_test_app_state();
+    report_ccsession(&state, "tab-a", "claude-x");
+    report_ccsession(&state, "tab-b", "claude-x");
+    state
+        .announced_edit_sessions
+        .insert("claude-x".to_string(), ());
+
+    report_ccsession(&state, "tab-a", "claude-y");
+    assert_eq!(
+        state.tuic_session_for_claude_session("claude-x").as_deref(),
+        Some("tab-b"),
+        "tab-a moving on must not drop tab-b's mapping"
+    );
+
+    cleanup_session("tab-a", &state, "closed");
+    assert_eq!(
+        state.tuic_session_for_claude_session("claude-x").as_deref(),
+        Some("tab-b"),
+        "tab-a closing must not drop tab-b's mapping"
+    );
+    assert!(state.claude_session_map.get("claude-y").is_none());
+    assert!(state.announced_edit_sessions.contains_key("claude-x"));
+}
+
 #[test]
 fn percent_decode_osc_payload_passes_through_plain_text() {
     assert_eq!(percent_decode_osc_payload("Bash"), "Bash");
