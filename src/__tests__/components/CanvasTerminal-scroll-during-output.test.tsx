@@ -216,6 +216,41 @@ describe("CanvasTerminal scroll gesture during output", () => {
 		}
 	});
 
+	// catches: the scrollbar drag anchors its offset to the frame the drag started
+	// on (#1265-8b16), so output landing mid-drag is dropped from the offset it
+	// sends and the view jumps forward over those lines.
+	it("keeps the top line under a scrollbar drag when output lands mid-drag", async () => {
+		layOutPane();
+		const view = render(() => <CanvasTerminal sessionId="scroll-1265" terminalId="scroll-1265" />);
+		try {
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame({ historySize: 100, displayOffset: 50 }));
+			const thumb = view.container.querySelector('div[style*="width:14px"] > div');
+			if (!thumb) throw new Error("scrollbar thumb not mounted");
+
+			thumb.dispatchEvent(new MouseEvent("mousedown", { clientY: 500, bubbles: true, cancelable: true }));
+			document.dispatchEvent(new MouseEvent("mousemove", { clientY: 450, bubbles: true }));
+			await waitFor(() => expect(sentOffsets().length).toBe(1));
+			const travelled = sentOffsets()[0] - 50;
+			expect(travelled).toBeGreaterThan(0);
+
+			// The backend applied that offset, then 5 lines of output scrolled into
+			// history: alacritty keeps the viewport still, offset and history both +5.
+			frameSink.current?.(fullFrame({ historySize: 105, displayOffset: sentOffsets()[0] + 5 }));
+
+			// The pointer keeps moving in the same drag, the same distance again.
+			document.dispatchEvent(new MouseEvent("mousemove", { clientY: 400, bubbles: true }));
+			await waitFor(() => expect(sentOffsets().length).toBe(2));
+
+			// Top line = the one the drag had reached, plus what the thumb travelled since.
+			// Anchoring to the start frame would send 50 + 2 * travelled: 5 lines forward.
+			expect(sentOffsets()[1]).toBeGreaterThanOrEqual(50 + 5 + 2 * travelled - 1);
+		} finally {
+			document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+			view.unmount();
+		}
+	});
+
 	// catches: a chunk fetched while lines 100-103 were still the agent's live
 	// region is cached for good, so once the redraw commits them to history the
 	// user scrolling back sees the stale rows instead of the lines that were written.
