@@ -26,6 +26,8 @@ interface RepoGitHubData {
 /** GitHub store state */
 interface GitHubStoreState {
 	repos: Record<string, RepoGitHubData>;
+	/** Ahead/behind of checkouts that are not a polled repo root (linked worktrees), by path */
+	checkoutStatus: Record<string, RepoRemoteStatus>;
 	issuesLoading: boolean;
 	circuitBreakerOpen: boolean;
 	viewerLogin: string | null;
@@ -34,6 +36,7 @@ interface GitHubStoreState {
 function createGitHubStore() {
 	const [state, setState] = createStore<GitHubStoreState>({
 		repos: {},
+		checkoutStatus: {},
 		issuesLoading: false,
 		circuitBreakerOpen: false,
 		viewerLogin: null,
@@ -149,9 +152,9 @@ function createGitHubStore() {
 		return repo.branches[branch] ?? null;
 	}
 
-	/** Get remote tracking status (ahead/behind) for a repo */
-	function getRemoteStatus(repoPath: string): GitHubStatus | null {
-		return state.repos[repoPath]?.remoteStatus ?? null;
+	/** Get remote tracking status (ahead/behind) for a repo root or a worktree checkout */
+	function getRemoteStatus(path: string): GitHubStatus | null {
+		return state.repos[path]?.remoteStatus ?? state.checkoutStatus[path] ?? null;
 	}
 
 	/** Get issues for a repo */
@@ -189,7 +192,10 @@ function createGitHubStore() {
 		try {
 			const remoteStatus = await invoke<GitHubStatus>("get_github_status", { path });
 			if (remoteStatus) {
-				setState("repos", path, "remoteStatus", remoteStatus);
+				// A path without a repo entry is a worktree checkout: writing it under `repos`
+				// would create a phantom repo without `branches`.
+				if (state.repos[path]) setState("repos", path, "remoteStatus", remoteStatus);
+				else setState("checkoutStatus", path, remoteStatus);
 			}
 		} catch {
 			// Remote status is best-effort — ignore failures
@@ -318,6 +324,7 @@ function createGitHubStore() {
 		listen<{ repo_path: string; statuses: BranchPrStatus[] }>("github-pr-update", (event) => {
 			updateRepoData(event.payload.repo_path, event.payload.statuses);
 			pollRemoteStatus(event.payload.repo_path);
+			for (const checkout of Object.keys(state.checkoutStatus)) pollRemoteStatus(checkout);
 		}).then((unsub) => unlisteners.push(unsub));
 
 		listen<{ type: string; repo_path: string; branch: string; pr_number: number; title: string }>(
@@ -375,6 +382,7 @@ function createGitHubStore() {
 		},
 		loadCheckDetails,
 		pollRepo,
+		pollRemoteStatus,
 		startPolling,
 		stopPolling,
 		/** Register a callback for PR terminal state transitions (merged/closed) */
