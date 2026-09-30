@@ -1983,6 +1983,36 @@ describe("initApp", () => {
 			vi.advanceTimersByTime(20_000);
 			expect(terminalsStore.get(termId)).toBeUndefined();
 		});
+
+		/**
+		 * Coverage gap named in the origin-tracking plan: a non-remote (locally/
+		 * user-created) tab must never enter the auto-close countdown — it's
+		 * managed entirely by Terminal.tsx's own pty-exit handler instead. There
+		 * is no `session-created` payload today that can produce a non-remote
+		 * `isRemote` terminal, so this seeds one directly in the store.
+		 */
+		it("does nothing for a non-remote tab (no countdown, tab is not removed)", async () => {
+			const { getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const termId = terminalsStore.add({
+				sessionId: "local-sess",
+				fontSize: 14,
+				name: "Local Tab",
+				cwd: "/repo",
+				awaitingInput: null,
+				isRemote: false,
+			});
+
+			getClosed()!({ payload: { session_id: "local-sess", reason: "process_exit", agent_type: null } });
+
+			// No countdown name change, and the tab survives indefinitely.
+			expect(terminalsStore.get(termId)?.name).toBe("Local Tab");
+			vi.advanceTimersByTime(60_000);
+			expect(terminalsStore.get(termId)).toBeDefined();
+			expect(terminalsStore.get(termId)?.name).toBe("Local Tab");
+		});
 	});
 
 	describe("close-html-tabs event", () => {
@@ -2467,6 +2497,53 @@ describe("initApp", () => {
 			expect(newId).toBeDefined();
 			expect(terminalsStore.state.activeId).toBe(newId);
 			expect(terminalsStore.get(newId!)?.nameIsCustom).toBe(false);
+		});
+
+		/**
+		 * Characterization test, written before the origin-tracking change lands:
+		 * today this listener hardcodes `isRemote: true` for every `session-created`
+		 * event, regardless of who created it. Once the backend payload carries
+		 * `is_remote`, this flips to asserting the terminal's `isRemote` follows
+		 * the payload value (defaulting to `true` when the field is absent, for
+		 * backward compatibility with an older backend).
+		 */
+		it("hardcodes isRemote true for every session-created event today", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "hardcoded-remote", cwd: null, agent_type: null } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "hardcoded-remote");
+			expect(terminalsStore.get(newId!)?.isRemote).toBe(true);
+		});
+
+		/**
+		 * Characterization test for the fallback-name branches
+		 * (`useAppInit.ts`'s session-created listener): with no `display_name`,
+		 * the name is `PTY: Session N` when there's no agent_type, and
+		 * `Session N` when there is one.
+		 */
+		it("falls back to 'PTY: Session N' when there is no display_name and no agent_type", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "no-name-no-agent", cwd: null, agent_type: null } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "no-name-no-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^PTY: Session \d+$/);
+		});
+
+		it("falls back to 'Session N' (no PTY prefix) when there is no display_name but an agent_type is set", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "no-name-with-agent", cwd: null, agent_type: "claude" } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "no-name-with-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^Session \d+$/);
 		});
 
 		it("uses a spawned agent display name as an intent-replaceable base title", async () => {
