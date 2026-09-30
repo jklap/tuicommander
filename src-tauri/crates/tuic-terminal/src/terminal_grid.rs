@@ -2933,13 +2933,21 @@ mod tests {
             // Rows below `base` were evicted by the cap; everything else must be
             // there. New rows are recorded, known rows must be unchanged.
             let full_scan = step % 50 == 0;
-            let from = if full_scan { base } else { next_index.max(base) };
+            let from = if full_scan {
+                base
+            } else {
+                next_index.max(base)
+            };
             let texts = if from - base < history {
                 grid.read_rows_in_range(from - base, history - 1)
             } else {
                 Vec::new()
             };
-            assert_eq!(texts.len(), history - (from - base), "{name}: history read short");
+            assert_eq!(
+                texts.len(),
+                history - (from - base),
+                "{name}: history read short"
+            );
             for (i, text) in texts.into_iter().enumerate() {
                 let idx = from + i;
                 match committed.get(&idx) {
@@ -2987,9 +2995,16 @@ mod tests {
             }
             let bytes = std::fs::read(&path).expect("readable fixture");
             let capture = crate::pty_capture::decode_capture(&bytes).expect("decodable fixture");
-            out.push((path.file_name().unwrap().to_string_lossy().into_owned(), capture));
+            out.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                capture,
+            ));
         }
-        assert!(!out.is_empty(), "no .tcap fixtures found in {}", dir.display());
+        assert!(
+            !out.is_empty(),
+            "no .tcap fixtures found in {}",
+            dir.display()
+        );
         out
     }
 
@@ -3004,7 +3019,10 @@ mod tests {
                 checked += replay_history_contract(&name, &capture, 10_000, k, None).committed_rows;
             }
         }
-        assert!(checked > 1000, "corpus too small to mean anything: {checked} rows");
+        assert!(
+            checked > 1000,
+            "corpus too small to mean anything: {checked} rows"
+        );
     }
 
     /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
@@ -3074,9 +3092,10 @@ mod tests {
             if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
                 continue;
             }
-            let capture =
-                crate::pty_capture::decode_capture(&std::fs::read(&path).expect("readable capture"))
-                    .expect("decodable capture");
+            let capture = crate::pty_capture::decode_capture(
+                &std::fs::read(&path).expect("readable capture"),
+            )
+            .expect("decodable capture");
             let name = path.display().to_string();
             for k in [0, 2, 9, 40] {
                 let s = replay_history_contract(&name, &capture, 10_000, k, None);
@@ -3087,7 +3106,9 @@ mod tests {
             files += 1;
         }
         assert!(files > 0, "corpus held no usable .tcap captures");
-        println!("files {files}  history rows checked {committed}  live rows rewritten in place {live}  alt-screen records skipped {alt}");
+        println!(
+            "files {files}  history rows checked {committed}  live rows rewritten in place {live}  alt-screen records skipped {alt}"
+        );
     }
 
     /// Measure the overship ratio over a corpus of real `.tcap` captures.
