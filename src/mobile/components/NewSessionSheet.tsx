@@ -17,7 +17,7 @@ function repoName(path: string): string {
 export function NewSessionSheet(props: NewSessionSheetProps) {
 	async function createSession(cwd: string) {
 		try {
-			await rpc("create_pty", { config: { cwd } });
+			await rpc("create_pty", { config: { cwd, user_initiated: true } });
 			// Dismiss only after the session is created; on failure keep the sheet
 			// open so the user can retry.
 			props.onDismiss();

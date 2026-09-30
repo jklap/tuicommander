@@ -290,6 +290,22 @@ describe("transport", () => {
 			expect(result.body).toEqual({ rows: 24, cols: 80, shell: null, cwd: "/tmp" });
 		});
 
+		// usePty.createSession sets this so the backend registers is_remote: false
+		// (a human created this tab, in the app or via our own HTTP client) —
+		// the mapper must carry it through untouched, like every other field.
+		it("carries user_initiated through to POST /sessions", () => {
+			const result = mapCommandToHttp("create_pty", {
+				config: { rows: 24, cols: 80, shell: null, cwd: "/tmp", user_initiated: true },
+			});
+			expect(result.body).toEqual({
+				rows: 24,
+				cols: 80,
+				shell: null,
+				cwd: "/tmp",
+				user_initiated: true,
+			});
+		});
+
 		// The desktop path reads `alias` off `PtyConfig`; the HTTP route reads it off
 		// the same body under the same name. A restore over either transport has to
 		// reserve the address the tab already had, so the field cannot be dropped in

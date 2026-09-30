@@ -74,6 +74,14 @@ pub(super) struct CreateSessionRequest {
     /// Same field name and meaning as `PtyConfig::display_name_is_custom`.
     #[serde(default)]
     pub display_name_is_custom: bool,
+    /// Set by our own HTTP client (the browser UI, `usePty.ts`) to mark a
+    /// session as created by a human, not an agent. Absent (the default) means
+    /// agent-created — covers a raw `curl` caller with no reason to know this
+    /// field exists, and every MCP/tmux-shim spawn, which never sets it either.
+    /// Same field name and meaning as `PtyConfig::user_initiated`. Drives
+    /// `is_remote`: `is_remote = !user_initiated`.
+    #[serde(default)]
+    pub user_initiated: bool,
 }
 
 #[derive(Deserialize)]

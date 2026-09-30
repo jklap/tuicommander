@@ -579,8 +579,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
 				const stillExists = terminalsStore.get(props.id);
 				const hadAgent = stillExists?.agentType != null;
-				const notifyOnExit = handleAgentExitCompletion(props.id);
-				if (stillExists) {
+				// A remote tab (agent-created, or via our own HTTP client) is owned
+				// exclusively by useAppInit.ts's session-closed listener from here on —
+				// it reads its own event's agent_type and runs the countdown/removal
+				// this component must not race. This component still tears down its
+				// own local refs below (sessionId, onSessionExit), but must not also
+				// mutate the shared store or fire a completion notification the
+				// listener will fire again for the same exit.
+				const isRemoteTab = stillExists?.isRemote ?? false;
+				const notifyOnExit = isRemoteTab ? false : handleAgentExitCompletion(props.id);
+				if (stillExists && !isRemoteTab) {
 					// Restoring an OSC-title-overwritten name on exit is now the
 					// backend's job (osc_title::restore_base_on_exit, called from
 					// the reader thread right before it announces session-closed)
@@ -635,14 +643,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				setCurrentSessionId(null);
 				props.onSessionExit?.(props.id);
 				// Completion chime only for an agent finishing in a background tab.
-				// A plain shell exit closes its tab, so it stays silent.
-				if (!notifyOnExit && hadAgent && terminalsStore.state.activeId !== props.id) {
+				// A plain shell exit closes its tab, so it stays silent. Skipped for a
+				// remote tab: notifyOnExit is always false there (see above), and this
+				// log would otherwise misleadingly claim "already notified" when the
+				// real reason is "not this component's job".
+				if (!isRemoteTab && !notifyOnExit && hadAgent && terminalsStore.state.activeId !== props.id) {
 					appLogger.debug("terminal", `[Notify] ${props.id} completion SUPPRESSED — cycle already notified`);
 				}
 				// Plain shell exit: close the tab via the app-level onShellExit handler.
-				// This is the single owner of local session-exit handling; the global
-				// session-closed listener deliberately stays remote-only.
-				if (stillExists && !hadAgent) {
+				// This is the single owner of local (non-remote) session-exit handling;
+				// a remote tab's close/countdown is owned by the global session-closed
+				// listener instead (see isRemoteTab above).
+				if (stillExists && !hadAgent && !isRemoteTab) {
 					terminalsStore.notifyShellExit(props.id);
 				}
 			},

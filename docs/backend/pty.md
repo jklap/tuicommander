@@ -251,6 +251,13 @@ structured intent titles may update it. An independent
 frontend reconnection. Session snapshots also carry `is_remote`, so reconnecting
 an HTTP/MCP-created PTY does not lose orchestration-only notification muting.
 
+`is_remote` means "created by an agent" (MCP, tmux shim, AI-agent tools/
+scheduler, or a raw HTTP caller), not network locality. `PtyConfig.user_initiated`
+(desktop IPC) and `CreateSessionRequest.user_initiated` (HTTP) are how a human's
+own client — the desktop app or our browser UI — opts a session into
+`is_remote: false`; omitting the field defaults to `is_remote: true`, so a raw
+`curl` caller or an MCP/tmux-shim spawn need no changes to stay agent-created.
+
 ## Shell Resolution
 
 ```rust

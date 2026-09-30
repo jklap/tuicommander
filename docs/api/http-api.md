@@ -143,7 +143,15 @@ Returns array of active session info (ID, cwd, worktree path, branch,
 `display_name`, `display_name_is_custom`, `is_remote`, optional
 `pty_description`, and nested state). The
 origin fields let browser and desktop clients preserve manual-title protection
-and remote-completion muting across reconnects. For detected agents,
+and remote-completion muting across reconnects.
+
+`is_remote` means "created by an agent" (MCP, tmux shim, AI-agent tools/
+scheduler, or a raw HTTP caller such as `curl`) — not network locality. A
+session a human created, in the desktop app or through our own HTTP client
+(the browser UI), is `is_remote: false`. See "Create Session" below for how a
+client opts a session into `is_remote: false`.
+
+For detected agents,
 `state.agent_state` distinguishes PTY
 silence (`idle`) from explicit protocol completion (`completed`); the latter
 requires a parsed `suggest: [ ... ]` marker. Other values are `starting`,
@@ -162,7 +170,8 @@ Content-Type: application/json
   "cols": 80,
   "shell": "/bin/zsh",    // optional
   "cwd": "/path/to/dir",  // optional
-  "alias": "tu-1"         // optional — reclaim a persisted alias
+  "alias": "tu-1",        // optional — reclaim a persisted alias
+  "user_initiated": true  // optional — see below, defaults to false
 }
 ```
 
@@ -173,6 +182,15 @@ honours it only when it still has the `<prefix>-<number>` shape and no live sess
 holds it, and then raises the per-prefix counter past that number so the next
 auto-assigned alias cannot collide. Anything else is ignored and the session receives a
 freshly minted alias.
+
+`user_initiated` is how our own HTTP client (the browser UI) marks a session as
+created by a human rather than an agent — it drives `is_remote: !user_initiated`
+on the registered session. Omitting it (the default) registers `is_remote: true`,
+so a raw `curl` caller with no reason to know this field exists, and every MCP/
+tmux-shim spawn, stay `is_remote: true` with no changes on their side. Also
+honoured on `POST /sessions/worktree` (nested in `config`); has no effect on
+`POST /sessions/agent` (always agent-created) or the desktop IPC twin of this
+route (always human-initiated, accepted for body-shape parity but not consulted).
 
 ### Create Session with Worktree
 
@@ -618,7 +636,7 @@ the server is back to the filter the connection was opened with.
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `session-created` | `{session_id, cwd, agent_type, display_name}` | New session started; `display_name` is the optional stable assigned name |
+| `session-created` | `{session_id, cwd, agent_type, display_name, is_remote}` | New session started; `display_name` is the optional stable assigned name; `is_remote` is "created by an agent", not network locality — see "List Sessions" above |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `session-closed` | `{session_id, reason, agent_type}` | Session ended. `reason` is informational (`"closed"`, `"killed"`, `"process_exit"`, `"explicit_close"`); `agent_type` is the session's agent type at close time (or `null`), read before the session-state accumulator removes the entry — used to pick the short vs. long auto-close timer |
 | `repo-changed` | `{repo_path, kind}` | Repository changed. `kind` is `"git-state"` (`.git/` was written — a commit, ref or index change) or `"working-tree"` (files changed and `.git` did not). A git-state emit cancels the pending working-tree one, so `"git-state"` does **not** mean "only `.git` changed" — a client that needs working-tree news must react to both kinds. |

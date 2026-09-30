@@ -30,7 +30,7 @@ describe("NewSessionSheet", () => {
 		const buttons = container.querySelectorAll("button");
 		await fireEvent.click(buttons[0]);
 		expect(rpc).toHaveBeenCalledWith("create_pty", {
-			config: { cwd: "/home/user/project-a" },
+			config: { cwd: "/home/user/project-a", user_initiated: true },
 		});
 		expect(onDismiss).toHaveBeenCalled();
 	});

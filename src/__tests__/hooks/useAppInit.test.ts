@@ -1922,6 +1922,7 @@ describe("initApp", () => {
 			cwd: string | null;
 			agent_type?: string | null;
 			display_name?: string | null;
+			is_remote?: boolean | null;
 		};
 		type SessionClosedPayload = { session_id: string; reason: string; agent_type?: string | null };
 
@@ -1962,6 +1963,32 @@ describe("initApp", () => {
 
 			// Tab must be gone
 			expect(terminalsStore.get(termId)).toBeUndefined();
+		});
+
+		/**
+		 * Regression test for the remote-tab exit race fix: this listener is now
+		 * the sole owner of a remote agent tab's teardown (Terminal.tsx's own
+		 * pty-exit handler explicitly skips its mutations for a remote tab), so it
+		 * must clear agentType itself — otherwise a remote agent tab's agentType
+		 * stays stuck forever once sessionId goes null and polling has nothing
+		 * left to detect against.
+		 */
+		it("clears agentType/resume-banner fields on session-closed for a remote agent tab", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "agent-sess-2", cwd: null, agent_type: "claude" } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "agent-sess-2")!;
+			terminalsStore.update(termId, { pendingResumeCommand: "claude --continue" });
+
+			getClosed()!({ payload: { session_id: "agent-sess-2", reason: "process_exit", agent_type: "claude" } });
+
+			const terminal = terminalsStore.get(termId);
+			expect(terminal?.agentType).toBeNull();
+			expect(terminal?.pendingResumeCommand).toBeNull();
+			expect(terminal?.sessionId).toBeNull();
+			expect(terminal?.shellState).toBe("exited");
 		});
 
 		it("auto-removes a remote tab after REMOTE_TAB_AUTOCLOSE_MS when agent_type is absent", async () => {
@@ -2443,6 +2470,7 @@ describe("initApp", () => {
 			cwd: string | null;
 			agent_type?: string | null;
 			display_name?: string | null;
+			is_remote?: boolean | null;
 		};
 
 		function captureSessionCreated() {
@@ -2499,15 +2527,8 @@ describe("initApp", () => {
 			expect(terminalsStore.get(newId!)?.nameIsCustom).toBe(false);
 		});
 
-		/**
-		 * Characterization test, written before the origin-tracking change lands:
-		 * today this listener hardcodes `isRemote: true` for every `session-created`
-		 * event, regardless of who created it. Once the backend payload carries
-		 * `is_remote`, this flips to asserting the terminal's `isRemote` follows
-		 * the payload value (defaulting to `true` when the field is absent, for
-		 * backward compatibility with an older backend).
-		 */
-		it("hardcodes isRemote true for every session-created event today", async () => {
+		/** Defaults to isRemote: true when the payload omits is_remote (backward compat with an older backend). */
+		it("defaults isRemote to true when the payload omits is_remote", async () => {
 			const { getCallback } = captureSessionCreated();
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -2518,13 +2539,25 @@ describe("initApp", () => {
 			expect(terminalsStore.get(newId!)?.isRemote).toBe(true);
 		});
 
+		it("honors an explicit is_remote: false from the payload (user-initiated session)", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({
+				payload: { session_id: "user-initiated-sess", cwd: null, agent_type: null, is_remote: false },
+			});
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "user-initiated-sess");
+			expect(terminalsStore.get(newId!)?.isRemote).toBe(false);
+		});
+
 		/**
-		 * Characterization test for the fallback-name branches
-		 * (`useAppInit.ts`'s session-created listener): with no `display_name`,
-		 * the name is `PTY: Session N` when there's no agent_type, and
-		 * `Session N` when there is one.
+		 * Fallback-name branches (`useAppInit.ts`'s session-created listener):
+		 * with no `display_name`, the name is `PTY: Session N` only when the
+		 * session is both remote and has no agent_type; otherwise `Session N`.
 		 */
-		it("falls back to 'PTY: Session N' when there is no display_name and no agent_type", async () => {
+		it("falls back to 'PTY: Session N' when remote with no display_name and no agent_type", async () => {
 			const { getCallback } = captureSessionCreated();
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -2543,6 +2576,21 @@ describe("initApp", () => {
 			getCallback()!({ payload: { session_id: "no-name-with-agent", cwd: null, agent_type: "claude" } });
 
 			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "no-name-with-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^Session \d+$/);
+		});
+
+		it("falls back to 'Session N' (no PTY prefix) for a non-remote (user-initiated) session with no agent_type", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({
+				payload: { session_id: "user-initiated-no-agent", cwd: null, agent_type: null, is_remote: false },
+			});
+
+			const newId = terminalsStore
+				.getIds()
+				.find((id) => terminalsStore.get(id)?.sessionId === "user-initiated-no-agent");
 			expect(terminalsStore.get(newId!)?.name).toMatch(/^Session \d+$/);
 		});
 

@@ -48,7 +48,7 @@ pub struct PtySession {
     pub cwd: Option<String>,                            // Working directory
     pub display_name: Option<String>,                   // UI/agent/intent title
     pub display_name_is_custom: bool,                   // Explicit user rename wins over OSC/intent
-    pub is_remote: bool,                                // Created through HTTP/MCP, not the desktop UI
+    pub is_remote: bool,                                // Created by an agent (MCP/tmux-shim/raw HTTP), not a human
     pub shell: String,                                  // Resolved spawn command, used to confirm a real shell foreground
 }
 ```
