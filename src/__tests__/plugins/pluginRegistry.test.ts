@@ -965,15 +965,21 @@ describe("PluginHost — Tier 2 read-only state", () => {
 		expect(result).toBeNull();
 	});
 
-	it("onStateChange returns a disposable", () => {
+	it("a disposed onStateChange listener stops receiving events", () => {
+		// Catches a dispose() that does not unsubscribe: the old test only checked the shape.
+		const listener = vi.fn();
 		let disposable: { dispose: () => void } | null = null;
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
-				disposable = host.onStateChange(() => {});
+				disposable = host.onStateChange(listener);
 			}),
 		);
-		expect(disposable).not.toBeNull();
-		expect(typeof disposable!.dispose).toBe("function");
+		const event = { type: "agent-started", sessionId: "s", terminalId: "t" } as const;
+		pluginRegistry.notifyStateChange(event);
+		expect(listener).toHaveBeenCalledTimes(1);
+		disposable!.dispose();
+		pluginRegistry.notifyStateChange(event);
+		expect(listener).toHaveBeenCalledTimes(1);
 	});
 
 	it("breaks synchronous reentrancy in notifyStateChange — caller returns without freezing", async () => {
