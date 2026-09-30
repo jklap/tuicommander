@@ -16416,6 +16416,92 @@ fn a_mapping_another_tab_took_over_survives_the_first_tab() {
     assert!(state.announced_edit_sessions.contains_key("claude-x"));
 }
 
+/// Two different TUIC sessions can report the SAME `claude_session_id` (a
+/// resumed/duplicated transcript, two tabs racing to reattach, or crafted PTY
+/// output). `claude_session_map` is last-write-wins by design — the most
+/// recent claimant is the one `tuic_session_for_claude_session` should
+/// return — but the FIRST session's own `tuic_to_claude_session` entry must
+/// be cleared too, or closing that stale claimant later would incorrectly
+/// evict the SECOND session's still-valid mapping (see
+/// `remove_live_session_state`'s guarded remove).
+#[test]
+fn ccsession_reassigned_to_a_different_tuic_session_does_not_let_the_stale_claimant_evict_it_on_close()
+ {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_a = "test-ccsession-dup-a";
+    let session_b = "test-ccsession-dup-b";
+    for id in [session_a, session_b] {
+        agent_session(&state, id, SHELL_IDLE);
+        state.grid.vt_log_buffers.insert(
+            id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+    }
+    let silence_a = state
+        .session_maps
+        .silence_states
+        .get(session_a)
+        .unwrap()
+        .clone();
+    let silence_b = state
+        .session_maps
+        .silence_states
+        .get(session_b)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-shared\x07",
+        &silence_a,
+        session_a,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-shared")
+            .map(|v| v.clone()),
+        Some(session_a.to_string())
+    );
+
+    // Session B claims the SAME claude_session_id — last write wins.
+    processor.process_chunk(
+        "\x1b]7770;ccsession=claude-shared\x07",
+        &silence_b,
+        session_b,
+        &state,
+    );
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-shared")
+            .map(|v| v.clone()),
+        Some(session_b.to_string()),
+        "the most recent claimant must own the mapping"
+    );
+    assert!(
+        state.tuic_to_claude_session.get(session_a).is_none(),
+        "session A's reverse-map entry must be cleared once B claims the same id, \
+         or A closing later would wrongly evict B's still-valid mapping"
+    );
+
+    // Closing the STALE first claimant (A) must not evict B's current, valid mapping.
+    remove_live_session_state(session_a, &state);
+    assert_eq!(
+        state
+            .claude_session_map
+            .get("claude-shared")
+            .map(|v| v.clone()),
+        Some(session_b.to_string()),
+        "closing the superseded session must not evict the live session's mapping"
+    );
+
+    // Closing the real current owner (B) does clear it.
+    remove_live_session_state(session_b, &state);
+    assert!(state.claude_session_map.get("claude-shared").is_none());
+}
+
 #[test]
 fn percent_decode_osc_payload_passes_through_plain_text() {
     assert_eq!(percent_decode_osc_payload("Bash"), "Bash");
