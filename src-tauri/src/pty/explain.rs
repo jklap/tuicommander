@@ -87,6 +87,13 @@ pub(crate) struct AgentExplain {
     /// False for `amp`/`cursor`/`droid` (documented gap) — a structural
     /// reason a session can never reach idle from a screen adapter alone.
     pub(crate) has_ready_screen_adapter: bool,
+    /// The underlying agent's own session id (e.g. Claude's hook-reported
+    /// `session_id`), mirrored from `SessionState.agent_session_id`. `None`
+    /// for a non-hook-instrumented agent or before the first hook event has
+    /// landed. Exists so a pasted `explain_state` snapshot can be joined
+    /// directly against `hook-debug.log`/a real hook transcript without
+    /// having to re-derive the mapping via the pid registry.
+    pub(crate) agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -261,6 +268,7 @@ pub(crate) fn explain_session_state_impl(
         hook_instrumented: session.hook_instrumented,
         hook_state_seen: false, // filled in below, once the SilenceState lock is held
         has_ready_screen_adapter: has_ready_screen_adapter(session.agent_type.as_deref()),
+        agent_session_id: session.agent_session_id.clone(),
     };
 
     let visible = VisibleExplain {
