@@ -420,6 +420,23 @@ component being mounted (or anything it renders) can itself write back to that s
 mount.
 
 
+## `<Show when={x} keyed>` Rejects A Zero-Arg Render Callback At Compile Time — And That's The Point
+
+`<Show when={rowKey(row())} keyed>{() => <Child .../>}</Show>` fails to type-check with a
+confusing overload-resolution error ("Type '() => JSX.Element' is not assignable to type
+'Element'") if the callback ignores the keyed value. Solid's own types define
+`RequiredParameter<T> = T extends () => unknown ? never : T`, so a zero-arg function's type
+collapses to `never`, leaving only the plain non-function `JSX.Element` overload — which the
+literal function value obviously isn't. This is deliberate: `keyed` mode exists specifically so
+the callback receives the resolved value directly (not an `Accessor`), and a callback that
+throws that value away is almost certainly a bug (why key on it if you don't use it?), so the
+type system won't let you write one. Fix by naming the parameter, even if genuinely unused
+(`{(_key) => <Child .../>}`) — found while building the Session Diff virtualized-list fix
+(`SessionDiffList.tsx`/`DiffFileList.tsx`, 2026-09-29), where `<Show keyed>` replaced a `<For>`
+that was silently reusing stale row objects; `vitest` never caught either the original bug or
+this follow-on type error, since it doesn't type-check — a full `tsc --noEmit` did.
+
+
 ## solid-js Signals Inside `vi.mock` Factories
 
 When a mocked hook (e.g. `useAgentDetection`) needs to expose a signal a test can flip **after** the component has mounted (simulating async data resolving), do not create that signal via a plain top-level `import { createSignal } from "solid-js"` referenced inside the `vi.mock(...)` factory. It silently resolves to a *different* solid-js module instance than the one `<For>`/the component's own reactive tracking uses under this project's Vite/Vitest config — the signal's value updates fine, but `<For>` never re-renders, because its tracking context lives in the other instance's module-scope globals. Confirmed empirically while writing the headless-agent `<select>` regression tests (`ProvidersTab.test.tsx`, `SmartPromptsTab.headlessAgent.test.tsx`, 2026-08-28): a first attempt using a top-level import produced a signal that updated but triggered zero re-renders.

@@ -44,6 +44,8 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
+- **Several independent commits landing in sequence on the same files (parallel agents/sessions each verifying and committing their own slice) can each pass their own scoped Rust checks while still drifting out of `cargo fmt`'s canonical formatting** — a scoped `cargo check`/`cargo clippy` run doesn't catch this, only `cargo fmt --check` does, and that only runs as part of the full gate. This isn't a correctness bug, just wasted cycles: a 2026-09-29 multi-fork session landed 5 formatting-drifted files across several commits, each individually "green" on its own targeted checks, only caught when the full `check-gate.sh` finally ran at the end. Run `cargo fmt` before each commit when several commits are landing back-to-back on overlapping files, not just once at the very end.
+
 Rust test-suite mechanics (mutation testing, `cargo nextest --workspace` gotchas for the
 vendored `patches/` crates, which 15 tests are skipped on purpose, timing-assertion
 pitfalls): `src-tauri/AGENTS.md`. Nothing frontend-specific is split out separately —
