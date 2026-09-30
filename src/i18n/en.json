@@ -250,6 +250,8 @@
 	"fileBrowser.sortName": "Name",
 	"fileBrowser.staged": "Staged for commit",
 	"fileBrowser.title": "Files",
+	"fileBrowser.backToRepo": "Back to the active repository",
+	"fileBrowser.backToRepoLabel": "Back to repository",
 	"fileBrowser.untracked": "Untracked (new file)",
 	"general.btn.addLauncher": "Add launcher",
 	"general.btn.checkNow": "Check Now",

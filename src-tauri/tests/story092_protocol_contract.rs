@@ -188,7 +188,7 @@ fn ego_initialize_response() -> serde_json::Value {
             "loadSession": true,
             "sessionCapabilities": {"list": {}, "delete": {}, "additionalDirectories": {}, "fork": {}, "resume": {}, "close": {}},
             "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
-            "mcpCapabilities": {"http": true, "sse": true},
+            "mcpCapabilities": {"http": true, "sse": true, "acp": true},
             "_meta": {"ego": {
                 "hold": {"version": 1, "pause": "_ego/pause", "resume": "_ego/resume"},
                 "compact": {"version": 1, "method": "_ego/compact"}
@@ -205,10 +205,9 @@ fn initialize_response_becomes_an_immutable_full_capability_snapshot() {
     assert!(snapshot.load && snapshot.list && snapshot.resume && snapshot.fork);
     assert!(snapshot.delete && snapshot.close && snapshot.prompt_image);
     assert!(snapshot.prompt_embedded_context && snapshot.mcp_http && snapshot.mcp_sse);
-    // The MCP transports this client carries do not move with the recorded
-    // response either: they are facts about this side. It carries one server,
-    // `tuicommander`, on the ACP transport (#1156-1b61) and no stdio bridge any
-    // more (#796-7fa3 retired), so stdio is excluded by contract.
+    // ACP is read from the recorded response; stdio is a fact about this side:
+    // no stdio bridge is carried any more (#796-7fa3 retired), so stdio is
+    // excluded by contract.
     assert!(snapshot.mcp_acp && !snapshot.mcp_stdio);
     assert!(!snapshot.client_boolean_config);
     assert_eq!(snapshot.availability(AcpOperation::McpAcp).reason, None);
