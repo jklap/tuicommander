@@ -23,7 +23,7 @@ logfile="/Users/jason.klapste/src/external/tuicommander/.claude/hook-debug.log"
 payload="$(cat)"
 
 {
-  printf '\n===== %s | %s | %s =====\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$event" "${CLAUDE_PROJECT_DIR:-unknown}"
+  printf '\n===== %s | %s | %s | tuic_session=%s =====\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$event" "${CLAUDE_PROJECT_DIR:-unknown}" "${TUIC_SESSION:-none}"
   printf '%s\n' "$payload"
 } >> "$logfile"
 

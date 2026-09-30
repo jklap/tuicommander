@@ -8,6 +8,23 @@
 
 # To Test
 
+## `debug action=explain_state` now surfaces `agent.agent_session_id` (2026-09-30) — **Rust, needs a `make dev` restart**
+
+Added while investigating why a "why is this session busy" report took a pid-registry detour
+to find the right hook transcript: `AgentExplain` (`pty/explain.rs`) gained an
+`agent_session_id: Option<String>` field, mirrored straight from
+`SessionState.agent_session_id` (already tracked for hook-instrumented Claude sessions, per
+the exit-time resume banner feature — just never surfaced in this diagnostic before). A
+pasted `explain_state`/`GET /sessions/{id}/explain-state` snapshot can now be joined directly
+against `hook-debug.log` by this id, with no need to resolve `child_pid` →
+`~/.claude/sessions/<pid>.json` first. Unit-tested
+(`explain_session_state_surfaces_the_hook_reported_agent_session_id`); needs a rebuild to
+confirm the live MCP `debug action=explain_state` / HTTP response actually includes the new
+field for a real hook-instrumented session (`[HUMAN]` not attempted — the orchestrator
+instance this would be checked against is a separately-launched release build per this
+repo's own "Test instance vs orchestrator instance" rule, so it can't observe this source
+change until a real rebuilt binary replaces it).
+
 ## Three desktop PTY-creation commands sized their VT screen at a hardcoded 24x220 instead of the real pane (2026-09-30) — **Rust, needs a `make dev` restart**
 
 Found while investigating a user report ("pane size and not showing the bottom of the
