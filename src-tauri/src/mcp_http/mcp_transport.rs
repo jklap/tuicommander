@@ -17541,12 +17541,7 @@ mod tests {
                 "missing {field} in repo progress input"
             );
         }
-        assert!(
-            input["description"]
-                .as_str()
-                .unwrap()
-                .contains("8 entries")
-        );
+        assert!(input["description"].as_str().unwrap().contains("8 entries"));
     }
 
     #[test]
