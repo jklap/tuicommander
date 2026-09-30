@@ -56,6 +56,16 @@ pub(crate) fn prevents_alt_screen(agent_type: &str) -> bool {
     prevents_alt_screen_in(&crate::config::load_agents_config(), agent_type)
 }
 
+/// `None` means "ask when detected" — deliberately no `.unwrap_or(..)` here,
+/// unlike `enabled()` above: every caller must branch on all three states
+/// (`None`/`Some(true)`/`Some(false)`), not collapse to a bool default.
+pub(crate) fn wrap_user_function(agent_type: &str) -> Option<bool> {
+    crate::config::load_agents_config()
+        .agents
+        .get(agent_type)
+        .and_then(|settings| settings.wrap_user_function)
+}
+
 fn claude_document() -> Value {
     let mut hooks = Map::new();
     for (event, matcher, command) in claude_hook_map() {
