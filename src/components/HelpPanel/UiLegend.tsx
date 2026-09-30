@@ -215,7 +215,9 @@ export const UiLegend: Component = () => {
 					<For each={SIDEBAR_SYMBOL_LEGEND}>
 						{(entry) => (
 							<div class={s.row}>
-								<span class={s.symbol}><BranchIcon {...entry.icon} /></span>
+								<span class={s.symbol}>
+									<BranchIcon {...entry.icon} />
+								</span>
 								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>
