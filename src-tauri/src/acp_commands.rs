@@ -66,7 +66,10 @@ pub(crate) async fn workspace_root(state: &AppState) -> Result<PathBuf, AcpClien
         PathBuf::from(&configured)
     };
     if !path.is_absolute() {
-        return Err(unusable(format!("{} is not an absolute path", path.display())));
+        return Err(unusable(format!(
+            "{} is not an absolute path",
+            path.display()
+        )));
     }
     tokio::fs::create_dir_all(&path)
         .await
