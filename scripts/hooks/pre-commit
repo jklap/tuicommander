@@ -59,6 +59,10 @@ if git diff --cached --name-only --diff-filter=ACMR | grep -qx 'Makefile'; then
     printf '  sends `make dev` to an empty `instances/<id>/`.\n' >&2
     exit 1
   fi
+  if ! bash scripts/check-make-dev-builds-sibling.sh; then
+    printf '\n\033[1;31m✗ pre-commit blocked:\033[0m `make dev` must build the sibling tuic-remote\n\n' >&2
+    exit 1
+  fi
 fi
 
 # --------------------------------------------------------------------------
