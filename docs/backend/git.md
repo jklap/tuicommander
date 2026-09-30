@@ -188,10 +188,10 @@ valid, cold linked worktree.
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
-| `get_git_diff` | `(path: String) -> String` | Full git diff (staged + unstaged) |
+| `get_git_diff` | `(path: String, scope: Option<String>, options: Option<DiffOptions>) -> String` | Full git diff. `scope` = `"staged"` or absent (unstaged/working-tree). See [Diff Options](#diff-options-whitespacecase-insensitive-comparison) below |
 | `get_diff_stats` | `(path: String) -> DiffStats` | Addition/deletion counts |
 | `get_changed_files` | `(path: String) -> Vec<ChangedFile>` | List changed files with per-file stats (single subprocess call) |
-| `get_file_diff` | `(path: String, file: String) -> String` | Diff for a single file |
+| `get_file_diff` | `(path: String, file: String, scope: Option<String>, untracked: Option<bool>, options: Option<DiffOptions>) -> String` | Diff for a single file. Same `options` behavior as `get_git_diff` |
 
 ### Repository Summary
 
@@ -216,6 +216,38 @@ The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phas
 | `start_conflict_assist` | `(repo_path, pr_number) -> ConflictAssistResult` | Creates a PR-head worktree and rebases it. A conflict-free result is `clean` only after a successful origin refresh; stale tracking or local fallback results are `clean_unverified` with `base_source` and `base_warning`. |
 | `get_branch_base` | `(path, branch) -> Option<String>` | Read stored base ref from `git config branch.<name>.tuicommander-base` |
 | `git_apply_reverse_patch` | `(path, patch) -> ()` | Apply a reverse patch for hunk/line-level restore |
+
+## Diff Options (whitespace/case-insensitive comparison)
+
+`diff_options.rs` is a small diff engine shared by `get_git_diff`/`get_file_diff`
+here and Session Diff Review's `get_session_review` (`session_review.rs`'s
+`unified_patch`) — one implementation, so the two views can never disagree on
+what an "ignore whitespace" option means. `git diff` itself only has flags for
+trailing whitespace (`--ignore-space-at-eol`) and whitespace *amount*
+(`--ignore-space-change`), with none for leading-only whitespace or
+case-insensitive comparison — and Session Diff Review never shells out to
+`git` at all (it diffs in-memory transcript reconstructions), so it needs a
+from-scratch engine regardless of what git itself supports.
+
+`DiffOptions { ignore_leading_ws, ignore_trailing_ws, ignore_ws_amount,
+ignore_case }` — all four independent, freely combined. The approach: intern
+each line under a *normalized* comparison key (so `gix::diff::blob`'s
+histogram algorithm treats two lines as equal whenever the active options say
+they're not a real change) while a custom printer emits the original,
+un-normalized text for every line it prints — so only the differences the
+active options actually ignore disappear from the diff.
+
+`DiffOptions::default()` (all `false`) is a no-op — `get_git_diff`/
+`get_file_diff` take the ordinary byte-exact `git diff` path unchanged, with
+zero behavioral or performance difference from before this existed. Any
+non-default option routes through `get_git_diff_with_options_sync` instead:
+list changed files (`git diff --name-status -z`), resolve each side's real
+content per scope (worktree/index/HEAD/a commit hash), and re-diff each
+file's content through the shared engine, building `diff --git`/`---`/`+++`
+headers by hand. Binary files and renames get a stub header rather than an
+attempted text diff. Above `MAX_OPTIONS_DIFF_FILES` (500) changed files, it
+falls back to the plain `git diff` path instead — ignoring the requested
+options rather than doing per-file content diffing on a huge changeset.
 
 ## Data Types
 

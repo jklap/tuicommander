@@ -41,6 +41,21 @@ Two limits are deliberate:
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
 | **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode), **AI Triage** (diff classification), **AI Watchers** (terminal event watchers), **Copy-on-write workspaces** (new workspaces become full repository clones instead of linked worktrees; workspaces you already created stay usable when it is off). |
 
+### Diffs
+
+These apply to both Session Diff Review and Branch Diff Scroll (and the per-file diff view),
+via the toolbar's own diff-options button as well as here.
+
+| Setting | Description |
+|---------|-------------|
+| **Ignore leading whitespace** | A line that only differs in leading whitespace isn't shown as changed. `git diff` has no native equivalent for this — TUIC computes it with its own diff engine when any of these four options is on. |
+| **Ignore trailing whitespace** | Same, for trailing whitespace. |
+| **Ignore whitespace amount** | Runs of whitespace compare equal regardless of how many characters they contain — catches reindentation/retabbing with no other content change. |
+| **Ignore case** | Case-insensitive line comparison. |
+| **Soft-wrap long lines** | Wrap long diff lines instead of scrolling horizontally. |
+| **Auto-open Session Diff Review** | When TUIC detects an agent editing files in a session: **Off** (never open it automatically), **Ask** (a toast with an "Open" action), or **Auto** (open the tab in the background, without switching to it). Skipped if a tab for that session is already open. |
+| **Truncate long changes** | Collapse a single change's diff above this many lines behind a "Show all N lines" button. 0 = never truncate. |
+
 ## Appearance Tab
 
 | Setting | Type | Default | Description |
@@ -56,7 +71,8 @@ Two limits are deliberate:
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
 
 At the bottom of the tab, the **UI Legend** documents every color/icon/animation the app uses
-(terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats) — and
+(terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats, tab
+activity dots) — and
 doubles as the editor for them. Clicking a row's own preview icon opens one combined dialog for
 that indicator, showing only the sections it actually has:
 

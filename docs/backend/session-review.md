@@ -42,9 +42,16 @@ pruned by Claude Code itself, so it's read best-effort and never assumed to
 exist.
 
 Sessions are large in practice (18–24 MB observed on real transcripts) — a
-byte-level pre-filter (`line_is_interesting`, rejecting any line without
-`"toolUseResult"` or `"file-history-delta"`) runs before any JSON parse, so
-the giant `attachment`/`assistant`/`system` records that dominate a
+byte-level pre-filter (`line_is_interesting`) runs before any JSON parse,
+admitting only lines that contain `"toolUseResult"`, `"file-history-delta"`,
+`"custom-title"`, `"last-prompt"`, or `"type":"user"` (a real human prompt —
+needed for turn start times/previews; also matches most
+`toolUseResult`-bearing user records, which the first check already lets
+through). Earlier, `custom-title`/`last-prompt` records were excluded from
+this filter, which meant `SessionReview.title`/`last_prompt` were
+effectively always `None` — the title-matching logic downstream never got a
+chance to see those records. So the giant `attachment`/`assistant`/`system`
+records that dominate a
 transcript's bytes are never deserialized.
 
 ## Base resolution
@@ -92,6 +99,68 @@ declared as a direct dependency with that feature on (see the comment next
 to it in `Cargo.toml`) — Cargo's feature unification then turns it on
 crate-wide for the one shared instance of the package.
 
+`get_session_review` optionally takes a `DiffOptions` (ignore leading/trailing
+whitespace, whitespace amount, or case — see [`docs/backend/git.md`](./git.md)
+for the shared engine) — when any option is on, `unified_patch` re-diffs
+through that engine instead of the plain `gix::diff::blob` path above. It's
+part of the review cache key (see Caching below), so two different option
+sets for the same session never collide, and `NetChange` itself respects the
+active options (a whitespace-only change reports `Unchanged`, not `Modified`
+with an empty diff).
+
+### Per-step line numbers
+
+Each `EditStep.patch` normally comes from folding the file forward/backward
+through the transcript, which yields real file-relative line numbers. When
+that fold fails (`base_source == Unknown`, or a specific step's replay can't
+locate its `old_string`), the step's patch used to be built by diffing only
+`old_string`/`new_string` from scratch — a from-scratch diff always starts
+its hunk header at `@@ -1`, which is wrong for anywhere but the top of the
+file, and "open at this change" would jump to the wrong line. Fixed: when the
+transcript record carries a non-empty `toolUseResult.structuredPatch` (Claude
+Code's own hunk list, with real `oldStart`/`newStart` line numbers),
+`patch_from_structured_hunks` renders those hunks directly instead of
+re-deriving them. A `Create`/`Overwrite` step's `structuredPatch` is empty for
+a create — it still gets an all-added hunk from `content`, unaffected by this
+fallback path.
+
+### Turns
+
+A **turn** is one user prompt's worth of edits (`EditStep.turn_index`,
+`SessionReview.turns: Vec<TurnSummary>`). `scan_transcript` collects every
+real user-prompt record's `promptId` → `(timestamp, first line of the prompt
+text)`, and every tool-result record's own `tool_use_id` → the `promptId` that
+triggered it (needed for subagent inheritance below). `assign_turns` then
+walks the chronologically-ordered edit list once: a main-session step's turn
+comes from its own record's `promptId`; a subagent step has no `promptId` of
+its own, so it inherits the turn of the parent transcript's `Agent`/`Task`
+tool_use call that spawned it, matched via the subagent's `meta.json`
+`toolUseId` field against the parent's `tool_use_id → promptId` map. A step
+whose `promptId` can't be resolved either way (an older transcript format, or
+an unmatched subagent) attaches to whichever turn is currently open rather
+than going unassigned. `TurnSummary.prompt_preview` is `None` for a turn
+that only ever got a fallback timestamp (no real prompt record was found).
+
+### Agent identity
+
+`EditStep.agent_id` is the raw hex subagent id (from the transcript filename,
+`subagent_name_from_path`); `EditStep.agent_display_name` is a friendlier
+name for it: `read_subagent_meta` reads the subagent's sibling
+`agent-<id>.meta.json` (when present) and prefers, in order, its `name` →
+`description` → `agentType` field, falling back to the raw hex id when none
+of those exist or the file itself is missing/malformed (never a hard
+failure). A main-session step's `agent_display_name` is the session's own
+title, falling back to the literal string `"main"`.
+
+### Change fingerprint
+
+`FileReview.revision` is a short hash of `cumulative_patch` plus the last
+touching step's `tool_use_id` — lets a caller detect "did this file's review
+content actually change" between two fetches (used by the frontend's live
+in-place-update/flash feature) without diffing the patch text itself. Files
+in `SessionReview.files` are already ordered by first touch, so a newly
+appended file naturally lands at the end of the list.
+
 ## Revert — two mechanisms, deliberately different
 
 - **Per-step** (`revert_session_step`, keyed by the transcript's own
@@ -132,18 +201,85 @@ search string as unlocatable and report "not found" rather than guessing.
 
 ## Caching
 
-An in-memory, `(len, mtime, include_subagents)`-validated full-review cache
-(last 4 sessions, evicted oldest) — not an incremental byte-offset-resume
-cache. Given the byte-level pre-filter above, a full re-scan is fast enough
-that incremental resume wasn't worth the added complexity for a first
-version; the cache still avoids re-parsing an unchanged transcript on every
-poll. `include_subagents` is part of the cache key (not just the transcript's
-own freshness signal) since it changes what the built review contains
-without changing the transcript file at all. Both revert commands evict the
-cached entry for their transcript on success, for the same reason: a revert
-mutates the *working tree*, which the built review also depends on
+An in-memory, full-review cache (last `MAX_CACHED_REVIEWS` = 4 sessions) —
+not an incremental byte-offset-resume cache. Given the byte-level pre-filter
+above, a full re-scan is fast enough that incremental resume wasn't worth the
+added complexity for a first version; the cache still avoids re-parsing an
+unchanged transcript on every poll. The cache key is `(len, mtime,
+include_subagents, subagent_fp, options)`:
+
+- `include_subagents` — changes what the built review contains without
+  changing the main transcript file at all.
+- `subagent_fp` (`SubagentFingerprint`: count + max mtime + total byte
+  length of every `<session>/subagents/*.jsonl`) — a revert or growth of a
+  *subagent* transcript never touches the main transcript's own `(len,
+  mtime)`; without this, a session with subagent edits could keep serving a
+  stale review indefinitely after a subagent transcript grew.
+- `options` (the `DiffOptions` above) — two different option sets for the
+  same session must never collide.
+
+Eviction is true LRU, not "evict whatever `HashMap::keys().next()` returns"
+(the latter is arbitrary, not actually least-recently-used) — each entry
+carries a `last_used` tick from a monotonic `next_use_tick()` counter,
+touched on every cache hit, and the entry with the smallest tick is evicted
+when a new one is inserted past capacity.
+
+Both revert commands evict the cached entry for their transcript on success,
+for the same reason the cache key above exists: a revert mutates the
+*working tree*, which the built review also depends on
 (`base_source`/`net_change`/`drifted_from_disk`), without changing the
 transcript's `(len, mtime)`.
+
+## Live watcher
+
+`session_review_watcher.rs` (modeled on `dir_watcher.rs`) pushes a change
+notification instead of relying on a client to poll. `watch_session_review`
+watches, per subscription: the main transcript file non-recursively, the
+project directory non-recursively (for a brand-new session `.jsonl`
+appearing), and — if it already exists at watch-start time — the session's
+own `<project_dir>/<session_id>/` subfolder recursively (where subagent
+transcripts live). Ref-counted per `(project_dir, session_id)`: multiple
+subscribers to the same session share one underlying `notify` watcher, and
+the last `unwatch_session_review` tears it down. Debounced ~400ms (shorter
+than `dir_watcher`'s 500ms — a live diff view benefits from feeling
+responsive to an agent's own rapid tool-call bursts).
+
+On a debounced fire it invalidates the review cache for that session and
+`emit_dual`s `SessionReviewChanged{repo_path, session_id}` (a change to the
+watched session) or `ReviewSessionsChanged{repo_path}` (a new session file
+appeared). The first change observed for a session since it started being
+watched also fires `AgentEditObserved{tuic_session_id, claude_session_id,
+repo_path}` exactly once per session (tracked in
+`AppState.announced_edit_sessions`) — the signal an auto-open/notification
+feature keys off (see the `session_diff_auto_open` setting in
+[`docs/backend/config.md`](./config.md)).
+
+**Known gap:** not dynamic about a subagent subfolder that doesn't exist yet
+— if a session has no `subagents/` directory when `watch_session_review` is
+called, this watcher does not notice one appearing later. A session that
+gains its first subagent after the watch started needs a fresh
+`watch_session_review` call to pick it up.
+
+## Claude session ↔ TUIC session map
+
+Every terminal running Claude Code already reports its Claude session id via
+tuic-hook's `SessionStart` OSC 7770 `ccsession` metadata — previously emitted
+by `pty.rs`'s output parser but never consumed. It now populates
+`AppState.claude_session_map`/`tuic_to_claude_session` (kept in sync both
+ways), cleaned up when the TUIC PTY session closes. `SessionSummary` and
+`SessionReview` both carry a `tuic_session_id: Option<String>` resolved from
+this map — `None` when there's no live PTY session currently running that
+Claude session. `session_review.rs` itself is a pure disk reader with no
+`AppState` access, so `list_review_sessions_impl`/`get_session_review_impl`
+never populate this field themselves; each transport's own thin wrapper
+(`list_review_sessions`/`get_session_review` desktop commands,
+`list_sessions_http`/`get_review_http` HTTP handlers) does it afterward — see
+the doc comment on `SessionSummary::tuic_session_id` for the current
+per-transport status.
+
+A tmux-shim teammate pane is its own separate Claude process in its own PTY,
+so it maps through this exact same mechanism with no special-casing — no
+distinct "teammate session" concept exists at this layer.
 
 `list_review_sessions` never parses a full transcript for the picker:
 `session_id`/`size_bytes`/timestamps come from the filename and
