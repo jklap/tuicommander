@@ -231,7 +231,18 @@ pub enum AppEvent {
         parent_session: Option<String>,
     },
     #[serde(rename = "session-closed")]
-    SessionClosed { session_id: String, reason: String },
+    SessionClosed {
+        session_id: String,
+        reason: String,
+        /// The session's `agent_type` at the moment it closed, so a client can
+        /// pick `AGENT_TAB_AUTOCLOSE_MS` vs `REMOTE_TAB_AUTOCLOSE_MS`
+        /// (`useAppInit.ts`) without a second lookup that may already have
+        /// been torn down. MUST be read from `session_states` BEFORE removing
+        /// the entry (`apply_event_to_session_state`'s `SessionClosed` arm
+        /// deletes it) — see `emit_session_closed`'s doc comment.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_type: Option<String>,
+    },
     #[serde(rename = "design-mode-changed")]
     DesignModeChanged {
         repo_path: String,
@@ -265,9 +276,6 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
-    /// Terminal title set (or reset to empty) through OSC 0/2.
-    #[serde(rename = "pty-title")]
-    PtyTitle { session_id: String, title: String },
     #[serde(rename = "pty-bell")]
     PtyBell { session_id: String },
     /// A user-confirmed OSC 1337 `OpenURL` request — the frontend should open
@@ -737,6 +745,39 @@ pub enum AppEvent {
         /// failure, mirroring `run_setup_script`'s own `Result` shape.
         error: Option<String>,
     },
+    /// A session was parked (SIGSTOP'd) or woken by the standby sweeper
+    /// (`pty.rs`'s `spawn_standby_checker`). Previously desktop-window-only —
+    /// see `emit_standby_event`'s doc comment for why a browser/PWA client
+    /// never saw the badge.
+    #[serde(rename = "session-standby")]
+    SessionStandby { session_id: String, standby: bool },
+    /// The raw PTY diagnostics-capture tap (`pty_capture.rs`) started or
+    /// stopped, or its session filter changed — via the Tauri command, the
+    /// HTTP route, or a raw curl POST from outside the app entirely. Global,
+    /// not per-session: `session_filter: None` means every session is being
+    /// recorded, so this can't be scoped to one `pty_session_id`. A frontend
+    /// tab evaluates "is *this* session being captured" itself from
+    /// `enabled` + `session_filter`.
+    #[serde(rename = "pty-capture-changed")]
+    PtyCaptureChanged {
+        enabled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_filter: Option<String>,
+    },
+    /// The theme registry finished its (debounced) reload from disk — clients
+    /// should re-read `GET /config/themes`. Payload-free, like
+    /// `RepositoriesChanged`: shipping the theme set on every save would copy
+    /// it to every client including the one that just wrote it.
+    #[serde(rename = "themes-changed")]
+    ThemesChanged,
+    /// An OSC 52 clipboard-set request from inside a PTY (`TermEvent::ClipboardStore`).
+    /// Previously desktop-window-only under the suffixed name
+    /// `pty-clipboard-store-{id}`, which cannot ride SSE — renamed unsuffixed
+    /// here, matching `PtyDescriptionChanged`'s pattern. Deliberately excluded
+    /// from `relay_client::is_relayable` — clipboard text must not leave the
+    /// host via a relay.
+    #[serde(rename = "pty-clipboard-store")]
+    PtyClipboardStore { session_id: String, text: String },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -850,7 +891,6 @@ impl AppEvent {
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
             | AppEvent::ShellAbandoned { session_id, .. }
-            | AppEvent::PtyTitle { session_id, .. }
             | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
@@ -862,7 +902,9 @@ impl AppEvent {
             | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionAccentColorChanged { session_id, .. }
-            | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
+            | AppEvent::SessionClosed { session_id, .. }
+            | AppEvent::SessionStandby { session_id, .. }
+            | AppEvent::PtyClipboardStore { session_id, .. } => Some(session_id),
             _ => None,
         }
     }
@@ -2313,6 +2355,12 @@ pub(crate) struct GridState {
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
     /// PTY output processor.
+    ///
+    /// Cleared (not just consumed) on every real alt-screen transition —
+    /// `ChunkProcessor::process_chunk` in `pty.rs`, comparing `vt.is_alternate_screen()`
+    /// against `last_grid_alt_screen`. A target computed against the OLD grid
+    /// (`swap_alt()` gives primary/alternate independent `display_offset`s) must
+    /// never be replayed against the NEW one — see that call site's comment.
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
 }
 
@@ -2863,9 +2911,11 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        // Titles are presentation only; do not grow the lossless state lane
-        // for an agent that animates its OSC title.
-        if !matches!(&event, AppEvent::PtyTitle { .. }) {
+        // Tab names are presentation only; do not grow the lossless state
+        // lane for an agent that animates its OSC title (each distinct title
+        // is a `SessionRenamed` from `osc_title::apply_osc_title`, which the
+        // accumulator ignores anyway).
+        if !matches!(&event, AppEvent::SessionRenamed { .. }) {
             self.session_maps.session_state_events.send(event.clone());
         }
         if let Some(sid) = event.pty_session_id()
@@ -2908,31 +2958,55 @@ impl AppState {
         };
         entry.lock().set_display_name(Some(name.clone()), is_custom);
         drop(entry);
-        self.emit_pty_event(AppEvent::SessionRenamed {
+        self.emit_dual(AppEvent::SessionRenamed {
             session_id: session_id.to_string(),
-            name: name.clone(),
+            name,
             is_custom,
         });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = self.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-renamed",
-                serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom }),
-            );
-        }
         true
     }
 
+    /// Dual-emitted through `emit_dual`: desktop `session-suspended` and the
+    /// bus carry the same `{record}` payload (`event_wire::event_payload`).
     pub(crate) fn notify_session_suspended(
         &self,
         record: &crate::suspended_sessions::SuspendedSession,
     ) {
-        self.emit_pty_event(AppEvent::SessionSuspended {
+        self.emit_dual(AppEvent::SessionSuspended {
             record: Box::new(record.clone()),
         });
+    }
+
+    /// Fire `event` on BOTH transports from ONE payload. There is no
+    /// bus→window forwarder for most events (`spawn_desktop_event_bridge` is
+    /// a narrow, explicit exception — see its doc comment), so every producer
+    /// must dual-emit explicitly. This is the one place that does it, so the
+    /// desktop and SSE/WS payloads cannot drift the way
+    /// `session-created`/`session-closed`/`session-standby`/`themes-changed`
+    /// all independently did before this existed.
+    ///
+    /// MUST branch on `pty_session_id()`, not call `emit_pty_event`
+    /// unconditionally: `emit_pty_event` unconditionally feeds the lossless
+    /// `session_state_events` lane (`state_rx` in
+    /// `spawn_session_state_accumulator`), which applies every event it
+    /// receives. That accumulator's *other* arm (the raw `event_bus`
+    /// subscription) also applies any event whose `pty_session_id()` is
+    /// `None`. A global event pushed through `emit_pty_event` would hit BOTH
+    /// arms — the lossless lane unconditionally, the broadcast arm because
+    /// its id is `None` — and get double-applied. Routing a global event
+    /// through a bare `event_bus.send` instead skips the lossless lane
+    /// entirely, so only the broadcast arm ever sees it.
+    pub(crate) fn emit_dual(&self, event: AppEvent) {
         #[cfg(feature = "desktop")]
-        if let Some(app) = self.app_handle.read().as_ref() {
-            let _ = app.emit("session-suspended", serde_json::json!({"record": record}));
+        if let Some(name) = crate::event_wire::window_event_name(&event)
+            && let Some(app) = self.app_handle.read().as_ref()
+        {
+            let _ = app.emit(name, crate::event_wire::event_payload(&event));
+        }
+        if event.pty_session_id().is_some() {
+            self.emit_pty_event(event); // per-session lane + per-session WS + bus
+        } else {
+            let _ = self.event_bus.send(event); // global — bus only
         }
     }
 }
@@ -3034,6 +3108,63 @@ impl AppState {
                 }),
             );
         }
+    }
+
+    /// Set a session's tab display name (`PUT /sessions/{id}/name`, or its
+    /// Tauri-command twin `set_session_name`). The single place both
+    /// transports' handlers call through, replacing the hand-duplicated
+    /// storage+guard logic that had drifted apart only in wrapper shape (not
+    /// substance) between `pty/commands.rs` and `mcp_http/session.rs`.
+    ///
+    /// Does NOT emit `session-renamed`: these renames start in the frontend
+    /// (see `AppEvent::SessionRenamed`'s doc comment), and emitting for them
+    /// would echo every name change straight back. Backend-originated renames
+    /// go through `rename_session_from_backend`, which does emit.
+    ///
+    /// Returns `false` when the session does not exist or nothing changed.
+    pub(crate) fn set_session_display_name(
+        &self,
+        session_id: &str,
+        name: Option<String>,
+        is_custom: bool,
+    ) -> bool {
+        let Some(entry) = self.session_maps.sessions.get(session_id) else {
+            return false;
+        };
+        let mut session = entry.lock();
+        if session.display_name == name && session.display_name_is_custom == is_custom {
+            return false;
+        }
+        session.set_display_name(name, is_custom);
+        true
+    }
+
+    /// Whether `session_id` counts as visible for standby and the watcher
+    /// engine's Unseen trigger. Reads the derived bool map that
+    /// `background_mode::hidden` maintains (desktop claim, any remote viewer's
+    /// claim, or a live stream watcher). A session with NO entry at all (no
+    /// viewer has ever reported) defaults to visible, like the watcher's own
+    /// `unwrap_or(true)`.
+    pub(crate) fn is_session_visible(&self, session_id: &str) -> bool {
+        self.session_maps
+            .session_visibility
+            .get(session_id)
+            .is_none_or(|visible| *visible)
+    }
+
+    /// Every live session `is_session_visible` currently answers `false` for
+    /// — the standby sweeper's iteration set. Walking every live session
+    /// (not just ones with a visibility entry) is what lets a session with
+    /// no entry at all correctly default to "visible" per
+    /// `is_session_visible`'s own doc comment, while still being excluded
+    /// here.
+    pub(crate) fn sessions_not_visible(&self) -> Vec<String> {
+        self.session_maps
+            .sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .filter(|session_id| !self.is_session_visible(session_id))
+            .collect()
     }
 
     /// Subscribe to lifecycle events for one PTY session. Subscription happens
@@ -4411,20 +4542,10 @@ impl AppState {
         self.session_maps
             .term_aliases
             .insert(session_id.to_string(), alias.clone());
-        self.emit_pty_event(AppEvent::TermAliasAssigned {
+        self.emit_dual(AppEvent::TermAliasAssigned {
             session_id: session_id.to_string(),
-            alias: alias.clone(),
+            alias,
         });
-        #[cfg(feature = "desktop")]
-        if let Some(ref app) = *self.app_handle.read() {
-            let _ = app.emit(
-                "term-alias-assigned",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "alias": alias,
-                }),
-            );
-        }
     }
 
     /// Find an existing prefix used by a session with the same repo name.
@@ -5440,6 +5561,50 @@ impl AppState {
         });
     }
 
+    /// Bus → desktop window forwarder, STRICT ALLOWLIST ONLY — never a
+    /// catch-all. Every other event is already dual-emitted at its own call
+    /// site (`emit_dual`); forwarding those too would double-deliver:
+    /// duplicate toasts, twice-applied state, and for an execution-triggering
+    /// event like `watcher-fire` (deliberately NOT on this allowlist), a
+    /// double-run agent.
+    ///
+    /// Allowlist: `UpstreamStatusChanged` — an event whose only producers
+    /// (`mcp_proxy::registry`) send straight to `event_bus` with no desktop
+    /// `app.emit` counterpart of their own. A single subscriber here covers
+    /// every existing and future producer, so there is no need to thread an
+    /// `AppHandle` through each one individually.
+    ///
+    /// Spawned from `spawn_background_tasks`, which runs before `app_handle`
+    /// is registered (`setup_app_state`'s desktop path) — that ordering is
+    /// fine: `emit` is read lazily off `self.app_handle` at forward time, so
+    /// anything published before the window exists is correctly dropped, not
+    /// queued.
+    #[cfg(feature = "desktop")]
+    pub(crate) fn spawn_desktop_event_bridge(state: Arc<AppState>) {
+        let mut rx = state.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event @ AppEvent::UpstreamStatusChanged { .. }) => {
+                        if let Some(app) = state.app_handle.read().as_ref() {
+                            let name = crate::event_wire::event_type_name(&event);
+                            let _ = app.emit(name, crate::event_wire::event_payload(&event));
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            source = "desktop_event_bridge",
+                            lagged = n,
+                            "Event bus lagged"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
     /// Publish `SessionStateChanged` for the session `event` just mutated, when
     /// the state a client renders actually moved.
     ///
@@ -5604,7 +5769,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } | AppEvent::PtyBell { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyBell { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
@@ -6208,7 +6373,16 @@ impl AppState {
             | AppEvent::WorktreeWarmProgress { .. }
             | AppEvent::WorktreeWarmCompleted { .. }
             // The setup-script outcome that follows the sync is repo-scoped too.
-            | AppEvent::WorktreeSetupScriptCompleted { .. } => {}
+            | AppEvent::WorktreeSetupScriptCompleted { .. }
+            // Standby is a process-signal (SIGSTOP/wake) that lives on
+            // `session_visibility`/the standby sweeper, not `SessionState`.
+            | AppEvent::SessionStandby { .. }
+            // The capture tap's own `session_filter` is the source of truth
+            // for who's being recorded; no `SessionState` field mirrors it.
+            | AppEvent::PtyCaptureChanged { .. }
+            | AppEvent::ThemesChanged
+            // Clipboard text is transient, never accumulated.
+            | AppEvent::PtyClipboardStore { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
@@ -6279,6 +6453,26 @@ pub(crate) struct PtyConfig {
     /// nothing was saved for it.
     #[serde(default)]
     pub(crate) restore_scrollback: bool,
+    /// Client-supplied session id — the desktop-transport twin of
+    /// `CreateSessionRequest::session_id`. Closes the same self-echo race the
+    /// HTTP path already closes (see that field's doc comment): a Tauri
+    /// `app.emit("session-created", ...)` can be delivered before the
+    /// originating `invoke()` call resolves, so the frontend pre-registers an
+    /// id and this field lets the backend honor it instead of minting a new
+    /// one the frontend would treat as a second, duplicate tab.
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
+    /// The creator's chosen initial tab name, propagated once at creation
+    /// time so every other client displays the exact same string instead of
+    /// independently inventing its own default (`nextDefaultName()`, a
+    /// branch-label, etc.) — see `AGENTS.md`'s IPC/HTTP Parity notes on
+    /// naming convergence.
+    #[serde(default)]
+    pub(crate) display_name: Option<String>,
+    /// Whether `display_name` above is a user's explicit rename rather than a
+    /// frontend-computed default. Mirrors `PtySession.display_name_is_custom`.
+    #[serde(default)]
+    pub(crate) display_name_is_custom: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -6546,6 +6740,116 @@ mod tests {
                 kind: ProgressKind::Normal,
                 value: Some(42)
             }
+        );
+    }
+
+    // ── B.8 ported onto main's `background_mode::hidden` model (decision 8):
+    // per-remote-viewer claims, bounded ──
+
+    use crate::background_mode::hidden::{LEGACY_VIEWER_ID, set_visible, set_visible_for_viewer};
+
+    #[test]
+    fn two_remote_viewers_keep_a_session_visible_when_one_goes_false() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        set_visible_for_viewer(&state, "s1", true, false, "browser-a");
+        set_visible_for_viewer(&state, "s1", true, false, "browser-b");
+
+        set_visible_for_viewer(&state, "s1", false, false, "browser-b");
+
+        assert!(
+            state.is_session_visible("s1"),
+            "the other remote viewer's own claim must keep the session visible"
+        );
+        assert!(!state.sessions_not_visible().contains(&"s1".to_string()));
+
+        set_visible_for_viewer(&state, "s1", false, false, "browser-a");
+        assert!(!state.is_session_visible("s1"));
+        assert!(state.sessions_not_visible().contains(&"s1".to_string()));
+    }
+
+    #[test]
+    fn a_remote_blur_never_hides_a_session_the_desktop_shows() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        set_visible(&state, "s1", true, true);
+        set_visible_for_viewer(&state, "s1", true, false, "browser");
+
+        set_visible_for_viewer(&state, "s1", false, false, "browser");
+
+        assert!(
+            state.is_session_visible("s1"),
+            "the desktop's own claim must keep the session visible"
+        );
+    }
+
+    #[test]
+    fn a_session_no_viewer_ever_focused_is_never_swept() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        // No session_visibility entry at all for "s1".
+
+        assert!(
+            state.is_session_visible("s1"),
+            "no entry defaults to visible, matching the pre-B.8 sweeper behavior"
+        );
+        assert!(!state.sessions_not_visible().contains(&"s1".to_string()));
+    }
+
+    #[test]
+    fn a_legacy_client_with_no_viewer_id_still_works() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+
+        set_visible_for_viewer(&state, "s1", true, false, LEGACY_VIEWER_ID);
+        assert!(state.is_session_visible("s1"));
+
+        set_visible_for_viewer(&state, "s1", false, false, LEGACY_VIEWER_ID);
+        assert!(!state.is_session_visible("s1"));
+        assert!(crate::background_mode::hidden::remote_viewers_for_test(&state, "s1").is_empty());
+    }
+
+    /// Security review, 2026-09-21: `viewer_id` is client-supplied and
+    /// unvalidated — an oversized one must be silently ignored, not stored.
+    #[test]
+    fn set_session_visible_ignores_an_oversized_viewer_id() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        let oversized = "x".repeat(1000);
+
+        set_visible_for_viewer(&state, "s1", true, false, &oversized);
+
+        assert!(
+            crate::background_mode::hidden::remote_viewers_for_test(&state, "s1").is_empty(),
+            "an oversized viewer_id must never be stored"
+        );
+    }
+
+    /// Security review, 2026-09-21: without a per-session cap, a client
+    /// calling `visible:true` with a fresh random `viewer_id` every time
+    /// grows this session's viewer map without bound for the life of the
+    /// session.
+    #[test]
+    fn set_session_visible_caps_the_number_of_viewers_per_session() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+
+        for i in 0..1000 {
+            set_visible_for_viewer(&state, "s1", true, false, &format!("viewer-{i}"));
+        }
+
+        let viewers = crate::background_mode::hidden::remote_viewers_for_test(&state, "s1");
+        assert!(
+            viewers.len() <= 16,
+            "remote viewer claims must stay bounded regardless of how many distinct \
+             viewer_ids a client supplies, got {} entries",
+            viewers.len()
+        );
+        // The most recent claim must survive eviction — only the oldest
+        // entries are dropped to make room.
+        assert!(
+            viewers.iter().any(|v| v == "viewer-999"),
+            "the most recently asserted viewer must not be the one evicted"
         );
     }
 
@@ -8013,6 +8317,8 @@ mod tests {
     }
 
     /// Catches: title animation re-stamps semantic activity or enters the lossless state queue.
+    /// (Retargeted from main's `PtyTitle` event, deleted by the backend OSC-title
+    /// move: an animated title now reaches clients as `SessionRenamed`.)
     #[test]
     fn remote_title_keeps_semantic_activity_and_state_queue_unchanged() {
         let state = Arc::new(tests_support::make_test_app_state());
@@ -8024,14 +8330,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        let event = AppEvent::PtyTitle {
+        let event = AppEvent::SessionRenamed {
             session_id: "title-session".into(),
-            title: "Claude Code".into(),
+            name: "Claude Code".into(),
+            is_custom: false,
         };
         let mut bus = state.event_bus.subscribe();
         let before = state.session_maps.session_state_events.depth();
         state.emit_pty_event(event.clone());
-        assert!(matches!(bus.try_recv().unwrap(), AppEvent::PtyTitle { .. }));
+        assert!(matches!(bus.try_recv().unwrap(), AppEvent::SessionRenamed { .. }));
         assert_eq!(state.session_maps.session_state_events.depth(), before);
         AppState::apply_event_to_session_state(&state, &event);
         let session = state
@@ -8136,6 +8443,7 @@ mod tests {
         state.emit_pty_event(AppEvent::SessionClosed {
             session_id: "s".to_string(),
             reason: "process_exit".to_string(),
+            agent_type: None,
         });
         // Simulate cleanup_session/tombstone_transient_cleanup dropping the sender.
         state.session_maps.pty_event_channels.remove("s");

@@ -113,7 +113,7 @@ fn session_removal_reaps_child_that_exits_after_first_poll() {
         };
         let (mut input, waited, pid) = insert_gated_child(&state, sid);
         if explicit_close {
-            cleanup_session(sid, &state);
+            cleanup_session(sid, &state, "closed");
         } else {
             mark_session_exited(sid, &state);
         }
@@ -207,7 +207,7 @@ fn linux_glibc_session_payload_release_returns_scrollback_pages() {
             reap_tombstones(&state, &ids);
         } else {
             for id in &ids {
-                cleanup_session(id, &state);
+                cleanup_session(id, &state, "closed");
             }
         }
         assert_eq!(state.grid.vt_log_buffers.len(), 1);

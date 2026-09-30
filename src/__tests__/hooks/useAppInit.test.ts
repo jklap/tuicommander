@@ -10,7 +10,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
-import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { type AppInitDeps, initApp, locallyCreatedSessions } from "../../hooks/useAppInit";
 import { notificationManager } from "../../notifications";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
@@ -26,10 +26,13 @@ import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { savedTerminalsFor, type WorkspaceState } from "../../stores/workspaceIdentity";
 import * as transport from "../../transport";
 import egoAwaiting2103 from "../fixtures/ego-awaiting-2103.json";
 import { makeTerminal, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
+
+const savedOf = (workspace: WorkspaceState | undefined) => (workspace ? savedTerminalsFor(workspace) : []);
 
 function resetStores() {
 	activityStore.clearAll();
@@ -322,6 +325,22 @@ describe("initApp", () => {
 		];
 		for (const [, message] of [...errors.mock.calls, ...warnings.mock.calls])
 			expect(expectedFixtureErrors).toContain(message);
+	});
+
+	// Only a tab switch asserted visibility (B.8), so a remote tab the user kept
+	// looking at aged out of the remote-activity grace and could be parked.
+	it("re-asserts the active session's visibility on the 30 s snapshot timer", async () => {
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-visible" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String) }),
+		);
 	});
 
 	it("logs the navigation type and document start at each initialization", async () => {
@@ -1691,26 +1710,31 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
 			lastActiveTerminal: "term-800",
-			savedTerminals: [
-				{
-					frontendId: "term-800",
-					sessionId: "live",
-					tuicSession: "stable-live",
-					name: "Live",
-					cwd: "/repo",
-					fontSize: 16,
-					agentType: "codex",
+			savedTerminalsByClient: {
+				test: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-800",
+							sessionId: "live",
+							tuicSession: "stable-live",
+							name: "Live",
+							cwd: "/repo",
+							fontSize: 16,
+							agentType: "codex",
+						},
+						{
+							frontendId: "term-801",
+							tuicSession: "stable-suspended",
+							name: "Suspended",
+							cwd: "/repo",
+							fontSize: 14,
+							agentType: "codex",
+							suspended: true,
+						},
+					],
 				},
-				{
-					frontendId: "term-801",
-					tuicSession: "stable-suspended",
-					name: "Suspended",
-					cwd: "/repo",
-					fontSize: 14,
-					agentType: "codex",
-					suspended: true,
-				},
-			],
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1757,9 +1781,21 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
 			lastActiveTerminal: "term-880",
-			savedTerminals: [
-				{ frontendId: "term-880", agentType: null, sessionId: "race-live", name: "Live", cwd: "/repo", fontSize: 18 },
-			],
+			savedTerminalsByClient: {
+				test: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-880",
+							agentType: null,
+							sessionId: "race-live",
+							name: "Live",
+							cwd: "/repo",
+							fontSize: 18,
+						},
+					],
+				},
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1794,17 +1830,22 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setWorkspace("/repo", "paused", {
 			worktreePath: "/repo-paused",
-			savedTerminals: [
-				{
-					frontendId: "term-890",
-					agentType: null,
-					tuicSession: "paused-peer",
-					name: "Paused",
-					cwd: "/repo-paused",
-					fontSize: 14,
-					suspended: true,
+			savedTerminalsByClient: {
+				test: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-890",
+							agentType: null,
+							tuicSession: "paused-peer",
+							name: "Paused",
+							cwd: "/repo-paused",
+							fontSize: 14,
+							suspended: true,
+						},
+					],
 				},
-			],
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1831,14 +1872,19 @@ describe("initApp", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
-			savedTerminals: [
-				{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
-			],
+			savedTerminalsByClient: {
+				test: {
+					savedAt: Date.now(),
+					terminals: [
+						{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
+					],
+				},
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		const deps = createMockDeps({
 			handleBranchSelect: vi.fn().mockImplementation(async () => {
-				expect(repositoriesStore.get("/repo")?.workspaces.main.savedTerminals).toEqual([]);
+				expect(savedOf(repositoriesStore.get("/repo")?.workspaces.main)).toEqual([]);
 				expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toContain("term-891");
 			}),
 		});
@@ -2158,8 +2204,9 @@ describe("initApp", () => {
 		window.dispatchEvent(new Event("beforeunload"));
 
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
-		expect(branch?.savedTerminals?.length).toBe(1);
-		expect(branch?.savedTerminals?.[0].agentSessionId).toBe("abc-123-uuid");
+		const saved = branch ? savedTerminalsFor(branch) : [];
+		expect(saved.length).toBe(1);
+		expect(saved[0].agentSessionId).toBe("abc-123-uuid");
 	});
 
 	// The flag is what keeps a suspended tab suspended across a restart; a snapshot that
@@ -2180,7 +2227,8 @@ describe("initApp", () => {
 		terminalsStore.update(terminalsStore.getIds()[0], { suspended: true });
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		const savedBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+		const saved = savedBranch ? savedTerminalsFor(savedBranch)[0] : undefined;
 		expect(saved?.suspended).toBe(true);
 	});
 
@@ -2200,8 +2248,9 @@ describe("initApp", () => {
 		window.dispatchEvent(new Event("beforeunload"));
 
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
-		expect(branch?.savedTerminals?.length).toBe(1);
-		expect(branch?.savedTerminals?.[0].agentSessionId).toBeNull();
+		const saved = branch ? savedTerminalsFor(branch) : [];
+		expect(saved.length).toBe(1);
+		expect(saved[0].agentSessionId).toBeNull();
 	});
 
 	it("snapshots the intent and a truncated prompt so a restored tab can say what it was doing", async () => {
@@ -2225,7 +2274,8 @@ describe("initApp", () => {
 
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		const savedBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+		const saved = savedBranch ? savedTerminalsFor(savedBranch)[0] : undefined;
 		expect(saved?.agentIntent).toBe("finishing the resume banner");
 		expect(saved?.lastPrompt).toBe("x".repeat(300));
 	});
@@ -2247,9 +2297,10 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals;
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const saved = branch ? savedTerminalsFor(branch) : [];
 			expect(saved).toHaveLength(1);
-			expect(saved?.[0].agentType).toBeNull();
+			expect(saved[0].agentType).toBeNull();
 		});
 
 		it("carries tuicSession and agentLaunchCommand through the snapshot", async () => {
@@ -2271,7 +2322,8 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const saved = branch ? savedTerminalsFor(branch)[0] : undefined;
 			expect(saved?.tuicSession).toBe("tuic-abc");
 			expect(saved?.agentLaunchCommand).toBe("c --model opus");
 		});
@@ -2291,8 +2343,10 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toHaveLength(1);
-			expect(repositoriesStore.get("/repo")?.workspaces["empty-branch"]?.savedTerminals).toBeUndefined();
+			const mainBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const emptyBranch = repositoriesStore.get("/repo")?.workspaces["empty-branch"];
+			expect(mainBranch ? savedTerminalsFor(mainBranch) : []).toHaveLength(1);
+			expect(emptyBranch ? savedTerminalsFor(emptyBranch) : []).toHaveLength(0);
 		});
 
 		it("flushes activityStore, uiStore, and paneLayoutStore before snapshotting", async () => {
@@ -2326,9 +2380,110 @@ describe("initApp", () => {
 			});
 			await initApp(deps);
 
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toBeUndefined();
+			const branchBefore = repositoriesStore.get("/repo")?.workspaces["main"];
+			expect(branchBefore ? savedTerminalsFor(branchBefore) : []).toHaveLength(0);
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toHaveLength(1);
+			const branchAfter = repositoriesStore.get("/repo")?.workspaces["main"];
+			expect(branchAfter ? savedTerminalsFor(branchAfter) : []).toHaveLength(1);
+		});
+	});
+
+	describe("listActiveSessions failure handling (B.7)", () => {
+		it("a failed initial fetch leaves existing terminals alone and skips eager adoption", async () => {
+			// Pre-existing terminal from BEFORE this initApp call — the exact
+			// state B.7 protects: a transient failure must not wipe it.
+			const preExistingId = terminalsStore.add({
+				sessionId: "pre-existing-session",
+				fontSize: 14,
+				name: "Pre-existing",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+
+			// Not wiped, and not clobbered by an eager (nonexistent) adopt pass.
+			expect(terminalsStore.get(preExistingId)?.sessionId).toBe("pre-existing-session");
+			expect(terminalsStore.get(preExistingId)?.name).toBe("Pre-existing");
+
+			// Drain the background retry loop (always-rejecting mock exhausts all
+			// three delays) so it doesn't leak a dangling promise into later tests.
+			await vi.advanceTimersByTimeAsync(1_000 + 3_000 + 9_000);
+		});
+
+		it("an authoritative empty list still clears stale terminals (distinct from the failure case)", async () => {
+			const staleId = terminalsStore.add({
+				sessionId: "stale-session",
+				fontSize: 14,
+				name: "Stale",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+
+			expect(terminalsStore.get(staleId)).toBeUndefined();
+		});
+
+		it("recovers via retry once listActiveSessions succeeds after an initial failure", async () => {
+			const preExistingId = terminalsStore.add({
+				sessionId: "will-be-replaced",
+				fontSize: 14,
+				name: "Pre-existing",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const listActiveSessions = vi
+				.fn()
+				.mockRejectedValueOnce(new Error("ECONNREFUSED"))
+				.mockResolvedValueOnce([{ session_id: "recovered-session", cwd: "/repo" }]);
+			const deps = createMockDeps({
+				pty: { listActiveSessions, close: vi.fn().mockResolvedValue(undefined) },
+			});
+
+			await initApp(deps);
+			// Immediately after init: the failure path, terminal left alone, no
+			// adoption yet.
+			expect(terminalsStore.get(preExistingId)?.sessionId).toBe("will-be-replaced");
+
+			// First retry delay (1s) — the mock now resolves.
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			// The stale pre-existing terminal (no real backend session) is pruned,
+			// and the recovered session is adopted as a fresh tab.
+			expect(terminalsStore.get(preExistingId)).toBeUndefined();
+			const recoveredId = terminalsStore.getTerminalForSession("recovered-session");
+			expect(recoveredId).toBeTruthy();
+		});
+
+		it("toasts once all retries are exhausted", async () => {
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+			// 1s + 3s + 9s
+			await vi.advanceTimersByTimeAsync(1_000 + 3_000 + 9_000);
+
+			expect(toastsStore.toasts.some((toast) => toast.level === "error")).toBe(true);
 		});
 	});
 
@@ -2360,7 +2515,7 @@ describe("initApp", () => {
 		expect(closeDialogStore.state.request).toEqual({ kind: "ask", sessions: 17 });
 	});
 
-	it("beforeunload closes browser-created PTY sessions", async () => {
+	it("beforeunload never closes a PTY session, on either transport (B.4)", async () => {
 		const closeSpy = vi.fn().mockResolvedValue(undefined);
 		const deps = createMockDeps({
 			pty: {
@@ -2370,19 +2525,22 @@ describe("initApp", () => {
 		});
 
 		await initApp(deps);
+		locallyCreatedSessions.add("sess-1");
 
-		// Register sess-1 as browser-created (beforeunload only closes these)
-		browserCreatedSessions.add("sess-1");
-
-		// Temporarily disable Tauri flag — beforeunload only closes in browser mode
+		// Browser transport: a plain page refresh (F5) fires this exact event —
+		// it must not kill the shared backend PTY the tab created.
 		const saved = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 		delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
-
 		window.dispatchEvent(new Event("beforeunload"));
-		expect(closeSpy).toHaveBeenCalledWith("sess-1");
-
+		expect(closeSpy).not.toHaveBeenCalled();
 		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = saved;
-		browserCreatedSessions.delete("sess-1");
+
+		// Desktop transport: same event, same non-effect — a webview reload
+		// (Vite HMR, manual reload) must not kill live sessions either.
+		window.dispatchEvent(new Event("beforeunload"));
+		expect(closeSpy).not.toHaveBeenCalled();
+
+		locallyCreatedSessions.delete("sess-1");
 	});
 
 	it("removes splash screen after hydration", async () => {

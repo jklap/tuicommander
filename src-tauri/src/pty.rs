@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
@@ -70,6 +71,65 @@ const WATCHER_BATCH_CAP: usize = 256 * 1024;
 /// rendered at second resolution and a boolean unread flag that latches on the
 /// first pulse.
 const ACTIVITY_PULSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The ONLY way to announce a new session. Every creation path calls this —
+/// `create_pty`/`create_pty_with_worktree` (`pty/commands.rs`),
+/// `register_pty_session` (`mcp_http::session`, itself shared by
+/// `spawn_pty_session`, the HTTP agent-spawn route, and MCP `agent
+/// action=spawn` — the latter publishes bus-only for a print-mode spawn), and
+/// `agent::spawn_agent`.
+///
+/// It must be the FIRST session-scoped announcement for a new id: anything
+/// else (`assign_term_alias`, an accent color, an initial rename) goes after.
+///
+/// `agent_type` MUST be the exact same value the caller's own
+/// `session_states` insert used (see `apply_event_to_session_state`'s
+/// `SessionCreated` arm, `state.rs`, which unconditionally overwrites
+/// `agent_type` from this event on the entry it just created/updated) — a
+/// caller that presets `agent_type` locally and then emits `None` here wipes
+/// its own preset.
+pub(crate) fn emit_session_created(
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<String>,
+    agent_type: Option<String>,
+    display_name: Option<String>,
+    parent_session: Option<String>,
+) {
+    state.emit_dual(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.to_string(),
+        // The live caller identity, so a new tab can match its caller's worktree
+        // declaration without waiting for a reconnect.
+        tuic_session: crate::mcp_http::session::live_tuic_sessions_by_pty(state).remove(session_id),
+        cwd,
+        agent_type,
+        display_name,
+        parent_session,
+    });
+}
+
+/// The ONLY way to announce a closed session. Every close path calls this —
+/// `close_pty_core`, `kill_pty_core`, `cleanup_session`, and the reader
+/// thread's own EOF handling.
+///
+/// Reads `agent_type` from `session_states` BEFORE building/sending the
+/// event, not after: the accumulator's own `SessionClosed` arm removes that
+/// entry the moment this event is applied, so a read that happens after
+/// `emit_dual` returns can already find nothing there. This ordering is what
+/// fixes the historical case where the reader-thread's EOF path "usually"
+/// reported `agent_type: None`.
+pub(crate) fn emit_session_closed(state: &AppState, session_id: &str, reason: &str) {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    state.emit_dual(crate::state::AppEvent::SessionClosed {
+        session_id: session_id.to_string(),
+        reason: reason.to_string(),
+        agent_type,
+    });
+}
 
 /// Tell this session's frontends that output is flowing. Payload-free by design
 /// — see [`ACTIVITY_PULSE_WINDOW`].
@@ -1493,6 +1553,14 @@ struct ChunkProcessor {
     /// Tracks whether the terminal is in alternate screen buffer mode.
     /// Set on ESC[?1049h, cleared on ESC[?1049l.
     pub(crate) in_alt_buffer: bool,
+    /// Mirrors `vt.is_alternate_screen()` (the real parsed `Term::mode()`
+    /// state, backed by `swap_alt()`) — NOT the same signal as
+    /// `in_alt_buffer` above, which scans raw bytes for `1049h`/`1049l` and
+    /// can theoretically desync (a split escape sequence, a `1047`/`47`
+    /// variant). Used only to edge-detect a real alt-screen swap so
+    /// `pending_scroll` can be cleared on the transition — see that field's
+    /// doc comment and the call site in `process_chunk`.
+    last_grid_alt_screen: bool,
     /// Structured terminal mode with nesting depth and app detection.
     terminal_mode: crate::ai_agent::tui_detect::TerminalMode,
     /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
@@ -1541,6 +1609,14 @@ struct ChunkProcessor {
     codex_approval_question: Option<String>,
     /// A cancellation row painted since the current Codex approval began.
     codex_approval_canceled: bool,
+    /// The display name to restore an OSC title to, once captured — see
+    /// `osc_title::apply_osc_title`'s doc comment for why this is
+    /// `Option<Option<String>>` rather than a plain `Option<String>` (outer
+    /// `None` = not yet captured; `Some(None)` = captured, and the base was
+    /// itself no name). Lives exactly as long as the PTY (this struct is
+    /// constructed once per session), so it needs no teardown reap.
+    #[allow(clippy::option_option)] // deliberate 3-state disambiguation, see doc comment above
+    osc_title_base: Option<Option<String>>,
     /// Reusable screen snapshot handed to the post-lock consumers
     /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
     /// check and `rearm_awaiting_for_open_dialog`). Retained across chunks so
@@ -1645,6 +1721,7 @@ impl ChunkProcessor {
             emitted_planfiles: std::collections::HashSet::new(),
             gaveup_planfiles: std::collections::HashSet::new(),
             in_alt_buffer: false,
+            last_grid_alt_screen: false,
             terminal_mode: crate::ai_agent::tui_detect::TerminalMode::Shell,
             last_vt_log_total: 0,
             alt_screen_warned: false,
@@ -1658,6 +1735,7 @@ impl ChunkProcessor {
             title_awaiting: false,
             codex_approval_question: None,
             codex_approval_canceled: false,
+            osc_title_base: None,
             screen_buf: Vec::new(),
             #[cfg(test)]
             after_identity_sample: None,
@@ -2054,6 +2132,24 @@ impl ChunkProcessor {
                     kitty_pending_jobs,
                 )
             };
+
+            // A wheel/scrollbar gesture computes its target against whichever
+            // grid is active when the gesture fires, but `pending_scroll` is
+            // consumed asynchronously by the frame ticker on its next tick —
+            // if `swap_alt()` (entering/exiting an app's alternate screen,
+            // e.g. launching or quitting Claude Code) lands in between, that
+            // stale target gets clamped against and applied to the NEW grid,
+            // landing the view short of true bottom by whatever the clamp
+            // allows. Clear it on every real alt-screen transition so a
+            // leftover gesture from the old grid is discarded instead of
+            // replayed. Lock-free by design (see `pending_scroll`'s doc
+            // comment) — deliberately done outside the `vt_log` lock above.
+            clear_pending_scroll_on_alt_screen_transition(
+                &state.grid.pending_scroll,
+                session_id,
+                alt_screen,
+                &mut self.last_grid_alt_screen,
+            );
 
             // CPR/DSR/DA1 replies (`device_status`/`identify_terminal` in the
             // alacritty fork's Handler impl) are latency-sensitive: a pager
@@ -2461,14 +2557,16 @@ impl ChunkProcessor {
                             "PtyWrite reached the deferred event loop instead of being flushed early");
                     }
                     TermEvent::Title(title) => {
-                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
-                            session_id: session_id.to_string(),
-                            title: title.clone(),
-                        });
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-title-{session_id}"), &title);
-                        }
+                        // Both transports now converge on one display name —
+                        // see osc_title.rs's module doc comment for why this
+                        // used to be a desktop-only app.emit with no bus arm
+                        // and no write to PtySession.display_name anywhere.
+                        crate::osc_title::apply_osc_title(
+                            state,
+                            session_id,
+                            Some(&title),
+                            &mut self.osc_title_base,
+                        );
                         // Some agents signal an awaiting-approval permission prompt by
                         // putting "Action Required" in their OSC 0 title (grok prefixes
                         // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …";
@@ -2497,21 +2595,24 @@ impl ChunkProcessor {
                         self.title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle => {
-                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
-                            session_id: session_id.to_string(),
-                            title: String::new(),
-                        });
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-title-{session_id}"), "");
-                        }
+                        crate::osc_title::apply_osc_title(
+                            state,
+                            session_id,
+                            None,
+                            &mut self.osc_title_base,
+                        );
                         self.title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
-                        }
+                        // Was a suffixed desktop-only `app.emit` with no bus
+                        // arm at all (D.7) — a browser/PWA client never saw
+                        // an OSC 52 clipboard-store. Converted to the
+                        // unsuffixed `PtyClipboardStore` variant so it can
+                        // ride SSE/WS like every other session-scoped event.
+                        state.emit_dual(crate::state::AppEvent::PtyClipboardStore {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        });
                     }
                     TermEvent::RequestFocus => {
                         if state.config.read().osc1337_focus_attention {
@@ -5150,6 +5251,17 @@ pub(crate) fn spawn_reader_thread(
                 drop(batch);
             }
 
+            // Restore an OSC-title-overwritten name to its captured base
+            // before announcing the exit and the close — see
+            // `osc_title::restore_base_on_exit`'s doc comment. This is what
+            // makes step C.1.5 (the ported frontend's own exit-time
+            // restore) work on every transport instead of only desktop. It
+            // must precede `PtyExit`, not just `session-closed`: a tab drops
+            // its `sessionId` on exit (Terminal.tsx), so a rename that lands
+            // after the exit frame (desktop `pty-exit-{id}`, or the remote
+            // per-session WS `exit` frame, which also disposes the socket)
+            // finds no tab to apply to.
+            crate::osc_title::restore_base_on_exit(&state, &session_id, &processor.osc_title_base);
             state.emit_pty_event(crate::state::AppEvent::PtyExit {
                 session_id: session_id.clone(),
             });
@@ -5161,26 +5273,7 @@ pub(crate) fn spawn_reader_thread(
                 );
             }
             tracing::info!(source = "pty", session_id = %session_id, "Session closed: process exited");
-            state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                session_id: session_id.clone(),
-                reason: "process_exit".to_string(),
-            });
-            #[cfg(feature = "desktop")]
-            if let Some(app) = state.app_handle.read().as_ref() {
-                let agent_type = state
-                    .session_maps
-                    .session_states
-                    .get(&session_id)
-                    .and_then(|s| s.agent_type.clone());
-                let _ = app.emit(
-                    "session-closed",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "reason": "process_exit",
-                        "agent_type": agent_type,
-                    }),
-                );
-            }
+            emit_session_closed(&state, &session_id, "process_exit");
 
             mark_session_exited(&session_id, &state);
         })); // end catch_unwind
@@ -5249,6 +5342,83 @@ fn desktop_grid_visible(state: &AppState, session_id: &str) -> bool {
         .channels
         .get(session_id)
         .is_some_and(|ch| ch.visible.load(Ordering::Relaxed))
+}
+
+/// Discard a pending coalesced scroll target on a real alt-screen transition.
+///
+/// `current_alt_screen` is `vt.is_alternate_screen()` for the chunk just
+/// processed; `last_alt_screen` is the caller's own tracking of the previous
+/// chunk's value (updated in place). A target left in `pending_scroll` was
+/// computed against whichever grid was active when the gesture fired — if
+/// `swap_alt()` (`patches/alacritty_terminal`) swaps to a different grid with
+/// its own independent `display_offset`/history before the frame ticker
+/// consumes it, applying that stale target lands the view short of the new
+/// grid's true bottom. See `pending_scroll`'s doc comment in `state.rs`.
+fn clear_pending_scroll_on_alt_screen_transition(
+    pending_scroll: &DashMap<String, Arc<AtomicI64>>,
+    session_id: &str,
+    current_alt_screen: bool,
+    last_alt_screen: &mut bool,
+) {
+    if current_alt_screen != *last_alt_screen {
+        if let Some(slot) = pending_scroll.get(session_id) {
+            slot.store(-1, Ordering::Relaxed);
+        }
+        *last_alt_screen = current_alt_screen;
+    }
+}
+
+#[cfg(test)]
+mod pending_scroll_alt_screen_tests {
+    use super::{AtomicI64, Ordering, clear_pending_scroll_on_alt_screen_transition};
+    use dashmap::DashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn clears_on_transition_into_alt_screen() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(42)));
+        let mut last = false;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", true, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), -1);
+        assert!(last);
+    }
+
+    #[test]
+    fn clears_on_transition_out_of_alt_screen() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(7)));
+        let mut last = true;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", false, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), -1);
+        assert!(!last);
+    }
+
+    #[test]
+    fn leaves_pending_target_alone_when_state_is_unchanged() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        map.insert("s1".to_string(), Arc::new(AtomicI64::new(99)));
+        let mut last = true;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "s1", true, &mut last);
+
+        assert_eq!(map.get("s1").unwrap().load(Ordering::Relaxed), 99);
+        assert!(last);
+    }
+
+    #[test]
+    fn missing_session_never_panics() {
+        let map: DashMap<String, Arc<AtomicI64>> = DashMap::new();
+        let mut last = false;
+
+        clear_pending_scroll_on_alt_screen_transition(&map, "does-not-exist", true, &mut last);
+
+        assert!(last);
+    }
 }
 
 /// Is anyone waiting for this session's grid frames?

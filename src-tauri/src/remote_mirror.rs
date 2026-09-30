@@ -159,14 +159,20 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// does not exist here. The allowed notices are session-scoped and idempotent
 /// against a session this client already knows about — the badge push, and the
 /// close that retires it, Progress/workflow receipts, and labelled MCP toasts.
+/// `session-renamed`/`session-accent-color-changed` are in that class too: the
+/// daemon applies OSC titles itself (`osc_title.rs`), so without them a remote
+/// tab would keep its spawn name forever; both listeners (`useAppInit.ts`) only
+/// touch a tab already bound to that session id.
 /// Everything else still reaches the local bus, where
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 16] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 18] = [
     "session-state-changed",
     "settings-changed",
     "session-closed",
+    "session-renamed",
+    "session-accent-color-changed",
     "progress-recorded",
     "workflow-run-changed",
     "mcp-toast",
@@ -332,11 +338,52 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
             patch_state(state, connection_id, &payload);
             false
         }
+        "session-renamed" | "session-accent-color-changed" => {
+            patch_presentation(state, connection_id, &frame.event, &payload);
+            false
+        }
         "session-created" | "session-closed" | "pty-exit" => true,
         _ => false,
     };
     republish(state, connection_id, &frame.event, payload);
     reseed
+}
+
+/// Keep a mirrored row's tab name / accent color in step with the push that
+/// just went out, so the next `list_active_sessions` (a reseed) does not hand
+/// back the stale spawn name.
+fn patch_presentation(
+    state: &Arc<AppState>,
+    connection_id: &str,
+    event: &str,
+    payload: &serde_json::Value,
+) {
+    let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(mut rows) = state.remote_sessions.by_connection.get_mut(connection_id) else {
+        return;
+    };
+    let Some(row) = rows.get_mut(session_id) else {
+        return;
+    };
+    match event {
+        "session-renamed" => {
+            if let Some(name) = payload.get("name").and_then(|v| v.as_str()) {
+                row.display_name = Some(name.to_string());
+                row.display_name_is_custom = payload
+                    .get("is_custom")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            }
+        }
+        _ => {
+            row.accent_color = payload
+                .get("color")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
+    }
 }
 
 /// Move a mirrored row's state, so the next `list_active_sessions` agrees with
@@ -866,6 +913,8 @@ mod tests {
         for event in [
             "session-state-changed",
             "session-closed",
+            "session-renamed",
+            "session-accent-color-changed",
             "progress-recorded",
             "workflow-run-changed",
             "review-progress",
@@ -937,6 +986,63 @@ mod tests {
             rx.try_recv().is_err(),
             "a disconnected question must not reappear"
         );
+    }
+
+    // Catches: a daemon-applied OSC title (or its exit restore) never reaches the
+    // desktop window, so a remote tab keeps its spawn name; or a reseed hands the
+    // stale name back because the mirrored row was not patched.
+    #[test]
+    fn remote_rename_and_accent_reach_window_and_patch_the_mirrored_row() {
+        let state = Arc::new(make_test_app_state());
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        store_seed(
+            &state,
+            "vps",
+            vec![SessionInfo {
+                session_id: "pty-1".into(),
+                display_name: Some("spawn-name".into()),
+                ..Default::default()
+            }],
+        );
+        let mut rx = state.event_bus.subscribe();
+        let reseed = apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "session-renamed".into(),
+                data: r#"{"session_id":"pty-1","name":"Claude Code","is_custom":false}"#.into(),
+            },
+        );
+        assert!(!reseed, "a rename is applied in place, not by reseeding");
+        let AppEvent::RemoteMirrored { event, payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing mirrored rename");
+        };
+        assert_eq!(event, "session-renamed");
+        assert!(
+            window_may_hear(&event),
+            "the window listener applies it to the tab"
+        );
+        assert_eq!(payload["session_id"], "pty-1");
+        assert_eq!(payload["name"], "Claude Code");
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "session-accent-color-changed".into(),
+                data: r##"{"session_id":"pty-1","color":"#ff0000"}"##.into(),
+            },
+        );
+        let AppEvent::RemoteMirrored { event, .. } = rx.try_recv().unwrap() else {
+            panic!("missing mirrored accent color");
+        };
+        assert!(window_may_hear(&event));
+        let rows = state.remote_sessions.by_connection.get("vps").unwrap();
+        let row = rows.get("pty-1").unwrap();
+        assert_eq!(row.display_name.as_deref(), Some("Claude Code"));
+        assert!(!row.display_name_is_custom);
+        assert_eq!(row.accent_color.as_deref(), Some("#ff0000"));
     }
 
     // Catches: mcp-toast is excluded from the window, loses its sound/level,

@@ -356,6 +356,35 @@ it too. When adding a new per-agent disk-config field read inside `build_mcp_ins
 audit every existing test that passes a Claude-family `client_name` and add the annotation
 where it's missing — don't assume "I didn't touch that test" means it's safe.
 
+**`load_agents_config()` itself is now cached (2026-09-24), fixing a real CPU/latency bug: it
+was called — with a full uncached locked read + JSON parse of `agents.json`, plus the codex-bypass
+migration's stamp-file check — from
+`osc_title::should_skip` on every OSC 0/2 title repaint for any session with an active agent
+intent, and some agents repaint their title at ~8Hz+.** The cache (`AGENTS_CONFIG_CACHE` in
+`config.rs`) is keyed on `(path, mtime, len)`, not on `CONFIG_DIR_OVERRIDE` directly — a cache
+hit requires the exact same resolved path AND an unchanged mtime/len. This does not reintroduce
+the cross-test hazard described above: two sequential tests sharing the exact same literal path
+only share a stale cache entry if the file's content is *also* actually the same, which is the
+correct (not stale) result anyway. Regression test:
+`load_agents_config_picks_up_a_second_write_not_a_stale_cache`.
+
+**mtime/len alone is not quite enough for this process's OWN writes — `save_agents_config` also
+explicitly clears the cache on every successful save.** A code-review pass caught the gap:
+two writes landing within the same filesystem mtime tick (a coarse-mtime mount, or simply two
+writes fast enough to share a tick) that happen to produce equal-length JSON collide on
+`(mtime, len)` with the first write's now-stale entry, and a stat-only check alone can't tell
+them apart. Clearing unconditionally on save removes any entry regardless of whether the new
+stat happens to collide, so there's nothing left to falsely match against. Regression test:
+`load_agents_config_picks_up_a_second_write_of_equal_length_content` (can't force an actual mtime
+collision portably, but exercises the same-length case the finding was about).
+
+**A miss only populates the cache when the file's `(mtime, len)` is identical before and after
+the load**, and never after a failed codex-bypass migration (that path falls back to a plain read
+and retries next call, as before the cache). The migration inside `load_agents_config` can itself
+rewrite `agents.json`, and another instance can write between the stat and the read — caching
+under the pre-load stat in either case would pin a stale value until the next write.
+
+
 ## Git Ref Enumeration — Never Classify a Ref by Its Short Name
 
 Any code that parses `git branch -a`/`for-each-ref` output to classify refs (is this
@@ -469,8 +498,8 @@ the workspace's `warm_artifacts` from `worktree_list` / `GET /worktrees/paths`, 
   commits a directory symlink at an intermediate component of an ignored path). A third writer into
   a freshly checked-out destination needs it too.
 - **Events**: `worktree-warm-started/-progress/-completed` (`warm_with_events`, payload builders in
-  `state.rs`, SSE arms in `sse_routes.rs`) drive the sidebar "Warming…" badge; silent when nothing
-  is copied. The badge matches rows by checkout path, never by branch.
+  `state.rs`, wire arms in `event_wire.rs`, dual-emitted through `AppState::emit_dual`) drive the
+  sidebar "Warming…" badge; silent when nothing is copied. The badge matches rows by checkout path, never by branch.
 - **Chain generations**: setup-status writes and the terminal `worktree-setup-script-completed`
   event are gated on `SETUP_CHAIN_GENERATIONS` (per `(repo, branch)`), with the map's read guard
   held across each write. A stale chain for a removed-and-recreated workspace therefore can neither
@@ -645,6 +674,97 @@ Frontend consumer rules (`rowAnchoredBlocks()`, `CommandOverview.tsx`'s
 `getCommandText`, subtracting `historyBase` from a stored block row): see
 `src/components/Terminal/AGENTS.md`.
 
+## Custom PTY Env Vars + Pane Shell-Readiness Gate (2026-09-24)
+
+Two related features closing the p10k-wizard-hijack pane-spawn race
+(`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`): `AppConfig::custom_pty_env`
+(user `KEY=value` pairs injected into every spawned PTY via the single choke point
+in `spawn_pty_pair_with_retry`) and `tmux_routes::materialize`'s shell-readiness
+gate (blocks until the freshly spawned shell reaches `SHELL_IDLE`, event-driven,
+5s bound, fail-open). Full design: `docs/backend/pty.md`'s "Custom PTY
+environment variables" and "Pane Shell-Readiness Gate" sections.
+
+**A "materialize already returns this pane's session, skip everything else" fast
+path must run the readiness gate too, not just the fresh-spawn path.** Found by
+code review: `materialize()` records `pane.tuic_session_id` in topology *before*
+its own readiness-gate call runs (so a second concurrent caller can find and
+reuse the session rather than double-spawning) — which means a second concurrent
+`materialize` call for the same pane, landing while the first call's gate is
+still waiting, used to hit the "already materialized" early return and skip the
+gate entirely. This is a real, not theoretical, shape: `tuic-cli`'s own
+`respawn-pane` retry logic documents an eager-materialize race from a sibling
+caller. Fixed by calling the gate on the fast path too — cheap when already idle
+(the underlying `wait_for_shell_idle` returns immediately in that case).
+**Any future "already have this, return early" fast path added near a
+readiness/settling gate needs the same treatment** — a fast path is not exempt
+from an invariant the slow path enforces just because it usually observes state
+the slow path already established.
+
+**A client-side timeout shorter than a server-side bounded-wait feature's own
+timeout turns "slow but working" into an apparent client error.** `tuic-cli`'s
+IPC client had one fixed 3s socket timeout applied to every request; the new
+gate's `SHELL_READINESS_TIMEOUT_MS` is 5s. Without raising the client's budget
+for this specific call (`ipc::post_with_timeout`, 8s), a legitimately slow (not
+hung) shell startup — the literal motivating scenario for this feature — would
+make the *client* time out and report failure before the *server's* own
+fail-open path had a chance to return `Ok`. Any new server-side bounded-wait
+feature reachable through this IPC client must check its timeout against
+whatever fixed client-side budget the call goes through, not just against the
+server's own request-handling timeout (if any).
+
+**The readiness gate's timeout is one shared constant,
+`mcp_transport::SHELL_READINESS_TIMEOUT_MS` — reuse it at any new gate call
+site.** A review finding on the first version of this gate predicted that "a
+future second readiness-gate call site would likely duplicate yet another ad
+hoc constant instead of reusing one." (On the pre-rebase branch the gate was
+also extended to a shared `pty::spawn_session_for_agent`; that function and its
+callers — the `ai_terminal_*` MCP tools, the cron scheduler, the PR-review
+watcher — do not exist on this codebase, and today's agent spawns exec the agent
+binary directly rather than typing into a shell, so `materialize` is the only
+server-side spawn-then-write path that needs it.) If you add a new server path
+that spawns a shell and writes into it right away, gate it with
+`wait_for_shell_idle` + that constant.
+
+**A test that subscribes to the event bus after a real materialized pane and
+expects a specific event type to be the very next message is fragile the
+moment anything makes the underlying shell run longer.** The readiness gate
+above (and its fast-path fix) give real spawned shells more running
+time before a test's next assertion, so ordinary background traffic (a
+`PtyOsc133` prompt marker, most often) can land on the bus in between —
+`rename_pane_is_idempotent_and_only_emits_on_real_change` actually flaked from
+this; two sibling tests (`set_pane_accent_color_resolves_and_applies_when_already_materialized`,
+`request_window_layout_emits_only_materialized_session_ids_in_pane_order`) had
+the identical latent shape and were fixed proactively before they did. The fix
+is always the same: drain-and-filter for the specific event type you care
+about (a `while let Ok(event) = rx.try_recv()` loop, `break`ing when found, or
+asserting the *specific* variant never appears rather than that the channel is
+empty) — several tests in this file already did this correctly
+(`materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`'s own
+comment names the exact same reason). When you add a test that subscribes
+after a real materialize/spawn call, use that pattern from the start rather
+than a bare single-shot `rx.try_recv()`.
+
+**A real-PTY test that records a cwd fixture and reads it back must use a real,
+existing directory once the code under test lets the shell actually run before
+the read** — not a fictional path like `/explicit/repo`. This repo's own OSC 7
+cwd tracking (`pty.rs`'s `parse_osc7_cwd`, `entry.lock().cwd = Some(cwd)`)
+overwrites `PtySession.cwd` the moment a real shell reports its actual directory
+— harmless when a test reads that field before the shell has had time to run
+(the pre-readiness-gate case), but three `tmux_routes.rs` cwd tests broke the
+instant the shell-readiness gate above started actually waiting for the shell to
+reach a prompt, because a real shell given a non-existent directory falls back
+to some real directory (its own `$HOME`, empirically) and OSC 7 duly reports
+*that* instead of the fixture string. Fixed by switching the fixture to
+`tempfile::tempdir()` for whichever cwd actually becomes the real spawn target
+in each test (a "loser" cwd that's never actually spawned into, e.g. a session's
+own cwd in a test proving a window's cwd wins instead, can stay fictional — only
+the winning value needs to be real). If you add a new PTY-spawn test that reads
+back `PtySession.cwd` after any code path that can give the shell real running
+time, use a real directory for whichever cwd you expect to observe. (On this tree
+`spawn_pty_session` also refuses a cwd that does not exist with a 400, so a fictional
+spawn-target cwd now fails even earlier; a fictional "loser" cwd that is only recorded in
+topology and never spawned into is still fine.)
+
 ## Agent Session Management
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
@@ -801,6 +921,10 @@ curl localhost:9876/diagnostics/capture         # state + bytes written per sess
 Captures land in `<config dir>/captures/<session-id>.tcap`, capped at 512 KB each. TUICCAP2 preserves the initial terminal rows/columns plus output/input direction, original chunk boundaries, ordering, and monotonic timestamps. The decoder remains backward-compatible with geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; a faithful replay of either old format must supply the observed geometry explicitly rather than silently assuming 41x128.
 Off by default (one relaxed atomic load per chunk when off) — code in
 `src-tauri/src/pty_capture.rs`.
+
+**The tap is one global switch, but the UI no longer has to poll to see it change.** Toggling it — via `POST /diagnostics/capture`, the `set_pty_capture` Tauri command, the tab context menu's "Capture Session", or the Command Palette's "Toggle diagnostics capture (active tab)" (`isPerfDebug()`-gated, `actionRegistry.ts`) — dual-emits `AppEvent::PtyCaptureChanged { enabled, session_filter }` from `pty_capture::set_enabled_in_config_dir`, the single app-side mutation point every entry point funnels through (the engine itself is `tuic_terminal::pty_capture`, which has no `AppState`). Every open tab's recording badge (`TabViews.tsx`, next to the standby badge) updates live off that event (`useAppInit.ts` → `ptyCaptureStore.applyStatus`) regardless of which entry point flipped it — including a raw curl from outside the app. `session_filter: None` means every session is being recorded, so `ptyCaptureStore.isRecording(id)` treats a `null` filter as "yes, this one too," not just an exact match.
+
+**`applyStatus()` merges, it must never fully replace.** A code-review pass on this feature (2026-09-24) caught that it originally did — the push event's payload only ever carries `{enabled, session_filter}` (no `dir`/`sessions`), and reusing `refresh()`'s own full-replace `adopt()` for it silently wiped whatever byte counts a prior `refresh()` had populated. This was reachable in a single window with no other window involved at all: `toggle()`'s own `invoke("set_pty_capture", ...)` call is exactly what makes the backend emit this event, and the ordering between that invoke's own response and this window's async event listener processing the resulting push is not guaranteed — so `toggle()`'s own `bytes(sessionId)` read (used for the "N KB written" stop toast) could read 0 even though the real `.tcap` file has content. Fixed by merging only `enabled`/`session_filter` into the existing signal, leaving `dir`/`sessions` untouched — those are `refresh()`'s job alone. If you add a second push-event-consuming store method anywhere in this codebase, check whether it's merging into partial state or replacing wholesale; whichever existing full-status adopter it's tempting to reuse is very likely the wrong shape for a partial payload.
 
 **A reproduced failure becomes a fixture, always.** Drop the `.tcap` in
 `src-tauri/src/fixtures/agent_prompts/` and add a case to the

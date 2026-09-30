@@ -5,8 +5,6 @@ use portable_pty::{CommandBuilder, PtySize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "desktop")]
-use tauri::Emitter;
 use uuid::Uuid;
 
 use super::mcp_transport::emit_close_html_tabs;
@@ -326,6 +324,88 @@ pub(super) async fn handle_session_suspend(
     }
 }
 
+/// Block (event-driven, not polling) until `predicate` returns true or
+/// `timeout_ms` elapses. Extracted from `handle_session_wait`'s own
+/// subscribe/check/re-check/timeout-boundary sequence so a second caller (the
+/// pane-materialize shell-readiness gate, `tmux_routes.rs`) gets the exact same
+/// no-lost-wake guarantee without duplicating the loop: a transition landing
+/// between the fast-path check and the subscription is still visible by
+/// re-reading state right after subscribing, and one landing exactly at the
+/// timeout boundary is caught by the final re-check rather than reported as a
+/// spurious miss.
+///
+/// Does not check whether `session_id` is a real session — callers that need
+/// that guard (to avoid `subscribe_pty_events` minting a channel for a
+/// made-up id) do it themselves before calling this, the way
+/// `handle_session_wait` still does.
+async fn wait_for_session_predicate<F>(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    mut predicate: F,
+) -> bool
+where
+    F: FnMut(&AppState) -> bool,
+{
+    if predicate(state) {
+        return true;
+    }
+    let mut events = state.subscribe_pty_events(session_id);
+    if predicate(state) {
+        return true;
+    }
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if predicate(state) {
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    woke || predicate(state)
+}
+
+/// Shared bound for every shell-readiness gate built on [`wait_for_shell_idle`]
+/// — one constant, not a fresh magic number per call site (a code review
+/// predicted exactly this: "a future second readiness-gate call site would
+/// likely duplicate yet another ad hoc constant instead of reusing one"). Any
+/// new gate call site must reuse it. Long enough for a normal `zsh -l`/`bash -l` startup (including
+/// Oh My Zsh/Powerlevel10k, which motivated this gate) under real spawn-burst
+/// contention, short enough that a shell with no detectable prompt signal
+/// doesn't stall the caller for long.
+pub(crate) const SHELL_READINESS_TIMEOUT_MS: u64 = 5_000;
+
+/// Block until `session_id`'s shell reaches `SHELL_IDLE`, or `timeout_ms`
+/// elapses — the same event-driven mechanism `session action=wait until=idle`
+/// uses, shared via `wait_for_session_predicate`. Used by that handler and by
+/// the pane-materialize shell-readiness gate (`tmux_routes.rs::materialize`,
+/// the one server-side path that spawns a shell and has its caller write a
+/// launch command into it right away) so a freshly spawned session's first
+/// injected keystrokes never arrive before the shell has actually reached a
+/// prompt. See
+/// `plans/p10k-wizard-hijack-agent-pane-spawn-race.md` for the race this closes.
+///
+/// Fail-open by design: returns `false` on timeout rather than erroring. Every
+/// caller must decide for itself what "gave up waiting" means in its own
+/// context — `handle_session_wait` reports `timed_out: true`, while
+/// `materialize` proceeds anyway rather than hanging forever.
+pub(crate) async fn wait_for_shell_idle(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+) -> bool {
+    wait_for_session_predicate(state, session_id, timeout_ms, |s| {
+        session_wait_met(s, session_id, "idle")
+    })
+    .await
+}
+
 /// `session action=wait` — block (server-side) until the session is idle or has
 /// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
 /// full model turn) with one cheap blocking call.
@@ -362,31 +442,10 @@ pub(super) async fn handle_session_wait(
             "error": format!("Unknown session \"{session_id}\"")
         });
     }
-    // Subscribe, then re-read state. This closes the lost-wake window without
-    // polling: a transition landing between the fast path above and this
-    // subscription is still visible in state, while any later one is retained by
-    // the per-session event receiver.
-    let mut events = state.subscribe_pty_events(&session_id);
-    if session_wait_met(state, &session_id, until) {
-        return session_wait_response(state, &session_id, until, true);
-    }
-    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
-        loop {
-            match events.recv().await {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if session_wait_met(state, &session_id, until) {
-                        return true;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-            }
-        }
+    let met = wait_for_session_predicate(state, &session_id, timeout_ms, |s| {
+        session_wait_met(s, &session_id, until)
     })
-    .await
-    .unwrap_or(false);
-    // Re-check at the timeout boundary so a simultaneous transition wins over
-    // a spurious timed_out response.
-    let met = woke || session_wait_met(state, &session_id, until);
+    .await;
     session_wait_response(state, &session_id, until, met)
 }
 
@@ -1534,35 +1593,19 @@ fn handle_session_unpaged(
             }
             // Uses the same tombstone path as the Tauri close_pty command so
             // post-mortem MCP reads keep returning final output + exit code.
-            // Idempotent: returns ok even if session was already tombstoned.
+            // Idempotent: returns ok even if session was already tombstoned —
+            // `close_pty_core_with_reason` itself emits `session-closed` on
+            // both transports (via `emit_session_closed`) only when it
+            // actually found and closed a live session; a repeat close of an
+            // already-tombstoned session emits nothing, which is correct —
+            // the reader thread's EOF-driven close (or a previous call to
+            // this same branch) already announced it once.
             let reason = if args.get("reason").and_then(|v| v.as_str()) == Some(IDLE_CLOSE_REASON) {
                 IDLE_CLOSE_REASON
             } else {
                 "close_requested"
             };
-            let existed = crate::pty::close_pty_core_with_reason(state, session_id, false, reason)
-                .is_some()
-                || state.grid.vt_log_buffers.contains_key(session_id);
-            if existed {
-                // Notify frontend and SSE consumers so the tab is removed from
-                // the UI. Without this the reader thread's EOF-driven
-                // session-closed event may never fire (the cloned reader fd
-                // keeps the pty master alive after close_pty_core drops it).
-                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                    session_id: session_id.to_string(),
-                    reason: "closed".to_string(),
-                });
-                #[cfg(feature = "desktop")]
-                if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit(
-                        "session-closed",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "reason": "closed",
-                        }),
-                    );
-                }
-            }
+            crate::pty::close_pty_core_with_reason(state, session_id, false, reason);
             // SIMP-1: drain HTML tabs registered by this session and emit close.
             emit_close_html_tabs(state.as_ref(), session_id);
             serde_json::json!({"ok": true})
@@ -1599,20 +1642,8 @@ fn handle_session_unpaged(
                 return serde_json::json!({"error": "Cannot kill own session. Use exit to terminate yourself."});
             }
             if crate::pty::kill_pty_core(state, session_id) {
-                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                    session_id: session_id.to_string(),
-                    reason: "killed".to_string(),
-                });
-                #[cfg(feature = "desktop")]
-                if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit(
-                        "session-closed",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "reason": "killed",
-                        }),
-                    );
-                }
+                // `kill_pty_core` itself emits `session-closed` on both
+                // transports now — see its doc comment.
                 // SIMP-1: drain HTML tabs registered by this session and emit close.
                 emit_close_html_tabs(state, session_id);
                 serde_json::json!({"ok": true})
@@ -2421,10 +2452,16 @@ pub(super) fn spawn_with_identity(
             // bus event, SSE arm and desktop emit; until then the tag shows only
             // after a reload for a caller that spawns before it registers.
             let published_parent = spawn_parent.clone().filter(|p| !is_pending_parent(p));
+            // A print-mode (non-interactive, one-shot) spawn deliberately
+            // never shows up as a desktop tab — read before
+            // `register_pty_session` so that suppression can be passed
+            // through instead of hand-duplicated here.
+            let print_mode = args["print_mode"].as_bool().unwrap_or(false);
             // Buffers, alias, metrics, grid watch and the session-created
             // broadcast, sharing one helper with session::spawn_pty_session so the
             // VT screen can only ever be built at the geometry the PTY was opened
-            // with.
+            // with. The bus half always fires; the desktop half is gated on
+            // `!print_mode` — see this helper's own doc comment.
             super::session::register_pty_session(
                 state,
                 &session_id,
@@ -2449,28 +2486,9 @@ pub(super) fn spawn_with_identity(
                 effective_agent_type.clone(),
                 None,
                 published_parent.clone(),
+                !print_mode,
             );
             crate::prompt_receipt::adopt_mcp_instructions(state, &session_id);
-            let cwd_str = effective_cwd.clone();
-
-            #[cfg(feature = "desktop")]
-            {
-                let print_mode = args["print_mode"].as_bool().unwrap_or(false);
-                let app_handle = state.app_handle.read().clone();
-                if !print_mode && let Some(ref app) = app_handle {
-                    super::session::emit_native_agent_session_created(
-                        |event, payload| {
-                            let _ = app.emit(event, payload);
-                        },
-                        state,
-                        &session_id,
-                        cwd_str.as_deref(),
-                        effective_agent_type.as_deref(),
-                        requested_name.as_deref(),
-                        published_parent.as_deref(),
-                    );
-                }
-            }
             state.set_pty_description(&session_id, pty_description);
             if skip_trust_dialog && effective_agent_type.as_deref() == Some("claude") {
                 state.managed_trust_dialogs.insert(session_id.clone());

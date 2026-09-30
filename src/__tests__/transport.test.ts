@@ -314,9 +314,13 @@ describe("transport", () => {
 			return [...struct![1].matchAll(/pub (\w+):/g)].map((m) => m[1]).sort();
 		}
 
-		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`. */
+		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`
+		 *  (the payload builder lives in `event_wire.rs`, shared with `emit_dual`). */
 		function ssePayloadKeys(): string[] {
-			const source = readRepoFile("src-tauri/src/mcp_http/sse_routes.rs");
+			// Moved out of mcp_http/sse_routes.rs into event_wire.rs (Phase 0 of
+			// the desktop-http-parity plan) so AppState::emit_dual could call it
+			// without depending on mcp_http.
+			const source = readRepoFile("src-tauri/src/event_wire.rs");
 			const arm = source.match(/AppEvent::RepoChanged \{[^}]*\} => \{\s*serde_json::json!\(\{([^}]*)\}\)/);
 			expect(arm, "RepoChanged SSE arm not found — the extractor is stale").not.toBeNull();
 			return [...arm![1].matchAll(/"(\w+)":/g)].map((m) => m[1]).sort();
@@ -1569,10 +1573,10 @@ describe("transport", () => {
 		});
 
 		it("maps set_session_visible to POST /sessions/{id}/visible", () => {
-			const result = mapCommandToHttp("set_session_visible", { sessionId: "s1", visible: false });
+			const result = mapCommandToHttp("set_session_visible", { sessionId: "s1", visible: false, viewerId: "c1" });
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/sessions/s1/visible");
-			expect(result.body).toEqual({ visible: false });
+			expect(result.body).toEqual({ visible: false, viewer_id: "c1" });
 		});
 
 		it("maps get_process_stats to GET /process/stats", () => {
@@ -3004,6 +3008,197 @@ describe("transport", () => {
 				"",
 			].join("\n");
 			await expect(body).toMatchFileSnapshot("../../src-tauri/src/mcp_http/command_table_paths.txt");
+		});
+	});
+
+	/**
+	 * D.11 — the listener-side sibling of the COMMAND_TABLE → router gate above,
+	 * same two-language snapshot+probe shape: here we extract every bare-string
+	 * `listen("name", ...)` call in the frontend and snapshot the name set; in
+	 * Rust, a test in `event_wire.rs` reads that snapshot and asserts every name
+	 * either has a real `event_type_name` arm (so it can reach SSE/WS) or is
+	 * explicitly allowlisted as desktop-only, with a reason.
+	 *
+	 * Deliberately excludes the suffixed per-session form
+	 * (`` listen(`pty-foo-${id}`) ``) — that shape is already covered by the
+	 * "per-session Tauri event parity" describe block above, which checks it
+	 * against `pty.rs`/`state.rs`/`terminal_grid.rs` directly rather than the
+	 * generic `event_type_name` map.
+	 */
+	describe("frontend listener → SSE arm parity (D.11)", () => {
+		/**
+		 * Event names with a real static `listen("name", ...)` call and NO
+		 * `AppEvent`/`event_type_name` arm — each needs a one-line reason, the
+		 * same discipline as `INTENTIONALLY_UNMAPPED` above. Every entry here
+		 * was confirmed (via a grep of `src-tauri/src/`) to have no
+		 * `AppEvent` variant backing it at all, not merely no *listener* on
+		 * the SSE side.
+		 */
+		const DESKTOP_ONLY_EVENTS: ReadonlySet<string> = new Set<string>([
+			// Native menu bridge (useNativeMenuBridge.ts) — OS menu bar, host-only.
+			"ctrl-tab",
+			"menu-action",
+			"file-open",
+			// DOM-level custom key-combo events (KeyComboCapture.tsx /
+			// useNativeKeyCombo.ts / useDictationHotkey.ts) — synthesized from raw
+			// native keydown, never touch the backend at all.
+			"fn-key-down",
+			"fn-key-up",
+			"native-key-down",
+			// Dictation (stores/dictation.ts) — desktop-only local Whisper pipeline.
+			// (`dictation-download-progress` is NOT here: it has a real AppEvent arm.)
+			"dictation-backend-info",
+			"dictation-partial",
+			// Background-mode window snapshot (background_mode_desktop.rs) — an
+			// imperative `emit_to("main")` asking the desktop window to snapshot its
+			// tabs before it is hidden; a browser tab has no window to hide, and an
+			// imperative event must never be bus-forwarded.
+			"snapshot-now",
+			// Content search streaming (fs.rs) — deliberately desktop-only: the
+			// HTTP route computes the same result and returns it in the response
+			// body instead of streaming, so a browser client never needs this
+			// event (see contentSearch.ts's own doc comment).
+			"content-search-batch",
+			"content-search-error",
+			// Detached secondary-window bridge (useDetachedPanelBridge.ts /
+			// panelSync.ts) — multi-window management is a desktop-only concept
+			// (mirrors `INTENTIONALLY_UNMAPPED`'s "open_panel_window" et al.).
+			"panel-action",
+			"panel-resync-request",
+			"panel-window-closed",
+			// FloatingTerminal.tsx's window-to-window `emitTo("main", ...)` — pure
+			// desktop multi-window IPC, no backend involvement at all.
+			"reattach-terminal",
+			// Screenshot capture request (mcp_transport.rs's `ui action=screenshot`)
+			// — targets the desktop window directly via `AppHandle.emit`, answered
+			// by a native window screenshot; no meaning for a headless/browser client.
+			"screenshot-request",
+			// OS sleep/wake notification (useTerminalCompletionNotifications.ts) —
+			// host-level power-management signal, host-only.
+			"system-wake",
+			// macOS Notification Center click (native_notification.rs) — a click on
+			// a host OS alert, delivered to the desktop window only.
+			"native-notification-click",
+			// Tauri WebView navigation guard (lib.rs `on_navigation`) — browser mode
+			// has no such guard, so nothing to tell a browser client.
+			"navigation-blocked",
+		]);
+
+		/** Every bare-string (non-template-literal) `listen("name", ...)` call across all of `src/`. */
+		/**
+		 * The top-level string keys of the object literal passed as
+		 * `subscribeEvents(...)`'s first argument, e.g.
+		 * `subscribeEvents({ "mcp-confirm": handler, "pty-open-url": other })`.
+		 * Found via code review: a naive `listen("name", ...)` regex alone
+		 * missed this whole registration shape — `mcp-confirm`,
+		 * `mcp-confirm-resolved`, `pty-open-url`, `progress-recorded`, and
+		 * `session-state-changed` (real production listeners in
+		 * `stores/mcpConfirm.ts`, `stores/ptyOpenUrl.ts`,
+		 * `hooks/useAgentPolling.ts`, `mobile/useSessions.ts`) were silently
+		 * absent from the snapshot, which would have let the D.11 gate pass
+		 * vacuously through a future regression on any of them.
+		 *
+		 * Walks braces by hand (not a regex) so a nested object literal
+		 * inside a handler body — depth 2+ — is never mistaken for a
+		 * top-level key.
+		 */
+		function extractSubscribeEventsKeys(source: string): string[] {
+			const keys: string[] = [];
+			for (const call of source.matchAll(/\bsubscribeEvents\s*\(/g)) {
+				const openBrace = source.indexOf("{", call.index! + call[0].length);
+				if (openBrace < 0) continue;
+				let depth = 0;
+				let end = -1;
+				for (let i = openBrace; i < source.length; i++) {
+					if (source[i] === "{") depth++;
+					else if (source[i] === "}") {
+						depth--;
+						if (depth === 0) {
+							end = i;
+							break;
+						}
+					}
+				}
+				if (end < 0) continue;
+				const body = source.slice(openBrace + 1, end);
+				// Depth-1 keys only: strip out every nested `{...}` (arrow/function
+				// bodies, nested objects) before matching quoted keys, so a
+				// string-keyed object literal INSIDE a handler body can never be
+				// mistaken for one of subscribeEvents' own event names.
+				let topLevelOnly = body;
+				for (;;) {
+					const stripped = topLevelOnly.replace(/\{[^{}]*\}/g, "{}");
+					if (stripped === topLevelOnly) break;
+					topLevelOnly = stripped;
+				}
+				for (const match of topLevelOnly.matchAll(/["']([a-zA-Z0-9_-]+)["']\s*:/g)) {
+					keys.push(match[1]);
+				}
+			}
+			return keys;
+		}
+
+		function extractStaticListenEventNames(): Map<string, string[]> {
+			const found = new Map<string, string[]>();
+			const add = (name: string, path: string) => {
+				const where = found.get(name) ?? [];
+				where.push(path.replace(`${process.cwd()}/`, ""));
+				found.set(name, where);
+			};
+			for (const { path, source } of collectFrontendSources()) {
+				for (const match of source.matchAll(/\blisten(?:<[^>]*>)?\(\s*["']([a-zA-Z0-9_-]+)["']/g)) {
+					add(match[1], path);
+				}
+				for (const key of extractSubscribeEventsKeys(source)) {
+					add(key, path);
+				}
+			}
+			return found;
+		}
+
+		it("finds a substantial number of listeners — guards the guard", () => {
+			// If the extractor silently stopped matching, every test below would
+			// pass vacuously for having found nothing to check.
+			expect(extractStaticListenEventNames().size).toBeGreaterThan(30);
+		});
+
+		it("every listened-for name is either a real AppEvent or explicitly allowlisted as desktop-only", () => {
+			const knownAppEventNames = new Set(
+				[...readRepoFile("src-tauri/src/event_wire.rs").matchAll(/=>\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+			);
+			expect(knownAppEventNames.size).toBeGreaterThan(30);
+
+			const orphaned = [...extractStaticListenEventNames().entries()].filter(
+				([name]) => !knownAppEventNames.has(name) && !DESKTOP_ONLY_EVENTS.has(name),
+			);
+			expect(
+				orphaned.map(
+					([name, where]) =>
+						`"${name}" (listened in ${where.join(", ")}) — add an event_type_name arm, or allowlist it in DESKTOP_ONLY_EVENTS with a reason`,
+				),
+			).toEqual([]);
+		});
+
+		it("does not allowlist a name that already has a real AppEvent arm (would be contradictory)", () => {
+			const knownAppEventNames = new Set(
+				[...readRepoFile("src-tauri/src/event_wire.rs").matchAll(/=>\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+			);
+			const contradictory = [...DESKTOP_ONLY_EVENTS].filter((name) => knownAppEventNames.has(name));
+			expect(contradictory).toEqual([]);
+		});
+
+		it("snapshots the name set the Rust parity test reads", async () => {
+			const names = [...extractStaticListenEventNames().keys()].sort();
+			expect(names.length).toBeGreaterThan(30);
+			const body = [
+				"# Generated by src/__tests__/transport.test.ts — do not edit by hand.",
+				'# Every bare-string listen("name", ...) call found across src/.',
+				"# Read by event_wire::tests::frontend_listen_event_names_all_have_an_sse_arm_or_are_allowlisted.",
+				"# Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u",
+				...names,
+				"",
+			].join("\n");
+			await expect(body).toMatchFileSnapshot("../../src-tauri/src/mcp_http/frontend_listen_event_names.txt");
 		});
 	});
 
