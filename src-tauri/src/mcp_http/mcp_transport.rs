@@ -3285,7 +3285,13 @@ fn handle_session(
             // Uses the same tombstone path as the Tauri close_pty command so
             // post-mortem MCP reads keep returning final output + exit code.
             // Idempotent: returns ok even if session was already tombstoned.
-            let existed = crate::pty::close_pty_core(state, session_id, false).is_some()
+            let reason = if args.get("reason").and_then(|v| v.as_str()) == Some(IDLE_CLOSE_REASON) {
+                IDLE_CLOSE_REASON
+            } else {
+                "close_requested"
+            };
+            let existed = crate::pty::close_pty_core_with_reason(state, session_id, false, reason)
+                .is_some()
                 || state.grid.vt_log_buffers.contains_key(session_id);
             if existed {
                 // Notify frontend and SSE consumers so the tab is removed from
@@ -3484,10 +3490,13 @@ fn handle_session(
 }
 
 /// Use the same close path as `session action=close`, including frontend events.
+/// Logged as the close cause when the idle sweep, not a client, closes a session.
+const IDLE_CLOSE_REASON: &str = "idle_close";
+
 pub(crate) fn close_idle_managed_session(state: &Arc<AppState>, session_id: &str) {
     let result = handle_session(
         state,
-        &serde_json::json!({"action": "close", "session_id": session_id}),
+        &serde_json::json!({"action": "close", "session_id": session_id, "reason": IDLE_CLOSE_REASON}),
         None,
     );
     if result.get("error").is_some() {

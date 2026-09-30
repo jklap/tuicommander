@@ -86,16 +86,35 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
-fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
-    if !state.session_maps.sessions.contains_key(session_id)
-        || !state
-            .session_maps
-            .session_parent
-            .get(session_id)
-            .is_some_and(|parent| {
-                !crate::mcp_http::mcp_transport::is_pending_parent(parent.value())
+/// A child whose last mail to its parent starts with BLOCKED waits for the
+/// parent's answer; nothing newer in either inbox means it has not come yet.
+fn blocked_on_parent(state: &AppState, session_id: &str, parent: &str) -> bool {
+    let Some(blocked_at) = state.agent_inbox.get(parent).and_then(|mail| {
+        mail.iter()
+            .rev()
+            .find(|message| {
+                message.from_tuic_session == session_id
+                    && !message
+                        .id
+                        .starts_with(crate::state::LIFECYCLE_MSG_ID_PREFIX)
             })
+            .filter(|message| message.content.trim_start().starts_with("BLOCKED"))
+            .map(|message| message.timestamp)
+    }) else {
+        return false;
+    };
+    !state
+        .agent_inbox
+        .get(session_id)
+        .is_some_and(|mail| mail.iter().any(|message| message.timestamp > blocked_at))
+}
+
+fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
+    let parent = state.session_maps.session_parent.get(session_id)?.clone();
+    if !state.session_maps.sessions.contains_key(session_id)
+        || crate::mcp_http::mcp_transport::is_pending_parent(&parent)
         || state.keep_open_sessions.contains(session_id)
+        || blocked_on_parent(state, session_id, &parent)
     {
         return None;
     }
@@ -591,6 +610,45 @@ mod tests {
         sweep_with_commands(&state, &mut tracker, 3_600_000, &[]);
         assert!(state.session_maps.sessions.contains_key("child-with-work"));
         crate::mcp_http::mcp_transport::close_idle_managed_session(&state, "child-with-work");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_whose_last_mail_to_parent_is_blocked_stays_open_until_a_newer_mail() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = tempfile::Builder::new()
+            .prefix("idle-close-blocked-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        let child = "managed-child";
+        live_child(&state, child, temp.path().to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+        let mail = |from: &str, content: &str, timestamp| crate::state::AgentMessage {
+            id: format!("mail-{timestamp}"),
+            from_tuic_session: from.into(),
+            from_name: from.into(),
+            content: content.into(),
+            timestamp,
+            delivered_via_channel: false,
+        };
+        state.push_agent_inbox("parent", mail(child, "BLOCKED: rb box unreachable", 10));
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key(child),
+            "a BLOCKED child waiting for its parent must not be idle-closed"
+        );
+        state.push_agent_inbox(child, mail("parent", "box is back", 20));
+        state.agent_read_cursor.insert(child.into(), 20);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 3_600_000, &[]);
+        assert!(!state.session_maps.sessions.contains_key(child));
     }
 
     #[cfg(unix)]
