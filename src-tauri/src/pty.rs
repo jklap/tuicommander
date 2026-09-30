@@ -9384,6 +9384,48 @@ fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
         .is_some_and(|buffer| !buffer.lock().content().is_empty())
 }
 
+/// A session whose `turn_epoch` is still 0 has never had any line submitted
+/// to it — not typed by a human at the terminal, not injected as a peer
+/// message, nothing (`note_submitted_input`/`note_submitted_input_with_hook`
+/// is the only thing that increments it, and every real submission path —
+/// raw terminal input and every injection path alike — funnels through one
+/// of those two). For a hook-instrumented Claude Code session that makes the
+/// combination of `turn_epoch == 0` and Protocol-rank `"hook-busy"` evidence
+/// unambiguous: the ONLY hook event that can have set it is `SessionStart`.
+/// Every other event that derives `state=busy` (`UserPromptSubmit`,
+/// `PreToolUse`, `PostToolUse`) requires a turn to have actually started
+/// first, which bumps `turn_epoch` before any of them can fire.
+///
+/// This matters because a session deliberately spawned with no initial
+/// prompt (`should_defer_prompt_for_mcp_bind`) sits in exactly this state
+/// from the moment its process starts, and can stay there forever: nothing
+/// else will ever submit a line to clear the `SessionStart` latch, so
+/// `should_inject_now`'s plain `shell_state == SHELL_IDLE` check can never
+/// pass and a message queued for it never flushes on any BUSY→IDLE
+/// transition, because that transition structurally cannot happen — see
+/// `spawn_deferred_prompt_delivery`'s doc comment for the feature this
+/// deadlocks. `deliver_notice_to_pty` uses this to recognize that specific
+/// case and write directly instead of waiting on an idle transition that
+/// will never arrive on its own.
+fn stuck_on_pre_first_turn_session_start(state: &AppState, session_id: &str) -> bool {
+    if !session_is_agent(state, session_id) {
+        return false;
+    }
+    let never_submitted = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|s| s.turn_epoch == 0);
+    if !never_submitted {
+        return false;
+    }
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().busy_source_is("hook-busy"))
+}
+
 /// Reserve an idle agent composer for one injected command.
 ///
 /// `should_inject_now` is only a snapshot. The agent may become busy between
@@ -10193,6 +10235,47 @@ pub(crate) fn deliver_notice_to_pty(
         // Submitted, or Uncertain — an ambiguous write must not be retried, so the
         // terminal keeps ownership either way.
         PtyDelivery::Typed
+    } else if !has_partial_user_input(state, session_id)
+        && !blocked_on_confident_question(state, session_id)
+        && stuck_on_pre_first_turn_session_start(state, session_id)
+    {
+        // `claim_idle_for_injection` above can never succeed for this session
+        // (see `stuck_on_pre_first_turn_session_start`'s doc comment) — its
+        // `SHELL_IDLE` requirement is unreachable, not merely unmet right
+        // now, so falling through to the ordinary queue-and-wait-for-idle
+        // branch below would leave this message queued forever. Write
+        // directly instead. Bookkeeping-wise this is exactly a submitted
+        // line (pressing Enter after this text is a real turn starting), so
+        // route it through the same `note_submitted_input` an ordinary
+        // claimed commit uses — just without the CAS-based IDLE→BUSY claim,
+        // since the shell is already BUSY and there is no idle moment to
+        // atomically steal.
+        match write_claimed_agent_command(state, session_id, framed) {
+            InjectionOutcome::Submitted => {
+                note_submitted_input(state, session_id);
+                PtyDelivery::Typed
+            }
+            InjectionOutcome::Uncertain(error) => {
+                // An ambiguous write must not be retried, matching the
+                // claimed path above. Counting it as a submission (rather
+                // than leaving `turn_epoch` at 0) also closes the forced
+                // path back off for this session — a real one may or may
+                // not have landed, but leaving it open risks a second forced
+                // write racing a genuinely new turn later.
+                tracing::warn!(session = %session_id, error, "forced pre-first-turn injection outcome uncertain; treating as delivered");
+                note_submitted_input(state, session_id);
+                PtyDelivery::Typed
+            }
+            InjectionOutcome::NotStarted(error) => {
+                tracing::debug!(session = %session_id, error, "forced pre-first-turn injection did not start; falling back to queue");
+                state
+                    .pending_injections
+                    .entry(session_id.to_string())
+                    .or_default()
+                    .push_back(crate::state::PendingInjection::notice(framed));
+                PtyDelivery::Queued
+            }
+        }
     } else {
         // One parked mail wake covers the whole inbox: the recipient answers it
         // by reading every message. Pushing one per sender would type the same
