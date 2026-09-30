@@ -1215,6 +1215,46 @@ test can reach is the live process: these are the checks that need one.
 - [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there. _(NOT VERIFIED 2026-09-29: Needs real ego processes (ps ax | grep ego) per repo root.)_
 - [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_
 
+## Three desktop PTY-creation commands sized their VT screen at a hardcoded 24x220 instead of the real pane (2026-09-30) — **Rust, needs a `make dev` restart**
+
+Found while investigating a user report ("pane size and not showing the bottom of the
+screen" — previously fixed in HTTP client mode, starting to recur in the desktop app).
+`register_pty_session` (`mcp_http/session.rs`) already builds the VT screen at the PTY's real
+geometry for the shared spawn paths (`spawn_pty_session`, MCP `agent spawn`, `POST /agents`),
+but the three desktop commands that build their own `VtLogBuffer` —
+`pty::commands::create_pty`/`create_pty_with_worktree` (behind **every** plain new terminal
+tab, worktree tab included) and `agent::spawn_agent` (desktop "New Agent" launch) — opened the
+real PTY at the caller's `rows`/`cols` but built the screen model (what agent-state detection,
+choice-prompt parsing and the chrome cutoff read) at a hardcoded `24x220`. Any pane taller than
+24 rows had its bottom rows (input box, dialog footer, Enter-to-select line) invisible to
+detection.
+
+Fixed by building the VT screen at exactly the PTY's `rows`/`cols` at all three sites — the
+same contract as `register_pty_session`, which on main has no 220-column floor any more (#1413-7dcc
+removed it; wip's version of this fix still floored the width through a `vt_screen_size_for`
+helper, which was not carried over). Tests in `mcp_http/session.rs`:
+`registration_sizes_the_vt_screen_to_the_real_pty_height` (40x300 PTY => 40-row, 300-column
+screen) beside main's `headless_registration_and_same_size_resize_preserve_requested_width`,
+and `desktop_spawn_commands_size_the_vt_screen_to_the_real_pty` (a source guard: the three
+desktop commands are `#[tauri::command]`s with no `tauri::test` scaffolding, so no hardcoded
+`new_vt_log_buffer(24, 220` may remain in `pty/commands.rs` or `agent.rs`).
+
+- [ ] [HUMAN] After restarting `make dev`, open a **plain new terminal tab** (not an agent
+  launch) in a tall pane (more than 24 rows — e.g. a maximized window), run something that
+  fills the bottom rows (e.g. `htop`, or any TUI with a footer), and confirm the full screen —
+  including the bottom rows — is captured correctly via `ai_terminal_read_screen`/`debug
+  explain_state` or an HTTP screen read for that session. This is the most commonly-hit of the
+  three fixed sites.
+- [ ] [HUMAN] Repeat the same check for a **worktree tab** created via "Create Worktree" (exercises
+  `create_pty_with_worktree` specifically).
+- [ ] [HUMAN] Spawn a new agent from the desktop app in a tall pane with a task that triggers a
+  choice prompt (`AskUserQuestion`) or a plan-approval dialog. Confirm the awaiting/badge
+  detection fires correctly and the dialog's footer/options are recognized (`agent::spawn_agent`).
+- [ ] [HUMAN] Open a narrow pane (fewer than 220 cols) and a very wide one (more than 220 cols)
+  with any of the three commands and confirm no truncation or misdetection at the right edge —
+  the screen now starts at the PTY's real width with no 220-column floor, and grows/shrinks with
+  each resize.
+
 ## `agent action=spawn` defers a Claude prompt until MCP identity binds (2026-09-29) — **Rust, needs a `make dev` restart**
 
 **REGRESSION FOUND live-testing this against the orchestrator instance (v1.7.7-nightly.20260930.b32b2990f) on 2026-09-30 — the prompt is never delivered at all, not just raced.** 4/4 deferred-path spawns (`agent_type: "claude"`, no `print_mode`) reproduced the same hang: `spawn` returned immediately with `prompt_delivery: "queued — withheld..."` as documented, and `wait_for_mcp_identity_bound` bound in ~400-1200ms (well inside the 5s fail-open window, confirmed via `debug logs` `mcp_initialize` entries matching the session's `tuic_session`) — but the composer stayed permanently empty (just the rotating placeholder hint) for 3-6+ minutes, `session status` showed `shell_state: "busy"`/`agent_state: "working"` the whole time with `busy_duration_ms` climbing unbounded, and `debug explain_state` showed `queued_commands: 1` that never drained, with the busy evidence pinned at `rank: "protocol", source: "hook-busy"` from the instant of spawn and never cleared. A 5th spawn using explicit `args: ["--verbose", "{prompt}"]` (the bypass path, item 16 below) worked perfectly — delivered via argv, replied and completed in ~5s — confirming the bypass path is fine and the bug is isolated to the deferred-delivery mechanism itself.

@@ -3543,6 +3543,64 @@ mod tests {
         );
     }
 
+    /// The VT screen is as TALL as the PTY, not just as wide: a hardcoded
+    /// 24-row screen hides the bottom rows of any taller pane (the composer
+    /// box, a dialog footer, the Enter-to-select line) from every screen
+    /// scrape. `headless_registration_and_same_size_resize_preserve_requested_width`
+    /// covers the width half of the same contract.
+    #[tokio::test]
+    async fn registration_sizes_the_vt_screen_to_the_real_pty_height() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            40,
+            300,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("create isolated geometry PTY");
+        let (rows, cols) = {
+            let vt = state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .expect("registration registers a VT screen");
+            let buffer = vt.lock();
+            (buffer.screen_rows().len(), buffer.grid_columns())
+        };
+        assert_eq!(
+            rows, 40,
+            "the VT screen must be as tall as the PTY, not 24 rows"
+        );
+        assert_eq!(
+            cols, 300,
+            "the VT screen must be as wide as the PTY, not 220 columns"
+        );
+    }
+
+    /// The desktop commands (`create_pty`, `create_pty_with_worktree`,
+    /// `agent::spawn_agent`) build their own VT screen instead of going
+    /// through `register_pty_session`, so they can drift from its
+    /// real-geometry contract on their own — they did, all three were left at a
+    /// hardcoded 24x220. Not callable without a Tauri `AppHandle`, so the
+    /// contract is pinned on their source.
+    #[test]
+    fn desktop_spawn_commands_size_the_vt_screen_to_the_real_pty() {
+        for (file, source) in [
+            ("pty/commands.rs", include_str!("../pty/commands.rs")),
+            ("agent.rs", include_str!("../agent.rs")),
+        ] {
+            let compact: String = source.split_whitespace().collect();
+            assert!(
+                !compact.contains("new_vt_log_buffer(24,220"),
+                "{file} builds a VT screen at a hardcoded 24x220 instead of the PTY's size"
+            );
+        }
+    }
+
     /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
     /// `update()` echoes every `name` change here), so it must never emit
     /// `session-renamed`: the frontend's listener feeds that event straight back

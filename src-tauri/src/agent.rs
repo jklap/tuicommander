@@ -1573,9 +1573,18 @@ pub(crate) async fn spawn_agent(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
+    // Built at the geometry the PTY was actually opened with above, like
+    // `mcp_http::session::register_pty_session` — see its doc comment for the
+    // class of bug a hardcoded 24x220 here reproduces: any screen scrape
+    // (agent-state detection, choice prompts, the chrome cutoff) parsing a grid
+    // taller than 24 rows would see a screen the child never drew into.
     state.grid.vt_log_buffers.insert(
         session_id.clone(),
-        Mutex::new(state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY)),
+        Mutex::new(state.new_vt_log_buffer(
+            pty_config.rows,
+            pty_config.cols,
+            VT_LOG_BUFFER_CAPACITY,
+        )),
     );
     state
         .session_maps
