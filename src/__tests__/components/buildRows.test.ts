@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRows } from "../../components/SessionDiffTab/buildRows";
+import { buildRows, findAdjacentStepIndices, rowIndexForStepIndex } from "../../components/SessionDiffTab/buildRows";
 import type { EditStep, FileReview, SessionReview } from "../../types/sessionDiff";
 
 function step(overrides: Partial<EditStep>): EditStep {
@@ -74,13 +74,13 @@ describe("buildRows", () => {
 			files: [fileGroup({ abs_path: "/repo/a.ts", step_indices: [5, 2] })],
 		});
 
-		const rows = buildRows(r, "file", new Set(), new Set());
+		const rows = buildRows(r, "file", new Set(), new Set(), new Set());
 		expect(rows).toHaveLength(1);
 		expect(rows[0].kind).toBe("file");
 		if (rows[0].kind !== "file") throw new Error("unreachable");
 		// Resolved by step_index identity, in the order step_indices listed them,
 		// NOT by array position in `steps`.
-		expect(rows[0].steps.map((s) => s.tool_use_id)).toEqual(["toolu_a", "toolu_b"]);
+		expect(rows[0].steps.map((s) => s.step.tool_use_id)).toEqual(["toolu_a", "toolu_b"]);
 	});
 
 	it("grouped mode: a dangling step_indices entry is dropped, not crashed", () => {
@@ -88,11 +88,22 @@ describe("buildRows", () => {
 			steps: [step({ step_index: 0, tool_use_id: "toolu_a" })],
 			files: [fileGroup({ step_indices: [0, 99] })],
 		});
-		const rows = buildRows(r, "file", new Set(), new Set());
+		const rows = buildRows(r, "file", new Set(), new Set(), new Set());
 		expect(rows[0].kind).toBe("file");
 		if (rows[0].kind !== "file") throw new Error("unreachable");
 		expect(rows[0].steps).toHaveLength(1);
-		expect(rows[0].steps[0].tool_use_id).toBe("toolu_a");
+		expect(rows[0].steps[0].step.tool_use_id).toBe("toolu_a");
+	});
+
+	it("grouped mode: each step's collapsed flag reflects collapsedSteps, keyed by tool_use_id", () => {
+		const r = review({
+			steps: [step({ step_index: 0, tool_use_id: "toolu_a" })],
+			files: [fileGroup({ step_indices: [0] })],
+		});
+		const rows = buildRows(r, "file", new Set(), new Set(), new Set(["toolu_a"]));
+		expect(rows[0].kind).toBe("file");
+		if (rows[0].kind !== "file") throw new Error("unreachable");
+		expect(rows[0].steps[0].collapsed).toBe(true);
 	});
 
 	it("grouped mode: expanded/stepsOpen reflect the given sets, keyed by abs_path", () => {
@@ -103,7 +114,7 @@ describe("buildRows", () => {
 				fileGroup({ abs_path: "/repo/b.ts", step_indices: [] }),
 			],
 		});
-		const rows = buildRows(r, "file", new Set(["/repo/a.ts"]), new Set(["/repo/b.ts"]));
+		const rows = buildRows(r, "file", new Set(["/repo/a.ts"]), new Set(["/repo/b.ts"]), new Set());
 		const a = rows.find((row) => row.kind === "file" && row.group.abs_path === "/repo/a.ts");
 		const b = rows.find((row) => row.kind === "file" && row.group.abs_path === "/repo/b.ts");
 		expect(a?.kind === "file" && a.expanded).toBe(true);
@@ -121,7 +132,7 @@ describe("buildRows", () => {
 			],
 			files: [fileGroup({})],
 		});
-		const rows = buildRows(r, "chronological", new Set(), new Set());
+		const rows = buildRows(r, "chronological", new Set(), new Set(), new Set());
 		expect(rows.every((row) => row.kind === "step")).toBe(true);
 		expect(rows.map((row) => (row.kind === "step" ? row.step.tool_use_id : null))).toEqual([
 			"toolu_1",
@@ -131,7 +142,61 @@ describe("buildRows", () => {
 	});
 
 	it("returns an empty array for a session with no files/steps", () => {
-		expect(buildRows(review({}), "file", new Set(), new Set())).toEqual([]);
-		expect(buildRows(review({}), "chronological", new Set(), new Set())).toEqual([]);
+		expect(buildRows(review({}), "file", new Set(), new Set(), new Set())).toEqual([]);
+		expect(buildRows(review({}), "chronological", new Set(), new Set(), new Set())).toEqual([]);
+	});
+});
+
+describe("findAdjacentStepIndices", () => {
+	it("finds the previous/next step touching the same file via FileReview.step_indices", () => {
+		const r = review({
+			steps: [
+				step({ step_index: 1, tool_use_id: "toolu_1" }),
+				step({ step_index: 4, tool_use_id: "toolu_4" }),
+				step({ step_index: 7, tool_use_id: "toolu_7" }),
+			],
+			files: [fileGroup({ step_indices: [1, 4, 7] })],
+		});
+		expect(findAdjacentStepIndices(r, r.steps[1])).toEqual({ prevStepIndex: 1, nextStepIndex: 7 });
+	});
+
+	it("returns null for the boundary ends", () => {
+		const r = review({
+			steps: [step({ step_index: 1 }), step({ step_index: 4 })],
+			files: [fileGroup({ step_indices: [1, 4] })],
+		});
+		expect(findAdjacentStepIndices(r, r.steps[0])).toEqual({ prevStepIndex: null, nextStepIndex: 4 });
+		expect(findAdjacentStepIndices(r, r.steps[1])).toEqual({ prevStepIndex: 1, nextStepIndex: null });
+	});
+
+	it("returns null/null when the step's file isn't in review.files at all", () => {
+		const r = review({ steps: [step({ abs_path: "/repo/orphan.ts" })], files: [] });
+		expect(findAdjacentStepIndices(r, r.steps[0])).toEqual({ prevStepIndex: null, nextStepIndex: null });
+	});
+});
+
+describe("rowIndexForStepIndex", () => {
+	it("finds a step row's position by step_index", () => {
+		const r = review({
+			steps: [step({ step_index: 2, tool_use_id: "toolu_2" }), step({ step_index: 0, tool_use_id: "toolu_0" })],
+		});
+		const rows = buildRows(r, "chronological", new Set(), new Set(), new Set());
+		expect(rowIndexForStepIndex(rows, 0)).toBe(0);
+		expect(rowIndexForStepIndex(rows, 2)).toBe(1);
+	});
+
+	it("returns null for a step_index that doesn't exist among the rows", () => {
+		const r = review({ steps: [step({ step_index: 0 })] });
+		const rows = buildRows(r, "chronological", new Set(), new Set(), new Set());
+		expect(rowIndexForStepIndex(rows, 99)).toBeNull();
+	});
+
+	it("returns null in by-file mode — rows there are files, not steps", () => {
+		const r = review({
+			steps: [step({ step_index: 0 })],
+			files: [fileGroup({ step_indices: [0] })],
+		});
+		const rows = buildRows(r, "file", new Set(), new Set(), new Set());
+		expect(rowIndexForStepIndex(rows, 0)).toBeNull();
 	});
 });

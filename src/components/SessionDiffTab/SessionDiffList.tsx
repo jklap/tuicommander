@@ -1,10 +1,11 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { type Component, createMemo, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import type { EditStep, FileReview } from "../../types/sessionDiff";
 import fl from "../shared/diffFileList.module.css";
+import type { DiffListNavHandle } from "../shared/diffListNav";
 import { DiffViewer } from "../ui/DiffViewer";
-import { rowKey, type SessionRow } from "./buildRows";
+import { rowKey, type SessionRow, type StepRowData } from "./buildRows";
 import s from "./SessionDiffTab.module.css";
 import { SessionFileHeader } from "./SessionFileHeader";
 import { StepCard } from "./StepCard";
@@ -20,7 +21,20 @@ interface SessionRowContentProps {
 	onCopyFile: (group: FileReview) => void;
 	onToggleExpanded: (absPath: string) => void;
 	onToggleStepsOpen: (absPath: string) => void;
+	onToggleStepCollapsed: (toolUseId: string) => void;
+	onJumpToStep: (stepIndex: number) => void;
 	onJumpToAgent?: () => void;
+}
+
+/** A step's `^`/`v` targets resolve to `onJumpToStep(stepIndex)` — the entry
+ *  already carries which step_index, if any, to jump to on each side. */
+function stepJumpHandlers(entry: StepRowData, onJumpToStep: (stepIndex: number) => void) {
+	const prev = entry.prevSameFileStepIndex;
+	const next = entry.nextSameFileStepIndex;
+	return {
+		onJumpPrev: prev !== null ? () => onJumpToStep(prev) : undefined,
+		onJumpNext: next !== null ? () => onJumpToStep(next) : undefined,
+	};
 }
 
 /**
@@ -73,10 +87,12 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 							<Show when={fr().stepsOpen}>
 								<div class={s.nestedSteps}>
 									<For each={fr().steps}>
-										{(step) => (
+										{(entry) => (
 											<StepCard
-												step={step}
+												step={entry.step}
 												mode={props.mode}
+												collapsed={entry.collapsed}
+												onToggleCollapsed={() => props.onToggleStepCollapsed(entry.step.tool_use_id)}
 												onOpenAtLine={props.onOpenAtLine}
 												onRevertStep={props.onRevertStep}
 												onCopyStep={props.onCopyStep}
@@ -96,6 +112,9 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 						step={sr().step}
 						mode={props.mode}
 						showFilePath
+						collapsed={sr().collapsed}
+						onToggleCollapsed={() => props.onToggleStepCollapsed(sr().step.tool_use_id)}
+						{...stepJumpHandlers(sr(), props.onJumpToStep)}
 						onOpenAtLine={props.onOpenAtLine}
 						onRevertStep={props.onRevertStep}
 						onCopyStep={props.onCopyStep}
@@ -118,9 +137,12 @@ export interface SessionDiffListProps {
 	onCopyFile: (group: FileReview) => void;
 	onToggleExpanded: (absPath: string) => void;
 	onToggleStepsOpen: (absPath: string) => void;
+	onToggleStepCollapsed: (toolUseId: string) => void;
+	onJumpToStep: (stepIndex: number) => void;
 	onJumpToAgent?: () => void;
 	scrollRef?: (el: HTMLElement) => void;
 	header?: JSX.Element;
+	ref?: (handle: DiffListNavHandle) => void;
 }
 
 /**
@@ -162,6 +184,21 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 		},
 	});
 
+	// `getVirtualItems()` is already Solid's own reactive read for this
+	// virtualizer (used below inside `<For>`) — tracking it here too keeps
+	// `currentIndex` live as the user scrolls, without reimplementing any of
+	// the virtualizer's own range math.
+	const [currentIndex, setCurrentIndex] = createSignal(0);
+	createEffect(() => {
+		const items = virtualizer.getVirtualItems();
+		if (items.length > 0) setCurrentIndex(items[0].index);
+	});
+	props.ref?.({
+		scrollToIndex: (index, opts) => virtualizer.scrollToIndex(index, { align: opts?.align ?? "auto" }),
+		currentIndex,
+		rowCount: () => props.rows.length,
+	});
+
 	return (
 		<div
 			class={fl.container}
@@ -194,6 +231,8 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 											onCopyFile={props.onCopyFile}
 											onToggleExpanded={props.onToggleExpanded}
 											onToggleStepsOpen={props.onToggleStepsOpen}
+											onToggleStepCollapsed={props.onToggleStepCollapsed}
+											onJumpToStep={props.onJumpToStep}
 											onJumpToAgent={props.onJumpToAgent}
 										/>
 									)}
