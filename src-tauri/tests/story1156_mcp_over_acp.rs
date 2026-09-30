@@ -235,6 +235,48 @@ fn the_snapshot_reads_mcp_acp_from_the_agent() {
     );
 }
 
+/// A session against an ego that never advertised `mcpCapabilities.acp` is
+/// refused, naming the missing capability, without a byte reaching the agent.
+///
+/// That ego would answer `session/new` with a session id and drop the server,
+/// leaving a chat with no tuicommander tools and no error (#1270-6d4c). The
+/// scenario's last step fails if any frame arrives.
+#[tokio::test]
+async fn a_session_is_refused_when_the_agent_never_advertised_mcp_acp() {
+    let fixture = Fixture::with("no-mcp-acp");
+    fixture.manager.set_mcp_host(Arc::new(Recorder::default()));
+    let connection = fixture
+        .manager
+        .connect_with_peer(
+            &Fixture::config(),
+            tuicommander_lib::acp::AcpConnectRequest {
+                root: fixture.root(),
+            },
+            PEER.to_owned(),
+        )
+        .await
+        .expect("connect");
+
+    let error = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect_err("an agent without mcpCapabilities.acp");
+    assert_eq!(
+        error.code,
+        tuicommander_lib::acp::AcpClientErrorCode::CapabilityUnavailable
+    );
+    assert_eq!(
+        error.operation,
+        Some(tuicommander_lib::acp::AcpOperation::McpAcp)
+    );
+    assert!(
+        error.message.contains("McpAcp"),
+        "the refusal names the missing support: {}",
+        error.message
+    );
+}
+
 /// A cancelled tool call is answered as cancelled, and stops.
 ///
 /// ego keeps per-call cancellation, so dropping a late reply is not enough: a
