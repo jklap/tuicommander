@@ -2403,6 +2403,31 @@ describe("transport", () => {
 			);
 		});
 
+		// Catches: a fixed client-side AbortController (was 30 s) shorter than a backend
+		// deadline such as ego's 60 s initialize, surfacing "signal is aborted" instead of the backend message.
+		it("does not abort a request before the backend answers, however long it takes", async () => {
+			vi.useFakeTimers();
+			try {
+				const { rpc } = await import("../transport");
+				let signal: AbortSignal | undefined;
+				globalThis.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+					signal = init.signal ?? undefined;
+					return new Promise((resolve) => {
+						setTimeout(() => resolve(jsonResponse('{"ok":true}')), 90_000);
+					});
+				});
+
+				const pending = rpc<{ ok: boolean }>("list_active_sessions");
+				await vi.advanceTimersByTimeAsync(89_000);
+
+				expect(signal?.aborted ?? false).toBe(false);
+				await vi.advanceTimersByTimeAsync(2_000);
+				await expect(pending).resolves.toEqual({ ok: true });
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("sends the selected Claude profile root when verifying a browser resume", async () => {
 			const { rpc } = await import("../transport");
 			globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("true"));

@@ -2587,24 +2587,18 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	}
 	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
 
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), 30_000);
-
+	// No client-side deadline: Tauri invoke() has none, and a fixed cap here cut
+	// backend calls that own a longer deadline (ego initialize: 60 s) with
+	// "signal is aborted" instead of the backend's own message.
 	const init: RequestInit = {
 		method: mapping.method,
 		headers: { "Content-Type": "application/json" },
-		signal: controller.signal,
 	};
 	if (mapping.body !== undefined) {
 		init.body = JSON.stringify(mapping.body);
 	}
 
-	let resp: Response;
-	try {
-		resp = await fetch(url, init);
-	} finally {
-		clearTimeout(timeoutId);
-	}
+	const resp = await fetch(url, init);
 	if (!resp.ok) {
 		if (resp.status === 404 && mapping.notFoundAsNull) {
 			return null as T;
