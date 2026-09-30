@@ -40,6 +40,121 @@ fn agent_alternate_screen_warning_is_once_per_session() {
     assert!(!processor.should_warn_alt_screen(Some("codex"), true));
 }
 
+/// Feed `chunks` to a fresh processor for `session_id` and return the alt-screen
+/// toasts the bus carried, as (title, message, origin_session_id).
+fn alt_screen_toasts(
+    session_id: &str,
+    agent_type: Option<&str>,
+    chunks: &[&str],
+    startup_elapsed: std::time::Duration,
+) -> Vec<(String, String, Option<String>)> {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = agent_type.map(String::from);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.startup_deadline -= startup_elapsed;
+    let mut events = state.event_bus.subscribe();
+    for chunk in chunks {
+        processor.process_chunk(chunk, &silence, session_id, &state);
+    }
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::McpToast {
+                title,
+                message,
+                origin_session_id,
+                ..
+            } => Some((title, message.unwrap_or_default(), origin_session_id)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn startup_alt_screen_entry_toasts_once_naming_the_session() {
+    for enter in ["\x1b[?1049h", "\x1b[?47h", "\x1b[?1047h"] {
+        let toasts = alt_screen_toasts(
+            "startup-alt-toast",
+            Some("claude"),
+            &[enter, "\x1b[?1049l\x1b[?1049h"],
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(toasts.len(), 1, "{enter:?}: one toast per session");
+        let (title, message, origin) = &toasts[0];
+        assert!(title.contains("alternate screen"), "{enter:?}: {title}");
+        assert!(
+            message.contains("startup-alt-toast"),
+            "{enter:?}: {message}"
+        );
+        assert_eq!(origin.as_deref(), Some("startup-alt-toast"));
+    }
+}
+
+#[test]
+fn startup_alt_screen_toast_covers_plain_shells() {
+    let toasts = alt_screen_toasts(
+        "startup-alt-shell",
+        None,
+        &["\x1b[?1049h"],
+        std::time::Duration::ZERO,
+    );
+    assert_eq!(toasts.len(), 1);
+}
+
+#[test]
+fn alt_screen_after_the_startup_window_does_not_toast() {
+    let toasts = alt_screen_toasts(
+        "late-alt-toast",
+        None,
+        &["\x1b[?1049h"],
+        std::time::Duration::from_secs(3600),
+    );
+    assert!(
+        toasts.is_empty(),
+        "vim/less later in the session: {toasts:?}"
+    );
+}
+
+#[test]
+fn alt_screen_entered_and_left_in_one_chunk_does_not_toast() {
+    let toasts = alt_screen_toasts(
+        "probe-alt-toast",
+        Some("codex"),
+        &["\x1b[?1049h\x1b[?1049l"],
+        std::time::Duration::ZERO,
+    );
+    assert!(toasts.is_empty(), "transient probe: {toasts:?}");
+}
+
+#[test]
+fn alt_screen_toast_text_names_the_fix_per_agent() {
+    let claude = alt_screen_toast_message("s", Some("claude"));
+    assert!(claude.contains("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+    assert!(claude.contains("CLAUDE_CODE_DISABLE_AGENT_VIEW"));
+    assert!(alt_screen_toast_message("s", Some("codex")).contains("--no-alt-screen"));
+    assert!(alt_screen_toast_message("s", Some("opencode")).contains("--mini"));
+    for agent in [None, Some("aider")] {
+        let text = alt_screen_toast_message("s", agent);
+        assert!(text.contains("scrollback"), "{agent:?}: {text}");
+        assert!(text.contains("state detection"), "{agent:?}: {text}");
+    }
+}
+
 #[test]
 fn pty_identity_defaults_claude_to_native_scrollback() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -68,6 +183,23 @@ fn pty_identity_defaults_claude_to_native_scrollback() {
     assert_eq!(
         ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
         Some(std::ffi::OsStr::new("1"))
+    );
+}
+
+#[test]
+fn spawned_claude_disables_the_alt_screen_agent_view() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut cmd, "agent-view-default", None);
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_AGENT_VIEW"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    // A caller's explicit value, applied afterwards, keeps precedence.
+    cmd.env("CLAUDE_CODE_DISABLE_AGENT_VIEW", "0");
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_AGENT_VIEW"),
+        Some(std::ffi::OsStr::new("0"))
     );
 }
 
