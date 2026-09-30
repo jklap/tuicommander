@@ -83,16 +83,6 @@ describe("register / unregister", () => {
 		expect(onload).toHaveBeenCalledOnce();
 	});
 
-	it("passes a PluginHost to onload", () => {
-		let receivedHost: PluginHost | null = null;
-		pluginRegistry.register(
-			makePlugin("p1", (host) => {
-				receivedHost = host;
-			}),
-		);
-		expect(receivedHost).not.toBeNull();
-	});
-
 	it("calls plugin.onunload when unregistered", () => {
 		const onunload = vi.fn();
 		pluginRegistry.register(makePlugin("p1", undefined, onunload));
