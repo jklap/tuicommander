@@ -65,7 +65,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		return tid;
 	}
 
-	/** Put an omitted worktree past the creation grace so only the probe decides. */
+	/** Let a refresh stamp the workspaces just added, then pass the creation grace so only the probe decides. */
 	async function ageOut(): Promise<void> {
 		await refresh("/repo");
 		vi.advanceTimersByTime(61_000);
@@ -76,7 +76,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		// leaving a ghost row with a dead terminal forever.
 		await refresh("/repo");
 		const tid = addWorktreeWithTerminal("gone", "/wt/gone");
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		await refresh("/repo");
 		expect(closeTerminal).toHaveBeenCalledWith(tid, true);
 		expect(repositoriesStore.get("/repo")?.workspaces.gone).toBeUndefined();
@@ -88,7 +88,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		// that never ends and the sidebar/git panel stop updating until restart.
 		await refresh("/repo");
 		const tid = addWorktreeWithTerminal("hung", "/wt/hung");
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		probe = () => new Promise(() => {});
 		const settled = vi.fn();
 		void refresh("/repo").then(settled);
@@ -103,7 +103,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		// 2s stall structure reconciliation for 24s.
 		await refresh("/repo");
 		for (let i = 0; i < 12; i++) addWorktreeWithTerminal(`w${i}`, `/wt/w${i}`);
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		probe = (path) =>
 			new Promise((resolve) => setTimeout(() => resolve({ branch: "x", is_git_repo: path === "/repo" }), 2_000));
 		const settled = vi.fn();
@@ -120,7 +120,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		const boom = addWorktreeWithTerminal("boom", "/wt/boom");
 		const gone1 = addWorktreeWithTerminal("gone1", "/wt/gone1");
 		const gone2 = addWorktreeWithTerminal("gone2", "/wt/gone2");
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		probe = async (path) => {
 			if (path === "/wt/boom") throw new Error("ipc failed");
 			return { branch: "x", is_git_repo: path === "/repo" || path === "/wt/live" };
@@ -138,9 +138,9 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 	it("a worktree kept by a live probe is judged again by the next refresh once it is gone", async () => {
 		// Bug caught: the keep path marks the branch as processed (or stamps it), so the
 		// checkout deleted a moment later is never closed and the ghost row is immortal.
-		await ageOut();
+		await refresh("/repo"); // the repo's first refresh: later additions get a real first-seen stamp
 		const tid = addWorktreeWithTerminal("late", "/wt/late");
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		probe = async () => ({ branch: "x", is_git_repo: true });
 		await refresh("/repo");
 		expect(closeTerminal).not.toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		// duplicate row lives next to it.
 		await refresh("/repo");
 		const tid = addWorktreeWithTerminal("old", "/wt/reused");
-		vi.advanceTimersByTime(61_000);
+		await ageOut();
 		structure = { main: "/repo", fresh: "/wt/reused" };
 		probe = async () => ({ branch: "x", is_git_repo: true });
 		await refresh("/repo");
