@@ -240,6 +240,31 @@ run `pnpm exec vitest run` directly and check whether the `Tests` line shows 0 r
 so, this is that known flake, not your change. Use `./scripts/check-gate.sh` (or `make
 check-gate`), which detects and calls this out automatically.
 
+**Audio-device-enumeration tests can hang indefinitely behind an un-granted macOS permission
+prompt, not a code bug.** Found 2026-09-30 running the full gate after an unrelated
+`to-test.md`-only change: `cargo nextest run --workspace` timed out (120s each) on
+`notification_sound::tests::list_output_devices_has_at_most_one_default_and_no_duplicate_names`,
+`::resolve_output_stream_falls_back_to_default_for_an_unknown_device_name`,
+`::resolve_output_stream_opens_a_named_device_when_one_is_available`,
+`mcp_http::config_routes::tests::list_audio_output_devices_http_returns_a_device_array`, and
+`mcp_http::tests::every_dictation_and_os_integration_path_has_a_route` (the last one only because
+its full-route-coverage sweep also calls the audio-device route). All five call
+`notification_sound::list_output_devices` → `rodio::cpal::default_host().output_devices()`/
+`default_output_device()` — real CoreAudio enumeration — with no timeout wrapping either call.
+On a machine where the audio-device (TCC) permission has never been granted/confirmed for this
+process, macOS shows a system permission dialog and the underlying `cpal` call blocks waiting for
+it; in a fully headless/automated run nothing is there to click it, so it hangs forever instead of
+erroring. Confirmed unrelated to any code change: both `notification_sound.rs` and
+`config_routes.rs` were last touched by commits from well before the session that first hit this,
+and the hang reproduces on a bare re-run of just these tests. This is the same *shape* as the
+"interactive Keychain" precondition in the ignored-tests table above, but worse: those are
+`#[ignore]`d (absent from an unattended run, not a hang), while these five are ordinary `#[test]`s
+that block the whole gate. If `check-gate`/`cargo nextest` hangs specifically on these five test
+names, grant/confirm the audio-device permission prompt for the terminal/process running the
+tests (System Settings → Privacy & Security, or just let the prompt appear and click through it
+once interactively) and re-run — do not treat it as a regression from whatever you just changed
+unless your diff actually touches `notification_sound.rs`/audio playback code.
+
 
 ## Building
 
