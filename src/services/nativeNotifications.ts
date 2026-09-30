@@ -9,6 +9,8 @@ interface NativeNotice {
 	body: string;
 	key: string;
 	target: NativeNoticeTarget;
+	/** Re-checked after the permission await; a native notice cannot be withdrawn once sent. */
+	isCurrent?: () => boolean;
 }
 
 const DEDUP_MS = 5_000;
@@ -32,7 +34,7 @@ export async function showNativeNotice(notice: NativeNotice): Promise<void> {
 	if (!isTauri() || document.hasFocus()) return;
 	const now = Date.now();
 	if (now - (recent.get(notice.key) ?? -Infinity) < DEDUP_MS) return;
-	if (!(await canNotify()) || document.hasFocus()) return;
+	if (!(await canNotify()) || document.hasFocus() || notice.isCurrent?.() === false) return;
 	// Record after permission succeeds and focus is checked again.
 	const sentAt = Date.now();
 	if (sentAt - (recent.get(notice.key) ?? -Infinity) < DEDUP_MS) return;
