@@ -4248,6 +4248,36 @@ mod tests {
         assert_eq!(after, before);
     }
 
+    // #1264-89c8 criterion 3: with output landing while scrolled back, sweeping the
+    // whole buffer from the top shows every retained line once, in order, also
+    // after the scrollback cap has trimmed the oldest ones.
+    #[test]
+    fn scrolled_back_output_leaves_every_retained_line_in_order_at_the_cap() {
+        let (rows, cap, total) = (3usize, 10usize, 60usize);
+        let mut grid = TerminalGrid::new(rows as u16, 20, cap);
+        for i in 0..8 {
+            let _ = grid.process(format!("l{i}\r\n").as_bytes());
+        }
+        grid.scroll_to_offset(3);
+        for i in 8..total {
+            let sep = if i + 1 < total { "\r\n" } else { "" };
+            let _ = grid.process(format!("l{i}{sep}").as_bytes());
+            grid.scroll_to_offset(grid.display_offset());
+        }
+
+        // Top row at each offset, cap..=0, then the rest of the bottom page.
+        let mut seen = Vec::new();
+        for off in (0..=cap).rev() {
+            grid.scroll_to_offset(off);
+            seen.push(grid.get_row_text(0));
+        }
+        seen.extend((1..rows).map(|r| grid.get_row_text(r)));
+        let expected: Vec<String> = (total - cap - rows..total)
+            .map(|i| format!("l{i}"))
+            .collect();
+        assert_eq!(seen, expected);
+    }
+
     #[test]
     fn scroll_to_offset_clamps_and_is_exact() {
         let mut grid = TerminalGrid::new(3, 20, 100);
