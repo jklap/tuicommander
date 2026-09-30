@@ -4107,7 +4107,7 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     let script = root.path().join("claude");
     let accepted = root.path().join("accepted");
     let observed_keys = root.path().join("keys");
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\ncat '{}'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b420d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", dialog.display(), observed_keys.display(), accepted.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\ncat '{}'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b420d ]; then printf 'accepted:%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", dialog.display(), observed_keys.display(), accepted.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4129,6 +4129,8 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     );
     assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
     let sid = spawned["session_id"].as_str().unwrap();
+    // The stand-in records `accepted:<first positional>` once it sees the
+    // trust answer; the positional is empty now that the prompt is withheld.
     let task = wait_for_file_content_async(&accepted, std::time::Duration::from_secs(5)).await;
     let output = handle_session(
         &state,
@@ -4146,9 +4148,16 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
         std::fs::read_to_string(&observed_keys)
     );
+    // An interactive claude spawn withholds its prompt from argv and delivers
+    // it through the mailbox once the child's MCP identity binds
+    // (`should_defer_prompt_for_mcp_bind`), so argv must NOT carry it here.
     assert!(
-        task.contains("say READY"),
-        "spawn prompt must remain submitted: {task}"
+        !task.contains("say READY"),
+        "an interactive claude prompt is deferred, not in argv: {task}"
+    );
+    assert!(
+        spawned["prompt_delivery"].is_string(),
+        "the spawn response must say the prompt is queued: {spawned}"
     );
 }
 
@@ -4280,7 +4289,7 @@ fn literal_codex_wrapper_default_keeps_positional_task_delivery() {
     }))
     .unwrap();
     let resolved = resolve_run_config("codex", &cfg);
-    let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+    let (argv, deferred, _deferred_mcp_bind) = compose_mcp_spawn_args(McpSpawnArgs {
         agent_type: &resolved.agent_type,
         args: resolved.args.as_ref().unwrap(),
         prompt: "perform the task",
@@ -4288,6 +4297,7 @@ fn literal_codex_wrapper_default_keeps_positional_task_delivery() {
         print_mode: false,
         output_format: None,
         default_template: false,
+        defer_for_mcp_bind: false,
     })
     .unwrap();
     assert_eq!(
@@ -4420,9 +4430,11 @@ fn finalize_codex_withholds_prompt_from_argv() {
     // codex's positional prompt only prefills its TUI (never submits):
     // the placeholder must be dropped and the task deferred for injection.
     let merged = vec!["{prompt}".to_string()];
-    let (argv, deferred) = finalize_spawn_args("codex", &merged, "say pong");
+    let (argv, deferred, deferred_mcp_bind) =
+        finalize_spawn_args("codex", &merged, "say pong", false);
     assert!(argv.is_empty(), "codex argv must not carry the task");
     assert_eq!(deferred.as_deref(), Some("say pong"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
@@ -4432,9 +4444,10 @@ fn finalize_codex_keeps_flags_drops_prompt() {
         "--model".to_string(),
         "o4".to_string(),
     ];
-    let (argv, deferred) = finalize_spawn_args("codex", &merged, "task");
+    let (argv, deferred, deferred_mcp_bind) = finalize_spawn_args("codex", &merged, "task", false);
     assert_eq!(argv, vec!["--model", "o4"]);
     assert_eq!(deferred.as_deref(), Some("task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
@@ -4442,9 +4455,10 @@ fn finalize_codex_defers_even_without_placeholder() {
     // Run-config args with no {prompt}: substitute would APPEND the prompt,
     // which for codex still only prefills — defer it instead.
     let merged = vec!["--fast".to_string()];
-    let (argv, deferred) = finalize_spawn_args("codex", &merged, "task");
+    let (argv, deferred, deferred_mcp_bind) = finalize_spawn_args("codex", &merged, "task", false);
     assert_eq!(argv, vec!["--fast"]);
     assert_eq!(deferred.as_deref(), Some("task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
@@ -4459,7 +4473,7 @@ fn explicit_codex_flags_keep_flags_and_defer_prompt() {
 #[test]
 fn codex_spawn_composition_preserves_model_with_explicit_args() {
     let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
-    let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+    let (argv, deferred, deferred_mcp_bind) = compose_mcp_spawn_args(McpSpawnArgs {
         agent_type: "codex",
         args: &explicit,
         prompt: "perform the task",
@@ -4467,6 +4481,7 @@ fn codex_spawn_composition_preserves_model_with_explicit_args() {
         print_mode: false,
         output_format: None,
         default_template: false,
+        defer_for_mcp_bind: false,
     })
     .unwrap();
 
@@ -4479,13 +4494,14 @@ fn codex_spawn_composition_preserves_model_with_explicit_args() {
         ]
     );
     assert_eq!(deferred.as_deref(), Some("perform the task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
 fn direct_codex_explicit_args_without_agent_type_use_codex_semantics() {
     let explicit = vec!["--search".to_string()];
     let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
-    let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+    let (argv, deferred, deferred_mcp_bind) = compose_mcp_spawn_args(McpSpawnArgs {
         agent_type: &agent_type,
         args: &explicit,
         prompt: "perform the task",
@@ -4493,18 +4509,20 @@ fn direct_codex_explicit_args_without_agent_type_use_codex_semantics() {
         print_mode: false,
         output_format: None,
         default_template: false,
+        defer_for_mcp_bind: false,
     })
     .unwrap();
 
     assert_eq!(argv, vec!["--search"]);
     assert_eq!(deferred.as_deref(), Some("perform the task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
 fn direct_codex_binary_path_without_args_defers_prompt() {
     let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
     let template = crate::agent::default_prompt_args("codex").unwrap();
-    let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+    let (argv, deferred, deferred_mcp_bind) = compose_mcp_spawn_args(McpSpawnArgs {
         agent_type: &agent_type,
         args: &template,
         prompt: "perform the task",
@@ -4512,11 +4530,13 @@ fn direct_codex_binary_path_without_args_defers_prompt() {
         print_mode: false,
         output_format: None,
         default_template: true,
+        defer_for_mcp_bind: false,
     })
     .unwrap();
 
     assert_eq!(argv, vec!["--model", "gpt-5.6-luna"]);
     assert_eq!(deferred.as_deref(), Some("perform the task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
@@ -4551,11 +4571,44 @@ fn explicit_claude_placeholder_remains_authoritative() {
 }
 
 #[test]
+fn finalize_claude_defers_for_mcp_bind_when_requested() {
+    // The direct unit-level counterpart to the critical bug a code review
+    // caught: `finalize_spawn_args` itself must honor `defer_for_mcp_bind`
+    // for claude's default template, not just whichever call site happens
+    // to reach it. `prompt_prefill_only` takes precedence when both would
+    // apply (it never does for claude, checked here for the boundary).
+    let merged = vec!["{prompt}".to_string()];
+    let (argv, deferred, deferred_mcp_bind) =
+        finalize_spawn_args("claude", &merged, "the real task", true);
+    assert!(
+        argv.is_empty(),
+        "the prompt placeholder must be dropped from argv when deferred"
+    );
+    assert!(
+        deferred.is_none(),
+        "must not also populate the unrelated pending-injection slot"
+    );
+    assert_eq!(deferred_mcp_bind.as_deref(), Some("the real task"));
+
+    // Sanity boundary: prefill-only wins over defer_for_mcp_bind if both
+    // were somehow requested (never happens for a real spawn today, since
+    // `should_defer_prompt_for_mcp_bind` only returns true for claude and
+    // `prompt_prefill_only` is codex/opencode-only, but the function's own
+    // contract should still be well-defined here).
+    let (argv, deferred, deferred_mcp_bind) =
+        finalize_spawn_args("codex", &merged, "the real task", true);
+    assert!(argv.is_empty());
+    assert_eq!(deferred.as_deref(), Some("the real task"));
+    assert!(deferred_mcp_bind.is_none());
+}
+
+#[test]
 fn finalize_other_agents_substitute_as_before() {
     let merged = vec!["session".to_string(), "{prompt}".to_string()];
-    let (argv, deferred) = finalize_spawn_args("goose", &merged, "do it");
+    let (argv, deferred, deferred_mcp_bind) = finalize_spawn_args("goose", &merged, "do it", false);
     assert_eq!(argv, vec!["session", "do it"]);
     assert!(deferred.is_none(), "non-prefill agents keep argv delivery");
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]
@@ -4605,8 +4658,10 @@ fn claude_template_argv_byte_identical_to_retired_branch() {
         let merged =
             merge_mcp_params_into_args("claude", &template, model, print_mode, output_format, true)
                 .expect("no conflicts");
-        let (argv, deferred) = finalize_spawn_args("claude", &merged, prompt);
+        let (argv, deferred, deferred_mcp_bind) =
+            finalize_spawn_args("claude", &merged, prompt, false);
         assert!(deferred.is_none(), "claude keeps argv prompt delivery");
+        assert!(deferred_mcp_bind.is_none());
         argv
     };
     for (model, print_mode, output_format) in [
@@ -4726,7 +4781,7 @@ fn direct_codex_executable_overrides_mismatched_bucket_semantics() {
     let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", Some("claude")).unwrap();
     assert_eq!(agent_type, "codex");
 
-    let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+    let (argv, deferred, deferred_mcp_bind) = compose_mcp_spawn_args(McpSpawnArgs {
         agent_type: &agent_type,
         args: &["--search".to_string()],
         prompt: "perform the task",
@@ -4734,10 +4789,12 @@ fn direct_codex_executable_overrides_mismatched_bucket_semantics() {
         print_mode: false,
         output_format: None,
         default_template: false,
+        defer_for_mcp_bind: false,
     })
     .unwrap();
     assert_eq!(argv, vec!["--search"]);
     assert_eq!(deferred.as_deref(), Some("perform the task"));
+    assert!(deferred_mcp_bind.is_none());
 }
 
 #[test]

@@ -1417,6 +1417,24 @@ pub(crate) async fn spawn_agent(
     let attachment_dir =
         crate::attachments::prepare_session_directory(&state.data_dir, "pty", &session_id)?;
 
+    // See `mcp_transport.rs`'s `should_defer_prompt_for_mcp_bind` doc comment for why this
+    // is scoped to claude, non-print-mode spawns only, and threaded through
+    // `spawn_deferred_prompt_delivery` after the session is registered below. This is the
+    // desktop IPC counterpart of `agent_routes::spawn_agent_session`'s identical HTTP-route
+    // fix — same effective-agent-type resolution shape (explicit `agent_type`, else
+    // default to "claude"), just via `AgentConfig` instead of `SpawnAgentRequest`.
+    let effective_agent_type = agent_config
+        .agent_type
+        .clone()
+        .unwrap_or_else(|| "claude".to_string());
+    // Only the default argv shape embeds the prompt; explicit `args` never carry
+    // it, so there is nothing to withhold (and nothing must be delivered later).
+    let defer_prompt_for_mcp_bind = agent_config.args.is_none()
+        && crate::mcp_http::mcp_transport::should_defer_prompt_for_mcp_bind(
+            Some(effective_agent_type.as_str()),
+            agent_config.print_mode,
+        );
+
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
@@ -1456,8 +1474,10 @@ pub(crate) async fn spawn_agent(
                     launch_args.push(model.clone());
                 }
 
-                // Add prompt
-                launch_args.push(spawn_agent_config.prompt.clone());
+                // Add prompt, unless withheld for deferred mailbox delivery below.
+                if !defer_prompt_for_mcp_bind {
+                    launch_args.push(spawn_agent_config.prompt.clone());
+                }
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
             let final_args = crate::agent_hook_launch::launch_args(
@@ -1532,10 +1552,13 @@ pub(crate) async fn spawn_agent(
         spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
         ..Default::default()
     };
-    session_state.seed_configured_agent(agent_config.agent_type.clone());
+    // Seeded with the effective type (explicit `agent_type`, else the "claude"
+    // default this command launches) — the deferred prompt delivery below needs
+    // `session_states[id].agent_type` set for `deliver_notice_to_managed_pty`.
+    session_state.seed_configured_agent(Some(effective_agent_type.clone()));
     session_state.hook_instrumented = crate::pty::hook_instrumented_for(
         &crate::config::load_agents_config(),
-        agent_config.agent_type.as_deref(),
+        Some(effective_agent_type.as_str()),
     );
     state
         .session_maps
@@ -1546,7 +1569,7 @@ pub(crate) async fn spawn_agent(
     // the `PtySession` struct below — `emit_session_created` at the end of
     // this function needs the same values.
     let created_cwd = agent_config.cwd.clone().or_else(|| pty_config.cwd.clone());
-    let created_agent_type = agent_config.agent_type.clone();
+    let created_agent_type = Some(effective_agent_type.clone());
     let created_display_name = pty_config.display_name.clone();
 
     // Store session (master handle kept for resize support)
@@ -1610,6 +1633,21 @@ pub(crate) async fn spawn_agent(
         state.inner().clone(),
         None,
     );
+
+    // Withheld from argv above by `defer_prompt_for_mcp_bind` — deliver it once this
+    // session's own MCP identity binds (bounded, fail-open). See
+    // `spawn_deferred_prompt_delivery`'s doc comment. `from_tuic_session: None` — this
+    // desktop command has no separate caller-agent identity to attribute the message to;
+    // `pty_config.tuic_session` is this NEW session's own persisted identity (for
+    // resume-after-restart), not a caller's.
+    if defer_prompt_for_mcp_bind {
+        crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery(
+            state.inner().clone(),
+            session_id.clone(),
+            None,
+            agent_config.prompt.clone(),
+        );
+    }
 
     Ok(session_id)
 }

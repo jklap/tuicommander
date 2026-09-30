@@ -1601,7 +1601,17 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
 /// directive text is present and the old hedged phrasing is gone, so a
 /// future edit can't silently revert to the measured-ineffective
 /// wording.
+///
+/// `#[serial_test::serial]`: reads claude-family per-agent config via
+/// `build_mcp_instructions(&state, Some("claude-code"))`, which is exactly
+/// the hazard `AGENTS.md`'s "MCP `initialize` Instructions: Per-Agent
+/// Config Tests Must Be `#[serial_test::serial]`" section warns about —
+/// confirmed flaky in practice once sibling tests started writing
+/// claude-family `agents.json` config concurrently (passes reliably in
+/// isolation; failed with a truncated instructions string under a full
+/// parallel run).
 #[test]
+#[serial_test::serial]
 fn instructions_prefer_tuicommander_bullet_uses_the_unhedged_directive() {
     let state = test_state();
     let out = build_mcp_instructions(&state, Some("claude-code"));
@@ -1965,6 +1975,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
             1_700_000_000_000,
             Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
             None,
+            false,
             false,
         ))
         .unwrap(),
