@@ -2909,6 +2909,28 @@ mod tests {
         );
     }
 
+    /// Mirrors `set_session_accent_color_404s_for_an_unknown_session` — the
+    /// existence check is a hand-copied guard in both handlers, so a change to
+    /// one can silently drop the other. `set_session_display_name` itself
+    /// (`state.rs`) also no-ops on an unknown session id, but that's covered
+    /// indirectly via this 404 rather than a bare `false` on the raw function.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_404s_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+        let resp = set_session_name(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(SetNameRequest {
+                name: Some("hello".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     /// Regression for the tab-name-flapping bug: the frontend's `update()`
     /// echoes any `name`/`nameIsCustom` change back to `set_session_name`
     /// (so a reconnect can distinguish a user-protected rename from a
@@ -2977,6 +2999,53 @@ mod tests {
                 assert_eq!(display_name, Some("world".to_string()));
             }
             other => panic!("expected SessionRenamed on a genuine rename, got {other:?}"),
+        }
+    }
+
+    /// `set_session_display_name`'s `changed` check is `name != .. ||
+    /// is_custom != ..` — a flip of `is_custom` alone, with the exact same
+    /// name text, must still count as a real change and emit. Every other
+    /// test in this file only ever varies the name text; this is the one
+    /// direct coverage for the `is_custom`-only branch of that OR.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_emits_when_only_is_custom_flips() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-is-custom-flip";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: Some("same name".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await;
+        rx.try_recv().expect("first rename must emit");
+
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: Some("same name".to_string()),
+                is_custom: Some(true),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionRenamed {
+                display_name,
+                is_custom,
+                ..
+            }) => {
+                assert_eq!(display_name, Some("same name".to_string()));
+                assert!(is_custom);
+            }
+            other => panic!("expected SessionRenamed when only is_custom flipped, got {other:?}"),
         }
     }
 

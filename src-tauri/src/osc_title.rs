@@ -484,6 +484,56 @@ mod tests {
         assert_eq!(name, Some(Some("Terminal 1".to_string())));
     }
 
+    /// The exact trigger shape behind the tab-name-flapping bug: a real
+    /// title arriving immediately followed by a ResetTitle (or an unusable
+    /// title) settles at the base name after exactly two `SessionRenamed`
+    /// emits — one for the title, one for the restore — never re-emitting
+    /// on top of that once settled. The test above only asserts the final
+    /// state; this is the event-count half of the same scenario, the shape
+    /// a frontend echo turns into an unbounded ping-pong if it isn't itself
+    /// guarded (see `terminals.ts`'s `update()` and its
+    /// `applyBackendRename`/`{echo:false}` fix).
+    #[test]
+    fn a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles() {
+        let state = fresh_state();
+        insert_bare_session(&state, "s1");
+        state.set_session_display_name("s1", Some("to-test".into()), false);
+        let mut rx = state
+            .session_maps
+            .pty_event_channels
+            .entry("s1".to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0)
+            .subscribe();
+        let mut base = None;
+
+        apply_osc_title(&state, "s1", Some("claude · resume"), &mut base);
+        apply_osc_title(&state, "s1", None, &mut base); // ResetTitle
+
+        let mut count = 0;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(event, AppEvent::SessionRenamed { .. }) {
+                count += 1;
+            }
+        }
+        assert_eq!(
+            count, 2,
+            "expected exactly two SessionRenamed emits: one for the title, one for the restore"
+        );
+        let name = state
+            .session_maps
+            .sessions
+            .get("s1")
+            .map(|s| s.lock().display_name.clone());
+        assert_eq!(name, Some(Some("to-test".to_string())));
+
+        // Settled: repeating the exact same restore must not re-emit.
+        apply_osc_title(&state, "s1", None, &mut base);
+        assert!(
+            rx.try_recv().is_err(),
+            "a repeat ResetTitle onto an already-restored name must not re-emit"
+        );
+    }
+
     #[test]
     fn the_base_name_is_recorded_once_and_not_overwritten_by_a_later_title() {
         let state = fresh_state();
