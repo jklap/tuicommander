@@ -2930,18 +2930,29 @@ mod tests {
                         "{name} k={k} step {step}: history row {idx} changed after commit"
                     ),
                     None => {
-                        assert_eq!(idx, next_index, "{name}: history rows skipped an index");
+                        // A jump is legitimate only to the oldest retained row: the
+                        // cap evicted, or the agent erased scrollback (ESC[3J), rows
+                        // this replay never saw.
+                        assert!(
+                            idx == next_index || idx == base,
+                            "{name} k={k} step {step}: history rows skipped to {idx} (expected {next_index})"
+                        );
                         committed.insert(idx, text);
-                        next_index += 1;
+                        next_index = idx + 1;
                         stats.committed_rows += 1;
                     }
                 }
             }
-            assert_eq!(
-                next_index,
-                base + history,
-                "{name} k={k} step {step}: history rows missing (base {base}, history {history}, from {from})"
-            );
+            if history > 0 {
+                assert_eq!(
+                    next_index,
+                    base + history,
+                    "{name} k={k} step {step}: history rows missing (base {base}, history {history}, from {from})"
+                );
+            } else {
+                // Scrollback erased: nothing retained to compare, resume at the origin.
+                next_index = base;
+            }
             committed.retain(|idx, _| *idx >= base);
         }
         stats
