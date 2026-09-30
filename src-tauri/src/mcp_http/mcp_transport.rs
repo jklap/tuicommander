@@ -8132,6 +8132,34 @@ mod tests {
         );
     }
 
+    /// ego's stdio requests carry the revision only in `params._meta`; the
+    /// bridge mirrors it into the header, but a direct caller sends no header.
+    #[tokio::test]
+    async fn bridge_tool_result_carries_result_type_when_only_meta_names_the_revision() {
+        let response = mcp_post(
+            State(test_state()),
+            ConnectInfo(loopback_addr()),
+            HeaderMap::new(),
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_tools",
+                    "arguments": {"query": "session list"},
+                    "_meta": {PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION}
+                }
+            })),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(response["result"]["resultType"], "complete");
+    }
+
     #[tokio::test]
     async fn legacy_bridge_search_tools_call_keeps_its_result_shape() {
         let mut headers = HeaderMap::new();
