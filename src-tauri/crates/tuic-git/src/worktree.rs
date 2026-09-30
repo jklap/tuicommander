@@ -8437,6 +8437,50 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn a_bare_pull_follows_the_default_only_when_the_default_is_its_upstream() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let default_branch = base_branch_of(&repo);
+        let source = add_worktree(&repo, "pull-source");
+        let from_default = add_worktree(&repo, "pulls-default");
+        let from_other = add_worktree(&repo, "pulls-other");
+        commit_file(&source, "feature.txt", "source work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "pull-source"])
+            .run()
+            .unwrap();
+        for (worktree, name, upstream) in [
+            (&from_default, "pulls-default", default_branch.as_str()),
+            (&from_other, "pulls-other", "pull-source"),
+        ] {
+            git_cmd(&repo)
+                .args(["config", &format!("branch.{name}.remote"), "."])
+                .run()
+                .unwrap();
+            git_cmd(&repo)
+                .args([
+                    "config",
+                    &format!("branch.{name}.merge"),
+                    &format!("refs/heads/{upstream}"),
+                ])
+                .run()
+                .unwrap();
+            git_cmd(worktree)
+                .args(["-c", "pull.rebase=false", "pull"])
+                .run()
+                .unwrap();
+        }
+
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "pulls-default").commit_status,
+            WorkspaceCommitStatus::InSync
+        );
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "pulls-other").commit_status,
+            WorkspaceCommitStatus::Merged
+        );
+    }
+
+    #[test]
     fn a_forced_removal_discards_a_dirty_registered_worktree() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let path = add_worktree(&repo, "dirty-forced");
