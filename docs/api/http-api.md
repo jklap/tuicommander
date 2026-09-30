@@ -39,7 +39,7 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
 lists the PTYs with stored history, including closed PTYs. The list is
-newest-first in pages of 10 entries by default. `limit` is clamped to 1–100;
+newest-first in pages of 8 entries by default. `limit` is clamped to 1–100;
 `total` counts entries matching the filters before the cursor, and `nextCursor`
 is `null` after the last page. Pass it back as `cursor` to read older entries.
 There is no revision: the journal is append-only, so an entry is written once
