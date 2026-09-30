@@ -11,6 +11,11 @@ const TARGETS: &[(&str, &str)] = &[
     ("Linux aarch64", "aarch64-unknown-linux-gnu"),
     ("Darwin arm64", "aarch64-apple-darwin"),
 ];
+/// Builds the sibling tuic-remote the update fallback serves. Run from the
+/// repository root; `make dev` runs the same command so the sibling lands in
+/// the target directory of the desktop dev binary.
+const BUILD_SIBLING_COMMAND: &str =
+    "cd src-tauri && cargo build --bin tuic-remote --no-default-features";
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -102,18 +107,9 @@ async fn resolve_update_asset_from_url(
             version: env!("CARGO_PKG_VERSION").to_string(),
         }),
         Err(error) if error.starts_with("no tuic-remote release asset") => {
-            let local_identity = if known_local_target.is_none() {
-                Some(probe_local_binary(local_path).await?)
-            } else {
-                None
-            };
-            let local_target = known_local_target
-                .or_else(|| {
-                    local_identity
-                        .as_ref()
-                        .map(|identity| identity.target.as_str())
-                })
-                .ok_or_else(|| "local daemon did not report its target".to_string())?;
+            // Target first: a remote of another target has no sibling fallback
+            // whatever the sibling's state, so that is the cause to report.
+            let local_target = known_local_target.unwrap_or(env!("TUIC_TARGET_TRIPLE"));
             if target != local_target {
                 return Err(format!(
                     "release asset unavailable for remote target {target}; local tuic-remote target is {local_target}"
@@ -121,10 +117,15 @@ async fn resolve_update_asset_from_url(
             }
             if !local_path.is_file() {
                 return Err(format!(
-                    "release asset unavailable; locally built tuic-remote for {local_target} not found at {}",
+                    "release asset unavailable; locally built tuic-remote for {local_target} not found at {}; build it with: {BUILD_SIBLING_COMMAND}",
                     local_path.display()
                 ));
             }
+            let local_identity = if known_local_target.is_none() {
+                Some(probe_local_binary(local_path).await?)
+            } else {
+                None
+            };
             let binary = local_asset(local_path.to_path_buf()).await?;
             if local_identity
                 .as_ref()
@@ -147,12 +148,6 @@ async fn resolve_update_asset_from_url(
 }
 
 async fn probe_local_binary(path: &Path) -> Result<BuildIdentity, String> {
-    if !path.is_file() {
-        return Err(format!(
-            "locally built tuic-remote not found at {}",
-            path.display()
-        ));
-    }
     let mut command = tokio::process::Command::new(path);
     command.arg("--build-info").kill_on_drop(true);
     let output = tokio::time::timeout(std::time::Duration::from_secs(300), command.output())
@@ -173,7 +168,7 @@ async fn probe_local_binary(path: &Path) -> Result<BuildIdentity, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("requires --no-default-features") {
             return Err(format!(
-                "local tuic-remote at {} requires --no-default-features; run cargo build --bin tuic-remote --no-default-features from src-tauri",
+                "local tuic-remote at {} requires --no-default-features; build it with: {BUILD_SIBLING_COMMAND}",
                 path.display()
             ));
         }
@@ -592,6 +587,165 @@ mod tests {
         assert_eq!(
             selected.binary.sha256,
             "7dee7cc2fcb3d9ee8394182fe8d23a1a3d7e5c80b869b281269df9215a5abf2f"
+        );
+    }
+
+    /// A remote whose target differs from this build has no sibling fallback
+    /// whatever the sibling's state, so the missing release asset must be the
+    /// reported cause, not the missing local file.
+    #[tokio::test]
+    async fn other_target_without_asset_reports_the_target_not_the_missing_sibling() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let missing = config.path().join("tuic-remote");
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            "no-such-target-triple",
+            &format!("{}/missing", server.url()),
+            &missing,
+            None,
+        )
+        .await
+        .expect_err("no asset and no matching local build");
+
+        assert!(error.contains("no-such-target-triple"), "{error}");
+        assert!(error.contains("release asset unavailable"), "{error}");
+        assert!(!error.contains("not found at"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn same_target_without_sibling_names_the_build_command() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let missing = config.path().join("tuic-remote");
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &missing,
+            None,
+        )
+        .await
+        .expect_err("sibling is absent");
+
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
+        assert!(error.contains("src-tauri"), "{error}");
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn same_target_sibling_is_probed_and_served_when_no_asset_exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let sibling = config.path().join("tuic-remote");
+        // The stub reports the digest of its own file, as the real daemon does.
+        let script = format!(
+            "#!/bin/sh\necho \"{{\\\"version\\\":\\\"0.0.1\\\",\\\"target\\\":\\\"{}\\\",\\\"sha256\\\":\\\"$(shasum -a 256 \"$0\" | cut -d' ' -f1)\\\"}}\"\n",
+            env!("TUIC_TARGET_TRIPLE")
+        );
+        std::fs::write(&sibling, script).unwrap();
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let selected = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &sibling,
+            None,
+        )
+        .await
+        .expect("matching sibling serves the update");
+
+        assert_eq!(selected.source, "local");
+        assert_eq!(selected.version, "0.0.1");
+        assert_eq!(selected.binary.path, sibling);
+    }
+
+    /// A directory at the sibling path must not pass as a built binary.
+    #[tokio::test]
+    async fn same_target_sibling_that_is_a_directory_names_the_build_command() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let sibling = config.path().join("tuic-remote");
+        std::fs::create_dir(&sibling).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &sibling,
+            None,
+        )
+        .await
+        .expect_err("a directory is not a sibling binary");
+
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
+        );
+    }
+
+    /// A sibling built with default features refuses to report its identity;
+    /// the error must say how to rebuild it, not only that the probe failed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn same_target_sibling_needing_no_default_features_names_the_build_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let sibling = config.path().join("tuic-remote");
+        std::fs::write(
+            &sibling,
+            "#!/bin/sh\necho 'requires --no-default-features' >&2\nexit 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let error = resolve_update_asset_from_url(
+            env!("TUIC_TARGET_TRIPLE"),
+            &format!("{}/missing", server.url()),
+            &sibling,
+            None,
+        )
+        .await
+        .expect_err("default-feature sibling cannot serve the update");
+
+        assert!(
+            error.contains("cargo build --bin tuic-remote --no-default-features"),
+            "{error}"
         );
     }
 }
