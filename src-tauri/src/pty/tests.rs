@@ -11976,6 +11976,8 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
         for record in records[range].iter().filter(|r| r.direction == Output) {
             reader.process_chunk(&String::from_utf8_lossy(&record.data), &silence, sid, &state);
+            let k = agent_submission_ack_kind(&state, sid);
+            if k != "terminal_output" { eprintln!("DBG kind={k} busy={:?}", silence.lock().busy_source_is("hook-busy")); }
         }
     };
     let mut seen = Vec::new();
@@ -11997,6 +11999,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         }
     });
 
+    eprintln!("DBG seen={:?}", seen.iter().map(|w| w.len()).collect::<Vec<_>>());
     assert_eq!(
         seen.iter().filter(|w| w.as_slice() == b"\r").count(),
         2,
