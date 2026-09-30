@@ -11742,6 +11742,16 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
+    close_pty_core_with_reason(state, session_id, cleanup_worktree, "close_requested")
+}
+
+/// `close_pty_core` with the cause that the close log line reports.
+pub(crate) fn close_pty_core_with_reason(
+    state: &AppState,
+    session_id: &str,
+    cleanup_worktree: bool,
+    reason: &str,
+) -> Option<crate::state::WorktreeInfo> {
     flush_open_intent_before_session_removal(session_id, state);
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
@@ -11753,7 +11763,7 @@ pub(crate) fn close_pty_core(
     tracing::info!(
         source = "session",
         session_id = %session_id,
-        reason = "close_requested",
+        reason,
         "Closing session: sending Ctrl-C"
     );
 
