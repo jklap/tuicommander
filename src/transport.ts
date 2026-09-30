@@ -133,10 +133,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },
 	get_model_info: { map: () => ({ method: "GET", path: "/dictation/models" }) },
 	download_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.modelName } }),
 	},
 	delete_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.modelName } }),
 	},
 	get_speech_assets: { map: () => ({ method: "GET", path: "/dictation/speech/assets" }) },
 	download_speech_asset: {

@@ -624,10 +624,10 @@ describe("transport", () => {
 			});
 
 			it.each([
-				["download_whisper_model", { model_name: "small" }, "POST", "/dictation/models/download", { model: "small" }],
-				["delete_whisper_model", { model_name: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
+				["download_whisper_model", { modelName: "small" }, "POST", "/dictation/models/download", { model: "small" }],
+				["delete_whisper_model", { modelName: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
 				// The wire key is `asset` on both transports, unlike the whisper
-				// pair above where the IPC parameter is `model_name` and the body
+				// pair above where the IPC argument is `modelName` and the body
 				// key is `model`. Keeping them the same here is deliberate: the
 				// mismatch above is a wart nobody should copy.
 				[
