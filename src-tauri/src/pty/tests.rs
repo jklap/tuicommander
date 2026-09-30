@@ -13833,6 +13833,84 @@ fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
     }
 }
 
+/// Characterization test, written before the resume-banner-on-exit change:
+/// an empty (but present) `ccsession=` payload still unconditionally emits
+/// an `AgentMetadata` event with an empty `value` — the verb arm decodes and
+/// forwards the payload with no emptiness check of its own, same as every
+/// other free-text metadata verb.
+#[test]
+fn tuic_osc_ccsession_with_empty_payload_still_emits_agent_metadata_with_empty_value() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-metadata-ccsession-empty";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let mut rx = state.event_bus.subscribe();
+    processor.process_chunk("\x1b]7770;ccsession=\x07", &silence, session_id, &state);
+
+    let event = rx
+        .try_recv()
+        .expect("event bus must receive a PtyParsed even for an empty ccsession payload");
+    match event {
+        crate::state::AppEvent::PtyParsed { parsed, .. } => {
+            assert_eq!(
+                parsed.get("type").and_then(|v| v.as_str()),
+                Some("agent-metadata")
+            );
+            assert_eq!(
+                parsed.get("field").and_then(|v| v.as_str()),
+                Some("session_id")
+            );
+            assert_eq!(parsed.get("value").and_then(|v| v.as_str()), Some(""));
+        }
+        other => panic!("unexpected event variant: {other:?}"),
+    }
+}
+
+/// An OSC 7770 verb this build doesn't recognize must be silently ignored —
+/// no panic, no event on the bus — the same "unrecognized is not an error"
+/// contract `tuic-hook`'s own module doc comment promises on the sending
+/// side (a stale/newer binary's future vocabulary must degrade gracefully).
+#[test]
+fn tuic_osc_unknown_verb_is_ignored_without_panicking() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-metadata-unknown-verb";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let mut rx = state.event_bus.subscribe();
+    processor.process_chunk(
+        "\x1b]7770;totallymadeupverb=whatever\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "an unrecognized verb must not emit anything on the event bus"
+    );
+}
+
 #[test]
 fn percent_decode_osc_payload_passes_through_plain_text() {
     assert_eq!(percent_decode_osc_payload("Bash"), "Bash");
@@ -18693,6 +18771,44 @@ fn get_session_foreground_process_clears_sticky_agent_type_on_confirmed_shell() 
     );
 }
 
+/// The exit-resume-banner snapshot is built inside `clear_agent_type_on_confirmed_shell`,
+/// which is shared by two callers: the OSC 133 fast path (covered by
+/// `exit_snapshot_captures_id_title_cwd_and_end_reason` and friends, calling the
+/// shared function directly) and this pgid-polling fallback, reached only
+/// through `get_session_foreground_process_impl`. A caller-coverage gap
+/// flagged in code review: nothing previously drove a snapshot through THIS
+/// specific caller — only through direct calls to the shared function.
+#[cfg(unix)]
+#[test]
+fn get_session_foreground_process_impl_produces_an_exit_snapshot_via_the_pgid_poll_path() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "confirmed-shell-pgid-poll-produces-snapshot";
+    insert_idle_shell_session(&state, session_id);
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            agent_session_id: Some("pgid-path-session-id".to_string()),
+            agent_session_title: Some("pgid-path-title".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let settled = settle_agent_type(&state, session_id);
+    assert_eq!(settled, None, "confirmed shell must still clear agent_type");
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    let resumable = entry
+        .resumable_session
+        .as_ref()
+        .expect("the pgid-poll path must produce a resumable_session snapshot, same as the OSC 133 fast path");
+    assert_eq!(resumable.agent_type, "claude");
+    assert_eq!(resumable.session_id, "pgid-path-session-id");
+    assert_eq!(resumable.title.as_deref(), Some("pgid-path-title"));
+}
+
 /// The exact regression a review caught in this fix: a session whose
 /// `agent_type` is only a run-config *preset* (`PtyConfig::agent_type`,
 /// for a custom/unrecognized launcher) — not yet confirmed by an actual
@@ -19103,6 +19219,328 @@ fn osc133_idle_clears_agent_type_but_osc7770_idle_does_not() {
         "OSC 7770 idle (hook_state=true) must NOT clear agent_type — it means \
          the agent finished a turn, not that the agent process exited"
     );
+}
+
+/// End-to-end resume-banner snapshot: `ccsession`/`cwd`/`cctitle` arrive via
+/// real OSC 7770 sequences (as `tuic-hook` would emit them for
+/// SessionStart), the hook's own `state=idle`/`ccend` (SessionEnd) must NOT
+/// by themselves take a snapshot or clear `agent_type`. The confirmed-exit
+/// signal itself (either the OSC 133 fast path or the pgid-polling fallback
+/// — both funnel through `clear_agent_type_on_confirmed_shell`, called
+/// directly here so this test exercises the snapshot logic without also
+/// re-testing the shell-transition-edge plumbing `osc133_idle_clears_agent_type_but_osc7770_idle_does_not`
+/// already covers) is what takes the snapshot and clears the live identity.
+#[test]
+fn exit_snapshot_captures_id_title_cwd_and_end_reason() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-full-sequence";
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    state
+        .session_maps
+        .silence_states
+        .insert(session_id.into(), Arc::new(Mutex::new(SilenceState::new())));
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    // SessionStart-equivalent metadata.
+    processor.process_chunk(
+        "\x1b]7770;ccsession=abc123\x07\x1b]7770;cwd=%2FUsers%2Fme%2Fproject\x07\x1b]7770;cctitle=file-locations\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    // SessionEnd-equivalent: reason + the hook's own state=idle. Neither
+    // takes a snapshot nor clears agent_type by itself.
+    processor.process_chunk(
+        "\x1b]7770;ccend=exit\x07\x1b]7770;state=idle\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    {
+        let entry = state.session_maps.session_states.get(session_id).unwrap();
+        assert_eq!(
+            entry.agent_type,
+            Some("claude".to_string()),
+            "OSC 7770 idle alone must not clear agent_type"
+        );
+        assert!(
+            entry.resumable_session.is_none(),
+            "OSC 7770 idle alone must not take an exit snapshot"
+        );
+    }
+
+    // The shell is confirmed back in the foreground.
+    clear_agent_type_on_confirmed_shell(&state, session_id);
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_type, None);
+    let resumable = entry
+        .resumable_session
+        .as_ref()
+        .expect("expected a resumable session snapshot");
+    assert_eq!(resumable.agent_type, "claude");
+    assert_eq!(resumable.session_id, "abc123");
+    assert_eq!(resumable.title.as_deref(), Some("file-locations"));
+    assert_eq!(resumable.cwd.as_deref(), Some("/Users/me/project"));
+    assert_eq!(resumable.end_reason.as_deref(), Some("exit"));
+}
+
+/// Title precedence: when no hook-reported `cctitle` was ever sent, the
+/// snapshot falls back to whatever `agent_osc_title` holds (the last cleaned
+/// OSC 0 title `osc_title::apply_osc_title` recorded).
+#[test]
+fn exit_snapshot_falls_back_to_osc_title_when_no_hook_title_was_sent() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-osc-title-fallback";
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            agent_seen_running: true,
+            agent_session_id: Some("xyz789".to_string()),
+            agent_osc_title: Some("Pwd output".to_string()),
+            ..Default::default()
+        },
+    );
+
+    clear_agent_type_on_confirmed_shell(&state, session_id);
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    let resumable = entry
+        .resumable_session
+        .as_ref()
+        .expect("expected a resumable session snapshot");
+    assert_eq!(resumable.title.as_deref(), Some("Pwd output"));
+}
+
+/// No snapshot is taken when no session id was ever observed — there is
+/// nothing to resume.
+#[test]
+fn no_exit_snapshot_when_agent_session_id_was_never_set() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-no-session-id";
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            agent_seen_running: true,
+            ..Default::default()
+        },
+    );
+
+    clear_agent_type_on_confirmed_shell(&state, session_id);
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_type, None, "the clear itself still happens");
+    assert!(entry.resumable_session.is_none());
+}
+
+/// No snapshot is taken for a non-Claude agent — no other agent reports a
+/// hook-provided session id today, so an `agent_session_id` on a non-claude
+/// entry (which should never happen in practice) must still not produce a
+/// snapshot.
+#[test]
+fn no_exit_snapshot_for_a_non_claude_agent_type() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-non-claude-agent";
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("codex".into()),
+            agent_seen_running: true,
+            agent_session_id: Some("should-be-ignored".to_string()),
+            ..Default::default()
+        },
+    );
+
+    clear_agent_type_on_confirmed_shell(&state, session_id);
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_type, None);
+    assert!(entry.resumable_session.is_none());
+}
+
+/// A later `ccsession` (a fresh agent launch in the same pane) must clear a
+/// stale `resumable_session` left over from a previous exit — otherwise a
+/// user who resumed and exited again would see the OLD snapshot's title/id
+/// on their next exit if that second run never reached SessionStart's own
+/// `ccsession` scrape for some reason.
+#[test]
+fn a_later_ccsession_clears_a_stale_resumable_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-new-ccsession-clears-stale";
+    state.session_maps.shell_states.insert(
+        session_id.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            agent_session_id: Some("old-id".to_string()),
+            resumable_session: Some(crate::state::ResumableSession {
+                agent_type: "claude".to_string(),
+                session_id: "old-id".to_string(),
+                title: Some("old title".to_string()),
+                cwd: None,
+                end_reason: None,
+            }),
+            ..Default::default()
+        },
+    );
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;ccsession=new-id\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_session_id.as_deref(), Some("new-id"));
+    assert!(
+        entry.resumable_session.is_none(),
+        "a new session id must clear the stale resumable_session from the previous run"
+    );
+}
+
+/// The decoded `cctitle`/`ccend` payload is capped — terminal output is
+/// untrusted, so an unbounded title must not be allowed to grow
+/// `SessionState` (and every `session-state-changed` payload built from it)
+/// indefinitely.
+#[test]
+fn cctitle_and_ccend_payloads_are_capped() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-title-cap";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    let long_title = "x".repeat(1000);
+    processor.process_chunk(
+        &format!("\x1b]7770;cctitle={long_title}\x07"),
+        &silence,
+        session_id,
+        &state,
+    );
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(
+        entry
+            .agent_session_title
+            .as_ref()
+            .map(|t| t.chars().count()),
+        Some(256),
+        "title must be capped to MAX_AGENT_METADATA_TEXT_LEN"
+    );
+}
+
+/// `clear_agent_type_on_confirmed_shell` must be a no-op when
+/// `agent_seen_running` is false — a session whose `agent_type` is only a
+/// run-config *preset* (nothing has actually launched yet) must survive an
+/// OSC 133 prompt marker unchanged, or a preset would be wiped before its
+/// launcher ever ran.
+#[test]
+fn osc133_idle_does_not_clear_agent_type_when_agent_was_never_confirmed_running() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "osc133-idle-preset-not-confirmed";
+    state.session_maps.shell_states.insert(
+        session_id.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            agent_seen_running: false,
+            ..Default::default()
+        },
+    );
+    let transitioned =
+        transition_explicit_shell_state(&state, session_id, SHELL_IDLE, "idle", false);
+    assert!(transitioned);
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(
+        entry.agent_type,
+        Some("claude".to_string()),
+        "must not clear a preset that was never confirmed running"
+    );
+}
+
+/// The clear must touch only the four fields it documents itself as owning
+/// (`agent_type`, `hook_instrumented`, `agent_seen_running`,
+/// `agent_seen_running_pending_since_ms`) — every other field on the entry
+/// must survive byte-for-byte.
+#[test]
+fn osc133_idle_clear_leaves_unrelated_session_state_fields_untouched() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "osc133-idle-clear-preserves-unrelated-fields";
+    state.session_maps.shell_states.insert(
+        session_id.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            hook_instrumented: true,
+            agent_seen_running: true,
+            current_task: Some("refactor".to_string()),
+            last_prompt: Some("do the thing".to_string()),
+            agent_intent: Some("implementing".to_string()),
+            active_sub_tasks: 3,
+            ..Default::default()
+        },
+    );
+    let transitioned =
+        transition_explicit_shell_state(&state, session_id, SHELL_IDLE, "idle", false);
+    assert!(transitioned);
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_type, None);
+    assert!(!entry.hook_instrumented);
+    assert!(!entry.agent_seen_running);
+    // Unrelated fields, unaffected by the clear:
+    assert_eq!(entry.current_task, Some("refactor".to_string()));
+    assert_eq!(entry.last_prompt, Some("do the thing".to_string()));
+    assert_eq!(entry.agent_intent, Some("implementing".to_string()));
+    assert_eq!(entry.active_sub_tasks, 3);
 }
 
 /// `inject_worktree_env` (:111) is meant to be called at every

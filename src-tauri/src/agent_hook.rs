@@ -916,6 +916,29 @@ mod tests {
         }
 
         #[test]
+        fn session_end_extracts_session_metadata_title_and_reason_from_stdin() {
+            let _binary = install_binary();
+            let map = claude_hook_map();
+            let (_, _, cmd) = map
+                .iter()
+                .find(|(e, _, _)| *e == "SessionEnd")
+                .expect("SessionEnd entry present");
+            let stdin = br#"{"hook_event_name":"SessionEnd","session_id":"abc123","cwd":"/tmp/proj","transcript_path":"/tmp/t.jsonl","session_title":"file-locations","reason":"exit"}"#;
+            let (code, written) = run(cmd, true, None, Some(stdin));
+            assert_eq!(code, 0);
+            let expected = [
+                osc("ccsession", "abc123"),
+                osc("cwd", "%2Ftmp%2Fproj"),
+                osc("transcript", "%2Ftmp%2Ft.jsonl"),
+                osc("cctitle", "file-locations"),
+                osc("ccend", "exit"),
+                osc("state", "idle"),
+            ]
+            .concat();
+            assert_eq!(written, expected);
+        }
+
+        #[test]
         fn pre_tool_use_extracts_tool_name_from_stdin() {
             let _binary = install_binary();
             let map = claude_hook_map();
