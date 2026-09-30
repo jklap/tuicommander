@@ -213,8 +213,8 @@ async fn ego_reaches_the_tuicommander_server_over_the_acp_connection() {
 /// way to refuse that loudly (#1270-6d4c).
 #[test]
 fn the_snapshot_reads_mcp_acp_from_the_agent() {
-    use agent_client_protocol::schema::v1::InitializeResponse;
     use agent_client_protocol::schema::ProtocolVersion;
+    use agent_client_protocol::schema::v1::InitializeResponse;
     use tuicommander_lib::acp::{AcpOperation, AcpUnavailableReason};
 
     let mut response = InitializeResponse::new(ProtocolVersion::V1);
