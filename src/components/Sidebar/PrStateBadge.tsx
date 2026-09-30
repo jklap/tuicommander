@@ -26,7 +26,7 @@ const PR_BADGE_CLASSES: Record<string, string> = {
 	"ci-pending": s.prCiPending,
 };
 
-function prBadgeKind(props: PrBadgeState): string {
+export function prBadgeKind(props: PrBadgeState): string {
 	if (props.isDraft) return "draft";
 	const state = props.state?.toLowerCase();
 	if (state === "merged") return "merged";
@@ -41,7 +41,8 @@ function prBadgeKind(props: PrBadgeState): string {
 	return "open";
 }
 
-const PR_STATE_LABELS: Record<string, string> = {
+/** Every PR state the badge can show, keyed by prBadgeKind. The Help > UI legend must explain each. */
+export const PR_STATE_LABELS: Record<string, string> = {
 	draft: "Draft",
 	merged: "Merged",
 	closed: "Closed",
