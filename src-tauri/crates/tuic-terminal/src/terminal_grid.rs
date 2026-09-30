@@ -2830,6 +2830,76 @@ mod tests {
         );
     }
 
+    /// The scroll row cache (frontend) relies on one property of real agent output:
+    /// a row that has entered history never changes again, so anything read for it
+    /// after it left the live screen is final (#1264-89c8). The live screen rows
+    /// are the ones an agent rewrites in place — counted here to show they do move.
+    ///
+    /// ```text
+    /// TUIC_HISTORY_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+    ///   cargo test -p tuic-terminal history_rows_never_change_over_capture_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a capture corpus; see TUIC_HISTORY_CORPUS"]
+    fn history_rows_never_change_over_capture_corpus() {
+        let Ok(dir) = std::env::var("TUIC_HISTORY_CORPUS") else {
+            panic!("set TUIC_HISTORY_CORPUS to a directory of .tcap captures");
+        };
+        let (mut files, mut committed_rows, mut live_rewrites) = (0usize, 0usize, 0usize);
+        for entry in std::fs::read_dir(&dir).expect("readable corpus directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let capture =
+                crate::pty_capture::decode_capture(&std::fs::read(&path).expect("readable capture"))
+                    .expect("decodable capture");
+            let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+            let mut grid = TerminalGrid::new(rows, cols, 10_000);
+            // All-time row index -> text, for rows already in history.
+            let mut committed: std::collections::HashMap<usize, String> = Default::default();
+            let mut screen: Vec<String> = Vec::new();
+            for (step, rec) in capture.records.iter().enumerate() {
+                if rec.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let before = grid.scrollback_count();
+                grid.process(&rec.data);
+                if grid.is_alternate_screen() {
+                    continue;
+                }
+                let history = grid.scrollback_count();
+                let base = grid.term().grid().total_scrolled().saturating_sub(history);
+                let now = grid.screen_text_rows();
+                if history == before && screen.len() == now.len() {
+                    live_rewrites += now.iter().zip(&screen).filter(|(a, b)| a != b).count();
+                }
+                screen = now;
+                if step % 25 != 0 && history == before {
+                    continue;
+                }
+                for (i, text) in grid.read_rows_in_range(0, history.saturating_sub(1)).into_iter().enumerate() {
+                    match committed.get(&(base + i)) {
+                        Some(seen) => assert_eq!(
+                            seen,
+                            &text,
+                            "{}: history row {} changed after it was committed",
+                            path.display(),
+                            base + i
+                        ),
+                        None => {
+                            committed.insert(base + i, text);
+                            committed_rows += 1;
+                        }
+                    }
+                }
+            }
+            files += 1;
+        }
+        assert!(files > 0, "corpus held no usable .tcap captures");
+        println!("files {files}  history rows checked {committed_rows}  live rows rewritten in place {live_rewrites}");
+    }
+
     /// Measure the overship ratio over a corpus of real `.tcap` captures.
     ///
     /// Ignored by default: the corpus is whatever the operator recorded through
