@@ -4,6 +4,15 @@ import { testInScope } from "../helpers/store";
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 
+// Real verifyAndBuildResumeCommand would otherwise round-trip through the
+// (unmocked, in this file) rpc/transport layer — mocked here so tests can
+// control exactly what a restored agent tab's resume verification returns,
+// independent of that layer's own behavior in a test environment.
+const mockVerifyAndBuildResumeCommand = vi.fn<(...args: unknown[]) => Promise<string | null>>();
+vi.mock("../../utils/agentSession", () => ({
+	verifyAndBuildResumeCommand: (...args: unknown[]) => mockVerifyAndBuildResumeCommand(...args),
+}));
+
 describe("createBranchSelectionCoordinator", () => {
 	let createBranchSelectionCoordinator: typeof import("../../hooks/git/createBranchSelectionCoordinator").createBranchSelectionCoordinator;
 	let repositoriesStore: typeof import("../../stores/repositories").repositoriesStore;
@@ -15,6 +24,7 @@ describe("createBranchSelectionCoordinator", () => {
 	beforeEach(async () => {
 		vi.resetModules();
 		mockInvoke.mockReset().mockResolvedValue(undefined);
+		mockVerifyAndBuildResumeCommand.mockReset().mockResolvedValue(null);
 		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 		createBranchSelectionCoordinator = (await import("../../hooks/git/createBranchSelectionCoordinator"))
 			.createBranchSelectionCoordinator;
@@ -332,6 +342,38 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(term?.agentSessionId).toBe("sess-1");
 				expect(term?.tuicSession).toBe("tuic-1");
 				expect(savedTerminalsFor(repositoriesStore.get("/Gits/alpha")!.workspaces.main)).toEqual([]);
+			});
+		});
+
+		it("sets pendingResumeCommand on a restored agent tab when verification returns a command", async () => {
+			await testInScope(async () => {
+				mockVerifyAndBuildResumeCommand.mockResolvedValue("claude --resume sess-1");
+				setupBranch([agentSaved]);
+
+				await makeCoordinator().handleBranchSelect("/Gits/alpha", "main");
+				await flushRaf();
+
+				const ids = terminalsStore.getIds();
+				expect(ids).toHaveLength(1);
+				const term = terminalsStore.get(ids[0]);
+				expect(mockVerifyAndBuildResumeCommand).toHaveBeenCalledWith("claude", "/Gits/alpha", "tuic-1", "sess-1", null);
+				expect(term?.pendingResumeCommand).toBe("claude --resume sess-1");
+			});
+		});
+
+		it("leaves pendingResumeCommand unset when verification returns null", async () => {
+			await testInScope(async () => {
+				mockVerifyAndBuildResumeCommand.mockResolvedValue(null);
+				setupBranch([agentSaved]);
+
+				await makeCoordinator().handleBranchSelect("/Gits/alpha", "main");
+				await flushRaf();
+
+				const ids = terminalsStore.getIds();
+				expect(ids).toHaveLength(1);
+				const term = terminalsStore.get(ids[0]);
+				expect(mockVerifyAndBuildResumeCommand).toHaveBeenCalled();
+				expect(term?.pendingResumeCommand).toBeNull();
 			});
 		});
 

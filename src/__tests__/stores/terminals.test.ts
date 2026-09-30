@@ -439,6 +439,33 @@ describe("terminalsStore", () => {
 				expect(store.get(id)!.fontSize).toBe(16);
 			});
 		});
+
+		it("sets and clears pendingResumeCommand (and its title/source pair)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				expect(store.get(id)!.pendingResumeCommand).toBeNull();
+				expect(store.get(id)!.pendingResumeTitle).toBeNull();
+				expect(store.get(id)!.pendingResumeSource).toBeNull();
+
+				store.update(id, {
+					pendingResumeCommand: "claude --resume abc123",
+					pendingResumeTitle: "file-locations",
+					pendingResumeSource: "exit",
+				});
+				expect(store.get(id)!.pendingResumeCommand).toBe("claude --resume abc123");
+				expect(store.get(id)!.pendingResumeTitle).toBe("file-locations");
+				expect(store.get(id)!.pendingResumeSource).toBe("exit");
+
+				store.update(id, {
+					pendingResumeCommand: null,
+					pendingResumeTitle: null,
+					pendingResumeSource: null,
+				});
+				expect(store.get(id)!.pendingResumeCommand).toBeNull();
+				expect(store.get(id)!.pendingResumeTitle).toBeNull();
+				expect(store.get(id)!.pendingResumeSource).toBeNull();
+			});
+		});
 	});
 
 	describe("setSessionId()", () => {

@@ -607,6 +607,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							currentTask: null,
 							agentType: null,
 							agentSessionId: null,
+							agentSessionIdIsAuthoritative: false,
+							// A whole-PTY close (not just the agent exiting inside a still-live
+							// shell) leaves no session to resume — an exit-sourced resume banner
+							// left showing would click through to a null sessionId and silently
+							// no-op. The restore-time banner is set fresh on the NEXT branch
+							// selection anyway, so clearing unconditionally here is safe.
+							pendingResumeCommand: null,
+							pendingResumeTitle: null,
+							pendingResumeSource: null,
 						});
 						terminalsStore.clearAwaitingInput(props.id);
 						pluginRegistry.notifyStateChange({
@@ -1128,7 +1137,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const handleResume = () => {
 		const cmd = terminalsStore.get(props.id)?.pendingResumeCommand;
 		if (cmd && sessionId) {
-			terminalsStore.update(props.id, { pendingResumeCommand: null });
+			// `resumeOfferedFor` deliberately survives this clear — it dedupes
+			// against the exact snapshot just resumed so a redundant repeat of
+			// the same `session-state-changed` push can never re-show this banner.
+			terminalsStore.update(props.id, {
+				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+			});
 			pty
 				.sendCommand(sessionId, cmd, null)
 				.catch((e) => appLogger.error("terminal", "Failed to write resume command", { error: String(e) }));
@@ -1138,7 +1154,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const handleDismissResume = (e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
-		terminalsStore.update(props.id, { pendingResumeCommand: null });
+		// See handleResume's comment on why `resumeOfferedFor` is left alone.
+		terminalsStore.update(props.id, {
+			pendingResumeCommand: null,
+			pendingResumeTitle: null,
+			pendingResumeSource: null,
+		});
 		canvasTerminalRef()?.focus();
 	};
 
@@ -1212,7 +1233,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					onClick={handleResume}
 					onKeyDown={onClickKeyDown(handleResume)}
 				>
-					<span>Agent session was active — click to resume</span>
+					<span class={s.resumeBannerText} title={terminalsStore.get(props.id)?.pendingResumeTitle ?? undefined}>
+						{terminalsStore.get(props.id)?.pendingResumeTitle
+							? `Resume "${terminalsStore.get(props.id)?.pendingResumeTitle}" — click to resume`
+							: "Agent session was active — click to resume"}
+					</span>
 					<button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">
 						&times;
 					</button>
@@ -1258,8 +1283,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							onSearchClose={() => closeSearchBar()}
 							searchVisible={searchVisible()}
 							onResume={handleResume}
-							onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
+							onResumeDismiss={() =>
+								terminalsStore.update(props.id, {
+									pendingResumeCommand: null,
+									pendingResumeTitle: null,
+									pendingResumeSource: null,
+								})
+							}
 							hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
+							pendingResumeIsClickOnly={terminalsStore.get(props.id)?.pendingResumeSource === "exit"}
 							onFocus={() => props.onFocus?.(props.id)}
 							onCwdChange={props.onCwdChange}
 							onRef={(ref) => {

@@ -209,6 +209,12 @@ export interface SavedTerminal {
 	/** Terminal alias (e.g. `tu-3`) — the address other agents already hold, so a
 	 *  restore reserves it instead of taking a fresh number */
 	alias?: string | null;
+	/** The resume banner's title, carried over from `pendingResumeTitle` if an
+	 *  exit-sourced banner was showing at save time — so a restart's own
+	 *  restore-time resume banner (`createBranchSelectionCoordinator.ts`) can
+	 *  show the same title instead of only the generic fallback text. `null`/
+	 *  absent when no title was known. */
+	agentSessionTitle?: string | null;
 }
 
 /** GitHub Issue from GraphQL API */

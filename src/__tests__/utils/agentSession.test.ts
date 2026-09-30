@@ -309,4 +309,36 @@ describe("verifyAndBuildResumeCommand", () => {
 			expect.objectContaining({ envOverrides: { CLAUDE_CONFIG_DIR: "/Users/me/My Cfg/.claude" } }),
 		);
 	});
+
+	// Goose (forced injection, `AGENTS.goose.sessionDiscovery.resumeWithId`) —
+	// untested before this. Unlike claude/gemini, `agentSessionId` here is the
+	// caller's TUIC tab UUID mirrored in as if it were a discovered id (goose's
+	// own discovery always returns None — SQLite storage, no filesystem scan —
+	// so nothing else could ever populate this field for a goose terminal); the
+	// function itself has no goose-specific branch and treats it identically
+	// to any other `sessionDiscovery`-backed agent.
+	it("uses agentSessionId (the tuic tab UUID) for goose verification via sessionDiscovery.resumeWithId", async () => {
+		mockRpc.mockResolvedValueOnce(true);
+		const result = await verifyAndBuildResumeCommand("goose", "/tmp/repo", "tuic-uuid-1", "tuic-uuid-1");
+		expect(mockRpc).toHaveBeenCalledWith("verify_agent_session", {
+			agentType: "goose",
+			sessionId: "tuic-uuid-1",
+			cwd: "/tmp/repo",
+			agentPid: null,
+			envOverrides: {},
+		});
+		expect(result).toBe("goose session --resume --name tuic-uuid-1");
+	});
+
+	it("returns null when goose's session id fails verification (session gone)", async () => {
+		mockRpc.mockResolvedValueOnce(false);
+		const result = await verifyAndBuildResumeCommand("goose", "/tmp/repo", "tuic-uuid-1", "tuic-uuid-1");
+		expect(result).toBeNull();
+	});
+
+	it("falls back to the bare resumeCommand when goose has no agentSessionId at all", async () => {
+		const result = await verifyAndBuildResumeCommand("goose", "/tmp/repo", "tuic-uuid-1", null);
+		expect(mockRpc).not.toHaveBeenCalled();
+		expect(result).toBe("goose session --resume");
+	});
 });

@@ -195,16 +195,23 @@ pub enum ParsedEvent {
     },
     /// Free-text metadata extracted natively (by `tuic-hook`) from a Claude
     /// Code hook's stdin JSON payload — `session_id`/`cwd`/`transcript_path`
-    /// (from `SessionStart`), `tool_name` (from `Pre`/`PostToolUse`), or
-    /// `message` (from `Notification`). Percent-decoded by the time this
-    /// reaches here (see `pty::percent_decode_osc_payload`); the shell-hook
-    /// era had no way to extract or safely transmit any of this. This is a
-    /// generic carrier rather than one variant per field so new fields don't
-    /// need a frontend contract change to land — `field` is a stable,
-    /// forward-open string key, not yet consumed by any UI feature.
+    /// (from `SessionStart`/`SessionEnd`), `session_title` (from
+    /// `SessionStart`/`UserPromptSubmit`/`SessionEnd`), `session_end_reason`
+    /// (from `SessionEnd`, diagnostics only), `tool_name` (from
+    /// `Pre`/`PostToolUse`), `message`/`notification_type` (from
+    /// `Notification`). Percent-decoded by the time this reaches here (see
+    /// `pty::percent_decode_osc_payload`); the shell-hook era had no way to
+    /// extract or safely transmit any of this. This is a generic carrier
+    /// rather than one variant per field so new fields don't need a
+    /// frontend contract change to land — `field` is a stable, forward-open
+    /// string key. `pty.rs`'s `ccsession`/`cwd`/`cctitle` verb arms also
+    /// write `session_id`/`cwd`/`session_title` synchronously into
+    /// `SessionState` (see that struct's `agent_session_id` doc comment) —
+    /// this event is the notification of that write, not its only consumer.
     #[serde(rename = "agent-metadata")]
     AgentMetadata {
-        /// One of: "session_id" | "cwd" | "transcript_path" | "tool_name" | "message"
+        /// One of: "session_id" | "cwd" | "transcript_path" | "session_title"
+        /// | "session_end_reason" | "tool_name" | "message" | "notification_type"
         field: String,
         value: String,
     },
@@ -6542,5 +6549,27 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                 }
             }
         }
+    }
+
+    #[test]
+    fn agent_metadata_event_serializes_with_type_tag_and_field_value() {
+        let event = ParsedEvent::AgentMetadata {
+            field: "session_id".to_string(),
+            value: "abc123".to_string(),
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "agent-metadata");
+        assert_eq!(json["field"], "session_id");
+        assert_eq!(json["value"], "abc123");
+
+        // Also test with another field to pin the generic shape
+        let event2 = ParsedEvent::AgentMetadata {
+            field: "tool_name".to_string(),
+            value: "bash".to_string(),
+        };
+        let json2 = serde_json::to_value(&event2).expect("serialize");
+        assert_eq!(json2["type"], "agent-metadata");
+        assert_eq!(json2["field"], "tool_name");
+        assert_eq!(json2["value"], "bash");
     }
 }

@@ -253,6 +253,12 @@ When TUICommander restores saved terminals after a restart, only tabs that had a
 
 The resume command honours the agent's **default run config**: TUICommander swaps the binary in the resume command (`claude`) for the run config's `command` (e.g. `c2`) and appends the run config's args after the resume flag. So a user with the default run config `c2 --model claude-opus-4-6` will resume with `c2 --resume <uuid> --model claude-opus-4-6`, not `claude --resume <uuid>`.
 
+### Resume Banner on Exit
+
+For a hook-instrumented Claude Code session, exiting (`/exit`, Ctrl-D) shows a resume banner in that same pane, labeled with the session's title (e.g. `Resume "file-locations" — click to resume`) — the title comes from Claude Code's own session name, whether auto-generated or set via `/rename`. Clicking it resumes the exact session that just exited; the × dismisses it without resuming.
+
+This banner is **click-only and stays until dismissed** — unlike the restore-time banner (above), which accepts Space/Enter and dismisses on any other keystroke, typing at the shell prompt after an exit passes straight through, and the banner remains until you click it, click ×, or start another agent session in that pane.
+
 ### UI Agent Spawn
 
 When you spawn an agent via the context menu or command palette, TUICommander automatically uses the tab's `TUIC_SESSION` as the `--session-id`. This ensures the spawned session is bound to the tab and will resume correctly on restart.

@@ -952,6 +952,68 @@ pub(crate) struct SessionState {
     /// Epoch ms of last push notification sent for this session (rate limiting)
     #[serde(skip)]
     pub last_push_ms: Option<u64>,
+    /// Live Claude Code session id, set once `tuic-hook`'s `ccsession` verb
+    /// reports it (SessionStart/SessionEnd). Powers the exit-resume-banner
+    /// snapshot (`resumable_session`) below, AND is exposed to clients
+    /// (2026-09-29, closing the residual gap in issue #119's fix) so the
+    /// frontend can prefer this hook-reported id over its own disk-discovery
+    /// heuristic for the LIVE `terminalsStore.agentSessionId` mirror — this
+    /// is exact by construction (tied to this exact pty's own OSC stream,
+    /// never a file scan that can read another tab's entry) where discovery
+    /// can still be a step behind or, for a Claude build with no pid
+    /// registry, fall back to the mtime heuristic #119 was originally about.
+    /// Cleared on a new agent session (`SessionCreated`) or a later
+    /// `ccsession` naming a different id (a fresh agent launch in the same
+    /// pane).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    /// Live session title from `tuic-hook`'s `cctitle` verb (SessionStart/
+    /// UserPromptSubmit/SessionEnd) — authoritative over `agent_osc_title`
+    /// at snapshot time (see `clear_agent_type_on_confirmed_shell` in
+    /// pty.rs). Internal bookkeeping only, see `agent_session_id`.
+    #[serde(skip)]
+    pub(crate) agent_session_title: Option<String>,
+    /// Fallback title: the last cleaned OSC 0 title Claude itself set
+    /// (`osc_title::apply_osc_title`) while `agent_type == Some("claude")`.
+    /// Used only when `agent_session_title` is absent (an unnamed session's
+    /// own auto-summary, or a non-hook-instrumented Claude). Internal
+    /// bookkeeping only, see `agent_session_id`.
+    #[serde(skip)]
+    pub(crate) agent_osc_title: Option<String>,
+    /// Live cwd from `tuic-hook`'s `cwd` verb, for the exit snapshot below.
+    /// Internal bookkeeping only, see `agent_session_id`.
+    #[serde(skip)]
+    pub(crate) agent_session_cwd: Option<String>,
+    /// Raw SessionEnd `reason` string from `tuic-hook`'s `ccend` verb —
+    /// recorded for diagnostics only, never a gate on whether the resume
+    /// banner shows. Internal bookkeeping only, see `agent_session_id`.
+    #[serde(skip)]
+    pub(crate) agent_session_end_reason: Option<String>,
+    /// Snapshot of the resumable Claude Code session taken the moment the
+    /// shell confirms the agent has exited
+    /// (`clear_agent_type_on_confirmed_shell`, pty.rs) — powers the
+    /// exit-time resume banner. `None` when no exit has produced one yet, or
+    /// after a new agent session starts in this pane (see `agent_session_id`'s
+    /// doc comment).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumable_session: Option<ResumableSession>,
+}
+
+/// A Claude Code session `clear_agent_type_on_confirmed_shell` (pty.rs)
+/// observed exiting, along with everything the frontend needs to offer
+/// resuming it. `end_reason` is diagnostics-only — it is never used to
+/// decide whether the resume banner shows; the banner always shows once a
+/// `session_id` is known, per the exit-resume-banner feature's design.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(crate) struct ResumableSession {
+    pub agent_type: String,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<String>,
 }
 
 impl SessionState {
@@ -1081,6 +1143,8 @@ impl PartialEq for SessionState {
             && self.slash_menu_items == other.slash_menu_items
             && self.choice_prompt == other.choice_prompt
             && self.terminal_mode == other.terminal_mode
+            && self.resumable_session == other.resumable_session
+            && self.agent_session_id == other.agent_session_id
     }
 }
 
@@ -4913,6 +4977,18 @@ impl AppState {
                         // clearing logic exists to avoid, from a different path.
                         session.agent_seen_running = false;
                         session.agent_seen_running_pending_since_ms = None;
+                        // A fresh agent session starting in this pane means
+                        // whatever was previously exiting/exited is no longer
+                        // relevant — reset the live identity/title trackers
+                        // and drop any exit snapshot so a stale resume
+                        // banner from a PRIOR session can't linger once a
+                        // new one has started.
+                        session.agent_session_id = None;
+                        session.agent_session_title = None;
+                        session.agent_osc_title = None;
+                        session.agent_session_cwd = None;
+                        session.agent_session_end_reason = None;
+                        session.resumable_session = None;
                     })
                     .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
@@ -9317,6 +9393,48 @@ mod tests {
             s.last_activity_ms, 1_000,
             "the activity pulse must not restamp last_activity_ms"
         );
+    }
+
+    /// `SessionCreated` for an existing entry must reset every field the
+    /// exit-resume-banner feature added — a fresh agent launch in this pane
+    /// means whatever was previously exiting/exited is stale. Mirrors the
+    /// pre-existing `agent_seen_running`/`agent_seen_running_pending_since_ms`
+    /// reset this same `.and_modify` branch already does, for the same reason
+    /// (a session-id reuse or an out-of-order bus replay must not leak a
+    /// prior session's resumable snapshot into a brand-new one).
+    #[test]
+    fn session_created_resets_resume_banner_fields_on_an_existing_entry() {
+        let state = fresh_state();
+        {
+            let mut s1 = state.session_maps.session_states.get_mut("s1").unwrap();
+            s1.agent_session_id = Some("old-session".to_string());
+            s1.agent_session_title = Some("old title".to_string());
+            s1.agent_osc_title = Some("old osc title".to_string());
+            s1.agent_session_cwd = Some("/old/cwd".to_string());
+            s1.agent_session_end_reason = Some("exit".to_string());
+            s1.resumable_session = Some(ResumableSession {
+                agent_type: "claude".to_string(),
+                session_id: "old-session".to_string(),
+                title: Some("old title".to_string()),
+                cwd: Some("/old/cwd".to_string()),
+                end_reason: Some("exit".to_string()),
+            });
+        }
+        let s = apply(
+            &state,
+            &AppEvent::SessionCreated {
+                session_id: "s1".to_string(),
+                cwd: None,
+                agent_type: Some("claude".to_string()),
+                display_name: None,
+            },
+        );
+        assert_eq!(s.agent_session_id, None);
+        assert_eq!(s.agent_session_title, None);
+        assert_eq!(s.agent_osc_title, None);
+        assert_eq!(s.agent_session_cwd, None);
+        assert_eq!(s.agent_session_end_reason, None);
+        assert_eq!(s.resumable_session, None);
     }
 
     #[test]
