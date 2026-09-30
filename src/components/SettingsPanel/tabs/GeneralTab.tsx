@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { appLogger } from "../../../stores/appLogger";
@@ -54,7 +54,12 @@ export const GeneralTab: Component = () => {
 	};
 
 	const [homeDirectory, setHomeDirectory] = createSignal("");
+	// What the person has typed, which may be a path that is not yet absolute.
+	// Only an absolute draft reaches the store; the hint waits for blur so a
+	// half-typed "C" does not flash a warning.
+	const [workspaceDraft, setWorkspaceDraft] = createSignal(settingsStore.state.aiChatWorkspace);
 	const [workspaceRefused, setWorkspaceRefused] = createSignal(false);
+	createEffect(() => setWorkspaceDraft(settingsStore.state.aiChatWorkspace));
 
 	onMount(() => {
 		invoke<string>("get_home_directory")
@@ -482,12 +487,12 @@ export const GeneralTab: Component = () => {
 			/>
 			<SettingInput
 				label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
-				value={settingsStore.state.aiChatWorkspace}
+				value={workspaceDraft()}
 				onInput={(path) => {
-					const accepted = settingsStore.setAiChatWorkspace(path);
-					setWorkspaceRefused(!accepted);
-					return accepted;
+					setWorkspaceDraft(path);
+					if (settingsStore.setAiChatWorkspace(path)) setWorkspaceRefused(false);
 				}}
+				onBlur={() => setWorkspaceRefused(settingsStore.state.aiChatWorkspace !== workspaceDraft().trim())}
 				placeholder={homeDirectory()}
 				hint={
 					workspaceRefused()
