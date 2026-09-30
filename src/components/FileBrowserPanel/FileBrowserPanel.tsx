@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
@@ -96,6 +96,16 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	 * best-effort — list_directory still works because it canonicalizes repo_path.
 	 */
 	const root = () => uiStore.state.fileBrowserExternalRoot || props.fsRoot || props.repoPath;
+
+	// The external folder belongs to the repository it was opened from: picking
+	// another repository or worktree returns the browser to it.
+	createEffect(
+		on(
+			() => [props.repoPath, props.fsRoot],
+			() => uiStore.setFileBrowserExternalRoot(null),
+			{ defer: true },
+		),
+	);
 
 	/** The active markdown-panel tab when a file on disk backs it — a markdown tab
 	 * or an HTML preview. The other md types (virtual, plugin panels, dashboards,
@@ -1157,6 +1167,24 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				</div>
 				<PanelWindowControls panelId="file-browser" mode={mode()} onInlineClose={props.onClose} />
 			</div>
+
+			<Show when={uiStore.state.fileBrowserExternalRoot}>
+				{(externalRoot) => (
+					<div class={s.externalRoot} data-testid="external-root-banner">
+						<span class={s.externalRootPath} title={externalRoot()}>
+							{externalRoot()}
+						</span>
+						<button
+							type="button"
+							class={s.externalRootBack}
+							title={t("fileBrowser.backToRepo", "Back to the active repository")}
+							onClick={() => uiStore.setFileBrowserExternalRoot(null)}
+						>
+							{t("fileBrowser.backToRepoLabel", "Back to repository")}
+						</button>
+					</div>
+				)}
+			</Show>
 
 			{/* Search filter with F/C mode toggle */}
 			<div class={s.searchBar}>

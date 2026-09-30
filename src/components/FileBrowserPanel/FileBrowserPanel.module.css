@@ -236,6 +236,29 @@
 }
 
 /* Enhanced search bar */
+.externalRoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-sm);
+}
+
+.externalRootPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.externalRootBack {
+  flex-shrink: 0;
+}
+
 .searchBar {
   display: flex;
   align-items: center;

@@ -503,3 +503,75 @@ describe("FileBrowserPanel create file", () => {
 		);
 	});
 });
+
+describe("FileBrowserPanel external root (#1207-efd4)", () => {
+	afterEach(() => uiStore.setFileBrowserExternalRoot(null));
+
+	it("returns to the active repository when the repository changes", async () => {
+		listings.set("/repoA|.", [file("a.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repoB|.", [file("b.txt")]);
+
+		const [repoPath, setRepoPath] = createSignal("/repoA");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath={repoPath()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setRepoPath("/repoB");
+		await waitFor(() => expect(queryByText("b.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+		expect(queryByText("outside.txt")).toBeNull();
+	});
+
+	it("returns to the active worktree when only the worktree changes", async () => {
+		listings.set("/repo/wt1|.", [file("one.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repo/wt2|.", [file("two.txt")]);
+
+		const [fsRoot, setFsRoot] = createSignal("/repo/wt1");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" fsRoot={fsRoot()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("one.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setFsRoot("/repo/wt2");
+		await waitFor(() => expect(queryByText("two.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("shows the external path with a control that returns to the repository", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText, getByTitle } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')).toBeNull();
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')?.textContent).toContain("/outside");
+
+		fireEvent.click(getByTitle("Back to the active repository"));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("keeps the external folder while the repository stays the same", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBe("/outside");
+	});
+});
