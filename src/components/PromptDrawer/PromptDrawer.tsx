@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { variablesForPicker } from "../../data/contextVariables";
 import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN, VARIABLE_DESCRIPTIONS } from "../../data/smartPromptsBuiltIn";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
@@ -271,6 +272,21 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 		const activeTerminal = terminalsStore.getActive();
 		if (!activeTerminal?.sessionId) return;
 
+		// Every other Smart Prompt trigger surface (SmartButtonStrip, SmartPromptsDropdown,
+		// ChangesTab) gates on canExecute before injecting — this path didn't, so a
+		// "Send immediately" prompt could fire straight into a busy or not-yet-detected
+		// agent's PTY. That races the Ctrl-U/text/Enter split write against Ink's own
+		// rendering (see sendCommand.ts's AGENT_ENTER_GAP_MS comment): the Enter lands in
+		// the same read as the text and gets swallowed as a newline instead of submitting,
+		// so it looks like nothing sent and the cursor ends up mid-composer instead of
+		// where the user expects.
+		const check = smartPrompts.canExecute(prompt);
+		if (!check.ok) {
+			appLogger.warn("prompts", `Cannot execute "${prompt.name}": ${check.reason}`);
+			toastsStore.add(`"${prompt.name}" failed`, check.reason ?? "Cannot execute prompt", "error");
+			return;
+		}
+
 		const content = await promptLibraryStore.processContent(prompt, variables);
 
 		try {
@@ -281,6 +297,12 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 				activeTerminal.ref.openComposeWithText(content);
 			} else {
 				await pty.sendCommand(activeTerminal.sessionId, content, activeTerminal.agentType, submit);
+				// Every other injection surface (sendToActiveTerminal, CommandPalette) moves
+				// DOM focus into the terminal after writing — this path didn't, so focus stayed
+				// wherever it was before the drawer opened (often nowhere reachable once the
+				// drawer unmounts), and a manual Enter went nowhere until the user clicked the
+				// terminal themselves to give it real focus.
+				requestAnimationFrame(() => activeTerminal.ref?.focus());
 			}
 			promptLibraryStore.markAsUsed(prompt.id);
 			promptLibraryStore.closeDrawer();
@@ -626,57 +648,17 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 	);
 };
 
-/** Context variables available for smart prompt templates */
-interface VarDef {
-	name: string;
-	description: string;
-	group: string;
-}
-
-const CONTEXT_VARIABLES: VarDef[] = [
-	// Git
-	{ name: "branch", description: "Current branch name", group: "Git" },
-	{ name: "base_branch", description: "Base branch (main/master/develop)", group: "Git" },
-	{ name: "diff", description: "Full working tree diff", group: "Git" },
-	{ name: "staged_diff", description: "Staged changes diff", group: "Git" },
-	{ name: "changed_files", description: "git status --short", group: "Git" },
-	{ name: "dirty_files_count", description: "Number of modified files", group: "Git" },
-	{ name: "commit_log", description: "Last 20 commits (oneline)", group: "Git" },
-	{ name: "last_commit", description: "Last commit hash + subject", group: "Git" },
-	{ name: "conflict_files", description: "Files with merge conflicts", group: "Git" },
-	{ name: "stash_list", description: "Stash entries", group: "Git" },
-	{ name: "branch_status", description: "Ahead/behind remote tracking", group: "Git" },
-	{ name: "remote_url", description: "Remote origin URL", group: "Git" },
-	{ name: "current_user", description: "Git user.name", group: "Git" },
-	{ name: "repo_name", description: "Repository directory name", group: "Git" },
-	{ name: "repo_path", description: "Full repository path", group: "Git" },
-	{ name: "repo_owner", description: "GitHub owner from remote URL", group: "Git" },
-	{ name: "repo_slug", description: "Repository name from remote URL", group: "Git" },
-	// GitHub
-	{ name: "pr_number", description: "PR number for current branch", group: "GitHub" },
-	{ name: "pr_title", description: "PR title", group: "GitHub" },
-	{ name: "pr_url", description: "PR URL", group: "GitHub" },
-	{ name: "pr_state", description: "open / closed / merged", group: "GitHub" },
-	{ name: "pr_author", description: "PR author username", group: "GitHub" },
-	{ name: "pr_labels", description: "PR labels (comma-separated)", group: "GitHub" },
-	{ name: "pr_additions", description: "Lines added in PR", group: "GitHub" },
-	{ name: "pr_deletions", description: "Lines deleted in PR", group: "GitHub" },
-	{ name: "merge_status", description: "Mergeable status", group: "GitHub" },
-	{ name: "review_decision", description: "Review decision", group: "GitHub" },
-	{ name: "pr_checks", description: "CI check summary", group: "GitHub" },
-	{ name: "pr_open_threads", description: "Open review threads (untrusted list)", group: "GitHub" },
-	// Terminal
-	{ name: "agent_type", description: "Detected agent (claude, codex...)", group: "Terminal" },
-	{ name: "cwd", description: "Terminal working directory", group: "Terminal" },
-];
-
-/** Variable insertion dropdown */
+/** Variable insertion dropdown. Unlike SmartPromptsTab's picker, this one
+ *  declares no hosts — PromptDrawer has no file/issue/branch context of its
+ *  own, so `variablesForPicker()` renders only the always-available
+ *  rust/frontend variables (matching this dropdown's pre-consolidation
+ *  content, which never included the file_* group either). */
 const VariableDropdown: Component<{
 	onInsert: (varName: string) => void;
 }> = (props) => {
 	const [open, setOpen] = createSignal(false);
 
-	const groups = () => Map.groupBy(CONTEXT_VARIABLES, (v) => v.group);
+	const groups = () => Map.groupBy(variablesForPicker(), (v) => v.group);
 
 	return (
 		<div class={s.varDropdownWrap}>

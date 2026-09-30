@@ -61,7 +61,11 @@ describe("SmartButtonStrip shared controls preserve actions", () => {
 		fireEvent.click(getByRole("button", { name: "Selected default" }));
 		await Promise.resolve();
 		expect(busy).toHaveBeenLastCalledWith(false);
-		expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: selected.id }), { branch: "feature" });
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({ id: selected.id }),
+			{ branch: "feature" },
+			"/fixture",
+		);
 	});
 
 	it("runs the chosen menu item and makes it the next main action", async () => {
@@ -71,7 +75,7 @@ describe("SmartButtonStrip shared controls preserve actions", () => {
 		fireEvent.click(getByTitle("More actions"));
 		fireEvent.click(getByRole("button", { name: "Second" }));
 		await Promise.resolve();
-		expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: chosen.id }), undefined);
+		expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: chosen.id }), undefined, "/fixture");
 		expect(queryByRole("button", { name: "First" })).toBeNull();
 		expect(getByRole("button", { name: "Second" })).toBeInTheDocument();
 	});

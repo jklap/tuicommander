@@ -8,12 +8,14 @@ const ptyMocks = vi.hoisted(() => ({
 const terminalMocks = vi.hoisted(() => ({
 	openComposeWithText: vi.fn(),
 	isComposeOpen: vi.fn(() => false),
+	focus: vi.fn(),
 }));
 
 const mockInvoke = vi.hoisted(() => vi.fn());
 
 const smartPromptsMocks = vi.hoisted(() => ({
 	executeSmartPrompt: vi.fn().mockResolvedValue({ ok: true }),
+	canExecute: vi.fn((): { ok: boolean; reason?: string } => ({ ok: true })),
 }));
 
 const toastMocks = vi.hoisted(() => ({
@@ -46,7 +48,7 @@ vi.mock("../../hooks/useSmartPrompts", async (importOriginal) => {
 		...actual,
 		useSmartPrompts: () => ({
 			executeSmartPrompt: smartPromptsMocks.executeSmartPrompt,
-			canExecute: vi.fn(() => ({ ok: true })),
+			canExecute: smartPromptsMocks.canExecute,
 			resolveAllVariables: vi.fn().mockResolvedValue({}),
 		}),
 	};
@@ -58,7 +60,11 @@ vi.mock("../../stores/terminals", () => ({
 			id: "terminal-1",
 			sessionId: "session-1",
 			agentType: "codex",
-			ref: { openComposeWithText: terminalMocks.openComposeWithText, isComposeOpen: terminalMocks.isComposeOpen },
+			ref: {
+				openComposeWithText: terminalMocks.openComposeWithText,
+				isComposeOpen: terminalMocks.isComposeOpen,
+				focus: terminalMocks.focus,
+			},
 		}),
 	},
 }));
@@ -113,6 +119,7 @@ describe("PromptDrawer auto-execute", () => {
 		vi.clearAllMocks();
 		terminalMocks.isComposeOpen.mockReturnValue(false);
 		smartPromptsMocks.executeSmartPrompt.mockReset().mockResolvedValue({ ok: true });
+		smartPromptsMocks.canExecute.mockReset().mockReturnValue({ ok: true });
 		mockInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
 			if (command === "extract_prompt_variables") {
 				const content = String(args?.content ?? "");
@@ -174,6 +181,30 @@ describe("PromptDrawer auto-execute", () => {
 		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
 		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("session-1", "Do the custom task", "codex", true);
 		expect(terminalMocks.openComposeWithText).not.toHaveBeenCalled();
+	});
+
+	it("moves DOM focus back to the terminal after injecting, so a manual Enter reaches the PTY without clicking first", async () => {
+		const { container } = render(() => <PromptDrawer />);
+		const row = createPromptThroughEditor(container, "Run custom prompt", "Do the custom task", true);
+
+		fireEvent.click(row, { detail: 1 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(ptyMocks.sendCommand).toHaveBeenCalledOnce();
+		expect(terminalMocks.focus).toHaveBeenCalledOnce();
+	});
+
+	it("blocks a Send-immediately inject prompt when canExecute rejects it (e.g. agent busy), instead of writing straight to the PTY", async () => {
+		smartPromptsMocks.canExecute.mockReturnValue({ ok: false, reason: "Agent is busy" });
+		const { container } = render(() => <PromptDrawer />);
+		const row = createPromptThroughEditor(container, "Run custom prompt", "Do the custom task", true);
+
+		fireEvent.click(row, { detail: 1 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+		expect(terminalMocks.openComposeWithText).not.toHaveBeenCalled();
+		expect(toastMocks.add).toHaveBeenCalledWith('"Run custom prompt" failed', "Agent is busy", "error");
 	});
 
 	it("keeps an editor-created prompt editable when autoExecute is disabled and Compose is closed (adaptive target routes to terminal)", async () => {
@@ -377,6 +408,7 @@ describe("PromptDrawer — category cycling, footer, placement, and modal regist
 		vi.clearAllMocks();
 		terminalMocks.isComposeOpen.mockReturnValue(false);
 		smartPromptsMocks.executeSmartPrompt.mockReset().mockResolvedValue({ ok: true });
+		smartPromptsMocks.canExecute.mockReset().mockReturnValue({ ok: true });
 		mockInvoke.mockResolvedValue(undefined);
 		for (const prompt of promptLibraryStore.getAllPrompts()) {
 			promptLibraryStore.deletePrompt(prompt.id);

@@ -126,9 +126,9 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const content = getByRole("textbox", { name: "Content *" }) as HTMLTextAreaElement;
 		content.setSelectionRange(3, 6);
 		fireEvent.click(getByRole("button", { name: "Insert variable... ▼" }));
-		fireEvent.click(getByRole("button", { name: "{branch} Current branch name" }));
+		fireEvent.click(getByRole("button", { name: "{branch} Current git branch name" }));
 		expect(updatePrompt).toHaveBeenCalledWith("sp-test", { content: "Do {branch} thing" });
-		expect(queryByRole("button", { name: "{branch} Current branch name" })).toBeNull();
+		expect(queryByRole("button", { name: "{branch} Current git branch name" })).toBeNull();
 	});
 
 	it("exposes editable Execution Mode and Auto-execute controls in the expanded editor", () => {

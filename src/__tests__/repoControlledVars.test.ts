@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { repoControlledVarsInContent } from "../components/SettingsPanel/tabs/SmartPromptsTab";
+import { repoControlledVarsInContent } from "../data/contextVariables";
 
 describe("repoControlledVarsInContent", () => {
 	it("detects a single repo-controlled variable", () => {
