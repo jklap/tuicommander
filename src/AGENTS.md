@@ -203,23 +203,124 @@ own cached layout as a flat single pane from its *current* `promoted` set,
 discarding whatever split geometry was cached — called alongside
 `paneLayoutStore.reset()` from `useSplitPanes.ts`'s `resetLayout()`.
 
-**Deliberately NOT fixed:** making `globalWorkspaceStore` filter dead members
-out of `promoted`/`layout` on every read (e.g. inside `syncToPaneStore()`) was
-tried and reverted — it broke ~22 existing tests that promote synthetic ids
-with no matching `terminalsStore` entry, which is this store's own established
-testing convention (see `globalWorkspaceScopes.test.ts`), not a bug in those
-tests. The store's real invariant, honored by every production call site
-(`useAppInit.ts`, `useWorktreeConsolidation.ts`), is that a promoted id is
-always `terminalsStore`-backed at the moment of promotion — a member that
-later dies without the normal `terminalsStore.onRemove` → `onTerminalRemoved`
-cleanup path firing is a narrower, not-yet-live-confirmed gap (a *promoted*
-ghost, as opposed to the *paneLayoutStore*-only ghosts that caused this
-report) than the fix above closes. If a promoted-but-dead member is ever
-confirmed live (e.g. a stuck entry in the sidebar's Global Workspace badge
-count, or a blank tab in its `TabBar` list while active), fix it the same way
-`branch.terminals` was fixed — filter by liveness in the specific reader that
-needs it, not by mutating `promoted` — rather than reaching for a blanket
-prune-on-every-sync pass again.
+**Update (2026-09-29): the "promoted-but-dead member" gap above WAS confirmed
+live** — a real user report of the sidebar's Global Workspace badge showing a
+stuck, inflated count. Fixed exactly the way this section predicted: by
+filtering at the specific reader (`globalWorkspaceStore.getLiveManualMembers()`,
+used by `GlobalWorkspaceEntry.tsx`'s badge/visibility and the
+`toggle-global-workspace` shortcut), not by mutating `promoted` or filtering
+inside `syncToPaneStore()`/`activate()`. The root of the *resurrection* itself
+(not just the display) turned out to be `useWorktreeConsolidation.ts`'s
+`worktreeTerminalsOf` feeding dead ids straight into `syncScopeMembers` as
+"wanted" on every reactive re-run — fixed by filtering that function's result
+to `terminalsStore`-live ids before it ever reaches the store. See the
+"`globalWorkspaceStore`'s Ambient `scope` Pointer" section below for the full
+fix, which turned out to be one symptom of a larger ambient-scope bug.
+
+
+## `globalWorkspaceStore`'s Ambient `scope` Pointer Must Never Leak Into User-Facing "Global Workspace" Identity
+
+`globalWorkspaceStore` (`src/stores/globalWorkspace.ts`) implements **two different
+features** through one mechanism: the user's manually hand-promoted, cross-repo
+bucket (`MANUAL_SCOPE`) and each repo's own automatic "consolidate all worktrees"
+view (`useWorktreeConsolidation.ts`, one scope keyed per repo path). Both share a
+single ambient, mutable module-level `scope` variable. Found 2026-09-29 from a
+live user report: the sidebar's "Global Workspace" badge showed a confusing,
+inflated count, the globe icon on a tab disagreed with the Activity Dashboard's
+promote checkbox for the same terminal, removing a terminal via the Activity
+Dashboard didn't stick, and the sidebar pill's click had no visible effect —
+four distinct symptoms, one root cause.
+
+**The rule going forward: "Global Workspace" as a user-facing concept — the
+sidebar pill, its badge, the promote/unpromote control anywhere (Activity
+Dashboard, `PaneTree.tsx`, `TabBar.tsx`'s context menu), and the globe icon —
+means exactly and only `MANUAL_SCOPE`, never whatever scope happens to be
+ambient.** `promote`/`unpromote`/`isPromoted`/`togglePromote` all hardcode
+`workspace(MANUAL_SCOPE)` internally now — no ambient dependency, no
+`scopeKey` override parameter. Use the new `isManualWorkspaceActive()` (`isActive()
+&& scope === MANUAL_SCOPE`) for any "is the manual Global Workspace showing"
+check — it replaced a duplicated local helper in `PanelOrchestrator.tsx` and is
+what the repo-name hover overlay/globe-icon-redundancy guard in `TabViews.tsx`
+and the repo-badge/globe-badge guards in `PaneTree.tsx` all use now.
+
+**`getPromotedIds()`/`hasPromoted()` are the one deliberate exception — they
+stay ambient-scope-relative.** `TabBar.tsx`'s `activeTerminals()` genuinely
+needs these to reflect whichever scope's tab strip is currently on screen
+(the manual one, or a repo's own auto-consolidated one) — that's correct
+precisely because the other fixes here keep `scope` itself accurate. Do not
+"fix" these to be MANUAL_SCOPE-specific too; that would break the
+auto-consolidation tab-strip filter this store also serves.
+
+**The sidebar pill is one-way, not a toggle.** Clicking it always means
+"switch to `MANUAL_SCOPE`'s view" — it forces `setScope(MANUAL_SCOPE)` then
+`activate()` if not already active. It never deactivates. Clicking an
+ordinary terminal or branch row in the **sidebar** always exits the manual
+Global Workspace view, even if the clicked terminal happens to already be
+promoted into it — a sidebar row click is a deliberate "go look at this
+repo/branch" action, never a within-workspace tab switch.
+`navigateToTerminal.ts` (sidebar terminal rows, plus every other caller
+that isn't the main TabBar — notifications, Activity Dashboard, Session Diff,
+next/prev-terminal shortcuts) and `createBranchSelectionCoordinator.ts`'s
+`handleBranchSelectInner` (sidebar branch rows) both check
+`isManualWorkspaceActive()` unconditionally and call `deactivate()` before
+proceeding, with no exception for already-promoted ids. Confirmed directly
+with Boss: do not reintroduce a deactivate-on-click path on the pill or its
+matching `toggle-global-workspace` keyboard shortcut, and do not make
+`navigateToTerminal.ts` itself promoted-id-aware — see the next paragraph for
+why that distinction lives one layer up instead.
+
+**The main TabBar's own tab clicks are a separate path that must NOT
+deactivate, and the fix lives in `useTerminalLifecycle.ts`, not
+`navigateToTerminal.ts`.** Found 2026-09-30 from a live user report: clicking
+*any* tab while the manual Global Workspace was showing switched the user out
+of it entirely. `handleTerminalSelect` (`useTerminalLifecycle.ts`, wired to
+the main `TabBar`'s tab clicks) called `navigateToTerminal(id)` for every
+plain terminal id — but while the workspace is showing, its tab strip renders
+exactly `globalWorkspaceStore.getPromotedIds()` (`TabBar.tsx`'s
+`activeTerminals()`), so every tab visible there is already a member, and
+`navigateToTerminal`'s unconditional `deactivate()` fired on every single
+click. An initial attempt fixed this by making `navigateToTerminal.ts` itself
+skip `deactivate()` whenever the id is in `getPromotedIds()` — wrong, because
+that function is *also* the sidebar's click handler, and a sidebar row click
+must always exit regardless of promoted status (see previous paragraph) — a
+promoted terminal can still appear in its branch's sidebar tab list. The
+correct fix special-cases only the TabBar path: `handleTerminalSelect` checks
+`globalWorkspaceStore.isManualWorkspaceActive() &&
+globalWorkspaceStore.getPromotedIds().includes(id)` itself and, when true,
+just switches the active tab/pane group directly (mirroring
+`activateInPaneGroup`'s existing pattern) instead of calling
+`navigateToTerminal` at all — leaving `navigateToTerminal.ts` completely
+unchanged from its original always-deactivate behavior. Any future caller of
+`navigateToTerminal` that renders its own filtered-to-`getPromotedIds()` tab
+strip (not a plain "go to any terminal" action) needs this same
+caller-side special case, not a change to the shared function.
+
+**Re-asserting the correct scope after an imperative exit needs an imperative
+call, not just the reactive effect.** `useWorktreeConsolidation()`'s second
+`createEffect` only re-fires on an actual change to `repositoriesStore.state.activeRepoPath`
+— clicking a terminal or branch within the *same* already-active repo doesn't
+change that value, so after an imperative `deactivate()` the reactive trigger
+alone can leave `scope` stuck at `MANUAL_SCOPE` even though you're still in a
+consolidated repo. Fixed by extracting the effect's body into a standalone
+exported `syncScopeForActiveRepo()`, called both by the effect (reactively)
+and by `navigateToTerminal.ts`/`createBranchSelectionCoordinator.ts`
+(imperatively, right after they exit the manual workspace and switch
+repo/branch). Any third call site with the same shape (exit the manual
+workspace, then possibly land on an already-active repo) needs the same
+imperative call — don't assume the mounted effect will catch it.
+
+**Ghost resurrection had a second source beyond the badge display gap
+above.** `useWorktreeConsolidation.ts`'s `worktreeTerminalsOf` used to feed
+`branch.terminals` (deliberately never pruned on terminal exit, per this
+file's own section above) straight into `syncScopeMembers` as "wanted" —
+so a dead worktree terminal got continuously re-added to a repo's
+auto-consolidation scope on every reactive re-run, even after
+`onTerminalRemoved` had already correctly swept it out. Fixed by filtering
+`worktreeTerminalsOf`'s result to `terminalsStore`-live ids before it's ever
+treated as "wanted" — this is a fix to what's fed *into* the declarative sync,
+not a filter on `promoted` itself, so it doesn't reopen the "~22 tests use
+synthetic non-live ids" problem the badge-display fix above had to route
+around.
 
 
 ## SolidJS `<For>` Index Staleness
@@ -288,6 +389,35 @@ specific to that one component: any inline (non-modal) editor/panel gated by
 a "target object" signal, where more than one entry point can retarget it
 while it's already open, has the same latent bug if it's mounted via
 `<Show>`.
+
+
+## A Plain-Value Component Prop Computed Inline From a Store Read Is Still Reactive
+
+`<PaneNodeView node={paneLayoutStore.getRoot()!} .../>` — `node` is typed as a plain
+`PaneNode`, not an accessor, but Solid's JSX compiler still wraps a non-trivial expression
+passed as a component prop in a getter, so `props.node` re-evaluates `paneLayoutStore.getRoot()`
+on demand rather than snapshotting it once at call time. Found 2026-09-29 writing
+`PaneTree.test.tsx` (new file, zero prior coverage): a test that first calls
+`globalWorkspaceStore.syncScopeMembers(...)`/`setScope(...)`/`activate()` — all synchronous,
+non-Tauri store mutations — then renders `<PaneNodeView node={paneLayoutStore.getRoot()!} .../>`
+crashed inside `<Switch><Match when={props.node.type === "branch"}>` with "Cannot read
+properties of null (reading 'type')", from inside a `writeSignal`/`runUpdates` call triggered by
+something reactive *inside the mounted tree itself* writing back to `paneLayoutStore` during
+mount — re-evaluating the getter against a transiently-stale/null root mid-render.
+
+**Fix: snapshot the value as a plain local variable before calling `render()`**, never pass the
+store-read expression inline:
+
+```ts
+const node = paneLayoutStore.getRoot()!; // snapshot first
+render(() => <PaneNodeView node={node} .../>); // pass the plain value, not the expression
+```
+
+Confirmed by reproducing both ways side-by-side against the identical store setup — inline
+crashed, snapshotted-first didn't. Any test that renders a component with a prop computed
+directly from a mutable store's getter (not just `paneLayoutStore`) should snapshot first if the
+component being mounted (or anything it renders) can itself write back to that same store during
+mount.
 
 
 ## solid-js Signals Inside `vi.mock` Factories

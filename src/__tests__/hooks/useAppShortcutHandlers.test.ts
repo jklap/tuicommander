@@ -56,7 +56,16 @@ vi.mock("../../stores/diffTabs", () => ({ diffTabsStore: mockStores.diff }));
 vi.mock("../../stores/editorTabs", () => ({ editorTabsStore: mockStores.editor }));
 vi.mock("../../stores/errorLog", () => ({ errorLogStore: { toggle: vi.fn() } }));
 vi.mock("../../stores/globalWorkspace", () => ({
-	globalWorkspaceStore: { hasPromoted: vi.fn(() => false), isActive: vi.fn(), activate: vi.fn(), deactivate: vi.fn() },
+	globalWorkspaceStore: {
+		hasPromoted: vi.fn(() => false),
+		isActive: vi.fn(),
+		activate: vi.fn(),
+		deactivate: vi.fn(),
+		isManualWorkspaceActive: vi.fn(() => false),
+		setScope: vi.fn(),
+		getLiveManualMembers: vi.fn(() => []),
+	},
+	MANUAL_SCOPE: "__manual__",
 }));
 vi.mock("../../stores/mcpPopup", () => ({ mcpPopupStore: { toggle: vi.fn() } }));
 vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: mockStores.markdown }));
@@ -73,6 +82,7 @@ vi.mock("../../utils/navigateToTerminal", () => ({ navigateToTerminal: mockNavig
 vi.mock("../../utils/nextWaitingTerminal", () => ({ nextWaitingTerminal: vi.fn(() => "term-2") }));
 
 import { useAppShortcutHandlers } from "../../hooks/useAppShortcutHandlers";
+import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 
 function createOptions() {
 	const terminalLifecycle = new Proxy(
@@ -337,6 +347,57 @@ describe("useAppShortcutHandlers", () => {
 				handlers.blockFoldToggle();
 				handlers.blockSearchToggle();
 			}).not.toThrow();
+		});
+	});
+
+	/**
+	 * Mirrors the sidebar pill's own one-way behavior (GlobalWorkspaceEntry.tsx)
+	 * — this shortcut used to toggle activate/deactivate; it's now one-way,
+	 * matching the pill exactly, and had zero test coverage before this.
+	 */
+	describe("toggleGlobalWorkspace", () => {
+		beforeEach(() => {
+			vi.mocked(globalWorkspaceStore.isManualWorkspaceActive).mockReturnValue(false);
+			vi.mocked(globalWorkspaceStore.getLiveManualMembers).mockReturnValue([]);
+			vi.mocked(globalWorkspaceStore.isActive).mockReturnValue(false);
+		});
+
+		it("does nothing when nothing is manually promoted", () => {
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+			handlers.toggleGlobalWorkspace();
+
+			expect(globalWorkspaceStore.setScope).not.toHaveBeenCalled();
+			expect(globalWorkspaceStore.activate).not.toHaveBeenCalled();
+		});
+
+		it("does nothing when the manual workspace is already the active view (one-way, never deactivates)", () => {
+			vi.mocked(globalWorkspaceStore.isManualWorkspaceActive).mockReturnValue(true);
+			vi.mocked(globalWorkspaceStore.getLiveManualMembers).mockReturnValue(["t1"]);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+			handlers.toggleGlobalWorkspace();
+
+			expect(globalWorkspaceStore.setScope).not.toHaveBeenCalled();
+			expect(globalWorkspaceStore.activate).not.toHaveBeenCalled();
+			expect(globalWorkspaceStore.deactivate).not.toHaveBeenCalled();
+		});
+
+		it("switches scope to MANUAL_SCOPE and activates when promoted and not already active", () => {
+			vi.mocked(globalWorkspaceStore.getLiveManualMembers).mockReturnValue(["t1"]);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+			handlers.toggleGlobalWorkspace();
+
+			expect(globalWorkspaceStore.setScope).toHaveBeenCalledWith("__manual__");
+			expect(globalWorkspaceStore.activate).toHaveBeenCalledOnce();
+		});
+
+		it("switches scope but skips activate() when some other scope is already active (setScope alone re-syncs)", () => {
+			vi.mocked(globalWorkspaceStore.getLiveManualMembers).mockReturnValue(["t1"]);
+			vi.mocked(globalWorkspaceStore.isActive).mockReturnValue(true);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+			handlers.toggleGlobalWorkspace();
+
+			expect(globalWorkspaceStore.setScope).toHaveBeenCalledWith("__manual__");
+			expect(globalWorkspaceStore.activate).not.toHaveBeenCalled();
 		});
 	});
 });

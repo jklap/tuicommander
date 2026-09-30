@@ -20,6 +20,7 @@ import { activityDashboardStore } from "../../stores/activityDashboard";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { __resetModalStackForTest } from "../../stores/modalStack";
 import { stateExplainStore } from "../../stores/stateExplain";
+import { terminalsStore } from "../../stores/terminals";
 
 function row(overrides: Partial<TerminalRow> = {}): TerminalRow {
 	return {
@@ -202,6 +203,41 @@ describe("ActivityDashboard", () => {
 			const btn = document.querySelector(".promoteBtn")!;
 			expect(btn.getAttribute("title")).toBe("Remove from Global Workspace");
 			expect(btn.classList.contains("promoted")).toBe(true);
+		});
+
+		/**
+		 * Every test above renders with a synthetic `terminals` prop override, so
+		 * the "selected" state is only ever asserted against a hand-constructed
+		 * row — never against the component's own real derivation
+		 * (`buildRow`'s `isPromoted: globalWorkspaceStore.isPromoted(id)`). This
+		 * is the real click → real store → re-render path: no `terminals` prop,
+		 * no `onPromote` prop, so a click falls all the way through to
+		 * `globalWorkspaceStore.togglePromote` for real, and the row must
+		 * reactively pick that up on its own.
+		 */
+		it("clicking it with no overrides toggles the real store and the button updates itself", () => {
+			const id = terminalsStore.add({ name: "real", sessionId: null, fontSize: 14, cwd: null, awaitingInput: null });
+			try {
+				render(() => <ActivityDashboard embedded />);
+				const btn = () => document.querySelector(`[data-term-id="${id}"] .promoteBtn`)!;
+
+				expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
+				expect(btn().classList.contains("promoted")).toBe(false);
+
+				fireEvent.click(btn());
+
+				expect(globalWorkspaceStore.isPromoted(id)).toBe(true);
+				expect(btn().classList.contains("promoted")).toBe(true);
+				expect(btn().getAttribute("title")).toBe("Remove from Global Workspace");
+
+				fireEvent.click(btn());
+
+				expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
+				expect(btn().classList.contains("promoted")).toBe(false);
+			} finally {
+				globalWorkspaceStore.unpromote(id);
+				terminalsStore.remove(id);
+			}
 		});
 	});
 

@@ -322,7 +322,7 @@ const PaneGroupView: Component<{
 								onContextMenu={(e) => openSubtabMenu(e, tab.id)}
 								title={tabTitle(tab)}
 							>
-								<Show when={globalWorkspaceStore.isActive() && tab.type === "terminal"}>
+								<Show when={globalWorkspaceStore.isManualWorkspaceActive() && tab.type === "terminal"}>
 									{(() => {
 										const repoPath = repositoriesStore.getRepoPathForTerminal(tab.id);
 										const color = repoPath ? getRepoColor(repoPath) : undefined;
@@ -337,7 +337,13 @@ const PaneGroupView: Component<{
 									})()}
 								</Show>
 								<span class="pane-tab-label">{tabTitle(tab)}</span>
-								<Show when={tab.type === "terminal" && globalWorkspaceStore.isPromoted(tab.id)}>
+								<Show
+									when={
+										tab.type === "terminal" &&
+										globalWorkspaceStore.isPromoted(tab.id) &&
+										!globalWorkspaceStore.isManualWorkspaceActive()
+									}
+								>
 									<span
 										class="pane-tab-globe"
 										title="Remove from Global Workspace"

@@ -3,6 +3,7 @@ import { useTerminalLifecycle } from "../../hooks/useTerminalLifecycle";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
@@ -739,6 +740,29 @@ describe("useTerminalLifecycle", () => {
 			lifecycle.handleTerminalSelect(mdId);
 			expect(mdTabsStore.state.activeId).toBe(mdId);
 			expect(terminalsStore.state.activeId).toBeNull();
+		});
+
+		it("switches tabs within the active Global Workspace without exiting it", () => {
+			// Regression test: clicking a tab that's part of the manual Global
+			// Workspace's own tab strip (globalWorkspaceStore.getPromotedIds())
+			// must not deactivate the workspace, unlike an ordinary sidebar row
+			// click (see navigateToTerminal.ts's own tests for that behavior).
+			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
+			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
+			globalWorkspaceStore.promote(id1);
+			globalWorkspaceStore.promote(id2);
+			globalWorkspaceStore.activate();
+			expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+
+			lifecycle.handleTerminalSelect(id1);
+
+			expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+			expect(terminalsStore.state.activeId).toBe(id1);
+
+			// Auto-deactivates once both are unpromoted — leaves clean state for
+			// the next test.
+			globalWorkspaceStore.unpromote(id1);
+			globalWorkspaceStore.unpromote(id2);
 		});
 	});
 
