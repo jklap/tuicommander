@@ -2065,27 +2065,6 @@ how it renders and whether it interrupts anything.
   branch, and `repo worktree_remove` with that id removes both the directory and
   the row.
 
-## An agent quoting a menu footer stops flagging itself as awaiting (2026-08-30, **Rust change — needs `make dev` restart**)
-
-Observed live on Boss's own `tuicommander/main` tab, twice in one turn: the agent
-read another session's screen, pasted it into its answer, and the menu footer
-came back out inside its own indented output. `parse_question` matched it,
-emitted `Question { confident: true }`, and no clear path retracts a confident
-question — the tab read "awaiting" while the agent worked, until Boss typed. The
-anchor is now matched at column 0 of the rendered row instead of the trimmed
-text. Covered by `pty::tests::quoted_ink_footer_in_agent_output_raises_no_question`
-(fixture `claude-quoted-ink-footer.tcap`, verified RED without the fix), but a
-live agent-frame check cannot be replayed.
-
-- [x] After restarting `make dev`, ask an agent in a throwaway session to print a _(verified 2026-09-29: by code/test inspection, tests not executed here: Replay test with fixture claude-quoted-ink-footer.tcap: pty/tests.rs:16111 quoted_ink_footer_in_agent_output_raises_no_question; parser test output_parser.rs:6206.)_
-  captured menu screen — footer row included — inside a fenced code block. Its tab
-  must stay "working": no `?` in the sidebar, `awaiting_input` false in
-  `GET /sessions`.
-- [x] In the same session, open a real interactive menu (any agent prompt that _(verified 2026-09-30: Real claude AskUserQuestion (Ink 'Enter to select · Esc to cancel' footer) -> awaiting_input true in session state, cleared on Esc. Note: /model menu (footer 'Enter to set as default...') did not raise awaiting.)_
-  draws the selection footer) and confirm the `?` still appears. The regression to
-  fear is the opposite one: an over-tight anchor that silences real menus for
-  agents whose frame indents them.
-
 ## tmux compatibility shim: per-teammate accent color + tiled-layout split view (2026-09-15)
 
 **Rust change — needs `make dev` restart** (adds `AppState.pty_accent_colors`, two `AppEvent`
