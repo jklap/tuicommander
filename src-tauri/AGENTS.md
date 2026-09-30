@@ -265,6 +265,23 @@ tests (System Settings → Privacy & Security, or just let the prompt appear and
 once interactively) and re-run — do not treat it as a regression from whatever you just changed
 unless your diff actually touches `notification_sound.rs`/audio playback code.
 
+**`mdkb_daemon::tests::ensure_running_without_binary_uses_existing_daemon` can fail deterministically
+from a stale, orphaned Unix socket file — not a code regression.** Found 2026-09-30 running the
+full gate after an unrelated `terminals.ts`/`osc_title.rs` fix (neither `mdkb_daemon.rs` nor
+`mdkb_client.rs` were touched). The test branches on `MdkbClient::socket_path().exists()`
+(`~/.mdkb/daemon-hook.sock`) to decide which assertion to make — but existence of the socket
+*file* doesn't mean a process is actually listening on it: a daemon that exited without cleaning
+up its socket leaves the file behind, and `ensure_running()`'s subsequent connect attempt then
+fails with "should connect to running daemon" every time, deterministically (confirmed: re-ran in
+isolation, same failure; `ps aux | grep mdkb` showed zero running daemon processes; `ls -la
+~/.mdkb/daemon-hook.sock` showed a day-old file). This is a real gap in the test itself (it should
+probably try connecting, not just stat the path, to decide which branch it's in) but not something
+to "fix" as a side effect of an unrelated change — if this test fails and your diff doesn't touch
+`mdkb_daemon.rs`/`mdkb_client.rs`, check `ps aux | grep mdkb` and the socket file's age before
+assuming a regression. This machine's own mdkb/rtk tooling (if in use) may recreate a fresh socket
+on its own if restarted; deleting the stale file yourself is not this fix's call to make since
+another process could own its lifecycle.
+
 
 ## Building
 

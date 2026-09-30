@@ -2932,11 +2932,14 @@ impl AppState {
     /// `mcp_http/session.rs`.
     ///
     /// Returns `false` (no-op, no emit) when nothing actually changed — same
-    /// reasoning as `set_pty_accent_color`'s guard: the frontend's
-    /// `terminalsStore.update()` echoes any `name`/`nameIsCustom` change back
-    /// here, including one that originated from this very function's own
-    /// emit, and an unconditional emit turns that into an unbounded
-    /// ping-pong on every OSC title change or tmux `select-pane -T` call.
+    /// reasoning as `set_pty_accent_color`'s guard. This is a backstop, not
+    /// the primary fix for the ping-pong it's named after: the frontend's
+    /// `terminalsStore.update()` now applies a `session-renamed` event via
+    /// `applyBackendRename`, which never echoes back to `set_session_name` at
+    /// all (`{ echo: false }`) — see that function's doc comment. This guard
+    /// still matters on its own: it stops a genuinely redundant call (e.g. an
+    /// OSC repaint that cleans to the same name every frame) from emitting,
+    /// independent of whether any given caller echoes.
     ///
     /// Unlike `set_pty_accent_color`/`set_pty_description`, this can't reuse
     /// `set_or_clear_string_mirror` — `display_name` lives on `PtySession`

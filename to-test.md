@@ -6055,3 +6055,26 @@ test can't produce.
   `All checks passed.`, exit 0: tsc, biome, architecture cycles, plugin-docs-sync, frontend
   build + bundle budget, rustfmt, clippy -D warnings, `cargo nextest run --workspace`
   [7108 passed, 16 skipped], vitest, plugin tests, pnpm audit, cargo audit)_.
+- [x] **The frontend's echo-suppression itself, live against a real running debug instance**
+  _(verified 2026-09-30: spun up a `make dev` debug instance on this worktree, port 9877 —
+  `TUIC_APP_INSTANCE` auto-derived; had to manually flip that fresh instance's own
+  `services.server.enabled`→`true` and pin `port`→9877 in its `config.json`, since a brand-new
+  named instance defaults the HTTP server to disabled. Created a throwaway session, then called
+  `PUT /sessions/{id}/name` directly twice in a row with alternating values
+  ("claude · resume" / "to-test") — exactly what `osc_title.rs` would emit for the real trigger.
+  Sampled `/events` for the whole window: exactly 2 `session-renamed` events, matching the 2
+  direct calls, with ZERO additional phantom events — proving the real running WebView
+  frontend's `useAppInit.ts` listener → `applyBackendRename` wiring does NOT call
+  `set_session_name` back. Pre-fix, this same test would have shown a cascading flood. Deleted
+  the throwaway session and cleanly stopped the debug instance (exact PIDs, orchestrator on 9876
+  confirmed untouched throughout)._
+- [ ] **Reproducing the trigger from a REAL OSC-emitting process** (a live shell/agent whose
+  title changes, not a direct `PUT /name` call) **still needs a human check** — an attempt to
+  simulate it via raw `POST /sessions/{id}/write` bytes over curl was confounded by shell/kernel
+  local-echo behavior and an unexpectedly auto-launched Claude Code CLI session in the throwaway
+  PTY, and wasn't worth further automated debugging given the mechanism above is already proven
+  both by the Rust unit test
+  (`osc_title::a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles`)
+  and the live check above. To close this out by hand: open a real terminal tab, run a real
+  agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its title changes and
+  then reverts, and confirm the tab title/accent border settle immediately with no flicker.

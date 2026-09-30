@@ -797,26 +797,23 @@ export async function initApp(deps: AppInitDeps) {
 	// other future caller of the rename route) now actually updates the tab.
 	listen<{ session_id: string; display_name?: string | null; is_custom: boolean }>("session-renamed", (event) => {
 		const { session_id, display_name, is_custom } = event.payload;
-		const termId = terminalsStore.getTerminalForSession(session_id);
-		if (!termId) return;
-		// A `null` display_name means "no name set", not "set to empty string" —
-		// coercing it to `""` here used to echo an empty name straight back to
-		// the backend (terminalsStore.update()'s own echo guard fires on any
-		// `name` key), destroying that "no name set" state for good. Only
-		// include `name` when there's a real value; always update nameIsCustom.
-		terminalsStore.update(termId, {
-			...(display_name != null ? { name: display_name } : {}),
-			nameIsCustom: is_custom,
-		});
+		// Never echoed back to the backend — a `session-renamed` payload IS the
+		// backend's authoritative state. Echoing it via a plain `update()` used
+		// to bounce forever with the backend's own OSC-title sync (two backend
+		// writes in quick succession, e.g. a real title followed by a restore to
+		// the base name, each looked like a genuine change from the other side's
+		// point of view). See `applyBackendRename`'s doc comment.
+		terminalsStore.applyBackendRename(session_id, display_name ?? null, is_custom);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
 	// The tmux compatibility shim's `set-option ... window-style|
 	// pane-border-style|pane-active-border-style` (Claude Code's per-teammate
-	// `--agent-color`) resolves to this — see `mcp_http::tmux_routes`.
+	// `--agent-color`) resolves to this — see `mcp_http::tmux_routes`. Never
+	// echoed back, for the same reason `session-renamed` above isn't — see
+	// `applyBackendAccentColor`'s doc comment.
 	listen<{ session_id: string; color?: string | null }>("session-accent-color-changed", (event) => {
 		const { session_id, color } = event.payload;
-		const termId = terminalsStore.getTerminalForSession(session_id);
-		if (termId) terminalsStore.update(termId, { accentColor: color ?? null });
+		terminalsStore.applyBackendAccentColor(session_id, color ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register session-accent-color-changed listener", err));
 
 	// The tmux compatibility shim's `select-layout tiled`/`main-vertical`

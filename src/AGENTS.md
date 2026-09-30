@@ -649,3 +649,48 @@ install`). Restored via `waitForSetupScriptCompletion` (same file): a `listen()`
 `effective?.setupScript` being truthy, with a generous (900s) safety-net timeout so a lost
 event (backend crash, SSE disconnect) can't hang worktree creation forever — it resolves
 either way, never rejects.
+
+## A Store Method Fed By a Backend Push Event Must Never Reuse The Same Write Path a Local User Action Uses, If That Path Echoes Back
+
+Found 2026-09-30 from a live report: a session's tab name (and, latently, its accent-color
+border) could flicker between two values on the order of 10k+ times/second, driving sustained
+high CPU. `terminalsStore.update()`'s `name`/`accentColor` echo (comment above, in this same
+file) already had an unchanged-value guard meant to stop exactly this — but the guard only
+stops a *value repeating*, not two backend writes racing each other. The real trigger: the
+backend can legitimately emit two `session-renamed` events close together (e.g. `osc_title.rs`
+setting a real OSC title, then almost immediately restoring the base name once the title clears)
+— call them A then B. The `session-renamed` listener fed both straight into the same `update()`
+a local rename (TabBar's rename UI, `ApplicationOverlays.tsx`'s rename dialog) uses, which echoes
+any change back to `set_session_name`. Because A and B are two *different* values, each hop looks
+like a genuine change to whichever side receives it next: frontend applies A (a change from
+whatever it had), echoes A; backend is already at B by then, flips to A, re-emits A; frontend
+receives the still-in-flight B, applies it (a change from A), echoes B; backend flips to B,
+re-emits B — forever. The backend's own unchanged-value no-op guard (`state.rs`'s
+`set_session_display_name`) never fires here, because from ITS point of view every incoming call
+really is a new value too.
+
+**The fix is not a better guard on the shared write path — it's a second, non-echoing path for
+backend-pushed events.** `applyBackendRename`/`applyBackendAccentColor` (`terminals.ts`) apply a
+`session-renamed`/`session-accent-color-changed` event via the existing `update(id, data, {
+echo: false })` option — which already existed for a different caller (the auto-close
+countdown's cosmetic "(5s)" name suffix) but had never been used for a *backend push*. There is
+nothing to synchronize back: the event already IS the backend's authoritative state, so echoing
+it can only ever recreate the exact race above. `useAppInit.ts`'s two listeners call these
+instead of a plain `update()`. The frontend-originated paths (TabBar, `ApplicationOverlays.tsx`,
+`intentTitle.ts`) are unaffected — they still legitimately need to echo a real local rename back.
+
+**The general rule: before wiring a `listen(EVENT)` handler to a store method that echoes any of
+its writes back to the backend, ask whether `EVENT` is itself backend-originated.** If it is, the
+handler needs its own non-echoing entry point (or an explicit `{ echo: false }` at the call
+site) — never the same method a local user action calls, no matter how good that method's own
+unchanged-value guard is. A guard comparing against "what the store currently holds" cannot
+distinguish "this is a stale echo of my own prior write" from "this is a second, different
+backend write that arrived while my first echo was still in flight" — those are indistinguishable
+from inside a single `update()` call, and only the caller (the listener) knows which shape it's
+in. Audited every other `listen(...)` handler in the frontend for this same shape while fixing
+this bug (grepped every `rpc`/`invoke` call with a mutating `set_*`/`save_*` command, traced each
+back to whether it's reachable from a listener) — `session-renamed`/`session-accent-color-changed`
+were the only two with this bug; every other listener either never writes back, or writes back
+through a path where the backend's own emit doesn't re-trigger the same listener (e.g.
+`repositories-changed`'s handler calls `set_hot_repos`/`github_update_paths`, neither of which
+emits anything back).
