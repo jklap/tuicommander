@@ -207,7 +207,7 @@ export interface TerminalData {
 	agentIntent: string | null; // LLM-declared intent via intent: token
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
-	isRemote: boolean; // Created via HTTP/MCP (not locally by the UI)
+	isRemote: boolean; // Created by an agent (MCP/tmux-shim/raw HTTP), not by a human via the app or our own HTTP client
 	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok)
 	// True once `agentSessionId` was set from the backend's hook-reported
 	// `SessionState.agent_session_id` (issue #119's residual gap: exact by

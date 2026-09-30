@@ -8,6 +8,27 @@
 
 # To Test
 
+## `is_remote` now means "created by an agent", not "created via HTTP/MCP" (2026-09-30)
+
+Every `POST /sessions`/`/sessions/worktree` call from our own HTTP client (the browser UI's
+`usePty.ts`, mobile's `NewSessionSheet.tsx`) now sends `user_initiated: true`, which registers
+`is_remote: false` — the goal being that a terminal a human starts from the browser and later
+continues in the desktop app no longer shows the `PTY · ` badge/remote styling, and survives a
+browser close exactly like an app-created tab (closing the browser must never close it — verify
+this specifically). A raw `curl` caller or an MCP/tmux-shim spawn needs no changes and stays
+`is_remote: true`.
+
+- [ ] Create a terminal from the browser UI ("+" button). Confirm in the desktop app: no `PTY`
+  badge, `remoteTab` styling absent, tab does NOT auto-close when its shell exits (behaves like a
+  normal app-created tab).
+- [ ] With that browser-created terminal still open, close the browser tab/window. Confirm the
+  terminal is still visible and usable in the desktop app afterward.
+- [ ] Create a session via a raw HTTP call with no `user_initiated` field (e.g. `curl -X POST
+  .../sessions -d '{}'`). Confirm it IS badged `PTY · ` (once it also has an `agent_type`) and gets
+  the auto-close countdown on exit — unchanged from today's behavior.
+- [ ] Have an agent (MCP `agent action=spawn`, or a swarm/tmux-shim pane) spawn a session. Confirm
+  unchanged remote/auto-close/notification-muting behavior end to end.
+
 ## `debug action=explain_state` now surfaces `agent.agent_session_id` (2026-09-30) — **Rust, needs a `make dev` restart**
 
 Added while investigating why a "why is this session busy" report took a pid-registry detour

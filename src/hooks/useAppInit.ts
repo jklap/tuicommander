@@ -3,6 +3,7 @@ import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompl
 import { t } from "../i18n";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { pluginRegistry } from "../plugins/pluginRegistry";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { conversationStore } from "../stores/conversationStore";
@@ -720,61 +721,67 @@ export async function initApp(deps: AppInitDeps) {
 	).catch((err) => appLogger.error("app", "Failed to register agent-edit-observed listener", err));
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
-	listen<{ session_id: string; cwd: string | null; agent_type?: string | null; display_name?: string | null }>(
-		"session-created",
-		(event) => {
-			const { session_id, cwd, agent_type, display_name } = event.payload;
-			const parsedAgentType = parseAgentType(agent_type);
-			// Skip if this session was created by this client itself (either
-			// transport — see `locallyCreatedSessions`'s doc comment) or is
-			// already tracked.
-			if (locallyCreatedSessions.has(session_id)) return;
-			const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
-			if (existing) return;
+	listen<{
+		session_id: string;
+		cwd: string | null;
+		agent_type?: string | null;
+		display_name?: string | null;
+		is_remote?: boolean;
+	}>("session-created", (event) => {
+		const { session_id, cwd, agent_type, display_name, is_remote } = event.payload;
+		const parsedAgentType = parseAgentType(agent_type);
+		// Default to true when the backend omits the field (older backend/test
+		// payload) — matches this listener's historical hardcoded behavior.
+		const isRemote = is_remote ?? true;
+		// Skip if this session was created by this client itself (either
+		// transport — see `locallyCreatedSessions`'s doc comment) or is
+		// already tracked.
+		if (locallyCreatedSessions.has(session_id)) return;
+		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
+		if (existing) return;
 
-			appLogger.info("app", `Remote session created: ${session_id}`);
-			const id = terminalsStore.add({
-				sessionId: session_id,
-				fontSize: deps.getDefaultFontSize(),
-				name:
-					display_name ||
-					(parsedAgentType
-						? `Session ${terminalsStore.getCount() + 1}`
-						: `PTY: Session ${terminalsStore.getCount() + 1}`),
-				// A spawn-assigned display name is the base title, not a manual rename.
-				// Intent/OSC titles may replace it until the user explicitly renames the tab.
-				nameIsCustom: false,
-				cwd: cwd ?? null,
-				awaitingInput: null,
-				isRemote: true,
-				agentType: parsedAgentType,
-				ptyDescription: null,
-			});
-			remoteSessionTabs.set(session_id, id);
+		appLogger.info("app", `Remote session created: ${session_id}`);
+		const id = terminalsStore.add({
+			sessionId: session_id,
+			fontSize: deps.getDefaultFontSize(),
+			name:
+				display_name ||
+				(isRemote && !parsedAgentType
+					? `PTY: Session ${terminalsStore.getCount() + 1}`
+					: `Session ${terminalsStore.getCount() + 1}`),
+			// A spawn-assigned display name is the base title, not a manual rename.
+			// Intent/OSC titles may replace it until the user explicitly renames the tab.
+			nameIsCustom: false,
+			cwd: cwd ?? null,
+			awaitingInput: null,
+			isRemote,
+			agentType: parsedAgentType,
+			ptyDescription: null,
+		});
+		remoteSessionTabs.set(session_id, id);
 
-			assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
+		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
 
-			// Dock agent-spawned tabs so swarm workers show up in the tab strip.
-			// Only for agent_type (MCP agent spawn), not for manually created
-			// sessions. The tab is docked but never selected: an MCP spawn must
-			// not take over the pane the user is working in.
-			if (agent_type) {
-				// In split mode, ensure there is an active group so assignTabToActiveGroup
-				// doesn't silently no-op and leave the tab invisible.
-				if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
-					const leafIds = paneLayoutStore.getAllGroupIds();
-					if (leafIds.length > 0) {
-						paneLayoutStore.setActiveGroup(leafIds[0]);
-					}
-				}
-				assignTabToActiveGroup(id, "terminal", false);
-				// Only steal focus when there is no existing active terminal.
-				if (!terminalsStore.state.activeId) {
-					terminalsStore.setActive(id);
+		// Dock agent-spawned tabs so swarm workers show up in the tab strip.
+		// Only for agent_type (MCP agent spawn), not for manually created
+		// sessions. The tab is docked but never selected: an MCP spawn must
+		// not take over the pane the user is working in.
+		if (agent_type) {
+			// In split mode, ensure there is an active group so assignTabToActiveGroup
+			// doesn't silently no-op and leave the tab invisible.
+			if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
+				const leafIds = paneLayoutStore.getAllGroupIds();
+				if (leafIds.length > 0) {
+					paneLayoutStore.setActiveGroup(leafIds[0]);
 				}
 			}
-		},
-	).catch((err) => appLogger.error("app", "Failed to register session-created listener", err));
+			assignTabToActiveGroup(id, "terminal", false);
+			// Only steal focus when there is no existing active terminal.
+			if (!terminalsStore.state.activeId) {
+				terminalsStore.setActive(id);
+			}
+		}
+	}).catch((err) => appLogger.error("app", "Failed to register session-created listener", err));
 
 	listen<{ session_id: string; description?: string | null }>("pty-description-changed", (event) => {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
@@ -954,23 +961,53 @@ export async function initApp(deps: AppInitDeps) {
 
 	listen<{ session_id: string; agent_type?: string }>("session-closed", (event) => {
 		const { session_id, agent_type } = event.payload;
-		// Prefer the persistent remoteSessionTabs map: the store's reverse map may
-		// have been cleared already by Terminal.tsx resetting sessionId on pty-exit.
+		// Prefer the persistent remoteSessionTabs map: Terminal.tsx's pty-exit
+		// handler resets a NON-remote tab's sessionId on exit (a remote tab's
+		// sessionId is left alone for this listener, see below), so the store's
+		// reverse map can already be gone by the time this fires for those.
 		const termId = remoteSessionTabs.get(session_id) ?? terminalsStore.getTerminalForSession(session_id);
 		if (!termId) return;
 
 		remoteSessionTabs.delete(session_id);
 
-		// Countdown + auto-remove is only for MCP-spawned (remote) tabs. Locally-created
-		// tabs are managed by Terminal.tsx's pty-exit handler — applying the rename
-		// here would leave the name stuck forever because the ticker's isRemote
-		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
+		// Countdown + auto-remove, and all shellState/sessionId teardown below, is
+		// only for a remote tab (agent-created, or via our own HTTP client) — this
+		// listener is that tab's sole owner (Terminal.tsx's pty-exit handler
+		// explicitly skips its own mutations for one, see that file). A non-remote
+		// tab is owned entirely by Terminal.tsx instead — applying the rename here
+		// would leave the name stuck forever because the ticker's isRemote guard
+		// aborts on the first tick and the setTimeout's isRemote guard skips removal.
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
 
 		const parsedAgentType = parseAgentType(agent_type);
 		handleAgentExitCompletion(termId, parsedAgentType != null);
-		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
+		// Mirrors Terminal.tsx's own (non-remote) pty-exit teardown for an agent
+		// tab — this listener is now the sole owner of that teardown for a remote
+		// one (Terminal.tsx explicitly skips it), so the agentType/resume-banner
+		// fields it used to clear locally must be cleared here instead, or a
+		// remote agent tab's `agentType` would stay stuck forever once its
+		// sessionId goes null and polling has nothing left to detect against.
+		const hadAgent = t0?.agentType != null;
+		terminalsStore.update(termId, {
+			shellState: "exited",
+			sessionId: null,
+			...(hadAgent
+				? {
+						currentTask: null,
+						agentType: null,
+						agentSessionId: null,
+						agentSessionIdIsAuthoritative: false,
+						pendingResumeCommand: null,
+						pendingResumeTitle: null,
+						pendingResumeSource: null,
+					}
+				: {}),
+		});
+		if (hadAgent) {
+			terminalsStore.clearAwaitingInput(termId);
+			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: session_id, terminalId: termId });
+		}
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
 		// and can be cleaned up faster than manually-opened remote sessions. Keyed

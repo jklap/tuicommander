@@ -626,12 +626,14 @@ pub(crate) fn emit_session_created(
     cwd: Option<String>,
     agent_type: Option<String>,
     display_name: Option<String>,
+    is_remote: bool,
 ) {
     state.emit_dual(crate::state::AppEvent::SessionCreated {
         session_id: session_id.to_string(),
         cwd,
         agent_type,
         display_name,
+        is_remote,
     });
 }
 
@@ -11771,6 +11773,7 @@ pub(crate) async fn spawn_session_for_agent(
         created_cwd,
         None, // no agent_type input on this orchestrated-spawn path
         created_display_name,
+        true, // orchestrated agent spawn — is_remote: true
     );
     // Assigned AFTER SessionCreated (not before, as this used to read) — a
     // subscriber must see SessionCreated as the first event for a brand-new

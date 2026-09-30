@@ -294,7 +294,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, and the optional stable `display_name`. Frontend uses this to auto-add remote tabs; a spawn-assigned name remains replaceable by OSC/intent titles, while session-list snapshots carry independent `display_name_is_custom` and `is_remote` flags for reconnect.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `is_remote`. Frontend uses this to auto-add remote (agent-created) tabs; a spawn-assigned name remains replaceable by OSC/intent titles, while session-list snapshots carry independent `display_name_is_custom` and `is_remote` flags for reconnect. `is_remote` means "created by an agent" (MCP, tmux shim, AI-agent tools/scheduler, raw HTTP) — a human-created session, in the app or via our own HTTP client's `user_initiated: true`, is `is_remote: false`.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Frontend uses this to update tab tooltips.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 

@@ -1119,6 +1119,7 @@ pub(crate) async fn spawn_agent(
         created_cwd,
         created_agent_type,
         created_display_name,
+        false, // desktop spawn_agent is always human-initiated
     );
 
     spawn_reader_thread(
