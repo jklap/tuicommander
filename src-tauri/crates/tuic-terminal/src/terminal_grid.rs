@@ -2830,6 +2830,287 @@ mod tests {
         );
     }
 
+    /// What a replay of one capture observed.
+    #[derive(Default)]
+    struct HistoryReplay {
+        committed_rows: usize,
+        live_rewrites: usize,
+        alt_records: usize,
+    }
+
+    /// Replays `.tcap` output records into a grid whose viewport is held `k` rows
+    /// above the bottom (0 = pinned to the tail) and checks the contract the scroll
+    /// row cache relies on (#1264-89c8): a row that entered history never changes,
+    /// every history row is present and contiguous in all-time order, and the
+    /// viewport at offset `k` shows exactly the rows the absolute-index read returns
+    /// for that window. `resize_at` = (output record index, rows, cols).
+    fn replay_history_contract(
+        name: &str,
+        capture: &crate::pty_capture::DecodedCapture,
+        cap: usize,
+        k: usize,
+        resize_at: Option<(usize, u16, u16)>,
+    ) -> HistoryReplay {
+        use std::collections::HashMap;
+        let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+        let mut grid = TerminalGrid::new(rows, cols, cap);
+        let mut stats = HistoryReplay::default();
+        // All-time row index -> text, for rows already in history.
+        let mut committed: HashMap<usize, String> = HashMap::new();
+        let mut next_index = 0usize;
+        let mut screen: Vec<String> = Vec::new();
+        let outputs = capture
+            .records
+            .iter()
+            .filter(|r| r.direction == crate::pty_capture::CaptureDirection::Output);
+        for (step, rec) in outputs.enumerate() {
+            let before = grid.scrollback_count();
+            if let Some((_, r, c)) = resize_at.filter(|(at, _, _)| *at == step) {
+                let history_of = |g: &TerminalGrid| -> Vec<String> {
+                    match g.scrollback_count() {
+                        0 => Vec::new(),
+                        n => g.read_rows_in_range(0, n - 1),
+                    }
+                };
+                let flat = |g: &TerminalGrid| -> Vec<String> {
+                    g.read_rows_in_range(0, g.total_lines() - 1)
+                        .into_iter()
+                        .filter(|t| !t.trim().is_empty())
+                        .collect()
+                };
+                let old_rows = grid.total_lines() - grid.scrollback_count();
+                let (old_history, old_content) = (history_of(&grid), flat(&grid));
+                grid.resize_with_mode(r, c, ReflowMode::All);
+                if (r as usize) < old_rows {
+                    // Shrinking drops non-blank rows below the cursor by design, and
+                    // pushes the top of the screen into history: the old history
+                    // must survive as the prefix.
+                    assert_eq!(
+                        &history_of(&grid)[..old_history.len()],
+                        &old_history[..],
+                        "{name}: shrinking the screen changed existing history"
+                    );
+                } else {
+                    assert_eq!(
+                        flat(&grid),
+                        old_content,
+                        "{name}: growing the screen lost or reordered lines"
+                    );
+                }
+                // The all-time origin may shift with the new row count: rebuild.
+                committed.clear();
+                next_index = 0;
+                screen.clear();
+            }
+            grid.process(&rec.data);
+            if grid.is_alternate_screen() {
+                stats.alt_records += 1;
+                continue;
+            }
+            if k > 0 {
+                grid.scroll_to_offset(k);
+            }
+            let history = grid.scrollback_count();
+            let base = grid.screen_origin().saturating_sub(history);
+
+            // Viewport at the held offset == the same window read by absolute index.
+            let offset = grid.display_offset();
+            let top = history - offset;
+            let vrows = grid.total_lines() - history;
+            let window = grid.read_rows_in_range(top, top + vrows - 1);
+            let shown: Vec<String> = (0..vrows).map(|r| grid.get_row_text(r)).collect();
+            assert_eq!(
+                shown, window,
+                "{name} k={k} step {step}: viewport differs from the rows it should show"
+            );
+
+            let now = grid.screen_text_rows();
+            if history == before && screen.len() == now.len() {
+                stats.live_rewrites += now.iter().zip(&screen).filter(|(a, b)| a != b).count();
+            }
+            screen = now;
+
+            // Rows below `base` were evicted by the cap; everything else must be
+            // there. New rows are recorded, known rows must be unchanged.
+            let full_scan = step % 50 == 0;
+            let from = if full_scan {
+                base
+            } else {
+                next_index.max(base)
+            };
+            let texts = if from - base < history {
+                grid.read_rows_in_range(from - base, history - 1)
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                texts.len(),
+                history - (from - base),
+                "{name}: history read short"
+            );
+            for (i, text) in texts.into_iter().enumerate() {
+                let idx = from + i;
+                match committed.get(&idx) {
+                    Some(seen) => assert_eq!(
+                        seen, &text,
+                        "{name} k={k} step {step}: history row {idx} changed after commit"
+                    ),
+                    None => {
+                        // A jump is legitimate only to the oldest retained row: the
+                        // cap evicted, or the agent erased scrollback (ESC[3J), rows
+                        // this replay never saw.
+                        assert!(
+                            idx == next_index || idx == base,
+                            "{name} k={k} step {step}: history rows skipped to {idx} (expected {next_index})"
+                        );
+                        committed.insert(idx, text);
+                        next_index = idx + 1;
+                        stats.committed_rows += 1;
+                    }
+                }
+            }
+            if history > 0 {
+                assert_eq!(
+                    next_index,
+                    base + history,
+                    "{name} k={k} step {step}: history rows missing (base {base}, history {history}, from {from})"
+                );
+            } else {
+                // Scrollback erased: nothing retained to compare, resume at the origin.
+                next_index = base;
+            }
+            committed.retain(|idx, _| *idx >= base);
+        }
+        stats
+    }
+
+    fn fixture_captures() -> Vec<(String, crate::pty_capture::DecodedCapture)> {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/fixtures/agent_prompts");
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("fixture directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("readable fixture");
+            let capture = crate::pty_capture::decode_capture(&bytes).expect("decodable fixture");
+            out.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                capture,
+            ));
+        }
+        assert!(
+            !out.is_empty(),
+            "no .tcap fixtures found in {}",
+            dir.display()
+        );
+        out
+    }
+
+    /// Real agent bytes, viewport held k rows up — k = 0 (tail), 1 and 3 (inside the
+    /// live region), a page, and deep history.
+    #[test]
+    fn history_rows_never_change_while_scrolled_up_over_real_captures() {
+        let mut checked = 0;
+        for (name, capture) in fixture_captures() {
+            let rows = capture.geometry.map_or(50, |(r, _)| r as usize);
+            for k in [0, 1, 3, rows / 2, rows, rows + 7] {
+                checked += replay_history_contract(&name, &capture, 10_000, k, None).committed_rows;
+            }
+        }
+        assert!(
+            checked > 1000,
+            "corpus too small to mean anything: {checked} rows"
+        );
+    }
+
+    /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
+    #[test]
+    fn history_rows_survive_the_scrollback_cap_over_real_captures() {
+        // One long session: every fixture back to back on the same grid.
+        let mut all = fixture_captures();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        let geometry = all[0].1.geometry;
+        let records: Vec<_> = all.into_iter().flat_map(|(_, c)| c.records).collect();
+        let session = crate::pty_capture::DecodedCapture { geometry, records };
+        for k in [0, 5] {
+            let stats = replay_history_contract("all fixtures", &session, 10, k, None);
+            assert!(
+                stats.committed_rows > 10,
+                "the session never exceeded the cap: the test proves nothing"
+            );
+        }
+    }
+
+    /// A rows-only resize in the middle of a redraw keeps history intact (shrink) and
+    /// every line in order (grow).
+    #[test]
+    fn history_content_survives_a_resize_during_redraw_over_real_captures() {
+        for (name, capture) in fixture_captures() {
+            let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+            for new_rows in [rows.saturating_sub(9).max(3), rows + 6] {
+                for at in [3, capture.records.len() / 2] {
+                    replay_history_contract(&name, &capture, 10_000, 4, Some((at, new_rows, cols)));
+                }
+            }
+        }
+    }
+
+    /// Entering and leaving the alternate screen never touches primary history.
+    #[test]
+    fn alt_screen_round_trip_leaves_history_untouched() {
+        let mut grid = TerminalGrid::new(4, 20, 100);
+        for i in 0..10 {
+            let _ = grid.process(format!("l{i}\r\n").as_bytes());
+        }
+        let history = grid.scrollback_count();
+        let before = grid.read_rows_in_range(0, history - 1);
+        let _ = grid.process(b"\x1b[?1049hALT1\r\nALT2\r\nALT3\r\nALT4\r\nALT5\r\nALT6");
+        assert!(grid.is_alternate_screen());
+        let _ = grid.process(b"\x1b[?1049l");
+        assert!(!grid.is_alternate_screen());
+        assert_eq!(grid.scrollback_count(), history);
+        assert_eq!(grid.read_rows_in_range(0, history - 1), before);
+    }
+
+    /// Whole-corpus run: the operator's own captures, no size limit.
+    ///
+    /// ```text
+    /// TUIC_HISTORY_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captures" \
+    ///   cargo test -p tuic-terminal history_rows_never_change_over_capture_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a capture corpus; see TUIC_HISTORY_CORPUS"]
+    fn history_rows_never_change_over_capture_corpus() {
+        let Ok(dir) = std::env::var("TUIC_HISTORY_CORPUS") else {
+            panic!("set TUIC_HISTORY_CORPUS to a directory of .tcap captures");
+        };
+        let (mut files, mut committed, mut live, mut alt) = (0usize, 0usize, 0usize, 0usize);
+        for entry in std::fs::read_dir(&dir).expect("readable corpus directory") {
+            let path = entry.expect("readable entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tcap") {
+                continue;
+            }
+            let capture = crate::pty_capture::decode_capture(
+                &std::fs::read(&path).expect("readable capture"),
+            )
+            .expect("decodable capture");
+            let name = path.display().to_string();
+            for k in [0, 2, 9, 40] {
+                let s = replay_history_contract(&name, &capture, 10_000, k, None);
+                committed += s.committed_rows;
+                live += s.live_rewrites;
+                alt += s.alt_records;
+            }
+            files += 1;
+        }
+        assert!(files > 0, "corpus held no usable .tcap captures");
+        println!(
+            "files {files}  history rows checked {committed}  live rows rewritten in place {live}  alt-screen records skipped {alt}"
+        );
+    }
+
     /// Measure the overship ratio over a corpus of real `.tcap` captures.
     ///
     /// Ignored by default: the corpus is whatever the operator recorded through
