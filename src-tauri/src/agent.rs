@@ -1093,9 +1093,16 @@ pub(crate) async fn spawn_agent(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
+    // Built at the geometry the PTY was actually opened with above — see
+    // `vt_screen_size_for`'s doc comment (mcp_http/session.rs) for the class
+    // of bug a hardcoded 24x220 here reproduces: any screen scrape (agent-state
+    // detection, choice prompts, the chrome cutoff) parsing a grid taller than
+    // 24 rows would see a screen the child never drew into.
+    let (vt_rows, vt_cols) =
+        crate::mcp_http::session::vt_screen_size_for(pty_config.rows, pty_config.cols);
     state.grid.vt_log_buffers.insert(
         session_id.clone(),
-        Mutex::new(state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY)),
+        Mutex::new(state.new_vt_log_buffer(vt_rows, vt_cols, VT_LOG_BUFFER_CAPACITY)),
     );
     state
         .session_maps

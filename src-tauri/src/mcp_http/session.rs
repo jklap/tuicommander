@@ -540,7 +540,26 @@ pub(super) async fn close_session(
 /// Column floor for a freshly registered VT screen, kept from the shell-session
 /// path: the grid starts at least this wide whatever geometry the caller asked
 /// for, and `VtLogBuffer::resize` only ever widens `max_cols` from there.
-const NEW_SESSION_MIN_VT_COLS: u16 = 220;
+pub(crate) const NEW_SESSION_MIN_VT_COLS: u16 = 220;
+
+/// Geometry for a freshly registered VT screen, given the caller's real PTY
+/// size: rows honored exactly, cols floored at `NEW_SESSION_MIN_VT_COLS`.
+///
+/// The single source of truth for this decision — every call site that
+/// builds its own `VtLogBuffer` (`register_pty_session` below, the desktop
+/// `agent::spawn_agent`/`pty::commands::create_pty`/`create_pty_with_worktree`
+/// commands) must go through this rather than open-coding `24, 220` or
+/// re-deriving the floor itself, which is exactly how those three desktop
+/// sites drifted from `register_pty_session`'s already-fixed contract (see
+/// that function's doc comment for the class of bug a hardcoded `24x220`
+/// reproduces). Deliberately NOT baked into `AppState::new_vt_log_buffer`
+/// itself — `pty.rs`'s scrollback-restore path uses that constructor with
+/// exact rows/cols and no floor on purpose, and `state.rs`'s own
+/// scrollback-reflow tests rely on being able to construct a genuinely
+/// narrow buffer.
+pub(crate) fn vt_screen_size_for(rows: u16, cols: u16) -> (u16, u16) {
+    (rows, cols.max(NEW_SESSION_MIN_VT_COLS))
+}
 
 /// Wire a freshly spawned PTY into `AppState`: the session handle, its terminal
 /// alias, the spawn metrics, the output ring, the VT screen **at the geometry the
@@ -585,13 +604,10 @@ pub(super) fn register_pty_session(
         session_id.to_string(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
+    let (vt_rows, vt_cols) = vt_screen_size_for(rows, cols);
     state.grid.vt_log_buffers.insert(
         session_id.to_string(),
-        Mutex::new(state.new_vt_log_buffer(
-            rows,
-            cols.max(NEW_SESSION_MIN_VT_COLS),
-            VT_LOG_BUFFER_CAPACITY,
-        )),
+        Mutex::new(state.new_vt_log_buffer(vt_rows, vt_cols, VT_LOG_BUFFER_CAPACITY)),
     );
     state
         .session_maps
@@ -2764,6 +2780,147 @@ mod tests {
             seen,
             vec!["session-created", "term-alias-assigned"],
             "SessionCreated must precede TermAliasAssigned for a brand-new session"
+        );
+    }
+
+    /// RED before this fix: every one of `vt_screen_size_for`'s callers
+    /// (`register_pty_session` below, plus the desktop `agent::spawn_agent`,
+    /// `pty::commands::create_pty`, and `create_pty_with_worktree` commands)
+    /// used to either build the VT screen at a hardcoded `24x220`, or — for
+    /// `register_pty_session` itself, already fixed in `fc478803f` — floor
+    /// the width inline at each call site independently. Asserting the pure
+    /// decision here means every current AND future caller is covered
+    /// without needing its own copy of a geometry test.
+    #[test]
+    fn vt_screen_size_for_uses_the_real_pty_geometry_not_a_hardcoded_24x220() {
+        assert_eq!(
+            vt_screen_size_for(40, 300),
+            (40, 300),
+            "a 40-row, 300-col PTY must get a VT screen of the same size, not 24x220"
+        );
+    }
+
+    /// The floor is real, not accidentally removed by the fix above: a PTY
+    /// narrower than `NEW_SESSION_MIN_VT_COLS` still gets the shared minimum
+    /// width.
+    #[test]
+    fn vt_screen_size_for_still_floors_narrow_widths_at_the_shared_minimum() {
+        assert_eq!(
+            vt_screen_size_for(24, 80),
+            (24, NEW_SESSION_MIN_VT_COLS),
+            "a narrower-than-floor PTY must still get the shared minimum column floor"
+        );
+    }
+
+    /// Opens a real PTY at the given size and spawns a short-lived shell,
+    /// for tests that need a real `PtySession` to hand to
+    /// `register_pty_session` without caring about the shell itself.
+    #[cfg(unix)]
+    fn open_test_pty_session(rows: u16, cols: u16) -> crate::state::PtySession {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let writer = pair.master.take_writer().expect("writer");
+        crate::state::PtySession {
+            writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }
+    }
+
+    /// RED before `fc478803f`: `register_pty_session` is the single choke
+    /// point all three spawn paths (`spawn_pty_session`, `POST /agents`,
+    /// MCP `agent action=spawn`) share specifically so this geometry
+    /// mismatch is unrepresentable rather than fixed three times — see this
+    /// function's own doc comment. Only the MCP path had a direct regression
+    /// test (`mcp_transport.rs`'s `agent_spawn_sizes_the_vt_screen_to_the_pty`);
+    /// this asserts the same contract at the shared choke point itself, so
+    /// every caller — present or future — is covered without needing its own
+    /// copy of this test.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn register_pty_session_sizes_the_vt_screen_to_the_real_pty() {
+        let state = super::super::tests::test_state();
+        let session_id = "geometry-invariant-session";
+        let session = open_test_pty_session(40, 300);
+
+        register_pty_session(&state, session_id, session, 40, 300, None, None, true);
+
+        // Height reads straight off the grid; width is only observable through
+        // wrapping, so it needs a probe on a known-clean screen — same
+        // technique as the MCP-level regression test.
+        let probe = format!("\x1b[2J\x1b[H{}", "x".repeat(260));
+        let rows = {
+            let vt = state
+                .grid
+                .vt_log_buffers
+                .get(session_id)
+                .expect("register_pty_session registers a VT screen");
+            let mut buffer = vt.lock();
+            buffer.process(probe.as_bytes());
+            buffer.screen_rows()
+        };
+        assert_eq!(
+            rows.len(),
+            40,
+            "the VT screen must be as tall as the PTY it was registered with"
+        );
+        assert_eq!(
+            rows[0].len(),
+            260,
+            "260 columns must fit on one row of a 300-column PTY, not wrap at a \
+             hardcoded 220"
+        );
+    }
+
+    /// The column floor is real, not accidentally removed: a caller that
+    /// registers a narrower-than-floor PTY still gets the shared minimum
+    /// width, matching `vt_screen_size_for`'s identical contract.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn register_pty_session_still_floors_narrow_widths_at_the_shared_minimum() {
+        let state = super::super::tests::test_state();
+        let session_id = "narrow-geometry-session";
+        let session = open_test_pty_session(24, 80);
+
+        register_pty_session(&state, session_id, session, 24, 80, None, None, true);
+
+        let probe = format!(
+            "\x1b[2J\x1b[H{}",
+            "x".repeat(NEW_SESSION_MIN_VT_COLS as usize)
+        );
+        let rows = {
+            let vt = state
+                .grid
+                .vt_log_buffers
+                .get(session_id)
+                .expect("register_pty_session registers a VT screen");
+            let mut buffer = vt.lock();
+            buffer.process(probe.as_bytes());
+            buffer.screen_rows()
+        };
+        assert_eq!(
+            rows[0].len(),
+            NEW_SESSION_MIN_VT_COLS as usize,
+            "a narrower-than-floor PTY must still get the shared minimum column floor, \
+             not the raw requested width"
         );
     }
 
