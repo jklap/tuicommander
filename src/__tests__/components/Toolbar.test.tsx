@@ -1,6 +1,6 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModifierSymbol } from "../../platform";
 
 // Mock IdeLauncher to avoid Tauri invoke calls from that component

@@ -452,7 +452,10 @@ mod tests {
         let _guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
         write_real_shaped_repositories(cfg.path(), Path::new("/Users/dev/project-a"));
 
-        assert_eq!(registered_repo_roots(), vec!["/Users/dev/project-a".to_string()]);
+        assert_eq!(
+            registered_repo_roots(),
+            vec!["/Users/dev/project-a".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -471,8 +474,14 @@ mod tests {
                 path: p.to_string_lossy().into_owned(),
             }))
         };
-        assert_eq!(get(repo.path().join("AGENTS.md")).await.status(), StatusCode::OK);
-        assert_eq!(get(outside.path().join("secret.md")).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            get(repo.path().join("AGENTS.md")).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            get(outside.path().join("secret.md")).await.status(),
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[test]
