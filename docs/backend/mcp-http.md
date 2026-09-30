@@ -36,7 +36,7 @@ exporting are the reader's business and cost instruction budget in every
 `initialize`.
 
 `repo action=progress_list` takes `path` and optional `input` with `blockedOnly`,
-`ptyId`, `limit` and `cursor`. The default page has 10 entries; `limit` is
+`ptyId`, `limit` and `cursor`. The default page has 8 entries; `limit` is
 clamped to 1–100. Entries are newest first. The response includes `total`
 (matching entries before the cursor) and `nextCursor` (`null` on the final
 page). Pass `nextCursor` as the next request's `cursor` to read the entire
