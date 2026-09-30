@@ -1,0 +1,176 @@
+.container {
+  position: fixed;
+  bottom: calc(var(--status-bar-height, 24px) + 8px);
+  /* --toast-right-inset is set while a docked side panel (AI Chat) would
+     otherwise sit under the toasts. */
+  right: calc(16px + var(--toast-right-inset, 0px));
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  /* Two columns, two rows: the dot and the text share the first row, and the
+     buttons get their own row underneath. Inline buttons took ~190px out of a
+     480px toast, so the title wrapped one or two words deep while the buttons
+     sat in empty space beside it. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 8px;
+  padding: 10px 14px;
+  /* Never wider than the viewport: the container is right-anchored, so an
+     over-wide toast would run off the left edge on a narrow window. */
+  max-width: min(480px, calc(100vw - 32px));
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  font-family: var(--font-ui);
+  font-size: var(--font-md);
+  color: var(--fg-primary);
+  cursor: pointer;
+  animation: slideIn 200ms ease-out;
+}
+
+.toast[data-level="warn"] {
+  border-color: var(--warning);
+}
+
+.toast[data-level="error"] {
+  border-color: var(--error);
+}
+
+.level {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* Nudge down so the dot aligns with the first line of the title, now that
+     the toast anchors its children to the top for multi-line messages. */
+  margin-top: 6px;
+}
+
+.body {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.level[data-level="info"] {
+  background: var(--accent);
+}
+
+.level[data-level="warn"] {
+  background: var(--warning);
+}
+
+.level[data-level="error"] {
+  background: var(--error);
+}
+
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+}
+
+/* Which repo is speaking. A toast arrives while the user is looking at another
+   repo, so the name has to be readable at a glance, not buried in the message. */
+.repo {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title {
+  font-weight: 600;
+  /* A flex BASIS, not just a min-width. `overflow-wrap: anywhere` puts the
+     title's min-content width at one character, so on its own the title would
+     never wrap onto its own line — it would squash into whatever column the
+     repo chip left, which is how a long title came to be drawn four words
+     deep and one word wide. With a basis, the row breaks when fewer than
+     ~14 characters fit beside the chip and the title gets the full width. */
+  flex: 1 1 14ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.message {
+  color: var(--fg-secondary);
+  /* Wrap long messages (e.g. CI-heal failures naming external providers)
+     across lines instead of truncating to an unreadable single line. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  /* A progress report can be 500 characters; unclamped it covered the whole
+     terminal. Four lines is enough to know what happened, and the full text
+     is one click away in the Progress panel. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+.action {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--font-sm);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Second row, under the text, aligned right. Empty when a toast carries no
+   action — the row collapses because the span has no content. */
+.actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.actions:empty {
+  display: none;
+}
+
+.repoAction {
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
+}
+
+.action:hover {
+  opacity: 0.85;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

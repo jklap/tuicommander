@@ -1,0 +1,294 @@
+import { createStore } from "solid-js/store";
+import { invoke } from "../invoke";
+import {
+	DEFAULT_NOTIFICATION_CONFIG,
+	type NotificationConfig,
+	type NotificationSound,
+	notificationManager,
+} from "../notifications";
+import { showNativeNotice } from "../services/nativeNotifications";
+import { isTauri } from "../transport";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
+import { appLogger } from "./appLogger";
+import { setToastBellMirrorResolver } from "./toasts";
+import { uiStore } from "./ui";
+
+interface PlayOptions {
+	terminalId?: string;
+}
+
+const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
+	question: "Agent needs input",
+	error: "Error detected",
+	completion: "Task completed",
+	warning: "Warning",
+	info: "Info",
+	attention: "Agent needs you",
+};
+
+let osNotificationPermission: NotificationPermission | null = null;
+
+async function ensureNotificationPermission(): Promise<boolean> {
+	if (!("Notification" in window)) return false;
+	if (osNotificationPermission === null) {
+		osNotificationPermission = Notification.permission;
+	}
+	if (osNotificationPermission === "granted") return true;
+	if (osNotificationPermission === "denied") return false;
+	osNotificationPermission = await Notification.requestPermission();
+	return osNotificationPermission === "granted";
+}
+
+const LEGACY_STORAGE_KEY = "tui-commander-notifications";
+const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
+
+/** Create a fresh copy of the default config */
+function copyDefaults(): NotificationConfig {
+	return {
+		...DEFAULT_NOTIFICATION_CONFIG,
+		sounds: { ...DEFAULT_NOTIFICATION_CONFIG.sounds },
+		audio_device: DEFAULT_NOTIFICATION_CONFIG.audio_device,
+	};
+}
+
+/** Persist config to Rust backend (fire-and-forget) */
+function saveConfig(config: NotificationConfig): void {
+	notificationWriter.save(config).catch((err) => appLogger.debug("config", "Failed to save notification config", err));
+}
+
+/** Notifications store state */
+interface NotificationsState {
+	config: NotificationConfig;
+	isAvailable: boolean;
+	badgeCount: number;
+}
+
+/** Create notifications store */
+function createNotificationsStore() {
+	const defaults = copyDefaults();
+	notificationManager.updateConfig(defaults);
+	const acpNotifications = new Map<string, Notification | null>();
+
+	const [state, setState] = createStore<NotificationsState>({
+		config: defaults,
+		isAvailable: notificationManager.isAvailable(),
+		badgeCount: 0,
+	});
+
+	const actions = {
+		/** Keep one desktop notification per pending ACP question until it settles. */
+		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[], panelHidden: boolean): void {
+			const pending = new Set(interactions.map((interaction) => interaction.id));
+			for (const [id, notification] of acpNotifications) {
+				if (pending.has(id)) continue;
+				notification?.close();
+				acpNotifications.delete(id);
+			}
+			if (!panelHidden || !isTauri()) return;
+			for (const interaction of interactions) {
+				if (acpNotifications.has(interaction.id)) continue;
+				acpNotifications.set(interaction.id, null);
+				void ensureNotificationPermission()
+					.then((allowed) => {
+						if (!allowed || !acpNotifications.has(interaction.id)) return;
+						const notification = new Notification("AI Chat needs input", {
+							body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
+							silent: true,
+						});
+						acpNotifications.set(interaction.id, notification);
+						notification.onclick = () => {
+							notification.close();
+							void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setFocus());
+							uiStore.setAiChatPanelVisible(true);
+						};
+					})
+					.catch((error) => appLogger.debug("ai-chat", "Could not show ACP notification", error));
+			}
+		},
+		/** Load config from Rust backend; migrate from localStorage on first run */
+		async hydrate(): Promise<void> {
+			try {
+				const loaded = await invoke<NotificationConfig>("load_notification_config");
+				notificationWriter.loaded(loaded ?? copyDefaults());
+				// One-time migration from localStorage
+				const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+				if (legacy) {
+					try {
+						const parsed = { ...copyDefaults(), ...JSON.parse(legacy) };
+						await notificationWriter.save(parsed);
+					} catch {
+						/* ignore corrupt legacy data */
+					}
+					localStorage.removeItem(LEGACY_STORAGE_KEY);
+				}
+
+				const config = { ...copyDefaults(), ...loaded };
+				setState("config", config);
+				notificationManager.updateConfig(config);
+			} catch (err) {
+				appLogger.debug("config", "Failed to hydrate notification config", err);
+			}
+		},
+
+		/** Enable or disable notifications */
+		setEnabled(enabled: boolean): void {
+			setState("config", "enabled", enabled);
+			notificationManager.setEnabled(enabled);
+			saveConfig(state.config);
+		},
+
+		/** Set volume (0.0 to 1.0) */
+		setVolume(volume: number): void {
+			const clampedVolume = Math.max(0, Math.min(1, volume));
+			setState("config", "volume", clampedVolume);
+			notificationManager.setVolume(clampedVolume);
+			saveConfig(state.config);
+		},
+
+		/** Set the audio output device (null = system default) */
+		setAudioDevice(device: string | null): void {
+			setState("config", "audio_device", device);
+			notificationManager.updateConfig({ audio_device: device });
+			saveConfig(state.config);
+		},
+
+		/** Silence (or restore) the completion chime for MCP/HTTP-created sessions.
+		 *  Not forwarded to notificationManager: this is a per-terminal policy applied
+		 *  at the completion call site, not a property of the audio playback. */
+		setSilenceRemoteCompletions(silence: boolean): void {
+			setState("config", "silence_remote_completions", silence);
+			saveConfig(state.config);
+		},
+
+		/** Mirror toasts into the toolbar bell, or leave them transient.
+		 *  Not forwarded to notificationManager: this is about the visual list,
+		 *  not about audio. */
+		setToastsInBell(mirror: boolean): void {
+			setState("config", "toasts_in_bell", mirror);
+			saveConfig(state.config);
+		},
+
+		/** Enable/disable a specific sound */
+		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
+			setState("config", "sounds", sound, enabled);
+			notificationManager.setSoundEnabled(sound, enabled);
+			saveConfig(state.config);
+		},
+
+		/** Play a notification sound; also increments dock badge and sends OS notification when window is not focused */
+		async play(sound: NotificationSound, opts?: PlayOptions): Promise<void> {
+			const caller =
+				new Error().stack
+					?.split("\n")
+					.slice(1, 4)
+					.map((l) => l.trim())
+					.join(" <- ") ?? "unknown";
+			appLogger.debug("app", `[Notification.Play] sound=${sound} focused=${document.hasFocus()} caller=${caller}`);
+			await notificationManager.play(sound);
+			if (!document.hasFocus()) {
+				actions.incrementBadge();
+				if (opts?.terminalId) {
+					void import("./terminals")
+						.then(({ terminalsStore }) => {
+							const term = terminalsStore.get(opts.terminalId!);
+							const tabName = term?.name ?? opts.terminalId!;
+							return showNativeNotice({
+								title: OS_NOTIFICATION_TITLES[sound],
+								body: tabName,
+								key: `${sound}:${opts.terminalId}`,
+								target: { kind: "terminal", id: opts.terminalId! },
+							});
+						})
+						.catch((error: unknown) => appLogger.warn("app", "Could not show terminal notification", error));
+				}
+			}
+		},
+
+		/** Play question notification */
+		async playQuestion(terminalId?: string): Promise<void> {
+			await actions.play("question", { terminalId });
+		},
+
+		/** Play error notification */
+		async playError(terminalId?: string): Promise<void> {
+			await actions.play("error", { terminalId });
+		},
+
+		/** Play completion notification */
+		async playCompletion(terminalId?: string): Promise<void> {
+			await actions.play("completion", { terminalId });
+		},
+
+		/** Play warning notification */
+		async playWarning(terminalId?: string): Promise<void> {
+			await actions.play("warning", { terminalId });
+		},
+
+		/** Play info notification */
+		async playInfo(terminalId?: string): Promise<void> {
+			await actions.play("info", { terminalId });
+		},
+
+		/** Test a notification sound — explicit user action, so it bypasses the
+		 *  enabled / per-sound / rate-limit gates and always plays at the current volume */
+		async testSound(sound: NotificationSound): Promise<void> {
+			await notificationManager.play(sound, { force: true });
+		},
+
+		/** Increment badge count on the app dock icon */
+		async incrementBadge(): Promise<void> {
+			const newCount = state.badgeCount + 1;
+			setState("badgeCount", newCount);
+			try {
+				if (isTauri()) {
+					const { getCurrentWindow } = await import("@tauri-apps/api/window");
+					await getCurrentWindow().setBadgeCount(newCount);
+				} else if ("setAppBadge" in navigator) {
+					await (navigator as Navigator & { setAppBadge: (n: number) => Promise<void> }).setAppBadge(newCount);
+				}
+			} catch (err) {
+				appLogger.debug("app", "Badge API unavailable or failed", err);
+			}
+		},
+
+		/** Clear badge count from the app dock icon */
+		async clearBadge(): Promise<void> {
+			if (state.badgeCount === 0) return;
+			setState("badgeCount", 0);
+			try {
+				if (isTauri()) {
+					const { getCurrentWindow } = await import("@tauri-apps/api/window");
+					await getCurrentWindow().setBadgeCount();
+				} else if ("clearAppBadge" in navigator) {
+					await (navigator as Navigator & { clearAppBadge: () => Promise<void> }).clearAppBadge();
+				}
+			} catch (err) {
+				appLogger.debug("app", "Badge API unavailable or failed", err);
+			}
+		},
+
+		/** Reset to defaults */
+		reset(): void {
+			const defaults = copyDefaults();
+			setState("config", defaults);
+			notificationManager.updateConfig(defaults);
+			saveConfig(defaults);
+		},
+
+		/** Check if notifications are enabled */
+		isEnabled(): boolean {
+			return state.config.enabled;
+		},
+
+		/** Check if a specific sound is enabled */
+		isSoundEnabled(sound: NotificationSound): boolean {
+			return state.config.enabled && state.config.sounds[sound];
+		},
+	};
+
+	return { state, ...actions };
+}
+
+export const notificationsStore = createNotificationsStore();
+
+setToastBellMirrorResolver(() => notificationsStore.state.config.toasts_in_bell);

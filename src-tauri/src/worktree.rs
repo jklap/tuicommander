@@ -1,0 +1,1954 @@
+//! App-side half of the worktree module: config-driven directory and archive
+//! script resolution, the removal paths that notify `AppState`, and the Tauri
+//! wrappers over [`tuic_git::worktree`]. The domain functions are re-exported
+//! so `crate::worktree::*` paths are unchanged.
+
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::Duration;
+#[cfg(feature = "desktop")]
+use tauri::State;
+
+pub(crate) use tuic_git::worktree::*;
+
+fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
+    let Some(url) = crate::git::read_remote_url(repo) else {
+        return false;
+    };
+    let Some((host, owner, name)) = crate::github_account::parse_remote_url(&url) else {
+        return false;
+    };
+    let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED]) {
+          nodes { number state headRefName headRefOid }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }"#;
+    let mut command = Command::new(crate::agent::resolve_cli("gh"));
+    command.current_dir(repo).args([
+        "api",
+        "graphql",
+        "--paginate",
+        "--slurp",
+        "--hostname",
+        host.as_str(),
+        "-f",
+        &format!("query={query}"),
+        "-f",
+        &format!("owner={owner}"),
+        "-f",
+        &format!("name={name}"),
+        "-f",
+        &format!("branch={branch}"),
+    ]);
+    crate::cli::apply_no_window(&mut command);
+    let Ok(output) = crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20))
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Ok(pages) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return false;
+    };
+    tuic_git::worktree::merged_pr_proof_from_pages(repo, branch, tip, &pages)
+}
+
+pub(crate) fn inspect_workspace_lifecycle(
+    base_repo: &Path,
+    workspace_id: &str,
+) -> WorkspaceLifecycleStatus {
+    tuic_git::worktree::inspect_workspace_lifecycle_with_pr(
+        base_repo,
+        workspace_id,
+        merged_github_pr_proves_tip,
+    )
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct WorktreeRemovalPreview {
+    #[serde(flatten)]
+    pub lifecycle: WorkspaceLifecycleStatus,
+    pub untracked_files: Option<usize>,
+    pub live_sessions: Vec<WorktreeLiveSession>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WorktreeLiveSession {
+    pub session_id: String,
+    pub name: String,
+}
+
+pub(crate) fn inspect_worktree_removal(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+) -> WorktreeRemovalPreview {
+    let lifecycle = inspect_workspace_lifecycle(repo_path, workspace_id);
+    let worktree_path = resolve_any_workspace(repo_path, workspace_id)
+        .ok()
+        .map(|workspace| PathBuf::from(workspace.path));
+    let untracked_files = worktree_path.as_ref().and_then(|path| {
+        git_cmd(path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .ok()
+            .map(|output| {
+                output
+                    .stdout
+                    .lines()
+                    .filter(|line| line.starts_with("??"))
+                    .count()
+            })
+    });
+    let mut live_sessions = Vec::new();
+    if let Some(worktree_path) = &worktree_path {
+        let root = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.clone());
+        for entry in &state.session_maps.sessions {
+            let session = entry.value().lock();
+            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+                session
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.path.clone())
+            });
+            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+                live_sessions.push(WorktreeLiveSession {
+                    session_id: entry.key().clone(),
+                    name: session
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| entry.key().clone()),
+                });
+            }
+        }
+        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    }
+    let mut warnings = Vec::new();
+    match lifecycle.commit_status {
+        WorkspaceCommitStatus::InSync => {
+            warnings.push("This branch has nothing of its own, not merged work".to_string())
+        }
+        WorkspaceCommitStatus::Merged => {
+            warnings.push("This branch's commits are in the default branch".to_string())
+        }
+        WorkspaceCommitStatus::Unmerged => {
+            warnings.push("This branch has unmerged commits".to_string())
+        }
+        WorkspaceCommitStatus::PushedUnmerged => {
+            warnings.push("This branch is not merged, but all its commits are pushed".to_string())
+        }
+        WorkspaceCommitStatus::Unknown => {
+            warnings.push("Branch history could not be verified".to_string())
+        }
+    }
+    if let Some(total) = lifecycle.dirty_files.filter(|total| *total > 0) {
+        let untracked = untracked_files.unwrap_or(0);
+        warnings.push(format!(
+            "{total} uncommitted files, including {untracked} untracked files"
+        ));
+    }
+    warnings.extend(
+        live_sessions
+            .iter()
+            .map(|session| format!("Live session: {}", session.name)),
+    );
+    WorktreeRemovalPreview {
+        lifecycle,
+        untracked_files,
+        live_sessions,
+        warnings,
+    }
+}
+
+pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<RemoveWorktreeOutcome, String> {
+    tuic_git::worktree::remove_worktree_by_workspace_id_with_confirmation_and_pr(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        expected_fingerprint,
+        merged_github_pr_proves_tip,
+    )
+}
+
+pub(crate) fn remove_worktree_with_presence_confirmation(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+    confirm_missing_checkout: bool,
+) -> Result<RemoveWorktreeOutcome, String> {
+    tuic_git::worktree::remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        expected_fingerprint,
+        Some(confirm_missing_checkout),
+        merged_github_pr_proves_tip,
+    )
+}
+
+pub(crate) fn branch_integration(repo: &Path, branch: &str) -> Result<BranchIntegration, String> {
+    tuic_git::worktree::branch_integration_with_pr(repo, branch, merged_github_pr_proves_tip)
+}
+
+pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>, String> {
+    tuic_git::worktree::branch_integrations_with_pr(repo, merged_github_pr_proves_tip)
+}
+
+pub(crate) fn delete_integrated_local_branch(
+    repo_path: &str,
+    branch_name: &str,
+) -> Result<&'static str, String> {
+    tuic_git::worktree::delete_integrated_local_branch_with_pr(
+        repo_path,
+        branch_name,
+        merged_github_pr_proves_tip,
+    )
+}
+
+pub fn spawn_background_warm(
+    source: PathBuf,
+    destination: PathBuf,
+    token: u64,
+    warm: impl FnOnce(&Path, &Path) -> tuic_git::cow::WarmingReport + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        tuic_git::worktree::finish_background_warm_blocking(source, destination, token, warm)
+    })
+}
+
+use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd};
+use crate::state::AppState;
+
+/// Resolve the effective archive_script for a repo from the three-tier config:
+/// per-repo settings → repo-local .tuic.json → global defaults.
+/// Returns None if no script is configured at any level.
+pub(crate) fn resolve_archive_script(repo_path: &str) -> Option<String> {
+    // 1. Per-repo app settings (highest priority)
+    let repo_settings = crate::config::load_repo_settings();
+    if let Some(entry) = repo_settings.repos.get(repo_path)
+        && let Some(ref script) = entry.archive_script
+        && !script.is_empty()
+    {
+        return Some(script.clone());
+    }
+    // .tuic.json scripts intentionally skipped — executing repo-committed
+    // scripts without TOFU prompt is unsafe. Re-add when trust-on-first-use
+    // confirmation is implemented.
+    // 2. Global repo defaults (lowest priority)
+    let defaults = crate::config::load_repo_defaults();
+    if !defaults.archive_script.is_empty() {
+        return Some(defaults.archive_script);
+    }
+    None
+}
+
+/// Resolve the worktree base directory for a given repo + storage strategy.
+///
+/// - `Sibling`: `{repo_parent}/{repo_name}__wt/`
+/// - `AppDir`: `{app_config_dir}/worktrees/{repo_name}/`
+/// - `InsideRepo`: `{repo_path}/.worktrees/`
+/// - `ClaudeCodeDefault`: `{repo_path}/.claude/worktrees/`
+pub(crate) fn resolve_worktree_dir(
+    repo_path: &Path,
+    strategy: &crate::config::WorktreeStorage,
+    app_worktrees_dir: &Path,
+) -> PathBuf {
+    use crate::config::WorktreeStorage;
+    match strategy {
+        WorktreeStorage::Sibling => {
+            let repo_name = repo_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "repo".to_string());
+            let parent = repo_path.parent().unwrap_or(repo_path);
+            parent.join(format!("{repo_name}__wt"))
+        }
+        WorktreeStorage::AppDir => {
+            let repo_name = repo_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "repo".to_string());
+            app_worktrees_dir.join(repo_name)
+        }
+        WorktreeStorage::InsideRepo => repo_path.join(".worktrees"),
+        WorktreeStorage::ClaudeCodeDefault => repo_path.join(".claude").join("worktrees"),
+    }
+}
+
+/// Resolve the effective worktree directory for a repo by loading config from disk.
+/// Per-repo `worktree_storage` overrides the global default from repo-defaults.
+pub(crate) fn resolve_worktree_dir_for_repo(repo_path: &Path, app_worktrees_dir: &Path) -> PathBuf {
+    let repo_path_str = repo_path.to_string_lossy();
+    let repo_settings = crate::config::load_repo_settings();
+    let strategy = repo_settings
+        .repos
+        .get(repo_path_str.as_ref())
+        .and_then(|entry| entry.worktree_storage.clone())
+        .unwrap_or_else(|| crate::config::load_repo_defaults().worktree_storage);
+    resolve_worktree_dir(repo_path, &strategy, app_worktrees_dir)
+}
+
+/// Create a linked worktree without a PTY session.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn create_worktree(
+    state: State<'_, Arc<AppState>>,
+    base_repo: String,
+    branch_name: String,
+    create_branch: Option<bool>,
+    base_ref: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let config = WorktreeConfig {
+        task_name: branch_name.clone(),
+        base_repo: base_repo.clone(),
+        branch: Some(branch_name),
+        create_branch: create_branch.unwrap_or(true),
+    };
+    let worktrees_dir =
+        resolve_worktree_dir_for_repo(Path::new(&config.base_repo), &state.worktrees_dir);
+    let workspace = tokio::task::spawn_blocking(move || {
+        create_workspace_unwarmed(&worktrees_dir, &config, base_ref.as_deref())
+    })
+    .await
+    .map_err(|error| format!("Task panic: {error}"))??;
+
+    let token = begin_warm(&workspace.path);
+    spawn_background_warm(
+        PathBuf::from(&base_repo),
+        workspace.path.clone(),
+        token,
+        crate::cow::warm_worktree,
+    );
+    state.invalidate_repo_caches(&base_repo);
+    Ok(ipc_worktree_response(&workspace, &base_repo))
+}
+
+/// Get worktrees directory path.
+/// When `repo_path` is provided, resolves the effective storage strategy for the repo.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn get_worktrees_dir(
+    state: State<'_, Arc<AppState>>,
+    repo_path: Option<String>,
+) -> String {
+    match repo_path {
+        Some(rp) => resolve_worktree_dir_for_repo(Path::new(&rp), &state.worktrees_dir)
+            .to_string_lossy()
+            .to_string(),
+        None => state.worktrees_dir.to_string_lossy().to_string(),
+    }
+}
+
+/// Remove one workspace's checkout by workspace id (Tauri command with cache invalidation)
+///
+/// `delete_branch` defaults to `false` with force and `true` otherwise.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn remove_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    workspace_id: String,
+    delete_branch: Option<bool>,
+    force: Option<bool>,
+    override_lock: Option<bool>,
+    expected_fingerprint: Option<String>,
+    confirm_missing_checkout: Option<bool>,
+) -> Result<RemoveWorktreeOutcome, String> {
+    let force = force.unwrap_or(false);
+    let confirm_missing_checkout = confirm_missing_checkout.unwrap_or(false);
+    if force && expected_fingerprint.is_none() && !confirm_missing_checkout {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
+    let delete_branch = delete_branch.unwrap_or(!force);
+    let override_lock = override_lock.unwrap_or(false);
+    tracing::info!(
+        source = "worktree",
+        workspace_id = %workspace_id,
+        repo = %repo_path,
+        delete_branch = %delete_branch,
+        force = %force,
+        "remove_worktree command: invoked"
+    );
+    let script = resolve_archive_script(&repo_path);
+    let repo_path_clone = repo_path.clone();
+    let workspace_id_clone = workspace_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        remove_worktree_with_presence_confirmation(
+            &repo_path_clone,
+            &workspace_id_clone,
+            delete_branch,
+            script.as_deref(),
+            force,
+            override_lock,
+            expected_fingerprint.as_deref(),
+            confirm_missing_checkout,
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?;
+
+    match result {
+        Ok(outcome) => {
+            tracing::info!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: SUCCESS — invalidating caches");
+            if outcome.branch_delete_warning.is_none() {
+                // Branch labels are branch-keyed, so a removed worktree drops the
+                // label only after the branch itself was deleted successfully.
+                crate::config::remove_branch_label(&repo_path, &outcome.branch);
+            }
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch.clone(),
+            });
+            Ok(outcome)
+        }
+        Err(e) => {
+            tracing::error!(source = "worktree", workspace_id = %workspace_id, "remove_worktree command: FAILED — {e}");
+            Err(e)
+        }
+    }
+}
+
+/// Tauri command: delete a local branch.
+///
+/// `keep_worktree` (optional, default `false`): when `true`, preserves the
+/// linked worktree directory by detaching its HEAD before removing the branch
+/// ref. Used by the post-merge cleanup dialog when the user unchecks the
+/// "Archive/Delete worktree" step.
+///
+/// Async + `spawn_blocking` because the body runs `git branch -d` and may
+/// remove a whole worktree directory. A plain `fn` command runs inline on the
+/// IPC thread — the macOS main thread — so it froze the WebView for the length
+/// of the delete. Its HTTP twin already offloaded; see
+/// `docs/backend/command-threading.md`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn delete_local_branch(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    branch_name: String,
+    workspace_id: String,
+    keep_worktree: Option<bool>,
+) -> Result<(), String> {
+    let keep_worktree = keep_worktree.unwrap_or(false);
+    {
+        let repo_path = repo_path.clone();
+        let branch_name = branch_name.clone();
+        let workspace_id = workspace_id.clone();
+        tokio::task::spawn_blocking(move || {
+            delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)
+        })
+        .await
+        .map_err(|e| format!("Task panic: {e}"))??;
+    }
+    if keep_worktree {
+        state.invalidate_repo_caches(&repo_path);
+    } else {
+        // The workspace's checkout went with the branch — the sidebar row must go too.
+        // `delete_local_branch_impl` refuses when the branch and the id disagree,
+        // so by here `branch_name` is this workspace's own branch.
+        state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+            repo_path: repo_path.clone(),
+            workspace_id: workspace_id.clone(),
+            branch: branch_name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Cached workspaces (id -> checkout) for synchronous callers (MCP handlers, etc.).
+pub(crate) fn get_worktree_paths_cached(
+    state: &crate::state::AppState,
+    repo_path: &str,
+) -> HashMap<String, WorkspaceWorktree> {
+    let p = repo_path.to_string();
+    (*state
+        .git_cache
+        .worktree_paths
+        .get_with(repo_path.to_string(), || {
+            std::sync::Arc::new(
+                crate::git_reads::git_reads()
+                    .worktree_paths(std::path::Path::new(&p))
+                    .unwrap_or_default(),
+            )
+        }))
+    .clone()
+}
+
+/// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+///
+/// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
+/// arbitrary directory deletion via a crafted path.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn remove_orphan_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    worktree_path: String,
+    safe_only: Option<bool>,
+) -> Result<(), String> {
+    validate_worktree_path(&repo_path, &worktree_path)?;
+    if safe_only.unwrap_or(false) {
+        tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
+    }
+
+    let base_repo = PathBuf::from(&repo_path);
+    let path = PathBuf::from(&worktree_path);
+    let worktree = WorktreeInfo {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| worktree_path.clone()),
+        path,
+        branch: None,
+        base_repo,
+    };
+    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
+    state.invalidate_repo_caches(&repo_path);
+    Ok(())
+}
+
+/// Result of switching the main worktree to a different branch.
+#[derive(Clone, Serialize)]
+pub(crate) struct SwitchBranchResult {
+    pub(crate) success: bool,
+    /// True if changes were auto-stashed before checkout
+    pub(crate) stashed: bool,
+    pub(crate) previous_branch: String,
+    pub(crate) new_branch: String,
+}
+
+/// Switch the main worktree to a different branch.
+///
+/// Runs `git checkout` directly (no PTY involvement) so it's safe even when
+/// terminals have editors or processes running — the caller is responsible
+/// for checking terminal busy-state before invoking this.
+///
+/// When `stash` is true, performs `git stash push` before checkout and
+/// does NOT auto-pop (the user can pop manually).
+/// When `force` is true, passes `--force` to discard uncommitted changes.
+/// Core logic for switching the checked-out branch. Blocking — callers wrap in
+/// `spawn_blocking` when on an async runtime.
+pub(crate) fn switch_branch_impl(
+    state: &Arc<AppState>,
+    repo_path: String,
+    branch_name: String,
+    force: bool,
+    stash: bool,
+) -> Result<SwitchBranchResult, String> {
+    let base_repo = PathBuf::from(&repo_path);
+
+    // `git checkout <ref>` has no end-of-options `--` form that keeps <ref> a
+    // branch (post-`--` args become pathspecs), so validate instead — a name
+    // beginning with `-` would otherwise be parsed as an option.
+    crate::git::validate_branch_name(&branch_name)?;
+
+    // Read current branch before switching
+    let previous_branch = crate::git::read_branch_from_head(&base_repo).unwrap_or_default();
+
+    if previous_branch == branch_name {
+        return Ok(SwitchBranchResult {
+            success: true,
+            stashed: false,
+            previous_branch: previous_branch.clone(),
+            new_branch: previous_branch,
+        });
+    }
+
+    // Check for uncommitted changes (unless force or stash)
+    if !force && !stash {
+        let status_out = git_cmd(&base_repo)
+            .args(["status", "--porcelain"])
+            .run()
+            .map_err(|e| format!("Failed to check working tree status: {e}"))?;
+        if !status_out.stdout.trim().is_empty() {
+            return Err("dirty".to_string());
+        }
+    }
+
+    // Stash if requested
+    let did_stash = if stash {
+        let stash_msg = format!("auto-stash before switching to {branch_name}");
+        let stash_out = git_cmd(&base_repo)
+            .args(["stash", "push", "-m", &stash_msg])
+            .run()
+            .map_err(|e| {
+                crate::git_locks::describe_stale_lock(&base_repo)
+                    .unwrap_or_else(|| format!("Stash failed: {e}"))
+            })?;
+
+        // "No local changes to save" means nothing was stashed
+        !stash_out.stdout.contains("No local changes to save")
+    } else {
+        false
+    };
+
+    // Checkout
+    let mut args = vec!["checkout"];
+    if force {
+        args.push("--force");
+    }
+    args.push(&branch_name);
+
+    git_cmd(&base_repo).args(&args).run().map_err(|e| {
+        crate::git_locks::describe_stale_lock(&base_repo)
+            .unwrap_or_else(|| format!("Checkout failed: {e}"))
+    })?;
+
+    state.invalidate_repo_caches(&repo_path);
+
+    Ok(SwitchBranchResult {
+        success: true,
+        stashed: did_stash,
+        previous_branch,
+        new_branch: branch_name,
+    })
+}
+
+/// Switch the checked-out branch (Tauri command).
+///
+/// Async + `spawn_blocking`: a checkout stashes, rewrites the working tree and
+/// can wait on an index lock. Inline on the IPC thread that is a frozen WebView
+/// for the whole operation — see `docs/backend/command-threading.md`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn switch_branch(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    branch_name: String,
+    force: bool,
+    stash: bool,
+) -> Result<SwitchBranchResult, String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        switch_branch_impl(&state, repo_path, branch_name, force, stash)
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
+}
+
+/// Create a local branch tracking a remote branch and switch to it.
+/// Equivalent to `git checkout -b <branch> origin/<branch>`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn checkout_remote_branch(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    branch_name: String,
+) -> Result<(), String> {
+    let base_repo = PathBuf::from(&repo_path);
+    let remote_ref = format!("origin/{branch_name}");
+
+    git_cmd(&base_repo)
+        .args(["checkout", "-b", &branch_name, &remote_ref])
+        .run()
+        .map_err(|e| format!("Checkout failed: {e}"))?;
+
+    state.invalidate_repo_caches(&repo_path);
+    Ok(())
+}
+
+/// Complete a pending merge by archiving or deleting the worktree.
+///
+/// Called after `merge_and_archive_worktree` returns `action: "pending"` (ask mode),
+/// and by the auto-archive-merged sweep, which has no user in the loop at all. The
+/// merge has already succeeded; this only handles the worktree cleanup.
+///
+/// `force` is the user's confirmation that a dirty worktree may be destroyed.
+/// Without it, a worktree that is not known to be clean is left untouched and the
+/// caller gets `needs_confirmation` — the same contract
+/// `merge_and_archive_worktree_impl` uses, through the same gate.
+///
+/// Blocking — callers wrap in `spawn_blocking` when on an async runtime.
+#[cfg(test)]
+pub(crate) fn finalize_merged_worktree_impl(
+    state: &Arc<AppState>,
+    repo_path: String,
+    workspace_id: String,
+    action: String,
+    force: bool,
+) -> Result<MergeArchiveResult, String> {
+    finalize_merged_worktree_impl_with_confirmation(
+        state,
+        repo_path,
+        workspace_id,
+        action,
+        force,
+        None,
+    )
+}
+
+/// Both one-click merge cleanup and post-merge finalization use this review
+/// gate. Before the merge, an unmerged commit is expected; afterwards, only
+/// merged work may be cleaned up without an explicit confirmation.
+fn cleanup_needs_lifecycle_confirmation(
+    state: &AppState,
+    repo_path: &Path,
+    workspace_id: &str,
+    action: &str,
+    force: bool,
+    dirt: &WorktreeDirtiness,
+    require_merged: bool,
+) -> bool {
+    if cleanup_needs_confirmation(action, force, dirt) {
+        return true;
+    }
+    if force || (action != "archive" && action != "delete") {
+        return false;
+    }
+    let preview = inspect_worktree_removal(state, repo_path, workspace_id);
+    preview.lifecycle.removal_safety != WorkspaceRemovalSafety::Safe
+        || !preview.live_sessions.is_empty()
+        || preview.lifecycle.commit_status == WorkspaceCommitStatus::Unknown
+        || (require_merged && preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged)
+}
+
+pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
+    state: &Arc<AppState>,
+    repo_path: String,
+    workspace_id: String,
+    action: String,
+    force: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<MergeArchiveResult, String> {
+    let script = resolve_archive_script(&repo_path);
+    let base_repo = std::path::PathBuf::from(&repo_path);
+
+    if let Some(expected) = expected_fingerprint {
+        let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
+        if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
+            return Err(
+                "Worktree state changed since confirmation; review it before cleanup".into(),
+            );
+        }
+    }
+
+    let dirt = worktree_dirtiness(&base_repo, &workspace_id);
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &action,
+        force,
+        &dirt,
+        true,
+    ) {
+        return Ok(MergeArchiveResult {
+            merged: true, // The merge itself already happened; only cleanup stopped.
+            action: "needs_confirmation".to_string(),
+            archive_path: None,
+            commits_ahead: 0,
+            worktree_dirty: dirt.is_dirty(),
+            branch_delete_warning: None,
+        });
+    }
+
+    match action.as_str() {
+        "archive" => {
+            // Read the branch off the record BEFORE the directory moves: archiving
+            // takes the worktree out of `git worktree list`, after which the id
+            // resolves to nothing and the removal event would have no branch to
+            // show. Resolution here is also still safe to fail — nothing has been
+            // mutated yet.
+            let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
+            let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
+            // Archiving moves the worktree out of the repo — as far as the sidebar
+            // is concerned the row is gone, same as a delete.
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch,
+            });
+            Ok(MergeArchiveResult {
+                merged: true,
+                action: "archived".to_string(),
+                archive_path: Some(archive_path),
+                // The merge already happened in the "pending" call that preceded
+                // this one; its pre-flight numbers were reported there.
+                commits_ahead: 0,
+                worktree_dirty: dirt.is_dirty(),
+                branch_delete_warning: None,
+            })
+        }
+        "delete" => {
+            let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                &repo_path,
+                &workspace_id,
+                true,
+                script.as_deref(),
+                force,
+                false,
+                expected_fingerprint,
+            )?;
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch,
+            });
+            Ok(MergeArchiveResult {
+                merged: true,
+                action: "deleted".to_string(),
+                archive_path: None,
+                commits_ahead: 0,
+                worktree_dirty: dirt.is_dirty(),
+                branch_delete_warning: outcome.branch_delete_warning,
+            })
+        }
+        _ => Err(format!(
+            "Unknown action '{action}': expected 'archive' or 'delete'"
+        )),
+    }
+}
+
+/// Finalize a pending merge by archiving/deleting the worktree (Tauri command).
+///
+/// Async + `spawn_blocking`: archiving moves a directory and deleting removes
+/// one, both unbounded. `finalize_merged_worktree_http` already offloaded, so
+/// the same work froze the WebView over IPC and not over HTTP — the drift
+/// `docs/backend/command-threading.md` exists to prevent.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn finalize_merged_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    workspace_id: String,
+    action: String,
+    force: Option<bool>,
+    expected_fingerprint: Option<String>,
+) -> Result<MergeArchiveResult, String> {
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        finalize_merged_worktree_impl_with_confirmation(
+            &state,
+            repo_path,
+            workspace_id,
+            action,
+            force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panic: {e}"))?
+}
+
+/// Merge a worktree branch into a target branch, then archive or delete the worktree.
+///
+/// Steps:
+/// 1. `git checkout <target_branch>` (in the base repo)
+/// 2. `git merge <source_branch>` (in the base repo)
+/// 3. Based on `after_merge`: archive (move dir) or delete (remove worktree + branch)
+///
+/// Blocking — callers wrap in `spawn_blocking` when on an async runtime.
+#[cfg(test)]
+pub(crate) fn merge_and_archive_worktree_impl(
+    state: &Arc<AppState>,
+    repo_path: String,
+    branch_name: String,
+    workspace_id: String,
+    target_branch: String,
+    after_merge: String,
+    force: bool,
+) -> Result<MergeArchiveResult, String> {
+    merge_and_archive_worktree_impl_with_confirmation(
+        state,
+        repo_path,
+        branch_name,
+        workspace_id,
+        target_branch,
+        after_merge,
+        force,
+        None,
+    )
+}
+
+pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
+    state: &Arc<AppState>,
+    repo_path: String,
+    branch_name: String,
+    workspace_id: String,
+    target_branch: String,
+    after_merge: String,
+    force: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<MergeArchiveResult, String> {
+    let script = resolve_archive_script(&repo_path);
+    let base_repo = PathBuf::from(&repo_path);
+    if let Some(expected) = expected_fingerprint {
+        let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
+        if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
+            return Err(
+                "Worktree state changed since confirmation; review it before cleanup".into(),
+            );
+        }
+    }
+
+    // 0. Pre-flight: would the cleanup take uncommitted work with it? Both
+    //    "archive" and "delete" end in `git worktree remove --force`, so any
+    //    worktree not known to be clean must be confirmed first — whether or not
+    //    the branch carries commits. `commits_ahead` is reported alongside so the
+    //    dialog can also say that an empty branch's merge would be a no-op.
+    let preflight = merge_preflight(&repo_path, &branch_name, &workspace_id, &target_branch);
+    if cleanup_needs_lifecycle_confirmation(
+        state,
+        &base_repo,
+        &workspace_id,
+        &after_merge,
+        force,
+        &preflight.worktree_dirty,
+        false,
+    ) {
+        return Ok(MergeArchiveResult {
+            merged: false,
+            action: "needs_confirmation".to_string(),
+            archive_path: None,
+            commits_ahead: preflight.commits_ahead,
+            worktree_dirty: preflight.worktree_dirty.is_dirty(),
+            branch_delete_warning: None,
+        });
+    }
+
+    // 1. Ensure we're on the target branch in the base repo
+    git_cmd(&base_repo)
+        .args(["checkout", &target_branch])
+        .run()
+        .map_err(|e| {
+            crate::git_locks::describe_stale_lock(&base_repo)
+                .unwrap_or_else(|| format!("Failed to checkout {target_branch}: {e}"))
+        })?;
+
+    // 2. Merge the source branch
+    if let Err(e) = git_cmd(&base_repo)
+        .args(["merge", &branch_name, "--no-edit"])
+        .run()
+    {
+        return Err(finish_failed_git_operation_after_abort(
+            &base_repo,
+            "merge",
+            "Merge failed",
+            e,
+        ));
+    }
+
+    // 3. Handle the worktree based on after_merge setting
+    let MergePreflight {
+        commits_ahead,
+        worktree_dirty,
+    } = preflight;
+    let worktree_dirty = worktree_dirty.is_dirty();
+    match after_merge.as_str() {
+        "archive" => {
+            // Before the move, for the same reason as in `finalize_merged_worktree_impl`:
+            // an archived worktree no longer resolves by id. `branch_name` is the
+            // merge subject the caller named, which is not necessarily what this
+            // workspace has checked out — the record is.
+            let branch = resolve_workspace(&base_repo, &workspace_id)?.branch;
+            let archive_path = archive_worktree(&base_repo, &workspace_id, script.as_deref())?;
+            // Archiving moves the worktree out of the repo — as far as the sidebar
+            // is concerned the row is gone, same as a delete.
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch,
+            });
+            Ok(MergeArchiveResult {
+                merged: true,
+                action: "archived".to_string(),
+                archive_path: Some(archive_path),
+                commits_ahead,
+                worktree_dirty,
+                branch_delete_warning: None,
+            })
+        }
+        "delete" => {
+            let outcome = remove_worktree_by_workspace_id_with_confirmation(
+                &repo_path,
+                &workspace_id,
+                true,
+                script.as_deref(),
+                force,
+                false,
+                expected_fingerprint,
+            )?;
+            state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
+                repo_path: repo_path.clone(),
+                workspace_id: workspace_id.clone(),
+                branch: outcome.branch,
+            });
+            Ok(MergeArchiveResult {
+                merged: true,
+                action: "deleted".to_string(),
+                archive_path: None,
+                commits_ahead,
+                worktree_dirty,
+                branch_delete_warning: outcome.branch_delete_warning,
+            })
+        }
+        _ => {
+            // "ask" — merge succeeded, let frontend decide what to do next
+            state.invalidate_repo_caches(&repo_path);
+            Ok(MergeArchiveResult {
+                merged: true,
+                action: "pending".to_string(),
+                archive_path: None,
+                commits_ahead,
+                worktree_dirty,
+                branch_delete_warning: None,
+            })
+        }
+    }
+}
+
+/// Merge a worktree branch into a target branch, then archive/delete (Tauri command).
+///
+/// `force` skips the pre-flight guard that refuses to clean up a branch carrying no
+/// commits while its worktree is dirty. The frontend sets it after the user confirms.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn merge_and_archive_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    branch_name: String,
+    workspace_id: String,
+    target_branch: String,
+    after_merge: String,
+    force: Option<bool>,
+    expected_fingerprint: Option<String>,
+) -> Result<MergeArchiveResult, String> {
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
+    merge_and_archive_worktree_impl_with_confirmation(
+        state.inner(),
+        repo_path,
+        branch_name,
+        workspace_id,
+        target_branch,
+        after_merge,
+        force.unwrap_or(false),
+        expected_fingerprint.as_deref(),
+    )
+}
+
+// --- Tauri wrappers over tuic_git::worktree ---
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn check_worktree_dirty(
+    repo_path: String,
+    workspace_id: String,
+) -> Result<bool, String> {
+    tuic_git::worktree::check_worktree_dirty(repo_path, workspace_id)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn get_workspace_lifecycle(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    workspace_id: String,
+) -> Result<WorktreeRemovalPreview, String> {
+    let state = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        Ok(inspect_worktree_removal(
+            &state,
+            Path::new(&repo_path),
+            &workspace_id,
+        ))
+    })
+    .await
+    .map_err(|e| format!("workspace lifecycle task failed: {e}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn get_worktree_paths(
+    repo_path: String,
+) -> Result<HashMap<String, WorkspaceWorktree>, String> {
+    tuic_git::worktree::get_worktree_paths(repo_path)
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        tuic_git::worktree::detect_orphan_worktrees_blocking(repo_path)
+    })
+    .await
+    .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn assess_orphan_cleanup(
+    repo_path: String,
+) -> Result<Vec<tuic_git::worktree::OrphanCleanupAssessment>, String> {
+    tokio::task::spawn_blocking(move || tuic_git::worktree::assess_orphan_worktrees(&repo_path))
+        .await
+        .map_err(|error| format!("orphan cleanup assessment task failed: {error}"))?
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingOrphanCleanup {
+    pub(crate) paths: Vec<String>,
+    pub(crate) answer: Option<bool>,
+}
+
+pub(crate) fn begin_orphan_cleanup_internal(
+    state: &AppState,
+    repo_path: &str,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
+    if paths.is_empty()
+        || paths
+            .iter()
+            .any(|path| !current.iter().any(|entry| &entry.path == path))
+    {
+        return Err("Pending cleanup must list current orphan worktrees".into());
+    }
+    state.pending_orphan_cleanup.insert(
+        repo_path.to_string(),
+        PendingOrphanCleanup {
+            paths,
+            answer: None,
+        },
+    );
+    Ok(())
+}
+
+pub(crate) fn answer_orphan_cleanup_internal(
+    state: &AppState,
+    repo_path: &str,
+    remove: bool,
+) -> Result<(), String> {
+    let pending = state
+        .pending_orphan_cleanup
+        .get(repo_path)
+        .ok_or("No pending orphan cleanup for this repository")?
+        .paths
+        .clone();
+    if remove {
+        for path in &pending {
+            tuic_git::worktree::orphan_cleanup_safety(repo_path, path)?;
+        }
+    }
+    let mut current = state
+        .pending_orphan_cleanup
+        .get_mut(repo_path)
+        .ok_or("Orphan cleanup was already dismissed")?;
+    if current.paths != pending || current.answer.is_some() {
+        return Err("Orphan cleanup changed while it was being answered".into());
+    }
+    current.answer = Some(remove);
+    Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn begin_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || begin_orphan_cleanup_internal(&state, &repo_path, paths))
+        .await
+        .map_err(|error| format!("orphan cleanup registration task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn pending_orphan_cleanup_answer(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Option<bool> {
+    state
+        .pending_orphan_cleanup
+        .get(&repo_path)
+        .and_then(|entry| entry.answer)
+}
+
+/// End a client's cleanup dialog. A Keep stays on the shared entry as `answer =
+/// Some(false)` so other clients polling it close their own dialog instead of
+/// counting down to a removal; anything else drops the entry.
+pub(crate) fn clear_orphan_cleanup_internal(state: &AppState, repo_path: &str, kept: bool) {
+    if kept && let Some(mut entry) = state.pending_orphan_cleanup.get_mut(repo_path) {
+        entry.answer = Some(false);
+        return;
+    }
+    state.pending_orphan_cleanup.remove(repo_path);
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String, kept: bool) {
+    clear_orphan_cleanup_internal(&state, &repo_path, kept);
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn generate_worktree_name_cmd(existing_names: Vec<String>) -> String {
+    tuic_git::worktree::generate_worktree_name_cmd(existing_names)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn generate_clone_branch_name_cmd(
+    source_branch: String,
+    existing_names: Vec<String>,
+) -> String {
+    tuic_git::worktree::generate_clone_branch_name_cmd(source_branch, existing_names)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
+    tuic_git::worktree::list_local_branches(repo_path)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, String> {
+    tuic_git::worktree::list_base_ref_options(repo_path)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
+    tuic_git::worktree::run_setup_script(script, cwd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::WorktreeStorage;
+    use std::fs;
+    use tempfile::TempDir;
+    use tuic_git::test_fixtures::{
+        base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
+    };
+
+    fn pending_cleanup(state: &AppState, repo: &str) {
+        state.pending_orphan_cleanup.insert(
+            repo.to_string(),
+            PendingOrphanCleanup {
+                paths: vec!["/wt/a".into()],
+                answer: None,
+            },
+        );
+    }
+
+    fn pending_answer(state: &AppState, repo: &str) -> Option<bool> {
+        state
+            .pending_orphan_cleanup
+            .get(repo)
+            .and_then(|entry| entry.answer)
+    }
+
+    // Catches: clear deleting the entry after a Keep, so a second client that shows the
+    // same dialog polls null, keeps counting down and removes the worktree (1289-27f8).
+    #[test]
+    fn clearing_a_kept_cleanup_leaves_the_keep_visible_to_other_clients() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Catches: a non-Keep clear leaving a stale entry behind that answers later dialogs.
+    #[test]
+    fn clearing_a_finished_cleanup_removes_the_entry() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", false);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: a Keep for a dialog nobody registered must not invent a pending entry.
+    #[test]
+    fn keeping_without_a_pending_cleanup_creates_nothing() {
+        let state = crate::state::tests_support::make_test_app_state();
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert!(state.pending_orphan_cleanup.get("/repo").is_none());
+    }
+
+    // Attack: two clients both end in Keep; the second must not flip the answer back.
+    #[test]
+    fn keeping_twice_stays_kept() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Attack: a kept entry is per repo and a new dialog starts unanswered again.
+    #[test]
+    fn keep_does_not_leak_to_another_repo_or_to_the_next_dialog() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        pending_cleanup(&state, "/other");
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+        assert_eq!(pending_answer(&state, "/other"), None);
+
+        pending_cleanup(&state, "/repo"); // what begin_orphan_cleanup does for a new dialog
+
+        assert_eq!(pending_answer(&state, "/repo"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-work", false);
+        fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
+        fs::write(worktree.join("README.md"), "changed").expect("modified file");
+        fs::write(worktree.join("new-a.txt"), "a").expect("first untracked file");
+        fs::write(worktree.join("new-b.txt"), "b").expect("second untracked file");
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "pty-active");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-active",
+            &worktree.join("nested").to_string_lossy(),
+        );
+        state
+            .session_maps
+            .sessions
+            .get("pty-active")
+            .unwrap()
+            .lock()
+            .display_name = Some("Codex: gate work".to_string());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-other");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-other",
+            &repo.path().to_string_lossy(),
+        );
+
+        let preview = inspect_worktree_removal(&state, repo.path(), "active-work");
+
+        assert_eq!(preview.lifecycle.dirty_files, Some(3));
+        assert_eq!(preview.untracked_files, Some(2));
+        assert_eq!(
+            preview.live_sessions,
+            vec![WorktreeLiveSession {
+                session_id: "pty-active".to_string(),
+                name: "Codex: gate work".to_string(),
+            }]
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Codex: gate work"))
+        );
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("2 untracked"))
+        );
+    }
+
+    /// The post-merge cleanup dialog runs these one after another, and each was
+    /// a plain `fn` command: a checkout, a branch delete that can take a whole
+    /// worktree with it, and an archive that moves a directory. A plain `fn`
+    /// runs inline on the IPC thread — the macOS main thread — so pressing
+    /// Execute froze the WebView for the length of every step. Their HTTP twins
+    /// in `mcp_http/worktree_routes.rs` were already on the blocking pool, which
+    /// is exactly the transport drift `docs/backend/command-threading.md` names.
+    #[test]
+    fn post_merge_cleanup_commands_never_run_on_the_ipc_thread() {
+        let source = include_str!("worktree.rs");
+        for command in [
+            "switch_branch",
+            "delete_local_branch",
+            "finalize_merged_worktree",
+        ] {
+            let signature = format!("pub(crate) async fn {command}(");
+            let at = source.find(&signature).unwrap_or_else(|| {
+                panic!("{command} must be async: a plain fn command runs on the macOS main thread")
+            });
+            // Async alone only moves the work to a Tokio worker; the body still
+            // runs git subprocesses and recursive deletes, so it needs the
+            // blocking pool as well.
+            // By chars, not bytes: this file has em dashes in its comments, and
+            // a byte window can end inside one. Where it lands depends on the
+            // line endings, so on Windows the same slice panicked.
+            let body: String = source[at..].chars().take(800).collect();
+            assert!(
+                body.contains("spawn_blocking"),
+                "{command} awaits blocking git work and must hand it to spawn_blocking"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_worktree_dir_sibling() {
+        let repo = Path::new("/home/user/dev/myrepo");
+        let app_dir = Path::new("/app/worktrees");
+        let result = resolve_worktree_dir(repo, &WorktreeStorage::Sibling, app_dir);
+        assert_eq!(result, PathBuf::from("/home/user/dev/myrepo__wt"));
+    }
+
+    #[test]
+    fn resolve_worktree_dir_app_dir() {
+        let repo = Path::new("/home/user/dev/myrepo");
+        let app_dir = Path::new("/app/worktrees");
+        let result = resolve_worktree_dir(repo, &WorktreeStorage::AppDir, app_dir);
+        assert_eq!(result, PathBuf::from("/app/worktrees/myrepo"));
+    }
+
+    #[test]
+    fn resolve_worktree_dir_inside_repo() {
+        let repo = Path::new("/home/user/dev/myrepo");
+        let app_dir = Path::new("/app/worktrees");
+        let result = resolve_worktree_dir(repo, &WorktreeStorage::InsideRepo, app_dir);
+        assert_eq!(result, PathBuf::from("/home/user/dev/myrepo/.worktrees"));
+    }
+
+    #[test]
+    fn resolve_worktree_dir_sibling_with_dots_in_name() {
+        let repo = Path::new("/home/user/dev/my.project.name");
+        let app_dir = Path::new("/app/worktrees");
+        let result = resolve_worktree_dir(repo, &WorktreeStorage::Sibling, app_dir);
+        assert_eq!(result, PathBuf::from("/home/user/dev/my.project.name__wt"));
+    }
+
+    // --- the destructive-cleanup gate ---
+    //
+    // Both "archive" and "delete" end in `git worktree remove --force`, which
+    // deletes uncommitted work without a word. Every path to that call must pass
+    // `cleanup_needs_confirmation` first. These tests exercise the two entry
+    // points end to end on a real repo, because the bug they cover was not in
+    // the gate — it was in a caller that never reached it.
+
+    /// An isolated config dir, so `resolve_archive_script` reads an empty config
+    /// instead of the developer's real one and cannot run a live archive script.
+    fn isolated_config() -> (TempDir, impl Drop) {
+        let dir = TempDir::new().expect("config dir");
+        let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        (dir, guard)
+    }
+
+    #[test]
+    fn merge_and_archive_asks_before_destroying_a_dirty_worktree_with_commits() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = dirty_worktree_with(repo.path(), "feat-dirty-ahead", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-dirty-ahead".to_string(),
+            "feat-dirty-ahead".to_string(),
+            base,
+            "archive".to_string(),
+            false,
+        )
+        .expect("pre-flight returns a result, not an error");
+
+        assert_eq!(res.action, "needs_confirmation");
+        assert!(!res.merged, "nothing ran — not even the merge");
+        assert_eq!(res.commits_ahead, 1, "the dialog says what would be merged");
+        assert!(res.worktree_dirty);
+        assert!(
+            wt.join("scratch.txt").exists(),
+            "the uncommitted file is still there"
+        );
+    }
+
+    #[test]
+    fn merge_and_archive_proceeds_once_the_user_confirms() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = dirty_worktree_with(repo.path(), "feat-confirmed", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-confirmed".to_string(),
+            "feat-confirmed".to_string(),
+            base,
+            "archive".to_string(),
+            true,
+        )
+        .expect("archive");
+
+        assert_eq!(res.action, "archived");
+        assert!(res.merged);
+        assert!(!wt.exists(), "the worktree left its old place");
+        // Archiving is the non-destructive choice, so the work must survive the
+        // move. Removing the worktree before the rename used to delete it.
+        let archived = PathBuf::from(res.archive_path.expect("archive path"));
+        assert!(
+            archived.join("scratch.txt").exists(),
+            "uncommitted work moved to the archive instead of being deleted"
+        );
+    }
+
+    #[test]
+    fn merge_and_archive_does_not_ask_about_a_clean_worktree() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        worktree_with(repo.path(), "feat-clean", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-clean".to_string(),
+            "feat-clean".to_string(),
+            base,
+            "archive".to_string(),
+            false,
+        )
+        .expect("archive");
+
+        assert_eq!(res.action, "archived", "nothing to lose, nothing to ask");
+        assert!(!res.worktree_dirty);
+    }
+
+    #[test]
+    fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
+        let (_cfg, _guard) = isolated_config();
+        for action in ["archive", "delete"] {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "active-feature", true);
+            let original_head = git_cmd(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .run()
+                .unwrap()
+                .stdout;
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+            crate::state::tests_support::set_session_cwd(
+                &state,
+                "active-agent",
+                &worktree.to_string_lossy(),
+            );
+
+            let result = merge_and_archive_worktree_impl(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(result.action, "needs_confirmation", "{action}");
+            assert!(
+                !result.merged,
+                "{action} must wait for approval before merging"
+            );
+            assert_eq!(
+                git_cmd(repo.path())
+                    .args(["rev-parse", "HEAD"])
+                    .run()
+                    .unwrap()
+                    .stdout,
+                original_head
+            );
+            assert!(worktree.exists(), "{action} must leave the checkout intact");
+
+            let fingerprint = inspect_worktree_removal(&state, repo.path(), "active-feature")
+                .lifecycle
+                .dirty_fingerprint
+                .expect("confirmed checkout fingerprint");
+            let confirmed = merge_and_archive_worktree_impl_with_confirmation(
+                &state,
+                repo.path().to_string_lossy().into_owned(),
+                "active-feature".into(),
+                "active-feature".into(),
+                base_branch_of(repo.path()),
+                action.into(),
+                true,
+                Some(&fingerprint),
+            )
+            .unwrap();
+            assert_eq!(
+                confirmed.action,
+                if action == "archive" {
+                    "archived"
+                } else {
+                    "deleted"
+                }
+            );
+            assert!(!worktree.exists(), "{action} proceeds after confirmation");
+        }
+    }
+
+    #[test]
+    fn merge_and_archive_in_ask_mode_never_blocks() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = dirty_worktree_with(repo.path(), "feat-ask", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-ask".to_string(),
+            "feat-ask".to_string(),
+            base,
+            "ask".to_string(),
+            false,
+        )
+        .expect("merge");
+
+        // "ask" destroys nothing — it merges and hands the cleanup decision to the
+        // dialog, which asks for itself. Blocking here would deadlock the flow.
+        assert_eq!(res.action, "pending");
+        assert!(res.merged);
+        assert!(res.worktree_dirty, "the dialog needs to know");
+        assert!(wt.join("scratch.txt").exists());
+    }
+
+    #[test]
+    fn finalize_refuses_to_destroy_a_dirty_worktree() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let wt = dirty_worktree_with(repo.path(), "feat-finalize-dirty", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        // This is the path the auto-archive sweep takes, with nobody watching.
+        let res = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-finalize-dirty".to_string(),
+            "delete".to_string(),
+            false,
+        )
+        .expect("guard returns a result");
+
+        assert_eq!(res.action, "needs_confirmation");
+        assert!(res.worktree_dirty);
+        assert!(wt.join("scratch.txt").exists(), "still on disk, untouched");
+    }
+
+    #[test]
+    fn finalize_deletes_once_the_user_confirms() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = dirty_worktree_with(repo.path(), "feat-finalize-forced", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        // Finalize always follows the "ask" merge, as in the dialog flow. Without
+        // it the branch keeps unmerged commits, and removal rightly refuses to
+        // strand them before the confirmation is ever consulted.
+        let pending = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-finalize-forced".to_string(),
+            "feat-finalize-forced".to_string(),
+            base,
+            "ask".to_string(),
+            false,
+        )
+        .expect("merge");
+        assert_eq!(pending.action, "pending");
+
+        let res = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-finalize-forced".to_string(),
+            "delete".to_string(),
+            true,
+        )
+        .expect("delete");
+
+        assert_eq!(res.action, "deleted");
+        assert!(!wt.exists(), "the user asked for it");
+    }
+
+    #[test]
+    fn forced_finalize_reports_that_an_unmerged_branch_was_kept() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "feat-finalize-unmerged", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "feat-finalize-unmerged".into(),
+            "delete".into(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(result.action, "deleted");
+        assert!(!worktree.exists());
+        let payload = serde_json::to_value(result).unwrap();
+        assert!(
+            payload["branch_delete_warning"]
+                .as_str()
+                .is_some_and(|w| w.contains("unmerged")),
+            "{payload}"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["show-ref", "--verify", "refs/heads/feat-finalize-unmerged"])
+                .run()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn finalize_leaves_a_clean_worktree_to_the_sweep() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        worktree_with(repo.path(), "feat-finalize-clean", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-finalize-clean", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let res = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-finalize-clean".to_string(),
+            "archive".to_string(),
+            false,
+        )
+        .expect("archive");
+
+        assert_eq!(res.action, "archived", "no confirmation needed");
+    }
+
+    #[test]
+    fn automatic_archive_keeps_a_clean_untouched_worktree() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "untouched-archive", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "untouched-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "active-archive", true);
+        git_cmd(repo.path())
+            .args(["merge", "active-archive", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "active-agent");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "active-agent",
+            &worktree.to_string_lossy(),
+        );
+
+        let result = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "active-archive".into(),
+            "archive".into(),
+            false,
+        )
+        .expect("unsafe automatic cleanup returns a review result");
+
+        assert_eq!(result.action, "needs_confirmation");
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn automatic_archive_leaves_a_locked_worktree_untouched() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let worktree = worktree_with(repo.path(), "feat-archive-locked", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-archive-locked", "--no-edit"])
+            .run()
+            .expect("merge before finalizing cleanup");
+        git_cmd(repo.path())
+            .args(["worktree", "lock", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let error = finalize_merged_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().into_owned(),
+            "feat-archive-locked".into(),
+            "archive".into(),
+            false,
+        )
+        .err()
+        .expect("locked checkout must not be archived");
+
+        assert!(error.starts_with(tuic_git::worktree::LOCKED_WORKTREE_PREFIX));
+        assert!(worktree.exists());
+        assert!(
+            git_cmd(repo.path())
+                .args(["worktree", "list", "--porcelain"])
+                .run()
+                .unwrap()
+                .stdout
+                .contains(&worktree.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_dir_sibling_strategy() {
+        use crate::config::WorktreeStorage;
+        let repo = PathBuf::from("/home/user/dev/myrepo");
+        let app_dir = PathBuf::from("/home/user/.config/tuic/worktrees");
+        assert_eq!(
+            resolve_worktree_dir(&repo, &WorktreeStorage::Sibling, &app_dir),
+            PathBuf::from("/home/user/dev/myrepo__wt")
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_dir_appdir_strategy() {
+        use crate::config::WorktreeStorage;
+        let repo = PathBuf::from("/home/user/dev/myrepo");
+        let app_dir = PathBuf::from("/home/user/.config/tuic/worktrees");
+        assert_eq!(
+            resolve_worktree_dir(&repo, &WorktreeStorage::AppDir, &app_dir),
+            PathBuf::from("/home/user/.config/tuic/worktrees/myrepo")
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_dir_inside_repo_strategy() {
+        use crate::config::WorktreeStorage;
+        let repo = PathBuf::from("/home/user/dev/myrepo");
+        let app_dir = PathBuf::from("/home/user/.config/tuic/worktrees");
+        assert_eq!(
+            resolve_worktree_dir(&repo, &WorktreeStorage::InsideRepo, &app_dir),
+            PathBuf::from("/home/user/dev/myrepo/.worktrees")
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_dir_claude_code_default_strategy() {
+        use crate::config::WorktreeStorage;
+        let repo = PathBuf::from("/home/user/dev/myrepo");
+        let app_dir = PathBuf::from("/home/user/.config/tuic/worktrees");
+        assert_eq!(
+            resolve_worktree_dir(&repo, &WorktreeStorage::ClaudeCodeDefault, &app_dir),
+            PathBuf::from("/home/user/dev/myrepo/.claude/worktrees")
+        );
+    }
+
+    #[test]
+    fn merge_cleanup_entry_points_refuse_stale_force_confirmation() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let worktree = dirty_worktree_with(repo.path(), "stale-merge-cleanup", false);
+        let confirmed = dirty_fingerprint_at(&worktree).unwrap().0;
+        fs::write(worktree.join("after-confirmation.txt"), "new work\n").unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.path().to_string_lossy().to_string();
+
+        let finalize_error = finalize_merged_worktree_impl_with_confirmation(
+            &state,
+            repo_path.clone(),
+            "stale-merge-cleanup".into(),
+            "delete".into(),
+            true,
+            Some(&confirmed),
+        )
+        .err()
+        .expect("stale confirmation must be rejected");
+        assert!(
+            finalize_error.contains("changed since confirmation"),
+            "{finalize_error}"
+        );
+
+        let merge_error = merge_and_archive_worktree_impl_with_confirmation(
+            &state,
+            repo_path,
+            "stale-merge-cleanup".into(),
+            "stale-merge-cleanup".into(),
+            base,
+            "archive".into(),
+            true,
+            Some(&confirmed),
+        )
+        .err()
+        .expect("stale confirmation must be rejected");
+        assert!(
+            merge_error.contains("changed since confirmation"),
+            "{merge_error}"
+        );
+        assert!(worktree.join("after-confirmation.txt").exists());
+    }
+}

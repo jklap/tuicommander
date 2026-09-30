@@ -1,0 +1,2127 @@
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+
+/* Sidebar */
+.sidebar {
+  --row-pad-x: 7px;
+  --row-icon: 14px;
+  --row-gap: 5px;
+  --row-h: 22px;
+  --tree-indent: 10px;
+  width: var(--sidebar-width);
+  min-width: 200px;
+  max-width: 500px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.15s ease;
+  overflow: hidden;
+}
+
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.resizeHandle:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.repoList {
+  /* container for repo sections */
+}
+
+/* ── Repo filter status banner (shown only while "active only" is engaged) ── */
+.filterStatus {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: calc(100% - 16px);
+  margin: 0 8px 6px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.filterStatus:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.filterStatusClear {
+  margin-left: auto;
+  text-decoration: underline;
+  opacity: 0.85;
+}
+
+.footer {
+  height: var(--status-height);
+  min-height: var(--status-height);
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+
+.addRepo {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  text-align: left;
+  min-width: 0;
+}
+
+.addRepo:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.addRepoIcon {
+  flex-shrink: 0;
+}
+
+.footerIcons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.footerAction {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.footerAction:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.empty {
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.empty p {
+  margin-bottom: 12px;
+}
+
+.empty button {
+  padding: 8px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-on-accent);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+/* ── Repository Section ── */
+.repoSection {
+  margin-bottom: 2px;
+}
+
+.repoHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 3px;
+  cursor: pointer;
+  position: relative;
+}
+
+.repoInitials {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border-radius: var(--radius-md);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  color: var(--text-on-accent);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  flex-shrink: 0;
+}
+
+.repoInitials:hover {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.repoName {
+  flex: 1;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repoActions {
+  display: flex;
+  gap: 2px;
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-secondary);
+  padding-left: 3px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .repoHeader:hover .repoActions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Every disclosure chevron in the sidebar is the same 12px ChevronIcon;
+   only the rotation differs between collapsed and expanded. */
+.repoChevron,
+.groupChevron,
+.ghSectionChevron {
+  display: inline-flex;
+  color: var(--fg-secondary);
+  transition: transform 150ms ease;
+  transform: rotate(0deg);
+  flex-shrink: 0;
+}
+
+.repoChevron.expanded {
+  transform: rotate(90deg);
+}
+
+.repoActionBtn {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.repoActionBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.addBtn {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.addBtn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+/* Empty stand-in for an action button that does not apply to this repo.
+   Keeps the box (and its margins) in the flex row so the trailing icons
+   align across all repo headers. */
+.repoActionSlot {
+  visibility: hidden;
+}
+
+/* Collapsed repository state */
+.collapsed {
+  transition: width 0.2s ease-in-out, padding 0.2s ease-in-out, opacity 0.2s ease-in-out;
+}
+
+.collapsed .repoHeader {
+  padding: 6px 5px;
+  justify-content: center;
+}
+
+.collapsed .repoInitials {
+  width: 28px;
+  height: 28px;
+  font-size: var(--font-sm);
+}
+
+.dragging {
+  opacity: 0.5;
+}
+
+.dragOverTop {
+  position: relative;
+}
+.dragOverTop::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.dragOverBottom {
+  position: relative;
+}
+.dragOverBottom::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.dragOverTarget {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-radius: 4px;
+}
+
+/* ── Group sections ── */
+.groupSection {
+  margin-bottom: 2px;
+}
+
+/* A section heading, not a peer of the repo header: smaller, wider-tracked text
+   and a hairline to the count, so a group reads as the container of the repos
+   below it. Extra top padding separates consecutive groups. */
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px 2px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius-md);
+  transition: background 0.1s;
+}
+
+.groupHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.groupColorDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.groupName {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.groupRule {
+  flex: 1;
+  min-width: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
+.groupCount {
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.groupChevron.expanded {
+  transform: rotate(90deg);
+}
+
+.groupRepos {
+  padding-left: 0;
+}
+
+.groupEmptyHint {
+  padding: 8px 16px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+  opacity: 0.5;
+  font-style: italic;
+}
+
+/* ── Branch Item ── */
+/* One indent step below the repo header — same step the file browser uses per
+   tree level, so the two panels read as one system (see --tree-indent). */
+.repoBranches {
+  padding-left: var(--tree-indent);
+  padding-top: 1px;
+}
+
+.repoEmpty {
+  padding: 8px 16px;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.branchItem {
+  display: flex;
+  align-items: center;
+  gap: var(--row-gap);
+  padding: 3px var(--row-pad-x);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  margin: 1px 0;
+  transition: background 0.1s;
+  position: relative;
+  min-height: var(--row-h);
+}
+
+@media (hover: hover) {
+  .branchItem:hover {
+    background: var(--bg-highlight);
+  }
+}
+
+/* A quiet tint, no outline: the selection only has to say where you are, and a
+   bordered accent box outweighed every status badge in the list. */
+.branchItem.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+/* Tooltips inside a branch row anchor to the row, not to the badge: a bubble
+   right-aligned to the PR marker, which sits well left of the sidebar edge,
+   ran off the window on the left. The row spans the sidebar, so capping the
+   bubble at the row's width keeps it inside on both sides. */
+.branchItem [data-tooltip] {
+  position: static;
+}
+
+/* border-box: the cap must include the bubble's padding and border, or a
+   long tooltip is 18px wider than the row and pokes out on the left. */
+.branchItem [data-tooltip]::after {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.branchPreparing {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.branchIcon {
+  font-size: var(--font-sm);
+  width: var(--row-icon);
+  text-align: center;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Branch icon as the agents toggle: the chevron sits in the icon's own box and
+   swaps in on hover or focus, so the row gives up no width. */
+.branchIconToggle {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.branchIconChevron {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-primary);
+  opacity: 0;
+}
+
+.branchIconChevron svg {
+  transition: transform 150ms ease;
+}
+
+.branchIconToggle.expanded .branchIconChevron svg {
+  transform: rotate(90deg);
+}
+
+.branchIconToggle:hover .branchIcon,
+.branchIconToggle:focus-visible .branchIcon {
+  opacity: 0;
+}
+
+.branchIconToggle:hover .branchIconChevron,
+.branchIconToggle:focus-visible .branchIconChevron {
+  opacity: 1;
+}
+
+/* A bare digit below the icon's right edge, not a pill: at 12px a pill covered
+   the part of the glyph that tells main, branch and worktree apart. The halo in
+   the sidebar background keeps it legible where it touches the glyph. */
+.branchAgentCount {
+  position: absolute;
+  bottom: -4px;
+  right: -3px;
+  color: var(--fg-primary);
+  font-size: var(--font-3xs);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-shadow:
+    0 0 1px var(--bg-secondary),
+    0 0 1px var(--bg-secondary),
+    0 0 2px var(--bg-secondary),
+    0 0 2px var(--bg-secondary);
+  pointer-events: none;
+}
+
+.branchIconToggle:hover .branchAgentCount,
+.branchIconToggle:focus-visible .branchAgentCount {
+  opacity: 0;
+}
+
+.branchIconMain {
+  color: var(--warning);
+}
+
+.branchIconWorktree {
+  color: var(--success);
+}
+
+/* Terminal state colors — applied directly via BranchIcon colorClass prop */
+.branchIconError {
+  color: var(--error);
+  animation: pulse-opacity 1s ease-in-out infinite;
+  font-weight: bold;
+}
+
+.branchIconActivity {
+  color: var(--activity);
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.branchIconQuestion {
+  color: var(--attention);
+  animation: pulse-opacity 1s ease-in-out infinite;
+  font-weight: bold;
+}
+
+.branchIconIdle {
+  color: var(--fg-muted);
+}
+
+.branchIconUnseen {
+  color: var(--unseen);
+}
+
+.branchContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.branchName {
+  display: block;
+  /* Claim the free space instead of merely tolerating it. Every badge in the row
+     is flex-shrink:0, so without this the name was the ONLY element that gave way
+     and a 300px sidebar rendered "fix/msn…" beside an intact "+238 -267 ⌘^3". */
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* A low-contrast surface groups the two values without turning every row into
+   a stack of bright pills. */
+.branchStats {
+  display: flex;
+  gap: 4px;
+  line-height: 1;
+  font-size: var(--font-2xs);
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 4px;
+  background: color-mix(in srgb, var(--fg-primary) 6%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* PR number and diff consume only their real width. A fixed empty diff column
+   used to truncate branch names even when a row had only a PR marker. */
+.branchBadgeStack {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.branchBadgeStack .branchStats {
+  margin-left: 0;
+}
+
+.branchBadgeStack .prBadge {
+  margin-left: 0;
+}
+
+.branchUnmergedMarker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.statAdd {
+  color: var(--success);
+}
+
+.statDel {
+  color: var(--diff-del);
+}
+
+/* Git merged badge — branch fully merged into main */
+.remoteBadge {
+  font-size: var(--font-3xs);
+  color: var(--fg-muted);
+  margin-left: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* A remote repo whose machine is not answering. The repo stays in the sidebar —
+   it is still registered — but every operation on it will fail, and the user has
+   to be able to see that here rather than discover it in Settings. */
+.remoteBadgeError {
+  color: var(--error);
+}
+
+.remoteBadgeConnecting {
+  color: var(--warning, var(--fg-muted));
+}
+
+/* Branch group — wraps a branch row + its collapsible terminal tab list.
+   When expanded, hovering anywhere over the block lifts the whole group as a
+   unified card (DIA-style), while individual items keep their own stronger hover. */
+.branchGroup {
+  border-radius: var(--radius-lg);
+  transition: background 0.15s ease;
+}
+
+.branchGroupExpanded {
+  padding-bottom: 3px;
+}
+
+/* Branch tab list — collapsible terminal tab list under branch row */
+.branchTabList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 1px 4px 2px;
+}
+
+.branchTabItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s, color 0.15s;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+/* Tinted with the theme foreground, not white: a white wash vanished on a
+   light theme. On a dark theme it matches the old rgba(255, 255, 255, 0.08). */
+.branchTabItem.active {
+  background: color-mix(in srgb, var(--fg-primary) 8%, transparent);
+  color: var(--fg-primary);
+}
+
+@media (hover: hover) {
+  .branchTabItem:hover {
+    background: color-mix(in srgb, var(--fg-primary) 8%, transparent);
+    color: var(--fg-primary);
+  }
+
+  .branchTabItem.active:hover {
+    background: color-mix(in srgb, var(--fg-primary) 11%, transparent);
+  }
+}
+
+/* Terminal status dot. Match the TabBar's 6px visual footprint: the old glow
+ * made the sidebar dot appear much larger even when its core was the same size. */
+.branchTabDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+  opacity: 0.4;
+}
+
+.branchTabDotBusy {
+  background: var(--activity);
+  opacity: 1;
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.branchTabDotIdle {
+  background: var(--success);
+  opacity: 1;
+}
+
+.branchTabDotUnseen {
+  background: var(--unseen);
+  opacity: 1;
+}
+
+.branchTabDotError {
+  background: var(--error);
+  opacity: 1;
+}
+
+.branchTabDotQuestion {
+  background: var(--attention);
+  opacity: 1;
+}
+
+.branchAgentIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.branchAgentActivity {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+}
+
+/* Parent of a spawned sub-agent PTY. Shrinks before the tab title does. */
+.branchSubAgentTag {
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  flex-shrink: 1;
+}
+
+.branchSubAgentIcon {
+  vertical-align: -1px;
+}
+
+.branchAgentTime {
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  flex-shrink: 0;
+}
+
+.mergedBadge,
+.lifecycleBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+  color: var(--bg-primary);
+  opacity: 0.7;
+}
+
+.lifecycleRisk {
+  background: var(--attention);
+  color: var(--bg-primary);
+  opacity: 1;
+}
+
+.lifecycleMerged {
+  background: var(--fg-muted);
+  color: var(--bg-primary);
+}
+
+/* PR state badge */
+.prBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.prReady,
+.prOpen {
+  background: var(--success);
+  color: var(--text-on-success);
+}
+
+.prMerged {
+  background: var(--merged);
+  color: var(--text-on-accent);
+}
+
+.prClosed {
+  background: var(--error);
+  color: var(--text-on-error);
+}
+
+.prBadgeDimmed {
+  opacity: 0.4;
+}
+
+.prDraft {
+  background: transparent;
+  border: 1px dashed var(--fg-secondary);
+  color: var(--fg-secondary);
+}
+
+.prConflict {
+  background: var(--error);
+  color: var(--text-on-error);
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.prCiFailed {
+  background: var(--error);
+  color: var(--text-on-error);
+}
+
+.prChangesRequested {
+  background: var(--changes);
+  color: var(--text-on-accent);
+}
+
+.prReviewRequired {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--changes);
+  color: var(--changes);
+}
+
+.prCiPending {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--changes);
+  color: var(--changes);
+  animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+/* Compact PR marker for branch rows: a small square plus the number, both in
+   the state color. The state word lives in the tooltip. */
+.prBadgeCompact {
+  gap: 4px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.prMark {
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.prMarkOpen { color: var(--success); }
+.prMarkMerged { color: var(--merged); }
+.prMarkClosed { color: var(--diff-del); }
+.prMarkChanges { color: var(--changes); }
+
+/* Review required keeps the pill's distinction from Changes requested: same
+   hue, outlined instead of filled. */
+.prMarkReview { color: var(--changes); }
+.prMarkReview .prMark {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.prMarkDraft { color: var(--fg-secondary); }
+.prMarkDraft .prMark {
+  background: none;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* The one state that also changes shape, so it does not rely on color. */
+.prMarkConflict { color: var(--diff-del); }
+.prMarkConflict .prMark {
+  transform: rotate(45deg) scale(0.85);
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.prMarkPending { color: var(--changes); }
+/* Same motion as the pill form: conflict pulses at 1.5s, checking and CI
+   running at 2s; only the marker moves, never the number. */
+.prMarkPending .prMark {
+  animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+/* Branch actions */
+.branchActions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: max-width 0.15s ease, opacity 0.15s ease;
+}
+
+@media (hover: hover) {
+  .branchItem:hover .branchActions {
+    max-width: 44px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.branchAddBtn,
+.branchRemoveBtn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--font-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.branchAddBtn {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.branchAddBtn:hover {
+  background: var(--accent-hover);
+}
+
+.branchRemoveBtn {
+  background: transparent;
+  color: var(--fg-secondary);
+}
+
+.branchRemoveBtn:hover {
+  background: var(--error);
+  color: var(--text-on-error);
+}
+
+.branchShortcut {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+  margin-left: auto;
+  /* This span REPLACES .branchActions in flow when the quick switcher arms, so it
+     owns that element's height budget too. .branchActions is display:flex around
+     20px buttons; its max-width:0 clips it horizontally but never shortens it, so
+     the row is 28px until it goes display:none. A bare 12px span is a ~14px line
+     box, the row drops to the 26px min-height, and every branch row in the sidebar
+     shrinks 2px the instant the hint appears. Match the 20px instead. */
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+}
+
+/* ── Global Workspace Entry ── */
+.globalWorkspaceEntry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  padding-left: 14px;
+  color: var(--fg-secondary);
+  background: var(--bg-tertiary);
+  transition: background 0.1s, color 0.1s;
+}
+
+.globalWorkspaceEntry:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
+.globalWorkspaceActive {
+  border-left-color: var(--accent);
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
+.globalWorkspaceLabel {
+  font-size: var(--font-sm);
+  font-weight: 500;
+}
+
+.globalWorkspaceBadge {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  background: var(--bg-tertiary);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  min-width: 18px;
+  text-align: center;
+}
+
+/* ── Git Quick Actions ── */
+.gitQuickActions {
+  height: var(--status-height);
+  min-height: var(--status-height);
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+
+.gitQuickLabel {
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+  align-self: center;
+}
+
+.gitQuickBtns {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+}
+
+.gitQuickBtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.gitQuickBtn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.gitQuickBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.gitQuickBtn.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.gitQuickIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* Parked repos popover */
+.parkedPopover {
+  position: absolute;
+  bottom: 42px;
+  right: 6px;
+  width: 220px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dropdown);
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.parkedPopoverHeader {
+  padding: 6px 10px 4px;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+.parkedPopoverEmpty {
+  padding: 12px 10px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.parkedPopoverItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.parkedPopoverName {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parkedPopoverName:hover {
+  background: var(--bg-tertiary);
+}
+
+.parkedPopoverUnpark {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.parkedPopoverUnpark:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+/* Stale-temp repair popover (#763-d219) */
+.staleTempActions {
+  padding: 6px 8px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.staleTempRepairButton {
+  width: 100%;
+  background: var(--error);
+  color: var(--text-on-error);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.staleTempRepairButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.staleTempError {
+  margin-top: 6px;
+  color: var(--error);
+  font-size: var(--font-2xs);
+  white-space: normal;
+}
+
+/* GitHub badge always visible (replaces broken :has() with LightningCSS Modules) */
+.repoActionsWithBadge {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Hide non-badge action buttons; only the ghBadgeBtn stays visible */
+.repoActionsWithBadge .repoActionBtn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.repoActionsWithBadge .ghBadgeBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .repoHeader:hover .repoActionsWithBadge .repoActionBtn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ── Remote-only PR popover ── */
+.remoteOnlyOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+
+.remoteOnlyPopover {
+  position: fixed;
+  left: var(--sidebar-width, 240px);
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.3);
+}
+
+.remoteOnlyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.remoteOnlyClose {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--font-md);
+}
+
+.remoteOnlyClose:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.remoteOnlyList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+/* ── Remote-only PR row (collapsed) ── */
+.remoteOnlyItem {
+  border-bottom: 1px solid transparent;
+}
+
+.remoteOnlyItemExpanded {
+  border-bottom: 1px solid var(--border);
+}
+
+.remoteOnlyRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.remoteOnlyRow:hover {
+  background: var(--bg-tertiary);
+}
+
+.remoteOnlyNum {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.remoteOnlyTitle {
+  flex: 1;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ── Remote-only PR accordion detail ── */
+.remoteOnlyDetail {
+  position: relative;
+  padding: 0 4px 8px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+}
+
+.remoteOnlyDetailDismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-md);
+  z-index: 1;
+}
+
+.remoteOnlyDetailDismiss:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
+.remoteOnlyDetailActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 8px 4px;
+}
+
+.remoteOnlyCheckout,
+.remoteOnlyWorktree {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.remoteOnlyCheckout:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.remoteOnlyWorktree:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.remoteOnlyApprove {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.remoteOnlyApprove:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.remoteOnlyApprove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.remoteOnlyMerge {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--success);
+  background: none;
+  color: var(--success);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.remoteOnlyMerge:hover {
+  background: var(--success);
+  color: var(--text-on-success);
+}
+
+.remoteOnlyMerge:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.remoteOnlyMergeError {
+  padding: 4px 8px;
+  font-size: var(--font-2xs);
+  color: var(--error);
+}
+
+.remoteOnlyViewDiff {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.remoteOnlyViewDiff:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.remoteOnlyViewDiffActive {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+
+.remoteOnlyViewDiff:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.remoteOnlyDismiss {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.remoteOnlyDismiss:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
+.remoteOnlyShowDismissed {
+  font-size: var(--font-2xs);
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.remoteOnlyShowDismissed:hover {
+  text-decoration: underline;
+}
+
+.remoteOnlyDiffViewer {
+  max-height: 400px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------------
+   Unified GitHub Panel (replaces RemoteOnlyPrPopover)
+   --------------------------------------------------------------------------- */
+
+.ghPanelOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  outline: none;
+  -webkit-app-region: no-drag;
+}
+
+.ghPanel {
+  position: fixed;
+  left: var(--sidebar-width, 240px);
+  top: 0;
+  bottom: 0;
+  width: 340px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.3);
+  outline: none;
+  -webkit-app-region: no-drag;
+}
+
+.ghPanelHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.ghPanelHeader svg {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.ghChangelogBtn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.ghChangelogBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.ghPanelClose {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--font-md);
+  margin-left: auto;
+}
+
+.ghPanelClose:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.ghPanelBody {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Section (PR / Issues) ── */
+.ghSection {
+  border-bottom: 1px solid var(--border);
+}
+
+.ghSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  user-select: none;
+}
+
+.ghSectionHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.ghSectionHeader svg {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.ghSectionChevronOpen {
+  transform: rotate(90deg);
+}
+
+.ghSectionCount {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+
+.ghShowDismissed {
+  font-size: var(--font-2xs);
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.ghShowDismissed:hover {
+  text-decoration: underline;
+}
+
+.ghSectionList {
+  padding: 0;
+}
+
+.ghEmpty {
+  padding: 12px;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+/* ── Item row (PR or Issue) ── */
+.ghItem {
+  border-bottom: 1px solid transparent;
+}
+
+.ghItemExpanded {
+  border-bottom: 1px solid var(--border);
+}
+
+.ghItemRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.ghItemRow:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Keyboard-navigated row. Distinct from :hover so arrow keys stay visible
+   while the pointer rests elsewhere; DOM focus stays on the panel. */
+.ghItemRowActive {
+  background: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.ghItemNum {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.ghItemTitle {
+  flex: 1;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ── Issue state badges ── */
+.ghIssueBadge {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.ghIssueOpen {
+  background: rgba(63, 185, 80, 0.12);
+  color: var(--success);
+}
+
+.ghIssueClosed {
+  background: color-mix(in srgb, var(--merged) 12%, transparent);
+  color: var(--merged);
+}
+
+/* ── Accordion detail ── */
+.ghItemDetail {
+  position: relative;
+  padding: 0 0 8px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+}
+
+.ghItemDismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-md);
+  z-index: 1;
+}
+
+.ghItemDismiss:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
+/* ── Action buttons ── */
+.ghItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 4px;
+}
+
+.ghActionBtn {
+  padding: 4px 12px;
+  font-size: var(--font-xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.ghActionBtn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.ghActionBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ghApproveBtn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ghApproveBtn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.ghMergeBtn {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.ghMergeBtn:hover {
+  background: var(--success);
+  color: var(--text-on-success);
+}
+
+.ghLinkBtn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ghLinkBtn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.ghCloseBtn {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.ghCloseBtn:hover {
+  background: var(--error);
+  color: var(--bg-primary);
+}
+
+.ghReopenBtn {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.ghReopenBtn:hover {
+  background: var(--success);
+  color: var(--bg-primary);
+}
+
+.ghActionError {
+  padding: 4px 8px;
+  font-size: var(--font-2xs);
+  color: var(--error);
+}
+
+/* ── Filter bar ── */
+.ghFilterBar {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ghFilterSelect {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: var(--font-xs);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ghFilterSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── GitHub badge button (replaces remoteOnlyBadgeBtn) ── */
+.ghBadgeBtn {
+  min-width: 18px;
+  height: 18px;
+  width: auto;
+  padding: 0 3px;
+  /* Same size as the branch stats badges; the fixed 18px height and line-height 1
+     keep the larger digits from growing the badge. */
+  font-size: var(--font-2xs);
+  line-height: 1;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+  border-radius: var(--radius-lg);
+  /* Last in .repoActions (anchored at right: 18px), so it needs its own clearance
+     from the chevron: 6px, the header's gap. */
+  margin-right: 6px;
+}
+
+.ghBadgeBtn:hover {
+  /* A light tint, not a solid fill: a solid accent block outweighed the whole header. */
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+}
+
+.ghBadgeSep {
+  opacity: 0.5;
+  font-size: 0.7em;
+}
+
+.ghBadgeBtn svg {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+}
+
+/* ── Rate limit banner ── */
+.ghRateLimitBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--error);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ghRetryBtn {
+  padding: 2px 10px;
+  font-size: var(--font-2xs);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--error);
+  background: none;
+  color: var(--error);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ghRetryBtn:hover {
+  background: var(--error);
+  color: var(--bg-primary);
+}
+
+/* ── Focused item (keyboard nav) ── */
+.ghItemFocused {
+  background: var(--bg-tertiary);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ── Skeleton loading rows ── */
+.ghSkeletonRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.ghSkeletonBar {
+  flex: 1;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  animation: pulse-opacity 1.2s ease-in-out infinite;
+}
+
+.ghSkeletonBarShort {
+  width: 40px;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  animation: pulse-opacity 1.2s ease-in-out infinite;
+  animation-delay: 0.2s;
+}
+
+/* ---------------------------------------------------------------------------
+   Plugin sidebar sections
+   --------------------------------------------------------------------------- */
+
+.pluginSection {
+  margin-top: 4px;
+  padding-left: 16px;
+}
+
+.pluginSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.pluginSectionHeader:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-secondary);
+}
+
+.pluginSectionIcon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.pluginSectionIcon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.pluginSectionLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pluginSectionBadge {
+  font-size: var(--font-3xs);
+  background: var(--accent);
+  color: var(--bg-primary);
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 1.4;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.pluginSectionChevron {
+  font-size: 8px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.pluginSectionItems {
+  padding-top: 1px;
+}
+
+.pluginItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  margin: 1px 0;
+  transition: background 0.1s;
+  min-height: 26px;
+}
+
+.pluginItem:hover {
+  background: var(--bg-highlight);
+}
+
+.pluginItemIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.pluginItemIcon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.pluginItemText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pluginItemLabel {
+  display: block;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pluginItemSubtitle {
+  display: block;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,652 @@
+import { batch } from "solid-js";
+import { invoke } from "../../invoke";
+import { appLogger } from "../../stores/appLogger";
+import { repoDefaultsStore } from "../../stores/repoDefaults";
+import { repoSettingsStore } from "../../stores/repoSettings";
+import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
+import { timeBatch } from "../../utils/perfTrace";
+
+interface WorkspaceLifecycleResponse {
+	dirty_files: number | null;
+	commit_status: import("../../stores/workspaceIdentity").WorkspaceCommitStatus;
+	removal_safety: import("../../stores/workspaceIdentity").WorkspaceRemovalSafety;
+	error?: string;
+}
+
+export interface PendingCreation {
+	repoPath: string;
+	displayName: string;
+	result: {
+		name: string;
+		path: string;
+		workspace_id: string;
+		branch: string;
+		base_repo: string;
+		kind?: "worktree";
+	};
+}
+
+interface RepositoryRefreshCoordinatorDeps {
+	repo: {
+		getInfo: (path: string) => Promise<{ branch: string; is_git_repo: boolean }>;
+		getRepoStructure: (repoPath: string) => Promise<{
+			worktree_paths: Record<string, import("../useRepository").WorkspaceWorktree>;
+			merged_branches: string[];
+		}>;
+		getRepoDiffStats: (repoPath: string) => Promise<{
+			diff_stats: Record<string, { additions: number; deletions: number }>;
+			last_commit_ts: Record<string, number | null>;
+			workspace_statuses: Record<string, WorkspaceLifecycleResponse>;
+		}>;
+		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
+		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
+		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
+		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
+		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
+		getWorkspaceLifecycle: (
+			repoPath: string,
+			workspaceId: string,
+		) => Promise<import("../../stores/workspaceIdentity").WorkspaceLifecycleStatus>;
+		finalizeMergedWorktree: (
+			repoPath: string,
+			workspaceId: string,
+			action: "archive" | "delete",
+		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
+	};
+	dialogs: {
+		confirmOrphanCleanup?: (
+			repoPath: string,
+			assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+			countdownSeconds: number,
+		) => Promise<boolean>;
+		answerOrphanCleanup?: (repoPath: string, remove: boolean) => void;
+	};
+	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
+	closeTerminalsInWorktree: (worktreePath: string) => Promise<void>;
+	setStatusInfo: (message: string) => void;
+}
+
+/** Owns two-phase repository refresh, stale-write guards, cleanup, and creation grace. */
+export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordinatorDeps) {
+	/** Transition a repo from git to shell mode (e.g. .git was removed) */
+	const transitionToShell = (repoPath: string, currentRepo: RepositoryState) => {
+		batch(() => {
+			// Migrate all terminals to a shell branch. Removal is by KEY: a record's
+			// `branchName` is not necessarily its key, and removing by the wrong one
+			// leaves the row behind with its terminals already re-homed.
+			const allTerminals: string[] = [];
+			for (const [workspaceId, workspace] of Object.entries(currentRepo.workspaces)) {
+				allTerminals.push(...workspace.terminals);
+				repositoriesStore.removeWorkspace(repoPath, workspaceId);
+			}
+			repositoriesStore.setIsGitRepo(repoPath, false);
+			const shellBranch = "shell";
+			repositoriesStore.setWorkspace(repoPath, shellBranch, {
+				worktreePath: repoPath,
+				isMain: true,
+				isShell: true,
+			});
+			for (const termId of allTerminals) {
+				repositoriesStore.addTerminalToWorkspace(repoPath, shellBranch, termId);
+			}
+			repositoriesStore.setActiveWorkspace(repoPath, shellBranch);
+		});
+	};
+
+	// Branch removals processed recently, keyed by `${repoPath}::${branchName}`.
+	// FSEvents fires multiple repo-changed bursts when a worktree is deleted
+	// (one for .git/worktrees/<name>, one for the worktree directory itself),
+	// which can schedule overlapping refresh cycles. Without dedup, the same
+	// terminals would be force-closed twice and the same branch removed twice,
+	// racing store subscribers and causing visible UI thrash. Entries expire
+	// after PROCESS_DEDUP_WINDOW_MS so a legitimate later re-creation is not
+	// blocked indefinitely.
+	const recentlyProcessedBranches = new Map<string, number>();
+	const PROCESS_DEDUP_WINDOW_MS = 2000;
+
+	// Grace period: branches just created via setupNewWorktree are protected from
+	// refresh-triggered removal for CREATION_GRACE_WINDOW_MS. This guards against
+	// the race where git hasn't fully registered the new worktree by the time the
+	// first repo-changed refresh fires (idempotent dir-exists path, slow FS, etc.).
+	const recentlyCreatedBranches = new Map<string, number>();
+	// Bumped from 5s → 60s to cover the worst-case background stale-recovery
+	// flow (large checkout, LFS, slow FS). 5s was shorter than the typical
+	// recreate window, so the failure path silently removed the placeholder
+	// before the grace expired.
+	const CREATION_GRACE_WINDOW_MS = 60_000;
+	const markRecentlyCreated = (repoPath: string, branchName: string): void => {
+		const now = Date.now();
+		for (const [k, ts] of recentlyCreatedBranches) {
+			if (now - ts > CREATION_GRACE_WINDOW_MS) recentlyCreatedBranches.delete(k);
+		}
+		recentlyCreatedBranches.set(`${repoPath}::${branchName}`, now);
+	};
+	const isRecentlyCreated = (repoPath: string, branchName: string): boolean => {
+		const key = `${repoPath}::${branchName}`;
+		const ts = recentlyCreatedBranches.get(key);
+		if (ts === undefined) return false;
+		if (Date.now() - ts > CREATION_GRACE_WINDOW_MS) {
+			recentlyCreatedBranches.delete(key);
+			return false;
+		}
+		return true;
+	};
+
+	const alreadyProcessed = (repoPath: string, branchName: string): boolean => {
+		const key = `${repoPath}::${branchName}`;
+		const ts = recentlyProcessedBranches.get(key);
+		if (ts === undefined) return false;
+		if (Date.now() - ts > PROCESS_DEDUP_WINDOW_MS) {
+			recentlyProcessedBranches.delete(key);
+			return false;
+		}
+		return true;
+	};
+	const markProcessed = (repoPath: string, branchName: string): void => {
+		const now = Date.now();
+		// Sweep expired entries on every write so the map stays bounded by the
+		// number of branches removed within PROCESS_DEDUP_WINDOW_MS — without
+		// this, branches removed and never re-queried leak forever.
+		for (const [k, ts] of recentlyProcessedBranches) {
+			if (now - ts > PROCESS_DEDUP_WINDOW_MS) recentlyProcessedBranches.delete(k);
+		}
+		recentlyProcessedBranches.set(`${repoPath}::${branchName}`, now);
+	};
+
+	const refreshRepoOnce = async (repoPath: string) => {
+		const repo = repositoriesStore.get(repoPath);
+		if (!repo) return;
+		// Snapshot branch keys before any await so we can detect user-triggered
+		// removals that happen while async ops are in-flight (race condition guard).
+		const priorBranchKeys = new Set(Object.keys(repo.workspaces));
+		// Non-git directories: check if they became a git repo
+		if (repo.isGitRepo === false) {
+			try {
+				const info = await deps.repo.getInfo(repoPath);
+				if (info.is_git_repo && info.branch) {
+					// Directory gained .git — transition to git mode. Carry the shell
+					// branch's terminals (and its last-active) into the new git branch:
+					// otherwise `git init` removes the shell branch and creates an empty
+					// git branch, orphaning the open terminals so they vanish from the
+					// view until a later branch-select re-adopts them by cwd.
+					batch(() => {
+						const carriedTerminals: string[] = [];
+						let carriedActive: string | null = null;
+						for (const [workspaceId, workspace] of Object.entries(repo.workspaces)) {
+							carriedTerminals.push(...workspace.terminals);
+							if (workspace.lastActiveTerminal) carriedActive = workspace.lastActiveTerminal;
+							repositoriesStore.removeWorkspace(repoPath, workspaceId);
+						}
+						repositoriesStore.setIsGitRepo(repoPath, true);
+						repositoriesStore.setWorkspace(repoPath, info.branch, {
+							worktreePath: repoPath,
+							lastActiveTerminal: carriedActive,
+						});
+						// addTerminalToWorkspace (not setWorkspace terminals) keeps the
+						// terminalToRepo inverse index consistent.
+						for (const tid of carriedTerminals) {
+							repositoriesStore.addTerminalToWorkspace(repoPath, info.branch, tid);
+						}
+						repositoriesStore.setActiveWorkspace(repoPath, info.branch);
+					});
+					// Restart the repo watcher so it registers the now-present .git
+					// sub-watches (HEAD/refs/worktrees). On macOS/Windows the recursive
+					// root watch already covers .git, but Linux uses targeted watches
+					// that were skipped while the directory was non-git.
+					invoke("stop_repo_watcher", { repoPath })
+						.then(() => invoke("start_repo_watcher", { repoPath }))
+						.catch((e) =>
+							appLogger.debug("git", "Watcher restart after git-init failed", { repoPath, error: String(e) }),
+						);
+				}
+			} catch (e) {
+				appLogger.debug("git", "Repo probe failed — staying in shell mode", { repoPath, error: String(e) });
+			}
+			return;
+		}
+
+		// === PHASE 1: Structure (fast) ===
+		// Returns worktree_paths + merged_branches only — no expensive diff stats.
+		const structure = await deps.repo.getRepoStructure(repoPath);
+
+		const worktreePaths = structure.worktree_paths;
+		const mergedSet = new Set(structure.merged_branches);
+
+		const currentRepo = repositoriesStore.get(repoPath);
+		if (!currentRepo) return;
+
+		if (Object.keys(worktreePaths).length === 0) {
+			// Worktrees came back empty — either a transient backend error or the
+			// repo is no longer a git repo. Probe to find out.
+			try {
+				const info = await deps.repo.getInfo(repoPath);
+				if (!info.is_git_repo) {
+					transitionToShell(repoPath, currentRepo);
+					return;
+				}
+			} catch (e) {
+				appLogger.debug("git", "getInfo failed — preserving UI state", { repoPath, error: String(e) });
+			}
+			// Still a git repo but no worktrees returned — skip to avoid
+			// destroying existing branch state on a transient error.
+			if (Object.keys(currentRepo.workspaces).length > 0) return;
+		}
+
+		// Compute the target set of branches to keep, then apply all
+		// mutations in a single batch to prevent intermediate renders
+		// (which caused the sidebar to flash/jump during refresh).
+		const storeIds = new Set(terminalsStore.getIds());
+		const toRemove: string[] = [];
+		const terminalsToClose: string[] = [];
+
+		const active = currentRepo.activeWorkspaceId;
+		// A branch switch changes the workspace id, not the checkout directory.
+		// Re-home sessions for every changed worktree, including inactive rows.
+		const replacementByPath = new Map(Object.entries(worktreePaths).map(([id, wt]) => [wt.path, id]));
+		const replacements = new Map<string, string>();
+
+		for (const branchName of Object.keys(currentRepo.workspaces)) {
+			if (!(branchName in worktreePaths)) {
+				// Skip branches that a concurrent/recent refresh already handled.
+				// The store removal may not have settled yet (batch scheduled), so
+				// we'd otherwise re-enqueue the same close+remove.
+				if (alreadyProcessed(repoPath, branchName)) continue;
+				// Skip branches just created — git may not have fully registered the
+				// worktree by the time the first repo-changed refresh fires.
+				if (isRecentlyCreated(repoPath, branchName)) {
+					appLogger.info("git", `refreshAllBranchStats: CREATION GRACE skipping "${branchName}" (just created)`, {
+						repoPath,
+					});
+					continue;
+				}
+				const replacement = replacementByPath.get(currentRepo.workspaces[branchName]?.worktreePath ?? "");
+				if (replacement) {
+					appLogger.info(
+						"terminal",
+						`refreshAllBranchStats: workspace "${branchName}" replaced by "${replacement}" at the same path`,
+					);
+					replacements.set(branchName, replacement);
+					toRemove.push(branchName);
+					markProcessed(repoPath, branchName);
+					continue;
+				}
+				// Branch has live terminals — only keep it if the worktree path
+				// is the main repo checkout (HEAD switched away). If the worktree
+				// directory was deleted externally, close the orphaned terminals
+				// so the stale branch can be cleaned up.
+				const branchState = currentRepo.workspaces[branchName];
+				const hasLiveTerminals = branchState?.terminals.some((id) => storeIds.has(id));
+				if (hasLiveTerminals) {
+					const isLinkedWorktree = branchState.worktreePath && branchState.worktreePath !== repoPath;
+					if (isLinkedWorktree) {
+						// Linked worktree was removed externally — close its terminals
+						appLogger.info(
+							"terminal",
+							`refreshAllBranchStats: closing terminals for deleted worktree "${branchName}"`,
+							{
+								terminals: branchState.terminals,
+								worktreePath: branchState.worktreePath,
+							},
+						);
+						terminalsToClose.push(...branchState.terminals.filter((id) => storeIds.has(id)));
+						toRemove.push(branchName);
+						markProcessed(repoPath, branchName);
+					} else {
+						appLogger.info("terminal", `refreshAllBranchStats: keeping "${branchName}" — has live terminals`, {
+							terminals: branchState.terminals,
+						});
+					}
+					continue;
+				}
+				toRemove.push(branchName);
+				markProcessed(repoPath, branchName);
+			}
+		}
+
+		if (toRemove.length > 0) {
+			appLogger.info("terminal", `refreshAllBranchStats removing branches from ${repoPath}`, {
+				toRemove,
+				worktreePathKeys: Object.keys(worktreePaths),
+				existingBranches: Object.keys(currentRepo.workspaces),
+			});
+		}
+
+		// Close terminals for deleted worktrees before mutating store state.
+		// Best-effort: a PTY may already be dead; log and continue so the
+		// branch removal in the batch below is not blocked.
+		await Promise.allSettled(
+			terminalsToClose.map(async (termId) => {
+				try {
+					await deps.closeTerminal(termId, true);
+				} catch (err) {
+					appLogger.warn("terminal", `refreshAllBranchStats: failed to close terminal ${termId}`, err);
+				}
+			}),
+		);
+
+		// Freeze-investigation: split the structural batch into body (our
+		// setState loop) vs reactive flush (dependent effects/memos waking).
+		timeBatch(`git.refreshBatch:${repoPath}`, (markBodyEnd) =>
+			batch(() => {
+				// Guard against race: if a branch was present before our async ops
+				// but is now gone from the live store, the user deleted it while we
+				// were in-flight. Don't resurrect it via stale worktreePaths data.
+				const liveRepo = repositoriesStore.get(repoPath);
+				// Create new worktree branches first so mergeWorkspaceState has a target
+				for (const [workspaceId, wt] of Object.entries(worktreePaths)) {
+					if (priorBranchKeys.has(workspaceId) && !liveRepo?.workspaces[workspaceId]) {
+						appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${workspaceId}"`, {
+							repoPath,
+							worktreePath: wt.path,
+						});
+						continue;
+					}
+					// `mergedSet` holds BRANCH names, so it is queried with the
+					// record's branch — never the key, which is a workspace id and
+					// only equals the branch under the identity migration.
+					const update: Partial<import("../../stores/repositories").WorkspaceState> = {
+						worktreePath: wt.path,
+						branchName: wt.branch,
+						kind: wt.path === repoPath ? "main" : wt.kind,
+						isMerged: mergedSet.has(wt.branch),
+					};
+					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
+				}
+				for (const [source, target] of replacements) {
+					repositoriesStore.mergeWorkspaceState(repoPath, source, target);
+					if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
+				}
+				for (const branchName of toRemove) {
+					repositoriesStore.removeWorkspace(repoPath, branchName);
+				}
+				markBodyEnd();
+			}),
+		);
+
+		const updatedRepo = repositoriesStore.get(repoPath);
+		if (!updatedRepo) return;
+
+		// Side effects that only need structure data — run before Phase 2
+		await handleAutoArchiveMerged(repoPath, updatedRepo.workspaces);
+		await handleOrphanCleanup(repoPath);
+
+		// === PHASE 2: Stats (slow) ===
+		// Per-worktree diff stats + last-commit timestamps.
+		// Non-fatal: if this fails, UI shows rows from Phase 1 with stale/zero stats.
+		try {
+			const stats = await deps.repo.getRepoDiffStats(repoPath);
+
+			const currentRepoForStats = repositoriesStore.get(repoPath);
+			if (!currentRepoForStats) return;
+
+			// Freeze-investigation: same body-vs-flush split for the stats batch.
+			timeBatch(`git.statsBatch:${repoPath}`, (markBodyEnd) =>
+				batch(() => {
+					// Diff stats are keyed by checkout directory, last-commit timestamps
+					// by branch, and store writes by workspace id.
+					for (const [workspaceId, workspace] of Object.entries(currentRepoForStats.workspaces)) {
+						if (!workspace.worktreePath) continue;
+						const ds = stats.diff_stats[workspace.worktreePath];
+						if (ds) {
+							repositoriesStore.updateWorkspaceStats(repoPath, workspaceId, ds.additions, ds.deletions);
+						}
+						const ts = stats.last_commit_ts?.[workspace.branchName];
+						const lifecycle = stats.workspace_statuses?.[workspaceId];
+						if (lifecycle) {
+							repositoriesStore.setWorkspace(repoPath, workspaceId, {
+								isMerged: lifecycle.commit_status === "merged",
+								lifecycleStatus: {
+									dirtyFiles: lifecycle.dirty_files,
+									commitStatus: lifecycle.commit_status,
+									removalSafety: lifecycle.removal_safety,
+									error: lifecycle.error,
+								},
+							});
+						}
+						if (ts !== undefined) {
+							// Rust emits Unix seconds (%ct); JS Date.now() uses milliseconds
+							repositoriesStore.setWorkspace(repoPath, workspaceId, {
+								lastCommitTs: ts !== null ? ts * 1000 : null,
+							});
+						}
+					}
+					markBodyEnd();
+				}),
+			);
+		} catch (err) {
+			appLogger.warn("git", `Phase 2 diff stats failed for ${repoPath}`, err);
+		}
+	};
+
+	// Per-repo single-flight with one trailing rerun. The former generation
+	// cancellation made structure reconciliation starvation-prone: a sustained
+	// repo-changed stream could obsolete every in-flight Phase 1 before it pruned
+	// deleted worktrees, leaving persisted ghost rows in the sidebar forever.
+	// Every caller now joins the current run and requests at most one fresh pass.
+	const refreshInFlight = new Map<string, Promise<void>>();
+	const refreshQueued = new Set<string>();
+	const refreshRepo = async (repoPath: string): Promise<void> => {
+		const existing = refreshInFlight.get(repoPath);
+		if (existing) {
+			refreshQueued.add(repoPath);
+			await existing;
+			return;
+		}
+
+		const run = (async () => {
+			do {
+				refreshQueued.delete(repoPath);
+				try {
+					await refreshRepoOnce(repoPath);
+				} catch (err) {
+					appLogger.warn("git", `Repository refresh failed for ${repoPath}`, err);
+				}
+			} while (refreshQueued.delete(repoPath));
+		})();
+		refreshInFlight.set(repoPath, run);
+		try {
+			await run;
+		} finally {
+			if (refreshInFlight.get(repoPath) === run) refreshInFlight.delete(repoPath);
+		}
+	};
+
+	// `scopeRepoPath` limits the refresh to a single repo. A `repo-changed`
+	// event carries the one repo that changed, so scoping avoids re-scanning
+	// every open repo in unison on each filesystem event. Called with no arg
+	// (init, branch ops) it refreshes all active repos as before.
+	const refreshReposCapped = async (paths: string[], maxConcurrent: number): Promise<void> => {
+		let nextIndex = 0;
+		const worker = async () => {
+			while (nextIndex < paths.length) {
+				const path = paths[nextIndex++];
+				await refreshRepo(path);
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(maxConcurrent, paths.length) }, worker));
+	};
+
+	const refreshAllBranchStats = async (scopeRepoPath?: string) => {
+		// Skip parked repos — they should stay dormant. (#1358-caf5)
+		const activePaths = repositoriesStore.getActivePaths();
+		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : [...activePaths];
+		const activeRepoPath = repositoriesStore.state.activeRepoPath;
+		if (activeRepoPath && paths.includes(activeRepoPath)) {
+			paths.splice(paths.indexOf(activeRepoPath), 1);
+			paths.unshift(activeRepoPath);
+		}
+		await refreshReposCapped(paths, 4);
+	};
+
+	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
+	let orphanDialogOpen = false;
+	// Orphans the user chose to "Keep" this session — don't nag about them again
+	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
+	const keptOrphans = new Set<string>();
+	const handleOrphanCleanup = async (repoPath: string) => {
+		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
+		if (orphanCleanup === "off") return;
+
+		let assessments: Array<{ path: string; safe: boolean; reason?: string }>;
+		try {
+			assessments = await deps.repo.assessOrphanCleanup(repoPath);
+		} catch {
+			return; // Detection failure is non-fatal
+		}
+		if (assessments.length === 0) return;
+
+		if (orphanCleanup === "on") {
+			// Auto-remove only the worktrees the backend classified as safe.
+			let removed = 0;
+			await Promise.allSettled(
+				assessments
+					.filter((entry) => entry.safe)
+					.map(async ({ path: wtPath }) => {
+						try {
+							await deps.closeTerminalsInWorktree(wtPath);
+							await deps.repo.removeOrphanWorktree(repoPath, wtPath, true);
+							removed++;
+						} catch (err) {
+							appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
+						}
+					}),
+			);
+			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
+			return;
+		}
+
+		// orphanCleanup === "ask"
+		// Skip orphans the user already chose to keep — otherwise the dialog re-fires
+		// on every refresh until the underlying worktree state changes. (#65)
+		const pending = assessments.filter((entry) => !keptOrphans.has(entry.path));
+		if (pending.length === 0) return;
+
+		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes
+		orphanDialogOpen = true;
+		let confirmed: boolean | undefined;
+		let poll: ReturnType<typeof setInterval> | undefined;
+		let dialogActive = true;
+		try {
+			await deps.repo.beginOrphanCleanup(
+				repoPath,
+				pending.map((entry) => entry.path),
+			);
+			let polling = false;
+			poll = setInterval(async () => {
+				if (polling) return;
+				polling = true;
+				try {
+					const answer = await deps.repo.pendingOrphanCleanupAnswer(repoPath);
+					if (dialogActive && answer !== null) {
+						clearInterval(poll);
+						deps.dialogs.answerOrphanCleanup?.(repoPath, answer);
+					}
+				} catch (err) {
+					appLogger.warn("git", `Failed to read pending orphan cleanup answer for ${repoPath}`, err);
+				} finally {
+					polling = false;
+				}
+			}, 500);
+			confirmed =
+				(await deps.dialogs.confirmOrphanCleanup?.(
+					repoPath,
+					pending,
+					Math.max(1, repoDefaultsStore.state.orphanCleanupCountdownSeconds),
+				)) ?? false;
+			// An agent's Keep answer wins if it arrived at the end of the countdown,
+			// before the next poll could settle the dialog.
+			const finalAnswer = await deps.repo.pendingOrphanCleanupAnswer(repoPath);
+			if (finalAnswer !== null) confirmed = finalAnswer;
+		} finally {
+			dialogActive = false;
+			if (poll) clearInterval(poll);
+			try {
+				// A Keep stays on the backend so other clients showing this dialog
+				// see it instead of counting down to a removal.
+				await deps.repo.clearOrphanCleanup(repoPath, confirmed === false);
+			} finally {
+				orphanDialogOpen = false;
+			}
+		}
+		if (!confirmed) {
+			// User chose "Keep" — remember these so we don't prompt again this session.
+			for (const entry of pending) keptOrphans.add(entry.path);
+			return;
+		}
+
+		let removed = 0;
+		await Promise.allSettled(
+			pending.map(async ({ path: wtPath, safe }) => {
+				try {
+					await deps.closeTerminalsInWorktree(wtPath);
+					await deps.repo.removeOrphanWorktree(repoPath, wtPath, safe);
+					removed++;
+				} catch (err) {
+					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);
+				}
+			}),
+		);
+		if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
+	};
+
+	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */
+	const handleAutoArchiveMerged = async (repoPath: string, branches: RepositoryState["workspaces"]) => {
+		if (!repoSettingsStore.getEffective(repoPath)?.autoArchiveMerged) return;
+
+		const mergedLinkedBranches = Object.values(branches).filter(
+			(b) => b.kind === "worktree" && b.isMerged && b.worktreePath !== null && b.worktreePath !== repoPath,
+		);
+		if (mergedLinkedBranches.length === 0) return;
+
+		let archived = 0;
+		const kept: string[] = [];
+		const safe: typeof mergedLinkedBranches = [];
+		for (const ws of mergedLinkedBranches) {
+			try {
+				const preview = await deps.repo.getWorkspaceLifecycle(repoPath, ws.workspaceId);
+				if (
+					preview.commitStatus === "merged" &&
+					preview.removalSafety === "safe" &&
+					preview.dirtyFiles === 0 &&
+					!preview.liveSessions?.length
+				) {
+					safe.push(ws);
+				} else {
+					kept.push(`${ws.branchName}: ${(preview.warnings ?? []).join("; ") || "removal needs review"}`);
+				}
+			} catch (error) {
+				kept.push(`${ws.branchName}: removal preview failed`);
+				appLogger.warn("git", `Could not inspect ${ws.branchName} before auto-archive`, error);
+			}
+		}
+		const results = await Promise.allSettled(
+			// By workspaceId, never branchName: with two workspaces on one branch the
+			// branch cannot say which checkout to archive (#726-5ac7).
+			safe.map((ws) => deps.repo.finalizeMergedWorktree(repoPath, ws.workspaceId, "archive")),
+		);
+		results.forEach((result, i) => {
+			const name = safe[i].branchName;
+			if (result.status === "rejected") {
+				appLogger.warn("git", `Failed to auto-archive merged worktree for "${name}"`, result.reason);
+				return;
+			}
+			// This sweep runs on a refresh tick with nobody watching, so it never
+			// passes `force`. A worktree that is not known to be clean comes back
+			// untouched and stays in the sidebar for the user to handle by hand.
+			if (result.value.action === "needs_confirmation") {
+				kept.push(`${name}: uncommitted work`);
+				appLogger.info("git", `Kept the merged worktree for "${name}" — it has uncommitted work`);
+				return;
+			}
+			archived++;
+		});
+		if (archived > 0 || kept.length > 0) {
+			const keptNote = kept.length > 0 ? `, kept ${kept.length}: ${kept.join(" | ")}` : "";
+			deps.setStatusInfo(`Auto-archived ${archived} merged worktree(s)${keptNote}`);
+		}
+	};
+
+	return { markRecentlyCreated, refreshAllBranchStats };
+}

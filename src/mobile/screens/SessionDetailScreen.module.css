@@ -1,0 +1,277 @@
+.screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 56px;
+  padding: 0 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.backBtn:active {
+  opacity: 0.7;
+}
+
+.headerInfo {
+  flex: 1;
+  min-width: 120px;
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agentName {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.stateDot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--bg-secondary);
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+
+.stateDot[data-state="busy"],
+.stateDot[data-state="sub-tasks"] { background: var(--accent); }
+.stateDot[data-state="idle"] { background: #4dbc80; }
+.stateDot[data-state="question"] { background: #eabf53; }
+.stateDot[data-state="error"],
+.stateDot[data-state="rate-limited"] { background: var(--accent-red, #f44747); }
+
+.headerAction {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.taskCount {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 15px;
+  padding: 1px 2px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.overflow {
+  position: absolute;
+  z-index: 15;
+  top: 56px;
+  right: 8px;
+  width: min(240px, calc(100% - 16px));
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.overflow button,
+.overflowInfo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.overflow button { cursor: pointer; }
+.overflow button:active { background: var(--bg-highlight); }
+.overflowInfo { color: var(--fg-muted); }
+.overflow .dangerAction { color: var(--accent-red, #f44747); }
+
+.questionBar {
+  padding: 8px 12px;
+  background: rgba(255, 215, 0, 0.08);
+  border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+  font-size: 13px;
+  color: var(--fg-primary);
+  flex-shrink: 0;
+}
+
+.errorBar {
+  padding: 8px 12px;
+  background: rgba(255, 80, 80, 0.08);
+  border-bottom: 1px solid rgba(255, 80, 80, 0.2);
+  font-size: 13px;
+  color: var(--fg-primary);
+  flex-shrink: 0;
+}
+
+.rateLimitBar {
+  padding: 8px 12px;
+  background: rgba(255, 165, 0, 0.08);
+  border-bottom: 1px solid rgba(255, 165, 0, 0.2);
+  font-size: 13px;
+  color: var(--fg-primary);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.rateLimitCountdown {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+}
+
+.outputArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.endedOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(30, 30, 30, 0.85);
+}
+
+.endedText {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.endedBackBtn {
+  padding: 10px 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font-size: 15px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.endedBackBtn:active {
+  opacity: 0.7;
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-size: 14px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.searchInput:focus {
+  border-color: var(--accent);
+}
+
+.searchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+}

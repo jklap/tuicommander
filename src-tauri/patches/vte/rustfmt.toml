@@ -1,0 +1,7 @@
+# Upstream vte formats on nightly. We build on stable, where the nightly-only
+# options are ignored with a warning, so only the stable subset is kept here.
+match_block_trailing_comma = true
+use_field_init_shorthand = true
+use_small_heuristics = "Max"
+use_try_shorthand = true
+newline_style = "Unix"

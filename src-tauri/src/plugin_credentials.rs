@@ -1,0 +1,284 @@
+//! Credential reading API for plugins.
+//!
+//! Plugins declaring the `credentials:read` capability can read credentials
+//! from the system credential store. On macOS this reads from Keychain;
+//! on Linux/Windows it reads from a JSON file in the user's home directory.
+//!
+//! Results are cached in-memory per service name (5 min TTL) to avoid
+//! repeated OS keychain prompts within the same process.
+//!
+//! Returns the raw credential JSON string, or null if not found.
+
+#[cfg(not(target_os = "macos"))]
+use std::path::PathBuf;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+const CACHE_TTL: Duration = Duration::from_secs(300);
+
+struct CachedEntry {
+    value: Option<String>,
+    fetched_at: Instant,
+}
+
+static CACHE: Mutex<Option<HashMap<String, CachedEntry>>> = Mutex::new(None);
+
+/// Validate service name format: alphanumeric, dots, hyphens, underscores, spaces.
+/// Prevents shell injection when service_name is passed to macOS `security` CLI.
+fn is_valid_service_name(name: &str) -> bool {
+    name.chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
+}
+
+/// Read a credential by service name.
+///
+/// - macOS: reads from Keychain via `security find-generic-password`
+/// - Linux/Windows: reads from `~/.claude/.credentials.json`
+///
+/// Returns `Ok(Some(json_string))` if found, `Ok(None)` if not found,
+/// `Err` on I/O or permission errors.
+// DESKTOP-ONLY (HTTP parity): OS keychain / native security tool
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn plugin_read_credential(
+    service_name: String,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Option<String>, String> {
+    crate::plugins::check_plugin_capability(&state, &plugin_id, "credentials:read")?;
+    // The uncached path shells out to the OS keychain (`security` on macOS) or
+    // reads a JSON file — run it off the async runtime.
+    tokio::task::spawn_blocking(move || plugin_read_credential_inner(&service_name))
+        .await
+        .map_err(|e| format!("credential read task failed: {e}"))?
+}
+
+fn plugin_read_credential_inner(service_name: &str) -> Result<Option<String>, String> {
+    if service_name.is_empty() {
+        return Err("Service name is empty".into());
+    }
+    if !is_valid_service_name(service_name) {
+        return Err(
+            "Service name contains invalid characters (allow: a-z A-Z 0-9 . - _ space)".into(),
+        );
+    }
+    // Deny access to TUICommander's OWN secrets vault. `credentials:read` is for
+    // reading OTHER tools' credentials (e.g. aws-cli creds), never the host's
+    // GitHub/LLM/MCP tokens. Reject the vault service and any legacy entry.
+    // `MCP_UPSTREAM_LEGACY_SERVICE` covers every unmigrated MCP-upstream entry
+    // regardless of which upstream: `security find-generic-password -s <service>`
+    // matches on service alone, so the account (upstream name) can't narrow it.
+    if crate::app_instance::is_owned_vault_service(service_name)
+        || crate::credentials::LEGACY_ENTRIES
+            .iter()
+            .any(|&(service, _)| service == service_name)
+        || service_name == crate::credentials::MCP_UPSTREAM_LEGACY_SERVICE
+    {
+        return Err("access to TUICommander's own credential vault is denied".into());
+    }
+
+    cached_read(service_name)
+}
+
+pub(crate) fn cached_read(service_name: &str) -> Result<Option<String>, String> {
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+
+    if let Some(entry) = map.get(service_name)
+        && entry.fetched_at.elapsed() < CACHE_TTL
+    {
+        return Ok(entry.value.clone());
+    }
+    drop(guard);
+
+    let value = read_credential_uncached(service_name)?;
+
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(
+        service_name.to_string(),
+        CachedEntry {
+            value: value.clone(),
+            fetched_at: Instant::now(),
+        },
+    );
+    Ok(value)
+}
+
+fn read_credential_uncached(service_name: &str) -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        read_from_keychain(service_name)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        read_from_json_file(service_name)
+    }
+}
+
+/// macOS: read from Keychain via `security find-generic-password -s <service> -w`.
+/// This shells out to avoid adding a native Keychain crate dependency.
+#[cfg(target_os = "macos")]
+pub(crate) fn read_from_keychain(service_name: &str) -> Result<Option<String>, String> {
+    let output = std::process::Command::new("security")
+        .args(["find-generic-password", "-s", service_name, "-w"])
+        .output()
+        .map_err(|e| format!("Failed to run security command: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // "could not be found" means the credential doesn't exist — not an error
+        if stderr.contains("could not be found") || stderr.contains("SecKeychainSearchCopyNext") {
+            return Ok(None);
+        }
+        return Err(format!("Keychain read failed: {}", stderr.trim()));
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(raw))
+}
+
+/// Linux/Windows: read from `~/.claude/.credentials.json`.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn read_from_json_file(service_name: &str) -> Result<Option<String>, String> {
+    let path = credentials_json_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            let parsed: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse credentials file: {e}"))?;
+            match parsed.get(service_name) {
+                Some(val) => Ok(Some(val.to_string())),
+                None => Ok(None),
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Failed to read credentials file: {e}")),
+    }
+}
+
+/// Path to the credentials JSON file on non-macOS platforms.
+#[cfg(not(target_os = "macos"))]
+fn credentials_json_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    Ok(home.join(".claude").join(".credentials.json"))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_service_names() {
+        assert!(is_valid_service_name("Claude Code-credentials"));
+        assert!(is_valid_service_name("my_app.secret"));
+        assert!(is_valid_service_name("simple"));
+    }
+
+    #[test]
+    fn invalid_service_names() {
+        assert!(!is_valid_service_name("$(whoami)"));
+        assert!(!is_valid_service_name("test;rm -rf /"));
+        assert!(!is_valid_service_name("test\ninjection"));
+        assert!(!is_valid_service_name("path/../traversal"));
+        assert!(!is_valid_service_name("test`id`"));
+    }
+
+    #[test]
+    fn empty_service_name_is_rejected() {
+        let result = plugin_read_credential_inner("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn own_vault_service_is_denied() {
+        // The host's own vault service must never be readable by a plugin.
+        let result = plugin_read_credential_inner(crate::credentials::KEYRING_SERVICE);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("denied"));
+
+        // Legacy vault service names are denied too.
+        for &(service, _) in crate::credentials::LEGACY_ENTRIES {
+            let result = plugin_read_credential_inner(service);
+            assert!(result.is_err(), "expected {service} to be denied");
+            assert!(result.unwrap_err().contains("denied"));
+        }
+
+        // A named application instance has its own vault service, which must
+        // remain private to the host just like the default vault.
+        let named_instance =
+            crate::app_instance::AppInstance::named("work-laptop").expect("valid named instance");
+        let result = plugin_read_credential_inner(named_instance.vault_service());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("denied"));
+    }
+
+    #[test]
+    fn legacy_mcp_upstream_service_is_denied() {
+        // "tuicommander-mcp" is not in LEGACY_ENTRIES (those are per-service, one
+        // literal each) and is not an owned vault service (app_instance.rs only
+        // knows "tuicommander" / "tuicommander-instance-*") — it is the shared
+        // legacy service every `Credential::McpUpstream` entry was written under
+        // (credentials.rs `legacy_entry()`) before per-upstream lazy migration
+        // runs. `security find-generic-password -s tuicommander-mcp -w` matches
+        // on service alone, with no account/user filter, so it would return the
+        // password of ANY unmigrated MCP-upstream entry. This must stay denied
+        // even though neither guard above names it.
+        let result = plugin_read_credential_inner(crate::credentials::MCP_UPSTREAM_LEGACY_SERVICE);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("denied"));
+
+        // The deny check must be reading the same constant `legacy_entry()`
+        // derives from, not a separately typed copy of the literal.
+        assert_eq!(
+            crate::credentials::MCP_UPSTREAM_LEGACY_SERVICE,
+            "tuicommander-mcp"
+        );
+    }
+
+    #[test]
+    fn plugin_owned_non_host_service_is_not_denied() {
+        // A plugin reading a credential for some OTHER tool (e.g. its own
+        // aws-cli entry) must still pass the guard — only the host's own vault
+        // services and legacy entries are blocked.
+        let result =
+            plugin_read_credential_inner("some-other-tool-credentials-741-0eae-not-a-host-service");
+        assert!(
+            result.is_ok(),
+            "expected a plugin-owned service name to be allowed through, got: {result:?}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_returns_none_for_nonexistent_service() {
+        let result = read_from_keychain("nonexistent-service-that-definitely-does-not-exist-12345");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_returns_some_for_claude_credentials() {
+        // This test verifies the integration works on this machine
+        let result = read_from_keychain("Claude Code-credentials");
+        assert!(result.is_ok());
+        // May or may not exist on the test machine, but should not error
+        if let Some(json) = result.unwrap() {
+            // If it exists, it should be valid JSON
+            assert!(json.starts_with('{'));
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&json);
+            assert!(parsed.is_ok());
+        }
+    }
+}
