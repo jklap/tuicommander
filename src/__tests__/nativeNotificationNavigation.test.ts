@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 const terminal = vi.fn();
 const progress = vi.fn();
 const listen = vi.fn();
+const aiChat = vi.fn();
 
 vi.mock("../utils/navigateToTerminal", () => ({ navigateToTerminal: terminal }));
 vi.mock("../stores/progress", () => ({ progressStore: { open: progress } }));
+vi.mock("../stores/ui", () => ({ uiStore: { setAiChatPanelVisible: aiChat } }));
 vi.mock("../invoke", () => ({ listen }));
 
 describe("native notification click", () => {
@@ -21,6 +23,14 @@ describe("native notification click", () => {
 		navigateFromNativeNotice({ kind: "progress", project: "/other-project", ptyId: "agent-2" });
 		expect(progress).toHaveBeenCalledWith("/other-project", "agent-2");
 		expect(terminal).toHaveBeenCalledTimes(0);
+	});
+
+	it("opens AI Chat after an ACP interaction notice", async () => {
+		const { navigateFromNativeNotice } = await import("../services/nativeNotificationNavigation");
+		navigateFromNativeNotice({ kind: "aichat", id: "connection-1:permission-1" });
+		expect(aiChat).toHaveBeenCalledWith(true);
+		expect(terminal).not.toHaveBeenCalled();
+		expect(progress).not.toHaveBeenCalled();
 	});
 
 	it("routes a native click event to its recorded target", async () => {
