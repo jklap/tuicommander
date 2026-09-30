@@ -39,7 +39,7 @@
 
 ## Safe orphan cleanup countdown (story 1257-a30b) — Rust restart required
 
-- [ ] In an isolated `TUIC_APP_INSTANCE=<id>` after `make dev` restart, create a disposable detached linked worktree whose HEAD is on a branch and has no tracked or untracked changes. In Ask mode verify the dialog counts down from the configured number and removes it; repeat with Keep and Escape and verify it remains. Add an untracked file and verify the dialog names the reason and never counts down. While a clean dialog is open, answer `repo action=orphan_cleanup_answer path=<repo> decision=keep` through MCP and verify it closes without removal.
+- [ ] In an isolated `TUIC_APP_INSTANCE=<id>` after `make dev` restart, create a disposable detached linked worktree whose HEAD is on a branch and has no tracked or untracked changes. In Ask mode verify the dialog counts down from the configured number and removes it; repeat with Keep and Escape and verify it remains. Add an untracked file and verify the dialog names the reason and never counts down. While a clean dialog is open, answer `repo action=orphan_cleanup_answer path=<repo> decision=keep` through MCP and verify it closes without removal. _(NOT VERIFIED 2026-09-29: partial — Clean detached wt: dialog 'Remove (10)' counted 10..1 then removed (verified). Untracked file: dialog 'agbu4: untracked files', buttons Keep/Remove, no countdown after 15s; MCP orphan_cleanup_answer keep closed it, wt kept (verified). NOT confirmed: Keep click/Escape/MCP keep on a CLEAN dialog closed the browser dialog but the wt was still removed )_
 
 ## Queued Claude notice confirmation (story 1251-9ec8) — Rust restart required
 
@@ -104,7 +104,7 @@
 
 ## Concurrent config saves (story 900-43dd) — Rust restart required
 
-- [ ] After a manual `make dev` restart with an isolated `TUIC_APP_INSTANCE=<id>`, open two windows, change different agent and UI preferences from the same loaded state, and confirm both persist after reopening. The live Rust backend does not hot-reload; targeted Rust and frontend tests cover the merge and request shapes.
+- [ ] After a manual `make dev` restart with an isolated `TUIC_APP_INSTANCE=<id>`, open two windows, change different agent and UI preferences from the same loaded state, and confirm both persist after reopening. The live Rust backend does not hot-reload; targeted Rust and frontend tests cover the merge and request shapes. _(NOT VERIFIED 2026-09-29: blocked — Needs two browser windows on the instance; README limits to a single :9880 tab (6-connection limit). Not attempted; no evidence.)_
 
 ## Current MCP tool results (story 1190-75eb) — Rust restart required
 
@@ -339,11 +339,11 @@
 
 ## Plan picker (2026-09-26) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, open Plans and Stories in a repository with `plans/*.md`. Confirm the document choices are visible, the selected plan title matches its heading or front matter, and **Add from path or link** stays collapsed until opened. The running backend cannot serve `list_plan_sources` or `add_plan_source` until restart. Targeted Rust and Vitest tests cover discovery and dialog behavior; the visual layout needs the rebuilt app.
+- [x] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, open Plans and Stories in a repository with `plans/*.md`. Confirm the document choices are visible, the selected plan title matches its heading or front matter, and **Add from path or link** stays collapsed until opened. The running backend cannot serve `list_plan_sources` or `add_plan_source` until restart. Targeted Rust and Vitest tests cover discovery and dialog behavior; the visual layout needs the rebuilt app. _(verified 2026-09-29: fx/repo with two md plans (one with front matter title differing from its # heading): 'Plans and Stories' > New plan lists 'Front Matter Title' and 'Plain Heading Plan' with their paths; 'Add from path or link' details open=false. Layout judged from DOM text only, no screenshot.)_
 
 ## Remote repository browsing and terminal attach (stories 1025-8103, 1026-7633) — Rust restart and remote daemon update
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance and updating its test remote daemon, open the remote repository picker. Confirm it starts at the remote host's home directory, a denied directory shows a readable error while manual path entry and Up remain usable, and a terminal in a remote repository renders its prompt. Opening a terminal with a missing cwd must show a readable error instead of a blank pane; a failed grid stream must show an error toast. Use only disposable test connections and sessions; the live `make dev` backend cannot load the new home-directory route or cwd validation without a restart.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance and updating its test remote daemon, open the remote repository picker. Confirm it starts at the remote host's home directory, a denied directory shows a readable error while manual path entry and Up remain usable, and a terminal in a remote repository renders its prompt. Opening a terminal with a missing cwd must show a readable error instead of a blank pane; a failed grid stream must show an error toast. Use only disposable test connections and sessions; the live `make dev` backend cannot load the new home-directory route or cwd validation without a restart. _(NOT VERIFIED 2026-09-29: blocked — Needs adding a remote connection to a tuic-remote daemon through the picker UI and validating remote host home/denied cwd behaviour; not attempted within time-box (multi-step, daemon update requirement).)_
 
 ## Claude question state after wrapped suggestions (story 1023-dcc9) — Rust, needs `make dev` restart
 
@@ -400,11 +400,11 @@
 
 ## File browser default (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected.
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected. _(NOT VERIFIED 2026-09-29: partial — ui-prefs.json already had file_browser_view_mode (written by earlier runs), not a fresh config. File browser opens with Tree view active (viewModeBtnActive); switched to List view -> ui-prefs file_browser_view_mode 'flat'; page reload -> List still active. Restored Tree. No instance restart.)_
 
 ## Editor line wrapping (2026-09-25) — Vite hot reload
 
-- [ ] After Vite reloads the frontend, open a `.txt` file with a long line and confirm it wraps without horizontal scrolling; open a `.rs` file and confirm it does not. Toggle either with the header button or `Alt+Z`, then reopen the file and restart the app to confirm each file kind keeps its own setting. Check the active button style and that cursor, selection, search, git gutter, and inline blame still work while wrapped.
+- [ ] After Vite reloads the frontend, open a `.txt` file with a long line and confirm it wraps without horizontal scrolling; open a `.rs` file and confirm it does not. Toggle either with the header button or `Alt+Z`, then reopen the file and restart the app to confirm each file kind keeps its own setting. Check the active button style and that cursor, selection, search, git gutter, and inline blame still work while wrapped. _(NOT VERIFIED 2026-09-29: partial — Long-line agb_long.txt: .cm-lineWrapping, scrollWidth==clientWidth (822), Wrap button aria-pressed true + active class. agb_long.rs: no wrap, scrollWidth 16108>822. Header Wrap button toggled .rs to wrapped (sw==cw); localStorage tui-commander-editor-wrap {text,code} separate per kind, survives reload. Not checked: Alt+Z effect, cursor/selection/se)_
 
 ## Native WontFix dependency recovery (2026-09-25) — Rust, needs `make dev` restart
 
@@ -421,7 +421,7 @@
 - [x] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled. _(verified 2026-09-29: tuic-remote (own instance ag2a) with absolute TUIC_CAPTURE_DIR: POST /diagnostics/capture -> dir echoed, .tcap (114B) appeared there, GET reports dir+bytes. Relative 'relcap' -> {enabled:false,error:'TUIC_CAPTURE_DIR must be absolute'}, GET enabled:false, no dir created.)_
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
+- [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted. _(NOT VERIFIED 2026-09-29: blocked — WebView navigation guard is Tauri-only; browser mode has none; needs desktop window (maccontrol has no Screen Recording).)_
 - [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_ _(NOT VERIFIED 2026-09-29: needs a Windows or Linux host — not reproducible in the isolated headless/browser instance)_
 ## Streaming Progress intents (2026-09-25) — Rust, needs `make dev` restart
 
@@ -446,7 +446,7 @@
 
 - [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error. _(NOT VERIFIED 2026-09-29: partial — Server side only: MCP session status resolves unique name (ag2-uniq) and 8-char short id to the session; ambiguous name -> error 'Session reference 'ag2-dup' is ambiguous; matches <id1>, <id2>'; unknown -> 'not found'. NOT verified: 'tuic agent spawn' stderr notice / CLI behaviour (no rebuilt tuic-cli).)_
 - [x] Orchestrator inbox under load: while children finish, a parent that does not read its inbox retains the newest 100 messages in FIFO order. The 101st send succeeds and the next inbox read reports the unread eviction in `missed_count`. _(verified 2026-09-29: same instance: unread inbox kept newest 100 in FIFO order, 101st send succeeded, missed_count=1 (tested peer-to-peer, not with finishing children))_
-- [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
+- [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once. _(NOT VERIFIED 2026-09-29: blocked — Needs hand-editing dictation-config.json of the instance (forbidden by README). Not done. Voice tab renders in web UI; recovery toast code only checked by reading, not observed.)_
 
 ## Native story API (2026-09-24) — Rust, needs `make dev` restart
 
@@ -458,7 +458,7 @@
 
 ## Voice auto-send is on by default (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, with an instance whose `dictation-config.json` has no `auto_send` key (use `TUIC_APP_INSTANCE=<id>`, fresh config), Settings → Voice shows Auto-send on and a dictated phrase is sent with Enter. In basic mode the Auto-send row is hidden; switching it off makes it visible and the stored `false` survives an app restart.
+- [ ] After a `make dev` restart, with an instance whose `dictation-config.json` has no `auto_send` key (use `TUIC_APP_INSTANCE=<id>`, fresh config), Settings → Voice shows Auto-send on and a dictated phrase is sent with Enter. In basic mode the Auto-send row is hidden; switching it off makes it visible and the stored `false` survives an app restart. _(NOT VERIFIED 2026-09-29: partial — Web UI Settings>Voice: Auto-send checkbox checked (GET /dictation/config auto_send:true); hidden in basic mode (text absent), visible with Expert on; toggled off->config false, back on->true. Not fresh config (key already present), no restart, no dictated send (mic).)_
 
 ## "Add another GitHub account" is an expert entry point (2026-09-24) — Rust, needs `make dev` restart
 
@@ -466,7 +466,7 @@
 
 ## Agent hook toggles store the default as absent (2026-09-24) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, in Settings → Agents, turn Claude's "Native status signals" off and on again, and Gemini's "Install hooks globally" on and off again. `agents.json` then has no `native_status_signals` / `hook_instrumentation` key for them. After a Settings reopen in basic mode, both rows are hidden. Signals and hooks still behave as enabled/disabled respectively. (Existing `agents.json` files that already hold `true`/`false` keep them until the toggle is used again.)
+- [ ] After a `make dev` restart, in Settings → Agents, turn Claude's "Native status signals" off and on again, and Gemini's "Install hooks globally" on and off again. `agents.json` then has no `native_status_signals` / `hook_instrumentation` key for them. After a Settings reopen in basic mode, both rows are hidden. Signals and hooks still behave as enabled/disabled respectively. (Existing `agents.json` files that already hold `true`/`false` keep them until the toggle is used again.) _(NOT VERIFIED 2026-09-29: partial — Web UI Agents (Expert): Claude 'Native status signals' off -> agents.json has native_status_signals:false, on -> key removed; Gemini 'Install hooks globally' on -> hook_instrumentation:true, off -> key removed. Basic mode after reopen: both rows hidden. Not checked: signals/hooks runtime behaviour, pre-existing true/false keys. Note ~/.gemini/setti)_
 
 ## Old config.json keeps `config`/`debug` MCP tools disabled (2026-09-24) — Rust, needs `make dev` restart
 
@@ -477,7 +477,7 @@
 
 ## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
 
-- [ ] [VISUAL] Spawn a sub-agent from an agent tab. Its sidebar row shows a small monochrome agent icon, aligned with the row text, instead of "↳ Parent". Hovering the icon shows "Spawned by <parent>". Take a screenshot (MCP maccontrol has no Screen Recording permission on 2026-09-25).
+- [ ] [VISUAL] Spawn a sub-agent from an agent tab. Its sidebar row shows a small monochrome agent icon, aligned with the row text, instead of "↳ Parent". Hovering the icon shows "Spawned by <parent>". Take a screenshot (MCP maccontrol has no Screen Recording permission on 2026-09-25). _(NOT VERIFIED 2026-09-29: blocked — Needs agent action=spawn from an agent-typed tab (real agent CLI; all agents NOT FOUND; a fake binary is not detected as agent, arm test showed session not agent-typed).)_
 
 ## Mobile terminal prose reflow (2026-09-24) — frontend, refresh PWA
 
@@ -487,9 +487,9 @@
 
 Settings > Voice > Spoken replies, with the Italian bundle and the runtime downloaded:
 
-- [ ] [VISUAL] Downloadable starts collapsed as "DOWNLOADABLE (n)" with a disclosure marker; Tab focuses it, Enter or Space opens it, and the Voice volume and Levelling sliders are visible without scrolling past the catalogue.
-- [ ] [VISUAL] Take a screenshot of the Spoken replies section. The group titles (Installed, Downloadable, Yours), the voice rows, the Listen button beside the voice picker and the two slider labels follow `docs/frontend/STYLE_GUIDE.md`.
-- [ ] Download one catalogue voice from Downloadable. The progress bar moves; when it ends, the row moves to Installed and the voice appears in the voice picker.
+- [ ] [VISUAL] Downloadable starts collapsed as "DOWNLOADABLE (n)" with a disclosure marker; Tab focuses it, Enter or Space opens it, and the Voice volume and Levelling sliders are visible without scrolling past the catalogue. _(NOT VERIFIED 2026-09-29: partial — Settings>Voice (Expert) language=Italian: details[data-voice-group=downloadable] closed, summary 'DOWNLOADABLE (25)', disclosure-closed marker. summary.focus()+Enter/Space toggles open/closed (trusted keys). Volume slider ~158px under summary (collapsed). Screenshot timed out; Tab-order not walked.)_
+- [ ] [VISUAL] Take a screenshot of the Spoken replies section. The group titles (Installed, Downloadable, Yours), the voice rows, the Listen button beside the voice picker and the two slider labels follow `docs/frontend/STYLE_GUIDE.md`. _(NOT VERIFIED 2026-09-29: partial — Screenshot timed out (60s) on hidden tab; STYLE_GUIDE comparison not possible. Only measured: group titles 12px, summary cursor pointer; groups Downloadable/Yours present (Installed only when a voice is installed), Listen button + Voice volume/Levelling labels present in DOM.)_
+- [x] Download one catalogue voice from Downloadable. The progress bar moves; when it ends, the row moves to Installed and the voice appears in the voice picker. _(verified 2026-09-29: Italian, Downloadable>alba(6MB) Download: row showed progress bar 0%->12%.. then left Downloadable; Installed group 'alba Downloaded'; voice select options [Default,giovanni,alba]; assets voice-italian-alba ready. Then deleted it (absent) and restored language auto.)_
 - [ ] Click "Add voice file…" and choose a valid Italian `.safetensors` voice. It appears under Yours and in the picker, and it speaks when selected. Choose a 24-layer (French) voice or a file that is not a voice: the reason shows under the button and nothing is added. The × on a Yours row deletes the file. Add a file with the same name as a voice under Yours: it is refused with "You already have a voice called … delete it first or choose another name", and the stored voice still speaks as before. _(NOT VERIFIED 2026-09-29: Needs a valid Italian .safetensors voice and hearing that it speaks when selected; audio output judged by ear.)_
 - [ ] [HUMAN] With no hands-free conversation, click Listen and listen: the sample is audible, in the selected voice, at the Voice volume level, and the saved voice does not change. Start hands-free, let the agent speak a reply, and click Listen while it plays: the refusal shows inline. _(2026-09-24 isolated instance voice0924: `POST /dictation/speech/voices/preview` with hands-free not armed returned 200 for giovanni, alba and an imported voice, and the output device accepted the audio; UI Listen with alba showed no error. Nobody listened, so audibility is unverified.)_ _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
 - [ ] Move Voice volume and Levelling and release. The next reply is louder or quieter and more or less even, without a restart. At -12 dB with Strong there is no clipping. _(NOT VERIFIED 2026-09-29: Needs real audio playback and ears to judge loudness/clipping.)_
@@ -505,7 +505,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Side panels follow an agent click to another repo (2026-09-24) — frontend, HMR
 
-- [ ] Open the Notes, Git and Files panels on repo A. In the sidebar, click an agent row under repo B. All three panels now show repo B, as they do after a click on B's branch row.
+- [ ] Open the Notes, Git and Files panels on repo A. In the sidebar, click an agent row under repo B. All three panels now show repo B, as they do after a click on B's branch row. _(NOT VERIFIED 2026-09-29: blocked — Needs a second registered repo; web 'Add Repository' shows no path prompt here and MCP worktree_create does not register unregistered repos, so only fx/repo is registered.)_
 
 ## Spoken replies at one level (2026-09-24) — Rust, needs `make dev` restart
 
@@ -543,7 +543,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Readable Design Mode tab badge (2026-09-23) — frontend via HMR
 
-- [ ] [VISUAL] Arm Design Mode on an agent tab, then stop it. The boxed `D·` badge in the tab is readable on the dark tab bar: letter and border in `--fg-primary`, 11px text. The armed `D` stays green.
+- [ ] [VISUAL] Arm Design Mode on an agent tab, then stop it. The boxed `D·` badge in the tab is readable on the dark tab bar: letter and border in `--fg-primary`, 11px text. The armed `D` stays green. _(NOT VERIFIED 2026-09-29: blocked — Design Mode arm/stop needs an agent tab (D badge) and Chrome; only shell tabs exist (no agent CLI).)_
 
 ## Hands-free from the Command Palette (2026-09-23) — frontend only, Vite HMR
 
@@ -556,7 +556,7 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Custom hands-free start notice (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, in Settings → Dictation → Hands-free, type a two-line start notice and arm hands-free on an idle agent tab: the agent receives your text as one line, not the built-in notice. Press **Reset to default**, disarm and arm again: the built-in notice is sent. `GET http://localhost:9876/dictation/hands-free/default-notice` returns the built-in text.
+- [ ] After a `make dev` restart, in Settings → Dictation → Hands-free, type a two-line start notice and arm hands-free on an idle agent tab: the agent receives your text as one line, not the built-in notice. Press **Reset to default**, disarm and arm again: the built-in notice is sent. `GET http://localhost:9876/dictation/hands-free/default-notice` returns the built-in text. _(NOT VERIFIED 2026-09-29: partial — GET /dictation/hands-free/default-notice returns built-in text ('Hands-free voice is now on for this terminal...'); Settings>Voice (Expert) shows Start notice + 'Reset to default'. Arming refused: POST /dictation/hands-free/arm -> 'Session cannot accept hands-free input' (needs agent-typed session/real agent CLI); custom-notice delivery not verifie)_
 - [ ] After the same restart, the **Start notice** textarea in Settings → Dictation shows the built-in text in grey as its placeholder. Before the restart it is empty and the log reads `Failed to load the default hands-free start notice`, because the old backend has no such endpoint. _(NOT VERIFIED 2026-09-29: partial: GET /dictation/hands-free/default-notice returns the built-in text and the log has no 'Failed to load the default hands-free start notice'; the Start notice textarea was not found in Settings > Voice in basic mode (likely Expert-only), placeholder unchecked)_
 
 ## Activation phrase survives Whisper's spelling (2026-09-23) — Rust, needs `make dev` restart
@@ -591,14 +591,14 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Unmerged worktree removal (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After the restart, a clean worktree with commits not in the default branch shows `Unmerged` in the sidebar even with no diff or dirty badge. Choosing Delete Worktree while **Delete branch on remove** is on keeps the worktree and its terminals and explains that the branch has unmerged commits. With that setting off, removal keeps the local branch.
+- [ ] After the restart, a clean worktree with commits not in the default branch shows `Unmerged` in the sidebar even with no diff or dirty badge. Choosing Delete Worktree while **Delete branch on remove** is on keeps the worktree and its terminals and explains that the branch has unmerged commits. With that setting off, removal keeps the local branch. _(NOT VERIFIED 2026-09-29: partial — fx/repo worktree agbu with 1 extra commit, clean: sidebar row shows aria-label 'Unmerged commits' marker (arrow) with no dirty badge. With Delete-branch on (global default) clicking x: toast 'Cannot remove agbu: the branch has unmerged commits...', worktree dir kept. Toggled off: confirm says 'local branch will be kept', removed worktree, branch ag)_
 
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] [VISUAL] After the restart, the in-window Activity Dashboard stays close to the detached window's width; a long terminal name remains readable beside the robot marker and project badge, and a narrow main window has no horizontal overflow.
-- [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
-- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows.
-- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable.
+- [ ] [VISUAL] After the restart, the in-window Activity Dashboard stays close to the detached window's width; a long terminal name remains readable beside the robot marker and project badge, and a narrow main window has no horizontal overflow. _(NOT VERIFIED 2026-09-29: partial — Command palette > Activity dashboard opens in-window overlay: dashboard width 500px (max-width 1296px), scrollWidth==clientWidth at 1440px viewport, rows have no horizontal overflow, rows show shell name + repo badge. Not done: narrow-window resize, long terminal name, robot marker (no agents), detached-window width comparison, screenshot.)_
+- [x] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back. _(verified 2026-09-29: Nested Terminal Tabs enabled via Settings>Appearance. Branch icon toggle expanded: .branchAgentCount absent (null); after collapse count '11' shown (DOM). No screenshot (timeouts).)_
+- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows a robot-head icon with tooltip `Spawned by <parent tab name>`, and the parent row shows no icon. Rename the parent tab: the tooltip follows. _(NOT VERIFIED 2026-09-29: blocked — Same: agent spawn needs an agent-typed parent tab / real agent CLI; none available in instance.)_
+- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same robot-head icon; with a long parent name, the tab title stays readable. _(NOT VERIFIED 2026-09-29: blocked — Same: agent spawn needs a real agent CLI (all agents NOT FOUND).)_
 - [ ] Pop out the Activity Dashboard: the detached window shows the same icon and parent tooltip. _(NOT VERIFIED 2026-09-29: blocked — GUI + real agent tab needed (child row with spawn parent icon in Activity Dashboard, then pop-out); two identical 'tuicommander - TUICommander' windows exist and maccontrol cannot tell the validate instance window from Boss's live one, so not driven to avoid touching live TUIC.)_
 - [ ] After the restart, with a child marked as a subagent, run `curl -X POST http://localhost:9876/debug/reload_webview`: the icon and resolved parent name remain. Open a browser-mode agent tab with no spawn name, let Claude set its OSC title, reload: the tab keeps following later OSC titles. A named `agent action=spawn` tab still ignores Claude's OSC title after the reload. _(NOT VERIFIED 2026-09-29: Needs real Claude setting an OSC title in a browser-mode agent tab; subagent tag part alone is testable but item is combined.)_
 
@@ -612,17 +612,17 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After the restart, spawn an agent with `agent action=spawn`, then reload the WebView (`curl -X POST localhost:9876/debug/reload_webview`). The tab context menu still shows "Alias: …" and the tooltip shows the alias that `session list` returns for that session.
+- [ ] After the restart, spawn an agent with `agent action=spawn`, then reload the WebView (`curl -X POST localhost:9876/debug/reload_webview`). The tab context menu still shows "Alias: …" and the tooltip shows the alias that `session list` returns for that session. _(NOT VERIFIED 2026-09-29: blocked — Needs agent action=spawn (real agent CLI) before the reload; not available.)_
 - [x] Browser mode (`http://localhost:9876/`): with the page open, spawn an agent. Its new tab shows the alias without a page reload (`term-alias-assigned` now arrives over `/events`). _(verified 2026-09-23: live `/events` SSE on :9876 delivered `event: term-alias-assigned` `{"session_id":…,"alias":"tt-1"}` for a throwaway `POST /sessions`; listener in `useAppInit.ts:596`; tests `assign_term_alias_publishes_the_alias_on_the_event_bus` + `term_alias_assigned_has_matching_sse_name_and_payload` pass. Browser tab rendering itself not observed.)_
 - [ ] Spawn a Claude agent with `name=call-map`. When Claude prints its session title, the tab still reads `call-map` (an `intent:` title may still replace it, a manual rename too). Reload the WebView: the name is still protected from the OSC title. _(frontend half is live via HMR; the reload check needs the restart)_
 
 ## Compose panel pin (2026-09-23) — frontend, live via HMR
 
-- [ ] [VISUAL] `Cmd+I` in an agent tab: the panel is one row shorter than before. Click the pin: the terminal shrinks above the panel, the agent redraws at the new height, and no row hides behind the panel. Unpin: the panel overlays the terminal again and the terminal regains its full height.
-- [ ] Pinned: `Ctrl+Enter` sends, the editor empties and keeps the caret; the panel stays open. `Shift+Ctrl+Enter` does the same through the queue.
-- [ ] Pinned: click in the terminal and type — the caret stays in the terminal (not pulled back into the panel). `Cmd+I` and `Esc` move the caret between the panel and the terminal.
-- [ ] Pinned in one tab only: another tab's compose panel still closes after send.
-- [ ] The ✕ at the right of the status bar closes the panel, pinned or not; reopening with `Cmd+I` shows it unpinned.
+- [ ] [VISUAL] `Cmd+I` in an agent tab: the panel is one row shorter than before. Click the pin: the terminal shrinks above the panel, the agent redraws at the new height, and no row hides behind the panel. Unpin: the panel overlays the terminal again and the terminal regains its full height. _(NOT VERIFIED 2026-09-29: partial — Pin button toggles (title 'Pin to the terminal bottom' <-> 'Unpin from the terminal bottom', aria-pressed). Terminal geometry not measurable: canvas height stayed 150px pinned vs unpinned, PTY screen_lines unchanged (38/24/13/24); panel-one-row-shorter and redraw at new height unverified; no screenshot.)_
+- [ ] Pinned: `Ctrl+Enter` sends, the editor empties and keeps the caret; the panel stays open. `Shift+Ctrl+Enter` does the same through the queue. _(NOT VERIFIED 2026-09-29: partial — Pinned: typed text + Send button: session got text, editor emptied, panel stayed open (verified). Ctrl+Enter / Shift+Ctrl+Enter via agent-browser press never reached the page (document keydown listener saw 0 events), so key bindings and caret retention untested; shell tab not agent.)_
+- [ ] Pinned: click in the terminal and type — the caret stays in the terminal (not pulled back into the panel). `Cmd+I` and `Esc` move the caret between the panel and the terminal. _(NOT VERIFIED 2026-09-29: partial — Pinned compose panel open, trusted mouse click on terminal area: document.activeElement is the terminal's INPUT (not inside the panel), panel stays open (caret stays in terminal). Cmd+I/Esc caret moves and typed-in-terminal echo not testable: agent-browser key presses do not reach the page.)_
+- [ ] Pinned in one tab only: another tab's compose panel still closes after send. _(NOT VERIFIED 2026-09-29: blocked — Needs a second terminal tab active: trusted clicks on the 'Foo' tab and its sidebar row did not switch away from Terminal 4 in this web session, so cross-tab pinned/unpinned behaviour could not be compared.)_
+- [x] The ✕ at the right of the status bar closes the panel, pinned or not; reopening with `Cmd+I` shows it unpinned. _(verified 2026-09-29: Compose panel (opened via 'Compose' hint on Terminal 4 shell tab; browser Cmd+I not delivered): pinned (aria-pressed true) -> x 'Close compose panel' at status bar right (1107,839) closed it; reopened -> pin aria-pressed false. Unpinned x also closes.)_
 
 ## Hands-free earcons (2026-09-23) — **Rust, needs a `make dev` restart**
 
@@ -638,8 +638,8 @@ HTTP import and delete (use the test instance on `:9877`):
 
 ## New-tab long press and settings button spacing (2026-09-23) — frontend, live via HMR
 
-- [ ] Hold the `+` in the tab bar for half a second: a menu lists the enabled agents (a submenu per agent with 2+ run configs). Picking one opens a new tab in the active branch that starts the agent. Releasing does not also open a plain tab.
-- [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split.
+- [ ] Hold the `+` in the tab bar for half a second: a menu lists the enabled agents (a submenu per agent with 2+ run configs). Picking one opens a new tab in the active branch that starts the agent. Releasing does not also open a plain tab. _(NOT VERIFIED 2026-09-29: partial — Web UI: mouse down on tab-bar '+' held 0.8s (agent-browser mouse down/up): no menu appeared and a plain terminal opened (tabs 10->11). Instance lists all agents NOT FOUND, so getNewAgentMenuItems is empty; agent menu/submenu/new-agent-tab not verifiable.)_
+- [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split. _(NOT VERIFIED 2026-09-29: partial — Quick click on tab-bar '+' opened a plain terminal (close buttons 9->10). Trusted right-click (mouse down/up right at 1426,47) showed no menu at all; createAgentLaunchMenu default rightClick=true opens only the agent list (empty: all agents NOT FOUND) — no 'New Tab / Split' menu observed; claim unconfirmed.)_
 - [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer. _(NOT VERIFIED 2026-09-29: partial — capture_window blocked (no Screen Recording perm) so no screenshot. DOM geometry via invoke_js in validate instance: Start-test button bottom 1172 vs Level gate label top 1190 (18px gap); Import/Export buttons 8px apart, 8px below prev row; Notifications Reset Defaults footer 20px below prev block. Human eyeball still advised.)_
 
 ## Mobile Progress header (story 1214-2b95)
@@ -656,7 +656,7 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [ ] Spawn the child into a managed worktree (`repo action=worktree_create spawn_session`). Its `intent:` now appears on its column (it was dropped before). _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] In a Claude terminal, run 2 subagents (one nested). Each gets a column under its terminal with a tool count; the dashed arrow carries its task and, once done, a green arrow carries its report. Clicking a long label fetches the full text, with any token shown as `[REDACTED]`. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
-- [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns.
+- [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns. _(NOT VERIFIED 2026-09-29: partial — Progress dialog (bell > Open project journal > Flow): ProgressFlow header row position:sticky top:0, flow container overflow-x:auto. Only 1 participant column present (columns come from delegated/subagent/message events between terminals; 7 independent 'done' entries via progress tool from 7 PTY ids did not add columns), so 6+ columns, arrows on li)_
 - [x] **Store fix, needs another `make dev` restart:** after the restart, one `progress` call (or `POST /progress/list`) succeeds, and the live journal's schema (`SELECT sql FROM sqlite_master WHERE name='entries'` on `<config dir>/progress.sqlite3`) contains `'delegated'`. The legacy no-AUTOINCREMENT journal is migrated with every id kept. _(verified 2026-09-23 after restart: `progress` returned id 1617; schema now `INTEGER PRIMARY KEY AUTOINCREMENT` with `'delegated'` in the CHECK; `sqlite_sequence` = 1617 = MAX(id); `POST /progress/list` and `/progress/flow` answer 200, list ids 388–1618.)_
 - [ ] After the same restart: in a Claude session with 65+ subagents, the newest and every running one still get a Flow column; expand a Flow row, let a new entry arrive, and the same row stays expanded. _(NOT VERIFIED 2026-09-29: Needs a real Claude session with 65+ subagents)_
 - [x] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed. _(verified 2026-09-23: returned `404` on :9876.)_
@@ -668,8 +668,8 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [x] Clicking a later `:line` or `:line:col` terminal link for a file already open in the editor moves the cursor there and retains unsaved edits. _(verified: `editorOpenLinks.test.tsx` checks repeat navigation, oversized column clamping, and retained edits.)_
 
 - [ ] In a Markdown file with plain, task, and nested bullets, hover each bullet's gutter and save a comment. Confirm each highlight stays on its chosen bullet and the file contains an indented `tweak:item` marker directly below that bullet's own content. _(Automated: `MarkdownTab.test.tsx` writes the selected task marker; `ContentRenderer.test.tsx` checks nested source targets; `tweakComments.test.ts` checks nested anchors and list rendering.)_
-- [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block.
-- [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line.
+- [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block. _(NOT VERIFIED 2026-09-29: blocked — Markdown tab opened (agb.md) but rendered blocks carry no data-comment-source-start attributes and hovering the gutter (mouse move 340,241) produced no comment button/rule; feature not reachable in this web session; no visual check possible.)_
+- [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line. _(NOT VERIFIED 2026-09-29: blocked — Same as 671: no comment overlay hooks in DOM (data-comment-source-start count 0) for the file opened from the file browser; task checkbox cycle with comments not testable. Task checkboxes render (2 unchecked inputs).)_
 - [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition. _(NOT VERIFIED 2026-09-29: Needs a real agent tab in the same repository with idle/busy transitions to observe immediate delivery vs queued delivery.)_
 
 ## Design Mode (2026-09-23) — **Rust, needs a `make dev` restart**
@@ -684,7 +684,7 @@ An isolated `make dev` attempt on 2026-09-23 stopped before launch because
 port 1421 was already serving a different checkout's Vite server. Do not stop
 that checkout merely to run this check.
 
-- [ ] In the restarted instance, set a repository's **Dev Server URL** to a
+- [ ] In the restarted instance, set a repository's **Dev Server URL** to a _(NOT VERIFIED 2026-09-29: blocked — Design Mode opens a dedicated Chrome window from an agent tab; no agent tab/CLI and desktop-only path; not attempted.)_
       local page with a click handler. Start Design Mode from an agent tab: a
       dedicated Chrome window opens the configured URL, hovering highlights an
       element, and clicking selects it without firing the page handler.
@@ -693,11 +693,11 @@ that checkout merely to run this check.
       submitting. Check selector, path, style subset, rectangle, HTML snippet,
       nearby text, source location when the dev build supplies one, and a valid
       `[image: …]` PNG path.
-- [ ] On a page whose CSS uses custom properties (for example a Tailwind v4
+- [ ] On a page whose CSS uses custom properties (for example a Tailwind v4 _(NOT VERIFIED 2026-09-29: blocked — Design Mode grab in the desktop WebView + Chrome; not reachable from the web client.)_
       or shadcn app), select a themed button. The grab carries a `tokens:` line
       with only the `--…` variables that button's rules reference, resolved to
       their values, and not the whole theme.
-- [ ] On a page built from web components (open shadow roots with their own
+- [ ] On a page built from web components (open shadow roots with their own _(NOT VERIFIED 2026-09-29: blocked — Design Mode needs an agent tab bound terminal and a dedicated Chrome window; not available (no agent CLI).)_
       `<style>` or `adoptedStyleSheets`), select a button inside a component.
       The `tokens:` line lists the component's own `--…` variables. jsdom has no
       `ShadowRoot.styleSheets`, so no unit test covers this.
@@ -708,7 +708,7 @@ that checkout merely to run this check.
 - [ ] With a separate debug instance, check that quitting TUICommander closes _(NOT VERIFIED 2026-09-29: Needs real Chrome on the host, TUIC quitting and owned-window behaviour, plus a live agent session (desktop-only, multi-app).)_
       only the Chrome windows it owns. A browser/PWA start must explain that
       Chrome opens on the host machine.
-- [ ] Review fixes (2026-09-23): a page running `debugger;` keeps responding;
+- [ ] Review fixes (2026-09-23): a page running `debugger;` keeps responding; _(NOT VERIFIED 2026-09-29: blocked — Design Mode review fixes need Chrome window, agent tab and CDP on a debugger page; not available.)_
       a Vite/webpack dev page resolves `source:` for most components, not only
       the first four modules; closing the bound terminal turns the hover
       highlight off, and a later start delivers no click made in between;
@@ -723,16 +723,16 @@ that checkout merely to run this check.
 
 ## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
 
-- [ ] [VISUAL] A terminal with a very long scrollback (e.g. `seq 100000`): the thumb stays 48px tall and is easy to grab; dragging it scrolls the whole history, top to bottom.
-- [ ] [VISUAL] A short scrollback still gets a proportional (larger) thumb; a very short split pane never shows a thumb taller than its track.
+- [ ] [VISUAL] A terminal with a very long scrollback (e.g. `seq 100000`): the thumb stays 48px tall and is easy to grab; dragging it scrolls the whole history, top to bottom. _(NOT VERIFIED 2026-09-29: partial — seq 100000 in Terminal 4 session: scroll-info total_lines 10024, screen_lines 24 (long scrollback reached). Thumb is drawn on the canvas (no DOM element; canvas 300x150), screenshot times out, so 48px height/drag not measured. Code: scrollbarThumb.ts MIN_THUMB_PX=48, height=min(trackH,max(48,trackH*ratio)) (read only).)_
+- [ ] [VISUAL] A short scrollback still gets a proportional (larger) thumb; a very short split pane never shows a thumb taller than its track. _(NOT VERIFIED 2026-09-29: partial — Code read only: scrollbarThumb.ts:41 height=min(trackH,max(MIN_THUMB_PX,trackH*ratio)) caps thumb at track height; canvas-drawn thumb not measurable in this web session (no DOM, screenshot timeouts).)_
 
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
-- [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.
-- [ ] Click the icon: agents expand/collapse, the branch does NOT open. Click the row: the branch opens, agents do NOT expand/collapse.
-- [ ] Tab to the icon + Enter/Space toggles; focus ring shows the chevron.
-- [ ] Every branch with terminals starts expanded after the reload; a branch collapsed via its icon stays collapsed after a restart.
-- [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts.
+- [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift. _(NOT VERIFIED 2026-09-29: partial — Hover over branch icon (mouse move): chevron opacity 0->1, icon opacity 1->0, toggle box identical [17,68,14,12], row height 26 unchanged; chevron pointing-down not judged (transform none, no screenshot).)_
+- [x] Click the icon: agents expand/collapse, the branch does NOT open. Click the row: the branch opens, agents do NOT expand/collapse. _(verified 2026-09-29: With co1 active: clicking main's icon toggle flipped aria-expanded false->true and active stayed co1; clicking main row made main active and aria-expanded unchanged.)_
+- [x] Tab to the icon + Enter/Space toggles; focus ring shows the chevron. _(verified 2026-09-29: focus() on icon toggle (role=button tabIndex 0); trusted Enter toggled aria-expanded true->false, Space back to true; :focus-visible true with chevron opacity 1 and icon opacity 0.)_
+- [ ] Every branch with terminals starts expanded after the reload; a branch collapsed via its icon stays collapsed after a restart. _(NOT VERIFIED 2026-09-29: partial — Collapsed via icon, reloaded page: aria-expanded stayed false (count shown), so collapse persists across reload. Not done: 'starts expanded after reload' from a fresh state, and instance restart.)_
+- [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts. _(NOT VERIFIED 2026-09-29: partial — Repo header hover (mouse move): repoActions (⋯ and +) opacity 0->1, repoName x=10 and chevron x=277 unchanged (no shift). No GitHub badge in fx/repo (no GitHub remote) so badge placement not verifiable; no screenshot.)_
 
 ## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
 
@@ -756,7 +756,7 @@ new colors or names until the JSONs are copied into that folder.
       to commander` and `getAppTheme` falls back to `DEFAULT_THEME = "commander"`
       (`settings.ts:85`); `src/__tests__/themes.test.ts` "falls back to commander for
       unknown theme" and "warns when applying unknown theme" pass, 24/24.)_
-- [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark
+- [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark _(NOT VERIFIED 2026-09-29: blocked — No theme picker rendered in web Settings (General/Appearance, basic and Expert have no 'Paper'/'Themes'); changing theme would need editing config via API/hand; screenshots time out.)_
       smear, a colored repo name is readable, and the active tab row in the
       sidebar is visible.
 
@@ -804,7 +804,7 @@ a user relies on scrolled away with it.
       _(verified 2026-09-23, synthetic: scrolled 50 lines back, sent 20× `CSI 10 M` at
       the top row; `row-text?row=0` read `228` before and after, `display_offset`
       moved 50→51 only for the one real linefeed of the command echo.)_
-- [ ] Select text in the scrollback, let the agent repaint, then copy. The
+- [ ] Select text in the scrollback, let the agent repaint, then copy. The _(NOT VERIFIED 2026-09-29: blocked — Canvas terminal selection/copy/cursor is not observable via DOM here (canvas 300x150, no selection DOM), agent-browser screenshots time out on this tab, and the README/item forbid real selection+copy against the shared clipboard without a verified interception guard.)_
       selection must still yield the text it covered.
 - [x] Run `less` or `man` on a long file and quit. Everything printed before it
       must still be in the scrollback — this is the linefeed path, which must be
@@ -841,7 +841,7 @@ tab being closed.
       queued, and nothing may be left speaking.
 - [ ] Arm from the desktop app while a browser tab holds an audio socket. The _(NOT VERIFIED 2026-09-29: Needs real microphone on desktop and a browser tab audio socket.)_
       desktop must use its own microphone and ignore the browser entirely.
-- [ ] Reload the browser tab while armed. The old conversation must disarm
+- [ ] Reload the browser tab while armed. The old conversation must disarm _(NOT VERIFIED 2026-09-29: blocked — arm over HTTP needs an agent-typed PTY (arm -> 'Session cannot accept hands-free input' on shell session; fake 'claude' binary not detected as agent). Reload-disarm not testable without a real agent CLI.)_
       rather than follow the new socket.
 
 ## ANSI edit-operation contract (2026-09-22) — **Rust, needs a `make dev` restart**
@@ -863,7 +863,7 @@ the parser; these items are the part a live terminal shows.
       Scrollback must not gain rows the agent did not print.
       _(verified 2026-09-23, synthetic, same probe as the DL/SU section: 80 DL/SU
       repaints added no history rows. Not observed with a real agent.)_
-- [ ] **[VISUAL]** Select and copy text ending at the right margin after such a
+- [ ] **[VISUAL]** Select and copy text ending at the right margin after such a _(NOT VERIFIED 2026-09-29: blocked — Canvas terminal selection/copy/cursor is not observable via DOM here (canvas 300x150, no selection DOM), agent-browser screenshots time out on this tab, and the README/item forbid real selection+copy against the shared clipboard without a verified interception guard.)_
       redraw. The copied text must keep its last character.
 
 ## Recover captured terminal context (2026-09-22) — frontend
@@ -881,10 +881,10 @@ the parser; these items are the part a live terminal shows.
       canvas hashes. Snapshot copy returns the original line; expired endpoints
       return HTTP 409. Clipboard writes were intercepted before app load.
       Evidence: `tests/terminal-stress/SELECTION_FINDINGS.md`.
-- [ ] After loading the updated frontend, copy one block, then select a different
+- [ ] After loading the updated frontend, copy one block, then select a different _(NOT VERIFIED 2026-09-29: blocked — Canvas terminal selection/copy/cursor is not observable via DOM here (canvas 300x150, no selection DOM), agent-browser screenshots time out on this tab, and the README/item forbid real selection+copy against the shared clipboard without a verified interception guard.)_
       multi-row block while output continues and keep the mouse held. The new
       selection must not disappear when another full frame arrives.
-- [ ] After loading the rebuilt backend and frontend, park a terminal in history
+- [ ] After loading the rebuilt backend and frontend, park a terminal in history _(NOT VERIFIED 2026-09-29: blocked — Canvas terminal selection/copy/cursor is not observable via DOM here (canvas 300x150, no selection DOM), agent-browser screenshots time out on this tab, and the README/item forbid real selection+copy against the shared clipboard without a verified interception guard.)_
       while output continues beyond the scrollback cap. Selection must stay on
       the same retained text, both during dragging and after release; copying
       must not substitute the next row when history advances. Automated browser
@@ -897,11 +897,11 @@ the parser; these items are the part a live terminal shows.
       2026-09-21: 1200×1223 → 1000×700 → scroll-to-top stayed painted, with
       scrollbar movement and valid frames, without forced hide/show. Evidence:
       `.tmp/terminal-integrity/post-fix-20260921-1819-frontend/`.
-- [ ] Finish the block-cursor-on-decomposed-glyph visual check using a browser
+- [ ] Finish the block-cursor-on-decomposed-glyph visual check using a browser _(NOT VERIFIED 2026-09-29: blocked — Canvas terminal selection/copy/cursor is not observable via DOM here (canvas 300x150, no selection DOM), agent-browser screenshots time out on this tab, and the README/item forbid real selection+copy against the shared clipboard without a verified interception guard.)_
       with verified clipboard interception. The prior run was interrupted after
       terminal auto-copy overwrote the host clipboard; do not repeat real
       selection/copy/paste against the shared clipboard.
-- [ ] After loading the rebuilt backend, print precomposed and decomposed accents,
+- [ ] After loading the rebuilt backend, print precomposed and decomposed accents, _(NOT VERIFIED 2026-09-29: partial — Session 61a38148 (shell): printf precomposed U+00E9, e+U+0301, a+U+0300: GET terminal/lines keeps code points intact (0xe9 ... 0x65 0x301 ... 0x61 0x300). search-buffer is code-point exact: precomposed query matches only the precomposed text (0-5), decomposed query only the decomposed (6-12); no canonical equivalence. Not checked: rendering, block )_
       including an accent written after its base letter. Verify rendering, block
       cursor, selection/copy, search and a link following accented text; scroll
       during output and resize. The installed instance still needs a restart
@@ -1022,7 +1022,7 @@ tested; what no test reaches is a real ego process answering a real diff.
 
 - [ ] Open a PR's detail popover and click **Run** under AI Review. It must produce findings (or "No findings" with a reviewed-file count and "by ego"), never a blank panel. Tick a finding with a line number and click **Post review**; the comment must appear on the PR in GitHub. _(NOT VERIFIED 2026-09-29: Needs ego to run the review plus a real GitHub PR and posting a review comment to GitHub.)_
 - [ ] A finding with **no** line number must be listed but its checkbox disabled — GitHub refuses an inline comment without a line. _(NOT VERIFIED 2026-09-29: PR review on ego needs ego binary and a real GitHub PR.)_
-- [ ] Rename `ego_executable` in Settings → General to something that does not exist and run the review again. The popover must show ego's own sentence, not an empty finding list. Put the real path back.
+- [ ] Rename `ego_executable` in Settings → General to something that does not exist and run the review again. The popover must show ego's own sentence, not an empty finding list. Put the real path back. _(NOT VERIFIED 2026-09-29: blocked — PR review popover needs a real GitHub PR (and ego run); to-test note already says needs ego + GitHub PR. Not attempted.)_
 - [ ] GitHub panel header → the document icon opens the Changelog modal. It must produce markdown for the merged PRs since the last tag, and **Copy** and **Save** must both work on the result. _(NOT VERIFIED 2026-09-29: Changelog/scan/review run on ego (real agent) plus real GitHub PRs/issues (external account))_
 - [ ] Open the **Ops Dashboard** (the chart icon in the same header). Click each of `refactor`, `testing` and `perf`. Each scan must fill the Proposals column with at most five cards, and **Create issue** on one of them must file a real GitHub issue. _(NOT VERIFIED 2026-09-29: Needs ego scans and creating a real GitHub issue (account/paid).)_
 - [ ] While a review is running, the dashboard's Review findings column must show the PR as Working and then Done with a count — that is the `review-progress` event arriving over the bus. _(NOT VERIFIED 2026-09-29: PR review runs on ego with real GitHub PR; needs ego and account)_
@@ -1045,7 +1045,7 @@ a real ssh process.
       content, so the saving is 62% and the untagged path is untouched. **Still
       uncovered: a real browser running the app's own decoder** — this proves the
       server's framing, not the frontend's inflate.)_
-- [ ] Same devtools panel, from a browser on **this** machine at `localhost:9876`: the URL must have **no** `compress=` at all and the messages must still be a mix of Binary and Text. This is the local path, and it must be untouched.
+- [ ] Same devtools panel, from a browser on **this** machine at `localhost:9876`: the URL must have **no** `compress=` at all and the messages must still be a mix of Binary and Text. This is the local path, and it must be untouched. _(NOT VERIFIED 2026-09-29: partial — Code: canvasTerminalTransport.ts:221 sends compress=deflate only when connectionId (remote) set; local -> 'format=grid'. Runtime WS URL not observed: WebSocket monkeypatch on :9880 tab saw no new WS after opening a new tab, resource entries have no ws. (Also at :9880 not :9876, Boss live untouched.))_
       _(NOTE 2026-09-20: the server half is proven — a socket that sends no `compress=`
       gets genuine untagged Text frames, byte for byte the old framing. What is still
       open here is the **frontend's** choice not to ask on a local connection, which no
