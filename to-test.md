@@ -180,19 +180,21 @@ uninstall + reinstall via the app's Settings UI (or `make dev` + a fresh
 in Finder and pick "New TUICommander Tab Here."
 
 **Separately, `tuic open-here`/any `tuic://` deep link fired while the app is
-already running currently does nothing visible** — confirmed unrelated to
-this fix and unrelated to frontend/Rust deep-link code (`open -a <exact
-running app bundle path> 'tuic://...'` delivers and logs correctly instantly;
-bare `open 'tuic://...'` — what `tuic open-here` actually calls — never
-reaches the app at all). Root cause: **two copies of TUICommander.app are
-registered under the same bundle id `com.tuic.commander`** on this machine —
-`/Applications/TUICommander.app` (v1.7.4-nightly, Aug 13) and the running dev
-build under `src-tauri/target/release/bundle/macos/` (v1.7.6-nightly) — so
-macOS Launch Services' `tuic://` scheme resolution is ambiguous/stale. This
-is an install-hygiene issue on Boss's machine, not a code bug — needs the
-stale `/Applications` copy removed or replaced and Launch Services refreshed
-before `tuic open-here` will work again. Not fixed as part of this session
-(touching `/Applications` needs Boss's own OK).
+already running currently does nothing visible.** **Re-checked 2026-09-30: the
+original two-`/Applications`-copies cause is stale — `/Applications/TUICommander.app`
+no longer exists on this machine — but the bug itself is still live.** Empirical
+re-test: `tuic open-here /tmp/<scratch-dir>` printed "Opening 1 terminal(s)" (no
+client-side error) but `session action=list` before/after showed the exact same 5
+sessions — no new tab materialized in the running orchestrator. New suspected root
+cause: `lsregister -dump | grep -i tuicommander.app` shows **dozens** of stale
+`/Volumes/dmg.<random>/TUICommander.app` Launch Services registrations for the same
+bundle id `com.tuic.commander` — leftover from previously-mounted, now-unmounted DMG
+installers — which could easily make `open 'tuic://...'`'s bundle-id resolution land
+on a nonexistent volume path instead of the real running app. Likely fix is
+`lsregister -kill` (forces a full Launch Services database rebuild) — **not run
+this session**: it's a system-wide operation affecting every app's registered
+file-type/URL-scheme associations on this machine, not scoped to TUICommander, so it
+needs Boss's own OK the same way the original `/Applications` cleanup did.
 ## Markdown Kanban plugin (`md-kanban`, 2026-09-14, **new plugin — not auto-loaded, install first**)
 
 Kanban board over checkbox tasks in a plain markdown file, plus two new
