@@ -4514,6 +4514,45 @@ mod tests {
     }
 
     #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-nometa.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        // No sibling agent-nometa.meta.json written at all.
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_file_is_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-badmeta.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        std::fs::write(
+            transcript.with_extension("meta.json"),
+            "{ not valid json at all",
+        )
+        .unwrap();
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_is_valid_json_but_not_an_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-arraymeta.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        // Valid JSON, but not the expected shape — `.get("name")` etc. on a
+        // non-object Value must fail closed to the same defaults, not panic.
+        std::fs::write(transcript.with_extension("meta.json"), "[1, 2, 3]").unwrap();
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
     fn main_session_steps_get_title_or_literal_main_as_display_name() {
         let (_dir, repo) = fixture_repo();
         let abs = repo.join("a.txt").to_string_lossy().to_string();
