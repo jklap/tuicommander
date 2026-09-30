@@ -81,6 +81,10 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	 *  again mid-fade restarts its own timer instead of the two colliding. */
 	const [flashKeys, setFlashKeys] = createSignal<Set<string>>(new Set());
 	const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	onCleanup(() => {
+		for (const t of flashTimers.values()) clearTimeout(t);
+		flashTimers.clear();
+	});
 	/** File mode: a live update touched a file that's currently off-screen —
 	 *  held back rather than applied, so `review()` doesn't silently mutate
 	 *  content the reviewer isn't looking at. `latestFetchedReview` is the
