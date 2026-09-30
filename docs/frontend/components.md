@@ -29,17 +29,33 @@ App.tsx (central orchestrator)
 │   │   ├── CommitGraph       # Visual commit graph with lane assignments
 │   │   └── SyncRow           # Push/pull/fetch action bar
 │   ├── DiffTab/              # Individual file diff tab (with Cmd+F search)
-│   │   ├── BranchDiffScrollView  # All-files scroll view (scroll mode)
+│   │   ├── BranchDiffScrollView  # The dedicated "Diff Scroll" tab's all-files view — identified
+│   │   │                        # structurally by that tab's filePath === "", not a shared global
+│   │   │                        # view mode (DiffViewMode is split|unified only); live-refreshes
+│   │   │                        # via the same revision-bump path as a per-file DiffTab, with an
+│   │   │                        # in-place flash for a visible changed file and a "Refresh (N)"
+│   │   │                        # pill for one that's off-screen
 │   │   ├── sendDiffComment.ts    # Shared comment-on-selected-lines formatter/sender
 │   │   ├── useLineSelection.ts   # Shared drag-to-select-lines-in-a-diff primitive
 │   │   └── CommentBox            # Shared comment textarea UI
 │   ├── SessionDiffTab/       # Step-by-step review of a Claude Code session's edits
-│   │   ├── SessionDiffTab        # Orchestrator: session picker, view-mode toolbar, revert/copy/search
-│   │   ├── SessionDiffList       # Virtualized list serving grouped-by-file + chronological views
-│   │   ├── SessionFileHeader     # Per-file row (chevron, path, stats, revert/copy actions)
+│   │   ├── SessionDiffTab        # Orchestrator: session picker, view-mode toolbar, revert/copy/
+│   │   │                        # search, live-watcher subscription, Follow checkbox + unseen-
+│   │   │                        # change pills, agent-name jump-to-tab
+│   │   ├── SessionDiffList       # Virtualized list serving grouped-by-file + chronological views;
+│   │   │                        # each row is read through a reactive accessor and remounted only
+│   │   │                        # on a real key change, so a live update or collapse toggle updates
+│   │   │                        # in place instead of leaving stale content on screen
+│   │   ├── SessionFileHeader     # Per-file row (whole row clickable, not just the chevron; path,
+│   │   │                        # stats, revert/copy actions)
 │   │   ├── SessionPicker         # Header dropdown over recent Claude Code sessions
-│   │   ├── StepCard              # One edit step's diff (reuses DiffTab's line-selection/comment box)
-│   │   └── buildRows.ts          # Pure row-model builder for both view modes
+│   │   ├── StepCard              # One edit step's diff (reuses DiffTab's line-selection/comment
+│   │   │                        # box); whole header clickable to collapse; `^`/`v` buttons jump to
+│   │   │                        # the previous/next step touching the same file (chronological mode)
+│   │   ├── TurnPicker            # Chronological-mode toolbar dropdown: one entry per turn (one user
+│   │   │                        # prompt), showing time/size/files, jumps to that turn's first step
+│   │   └── buildRows.ts          # Pure row-model builder for both view modes; also the same-file
+│   │                             # prev/next step lookup StepCard's jump buttons use
 │   ├── PrDiffTab/            # PR diff viewer tab
 │   ├── CodeEditorPanel/      # CodeMirror 6 code editor tab
 │   ├── MarkdownPanel/        # Markdown file browser
@@ -598,7 +614,7 @@ system and never turns an absent provider value into zero.
 |-----------|-------------|
 | `AgentIcon` | Agent type icon with consistent sizing and coloring |
 | `CiRing` | SVG circular CI status indicator with proportional segments |
-| `DiffViewer` | Syntax-highlighted unified diff renderer |
+| `DiffViewer` | Syntax-highlighted unified diff renderer. `wrap` (soft-wrap) and `maxLines` (truncate above N lines behind a "Show all" button, via `utils/truncatePatch.ts`) are optional props each consumer wires to its own settings |
 | `Dropdown` | Reusable dropdown select component |
 | `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), with escaped preformatted text on parser failure, interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
@@ -616,6 +632,8 @@ system and never turns an absent provider value into zero.
 | `KeyComboCapture` | Keyboard shortcut capture input (for keybinding editor) |
 | `SearchBar` | Reusable search bar with regex/case-sensitive toggles |
 | `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor and `TunnelEditorModal` |
+| `DiffFileList` | Virtualized per-file list shared by `PrDiffTab` and `BranchDiffScrollView`. Collapse state is hoisted (keyed by row, not list slot) via optional `collapsedKeys`/`onToggleCollapsed` props, falling back to an internal signal when a parent doesn't own it; `collapsedByDefault` starts chosen files collapsed. Exposes a nav handle (`scrollToIndex`/`currentIndex`/`rowCount`/`visibleIndices`, `components/shared/diffListNav.ts`) via `ref` for file-to-file `<`/`>` navigation |
+| `DiffOptionsMenu` | Toolbar popover for the 4 whitespace/case diff-comparison settings plus soft-wrap — reads/writes `settingsStore`/`uiStore` directly, no local state. Mounted in `SessionDiffTab`'s and `DiffTab`'s toolbars (the latter covers `BranchDiffScrollView` too, since it shares that toolbar) |
 
 ## Panel Toggle States
 

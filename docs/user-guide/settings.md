@@ -71,7 +71,7 @@ never all expert: in basic mode it would show an empty page.
 
 | Page | Expert settings |
 |------|-----------------|
-| General | Auto-Standby Timeout, Content Indexing, Update Channel |
+| General | Auto-Standby Timeout, Content Indexing, Ignore leading whitespace, Ignore trailing whitespace, Ignore whitespace amount, Ignore case, Auto-open Session Diff Review, Truncate long changes, Update Channel |
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Allow terminal focus/attention requests, Block folding, Show block marks, Show prompt marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Warm ignored build directories, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
@@ -94,6 +94,13 @@ never all expert: in basic mode it would show an empty page.
 | **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
 | **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
 | **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
+| **Ignore leading whitespace** | (**Diffs** section — applies to Session Diff Review, Branch Diff Scroll and the per-file diff view; the toolbar's diff-options popover sets the same values.) A line that only differs in leading whitespace isn't shown as changed. `git diff` has no native equivalent for this — TUIC computes it with its own diff engine when any of these four options is on. |
+| **Ignore trailing whitespace** | Same, for trailing whitespace. |
+| **Ignore whitespace amount** | Runs of whitespace compare equal regardless of how many characters they contain — catches reindentation/retabbing with no other content change. |
+| **Ignore case** | Case-insensitive line comparison. |
+| **Soft-wrap long lines** | Wrap long diff lines instead of scrolling horizontally. |
+| **Auto-open Session Diff Review** | When TUIC detects a Claude Code session editing files in a repo: **Off** (never open it automatically), **Ask** (a notice in the notification bell with an "Open Session Diff" action), or **Auto** (open the tab in the background, without switching to it). Skipped if a tab for that session is already open. |
+| **Truncate long changes** | Collapse a single change's diff above this many lines behind a "Show all N more lines" button. 0 = never truncate. |
 | **Automatically check for updates** | Check for new versions on startup |
 | **Update Channel** | Choose which release channel to receive updates from |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
@@ -122,7 +129,8 @@ never all expert: in basic mode it would show an empty page.
 The terminal and app color theme is on the [Terminal](#terminal) page. The mobile PWA offers a separate Dark/Light choice in its Settings screen, saved on the server for connected mobile clients; the screen also shows app and server versions.
 
 At the bottom of the tab, the **UI Legend** documents every color/icon/animation the app uses
-(terminal status dots, tab types, sidebar symbols, branch markers, PR markers, git repo status,
+(terminal status dots, tab types, tab activity dots — the unseen-content dot on an inactive
+Session Diff Review tab — sidebar symbols, branch markers, PR markers, git repo status,
 toolbar counts, diff stats) — the sidebar rows are drawn with the real sidebar components — and
 doubles as the editor for them. A PR state's override recolors that state's marker on every
 branch row as well as its badge in the GitHub panel. Clicking a row's own preview (the real

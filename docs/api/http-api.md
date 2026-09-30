@@ -996,6 +996,9 @@ the server is back to the filter the connection was opened with.
 | `pty-capture-changed` | `{enabled, session_filter}` — `session_filter` omitted (not `null`) when absent | The raw PTY diagnostics-capture tap started/stopped or its filter changed, via `POST /diagnostics/capture`, the `set_pty_capture` Tauri command, or a raw curl POST from outside the app. Global, not per-session — `session_filter: null`/omitted means every session is being recorded, so a client evaluates "is this session captured" itself from `enabled` + `session_filter` |
 | `themes-changed` | `{}` | The themes directory changed on disk (hot-reload); clients should re-fetch `GET /config/themes` |
 | `pty-clipboard-store` | `{session_id, text}` | OSC 52 clipboard-store sequence seen in the PTY stream. Never relayed off the host (see `relay_client.rs`'s `is_relayable` exclusion) |
+| `session-review-changed` | `{repo_path, session_id}` | A watched Claude Code session's transcript (or one of its subagent transcripts) changed on disk — see `POST /repo/session-review/watch` above. Receiver should invalidate any cached `SessionReview` for `session_id` and re-fetch if it's currently displayed |
+| `review-sessions-changed` | `{repo_path}` | A new Claude Code session `.jsonl` appeared in `repo_path`'s project directory while its session list was being watched — receiver should re-list sessions for this repo |
+| `agent-edit-observed` | `{tuic_session_id, claude_session_id, repo_path}` — `tuic_session_id` is `null` on SSE (omitted on the desktop window event) when no TUIC session is known | The live watcher observed the first change to a Claude Code session's transcript since it started being watched. Fires once per session — a "this session made an edit" signal for an auto-open/notification feature (see the `session_diff_auto_open` setting) |
 
 ### MCP Streamable HTTP
 
@@ -1040,10 +1043,17 @@ Returns `RepoInfo` (name, branch, status, initials).
 ### Git Diff
 
 ```
-GET /repo/diff?path=/path/to/repo
+GET /repo/diff?path=/path/to/repo&scope=staged&ignoreLeadingWs=false&ignoreTrailingWs=false&ignoreWsAmount=false&ignoreCase=false
 ```
 
-Returns unified diff string.
+Returns unified diff string. `scope` (`"staged"` or absent for unstaged/working-tree) is forwarded
+to the underlying diff — previously ignored by this route, which meant a browser/remote client's
+staged-diff request silently returned the unstaged diff instead (every file appeared twice). The
+four `ignore*` booleans, all default `false`, are the same whitespace/case options as Branch Diff
+Scroll and Session Diff Review's toolbar — with all four off this is byte-identical to plain
+`git diff`; with any on it re-diffs each changed file's content through the shared engine (see
+[`docs/backend/git.md`](../backend/git.md)), falling back to plain `git diff` above 500 changed
+files.
 
 ### Diff Stats
 
@@ -1064,10 +1074,11 @@ Returns array of `ChangedFile` (path, status, additions, deletions).
 ### Single File Diff
 
 ```
-GET /repo/file-diff?path=/path/to/repo&file=src/main.rs
+GET /repo/file-diff?path=/path/to/repo&file=src/main.rs&scope=staged&untracked=false&ignoreLeadingWs=false&ignoreTrailingWs=false&ignoreWsAmount=false&ignoreCase=false
 ```
 
-Returns diff for a single file.
+Returns diff for a single file. The four `ignore*` options are the same as `/repo/diff` above —
+they have no effect on an untracked/new file, whose old side is always empty.
 
 ### Session Diff Review
 
@@ -1080,10 +1091,10 @@ GET /repo/session-review/sessions?path=/path/to/repo&limit=20&include_counts=tru
 Recent Claude Code sessions for the repo, newest first. `limit` (default 20, capped 50) and `include_counts` (default false — scans each transcript's edit/file counts) are optional.
 
 ```
-GET /repo/session-review?path=/path/to/repo&session_id=<uuid>&include_subagents=false
+GET /repo/session-review?path=/path/to/repo&session_id=<uuid>&include_subagents=false&ignoreLeadingWs=false&ignoreTrailingWs=false&ignoreWsAmount=false&ignoreCase=false
 ```
 
-Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts.
+Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts. The four `ignore*` whitespace/case options are the same `DiffOptions` used by `/repo/diff` — included in the server's review cache key, so two option sets for the same session never collide. `SessionSummary.tuic_session_id`/`SessionReview.tuic_session_id` are populated from the server's Claude-session↔TUIC-session map (built from the SessionStart hook's `ccsession` metadata) — `null` when there's no live PTY session for that Claude session.
 
 ```
 POST /repo/session-review/revert-step
@@ -1098,6 +1109,26 @@ POST /repo/session-review/revert-file
 ```
 
 Restore a file to its content at session start (or delete it if the session created it). Refuses when the file has drifted since unless `force: true`.
+
+```
+POST /repo/session-review/watch
+{ "path": "/path/to/repo", "session_id": "<uuid>" }
+```
+
+Start (or add a subscriber to) a live watcher on this session's transcript, its `subagents/`
+subfolder, and its project directory (for new sessions appearing) — ref-counted per
+`(project_dir, session_id)`. On a debounced (~400ms) change it invalidates the server's cached
+review and pushes `session-review-changed` / `review-sessions-changed` / `agent-edit-observed`
+over the `/events` SSE stream (see [`docs/backend/session-review.md`](../backend/session-review.md#live-watcher)
+and the Events section below). Known gap: a `subagents/` subfolder that doesn't exist yet when
+this is called isn't picked up if it's created later — call `watch` again to pick it up.
+
+```
+POST /repo/session-review/unwatch
+{ "path": "/path/to/repo", "session_id": "<uuid>" }
+```
+
+Release one subscriber's ref on the watcher above; torn down when the count reaches zero.
 
 ### Read File
 
