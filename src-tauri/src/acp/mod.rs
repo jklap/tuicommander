@@ -1220,7 +1220,7 @@ impl AcpCapabilitySnapshot {
             AcpOperation::McpStdio => included(self.mcp_stdio),
             AcpOperation::McpHttp => advertised(self.mcp_http),
             AcpOperation::McpSse => advertised(self.mcp_sse),
-            AcpOperation::McpAcp => included(self.mcp_acp),
+            AcpOperation::McpAcp => advertised(self.mcp_acp),
             AcpOperation::ClientFormElicitation => included(self.client_form_elicitation),
             AcpOperation::ClientBooleanConfig => included(self.client_boolean_config),
             AcpOperation::Pause | AcpOperation::ResumeTurn => {
@@ -1266,14 +1266,14 @@ pub fn capability_snapshot(
         prompt_image: prompt.image,
         prompt_audio: prompt.audio,
         prompt_embedded_context: prompt.embedded_context,
-        // Neither is read from the agent. They say what *this client* carries:
-        // one server, `tuicommander`, on the ACP transport — the stdio bridge
-        // it used to carry is gone (Boss, 2026-09-28). ego advertises
-        // `mcpCapabilities.acp`, and a build that did not would refuse the
-        // session loudly rather than run without the server; both ends are
-        // ours, so there is no older agent to fall back for.
+        // Stdio is a fact about this client: the bridge it used to carry is
+        // gone (Boss, 2026-09-28), so it is excluded by contract. The ACP
+        // transport is the agent's to advertise: an ego that predates
+        // `mcpCapabilities.acp` still answers `session/new` with a session id
+        // and silently drops the server, which would open a chat with no
+        // tuicommander tools and no error (#1270-6d4c).
         mcp_stdio: false,
-        mcp_acp: true,
+        mcp_acp: mcp.acp,
         mcp_http: mcp.http,
         mcp_sse: mcp.sse,
         // What this client can do, not what the agent said. It is here rather
