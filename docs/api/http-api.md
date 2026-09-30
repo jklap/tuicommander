@@ -1122,6 +1122,8 @@ review and pushes `session-review-changed` / `review-sessions-changed` / `agent-
 over the `/events` SSE stream (see [`docs/backend/session-review.md`](../backend/session-review.md#live-watcher)
 and the Events section below). Known gap: a `subagents/` subfolder that doesn't exist yet when
 this is called isn't picked up if it's created later — call `watch` again to pick it up.
+Refused (error, no ref taken — do not `unwatch` for it) past 64 distinct watched sessions or 32
+subscribers on one session's watcher.
 
 ```
 POST /repo/session-review/unwatch

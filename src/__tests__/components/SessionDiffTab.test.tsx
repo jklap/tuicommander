@@ -123,7 +123,7 @@ const h = vi.hoisted(() => ({
 	getSessionReview: vi.fn(),
 	revertSessionStep: vi.fn(),
 	revertFileToSessionStart: vi.fn(),
-	watchSessionReview: vi.fn().mockResolvedValue(undefined),
+	watchSessionReview: vi.fn().mockResolvedValue(true),
 	unwatchSessionReview: vi.fn().mockResolvedValue(undefined),
 	navScrollToIndex: vi.fn(),
 	navCurrentIndex: 0,
@@ -707,7 +707,21 @@ describe("SessionDiffTab", () => {
 			expect(h.watchSessionReview).toHaveBeenCalledWith(REPO, "sess-2");
 
 			unmount();
+			await settle();
 			expect(h.unwatchSessionReview).toHaveBeenCalledWith(REPO, "sess-2");
+		});
+
+		// A refused watch took no backend ref; unwatching it would drop the ref
+		// of another tab watching the same session.
+		it("never unwatches a session whose watch the backend refused", async () => {
+			h.watchSessionReview.mockResolvedValueOnce(false);
+			const { unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(h.watchSessionReview).toHaveBeenCalledWith(REPO, "sess-1");
+
+			unmount();
+			await settle();
+			expect(h.unwatchSessionReview).not.toHaveBeenCalled();
 		});
 
 		it("a review-sessions-changed event for this repo refreshes the session dropdown", async () => {
@@ -846,6 +860,35 @@ describe("SessionDiffTab", () => {
 				expect(getByTestId("stub-list").dataset.flashKeys).toBe("/repo/a.ts");
 				await vi.advanceTimersByTimeAsync(1600);
 				expect(getByTestId("stub-list").dataset.flashKeys).toBe("");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("unmounting mid-flash clears the pending fade timer instead of leaking it", async () => {
+			vi.useFakeTimers();
+			try {
+				const handlers = captureListenHandlers();
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r1" })] }),
+				);
+				const { unmount } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+				await vi.advanceTimersByTimeAsync(0);
+				h.navVisibleIndices = new Set([0]);
+
+				h.getSessionReview.mockResolvedValue(
+					review({ files: [fileGroup({ abs_path: "/repo/a.ts", revision: "r2", cumulative_patch: "changed" })] }),
+				);
+				handlers.get("session-review-changed")?.({ payload: { repo_path: REPO, session_id: "sess-1" } });
+				await vi.advanceTimersByTimeAsync(0);
+
+				const pendingTimers = vi.getTimerCount();
+				expect(pendingTimers).toBeGreaterThan(0);
+				unmount();
+				// Every timer flashFiles() scheduled must be cleared on unmount, not
+				// just the component's own reactive roots torn down — a fade timer
+				// left running would call setFlashKeys on a disposed signal.
+				expect(vi.getTimerCount()).toBeLessThan(pendingTimers);
 			} finally {
 				vi.useRealTimers();
 			}

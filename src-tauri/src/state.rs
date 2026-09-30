@@ -2697,7 +2697,8 @@ pub struct AppState {
     /// Live watchers for a Session Diff Review's transcript + subagent files,
     /// keyed by `(project_dir, claude_session_id)` and ref-counted so multiple
     /// UI subscribers to the same session share one underlying watcher — see
-    /// `session_review_watcher.rs`.
+    /// `session_review_watcher.rs`. Bounded by its `MAX_SESSION_REVIEW_WATCHERS`
+    /// / `MAX_SESSION_REVIEW_WATCH_REFS`.
     pub(crate) session_review_watchers:
         DashMap<(String, String), crate::session_review_watcher::SessionWatchEntry>,
     /// Claude session id → the TUIC PTY session currently running it, from

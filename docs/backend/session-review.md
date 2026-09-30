@@ -245,7 +245,12 @@ appearing), and — if it already exists at watch-start time — the session's
 own `<project_dir>/<session_id>/` subfolder recursively (where subagent
 transcripts live). Ref-counted per `(project_dir, session_id)`: multiple
 subscribers to the same session share one underlying `notify` watcher, and
-the last `unwatch_session_review` tears it down. Debounced ~400ms (shorter
+the last `unwatch_session_review` tears it down. Bounded: at most
+`MAX_SESSION_REVIEW_WATCHERS` (64) distinct watchers and
+`MAX_SESSION_REVIEW_WATCH_REFS` (32) subscribers per watcher — past either, a
+`watch` is refused and takes no ref (the frontend then never unwatches for it,
+and an unwatch with no ref behind it is a no-op rather than stealing another
+subscriber's). Debounced ~400ms (shorter
 than `dir_watcher`'s 500ms — a live diff view benefits from feeling
 responsive to an agent's own rapid tool-call bursts).
 
@@ -255,7 +260,8 @@ watched session) or `ReviewSessionsChanged{repo_path}` (a new session file
 appeared). The first change observed for a session since it started being
 watched also fires `AgentEditObserved{tuic_session_id, claude_session_id,
 repo_path}` exactly once per session (tracked in
-`AppState.announced_edit_sessions`) — the signal an auto-open/notification
+`AppState.announced_edit_sessions`, cleared when the last subscriber unwatches
+or when the TUIC PTY session that owns that Claude session closes) — the signal an auto-open/notification
 feature keys off (see the `session_diff_auto_open` setting in
 [`docs/backend/config.md`](./config.md)).
 
@@ -271,7 +277,10 @@ Every terminal running Claude Code already reports its Claude session id via
 tuic-hook's `SessionStart` OSC 7770 `ccsession` metadata — previously emitted
 by `pty.rs`'s output parser but never consumed. It now populates
 `AppState.claude_session_map`/`tuic_to_claude_session` (kept in sync both
-ways), cleaned up when the TUIC PTY session closes. `SessionSummary` and
+ways), cleaned up when the TUIC PTY session closes. A TUIC session that reports
+a different `ccsession` retires its previous mapping, and both cleanups drop a
+forward entry only while this TUIC session still owns it (a second tab that
+resumed the same Claude session keeps its mapping). `SessionSummary` and
 `SessionReview` both carry a `tuic_session_id: Option<String>` resolved from
 this map — `None` when there's no live PTY session currently running that
 Claude session. `session_review.rs` itself is a pure disk reader with no

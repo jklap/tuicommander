@@ -36,6 +36,32 @@ use crate::state::AppEvent;
 /// fine at 400ms.
 const DEBOUNCE_MS: u64 = 400;
 
+/// Most distinct `(project_dir, session_id)` watchers alive at once. Each holds
+/// an OS file watcher (FSEvents stream / inotify watches), and the routes that
+/// create them are reachable over HTTP, so the map must not grow with whatever
+/// a client asks for. A real UI watches one session per open Session Diff tab.
+pub(crate) const MAX_SESSION_REVIEW_WATCHERS: usize = 64;
+
+/// Most subscribers sharing one watcher. A subscriber that never unwatches
+/// (a crashed client) leaks one ref; this bounds what any number of them can
+/// pin, and a refused `watch` never takes a ref, so the caller must not
+/// `unwatch` for it.
+pub(crate) const MAX_SESSION_REVIEW_WATCH_REFS: usize = 32;
+
+/// Takes one more ref on an existing entry, unless it is at
+/// [`MAX_SESSION_REVIEW_WATCH_REFS`].
+fn add_ref(entry: &SessionWatchEntry) -> Result<(), String> {
+    entry
+        .ref_count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < MAX_SESSION_REVIEW_WATCH_REFS).then_some(n + 1)
+        })
+        .map(|_| ())
+        .map_err(|_| {
+            format!("Too many subscribers for this session's watcher (max {MAX_SESSION_REVIEW_WATCH_REFS})")
+        })
+}
+
 /// One ref-counted watcher entry, keyed by `(project_dir, claude_session_id)`
 /// in `AppState::session_review_watchers`.
 pub(crate) struct SessionWatchEntry {
@@ -64,8 +90,12 @@ pub(crate) fn watch_session_review_internal(
 ) -> Result<(), String> {
     let key = watch_key(project_dir, session_id);
     if let Some(entry) = state.session_review_watchers.get(&key) {
-        entry.ref_count.fetch_add(1, Ordering::Relaxed);
-        return Ok(());
+        return add_ref(&entry);
+    }
+    if state.session_review_watchers.len() >= MAX_SESSION_REVIEW_WATCHERS {
+        return Err(format!(
+            "Too many live session review watchers (max {MAX_SESSION_REVIEW_WATCHERS})"
+        ));
     }
     if !project_dir.is_dir() {
         return Err(format!(
@@ -206,14 +236,19 @@ pub(crate) fn watch_session_review_internal(
         let _ = watcher.watch(&session_subdir, RecursiveMode::Recursive);
     }
 
-    state.session_review_watchers.insert(
-        key,
-        SessionWatchEntry {
-            watcher: Mutex::new(watcher),
-            ref_count: AtomicUsize::new(1),
-        },
-    );
-    Ok(())
+    // A concurrent `watch` for the same key may have inserted its own entry
+    // while this one was being built: share it (dropping this watcher) rather
+    // than overwrite it and lose that subscriber's ref.
+    match state.session_review_watchers.entry(key) {
+        dashmap::mapref::entry::Entry::Occupied(existing) => add_ref(existing.get()),
+        dashmap::mapref::entry::Entry::Vacant(slot) => {
+            slot.insert(SessionWatchEntry {
+                watcher: Mutex::new(watcher),
+                ref_count: AtomicUsize::new(1),
+            });
+            Ok(())
+        }
+    }
 }
 
 /// Drop this subscriber's reference; tears the watcher down once the last
@@ -227,13 +262,23 @@ pub(crate) fn unwatch_session_review_internal(
     let key = watch_key(project_dir, session_id);
     let mut should_remove = false;
     if let Some(entry) = state.session_review_watchers.get(&key) {
-        let prev = entry.ref_count.fetch_sub(1, Ordering::AcqRel);
-        if prev <= 1 {
-            should_remove = true;
-        }
+        // Never below zero: an unwatch with no matching ref is a no-op rather
+        // than stealing another subscriber's ref.
+        let prev = entry
+            .ref_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1));
+        should_remove = prev == Ok(1);
     }
-    if should_remove {
-        state.session_review_watchers.remove(&key);
+    // Re-checked under the shard lock: a `watch` that took a fresh ref between
+    // the decrement above and here keeps the watcher alive.
+    if should_remove
+        && state
+            .session_review_watchers
+            .remove_if(&key, |_, entry| {
+                entry.ref_count.load(Ordering::Acquire) == 0
+            })
+            .is_some()
+    {
         state.announced_edit_sessions.remove(session_id);
     }
 }
@@ -332,6 +377,64 @@ mod tests {
 
         unwatch_session_review_internal(project_dir, "session-a", &state);
         assert!(!state.session_review_watchers.contains_key(&key));
+    }
+
+    /// The watch routes are reachable over HTTP, and every distinct session id
+    /// costs an OS file watcher: the map must stop growing at its cap.
+    #[tokio::test]
+    async fn refuses_a_new_watcher_past_the_distinct_session_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path();
+        let state = make_test_state();
+
+        for i in 0..MAX_SESSION_REVIEW_WATCHERS {
+            watch_session_review_internal(project_dir, &format!("session-{i}"), "/repo", &state)
+                .unwrap();
+        }
+        let err = watch_session_review_internal(project_dir, "one-too-many", "/repo", &state)
+            .unwrap_err();
+        assert!(err.contains("Too many"), "{err}");
+        assert_eq!(
+            state.session_review_watchers.len(),
+            MAX_SESSION_REVIEW_WATCHERS
+        );
+
+        // An existing watcher still takes another subscriber at the cap.
+        watch_session_review_internal(project_dir, "session-0", "/repo", &state).unwrap();
+        // Freeing a slot lets a new session in again.
+        unwatch_session_review_internal(project_dir, "session-1", &state);
+        watch_session_review_internal(project_dir, "one-too-many", "/repo", &state).unwrap();
+    }
+
+    /// Subscribers that never unwatch (a crashed client) cannot pin an
+    /// unbounded ref count, and an unwatch with no ref behind it (e.g. after a
+    /// refused watch) never steals another subscriber's ref.
+    #[tokio::test]
+    async fn caps_refs_per_watcher_and_never_decrements_below_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path();
+        let state = make_test_state();
+        let key = watch_key(project_dir, "session-a");
+        let refs = || {
+            state
+                .session_review_watchers
+                .get(&key)
+                .map(|e| e.ref_count.load(Ordering::Acquire))
+        };
+
+        for _ in 0..MAX_SESSION_REVIEW_WATCH_REFS {
+            watch_session_review_internal(project_dir, "session-a", "/repo", &state).unwrap();
+        }
+        assert!(watch_session_review_internal(project_dir, "session-a", "/repo", &state).is_err());
+        assert_eq!(refs(), Some(MAX_SESSION_REVIEW_WATCH_REFS));
+
+        for _ in 0..MAX_SESSION_REVIEW_WATCH_REFS {
+            unwatch_session_review_internal(project_dir, "session-a", &state);
+        }
+        assert_eq!(refs(), None, "last ref tears the watcher down");
+        // A stray unwatch for a key with no watcher is a no-op.
+        unwatch_session_review_internal(project_dir, "session-a", &state);
+        assert_eq!(refs(), None);
     }
 
     #[tokio::test]
