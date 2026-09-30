@@ -68,7 +68,16 @@
 .filePath {
   color: var(--fg-primary);
   font-weight: 600;
-  flex: 1;
+  /* flex-grow MUST stay 0 — this span has its own onClick (open file) with
+   * stopPropagation, layered over .fileHeader's onClick (toggle collapse).
+   * `flex: 1` (flex-grow: 1) used to stretch this span's DOM box across all
+   * the header's unused space, so a click anywhere on the row except the
+   * chevron or the stats badge landed on THIS element and opened the file
+   * instead of collapsing it — found via live browser verification
+   * (happy-dom has no real flex layout, so no unit test catches this).
+   * flex-shrink stays 1 (with min-width: 0) so a long path still truncates
+   * with an ellipsis instead of overflowing the header. */
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
