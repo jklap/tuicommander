@@ -122,6 +122,12 @@ to `armed` or `stopped`. The backend also emits `design-mode-changed` with a
 snake_case event payload `{ repo_path, session_id, status }`; browser clients
 receive it on `/events`.
 
+`PtyConfig.user_initiated` is the desktop-transport twin of
+`CreateSessionRequest.user_initiated` (HTTP) — accepted on `create_pty`/
+`create_pty_with_worktree` for body-shape parity with the browser client, but
+NOT consulted: a desktop IPC call is always human-initiated, so `is_remote`
+stays hardcoded `false` there regardless of this field's value.
+
 ## Scrollback Restore (`scrollback_store.rs`)
 
 | Command | Args | Returns | Description |

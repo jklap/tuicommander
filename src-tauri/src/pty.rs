@@ -727,6 +727,7 @@ pub(crate) fn emit_session_created(
     agent_type: Option<String>,
     display_name: Option<String>,
     parent_session: Option<String>,
+    is_remote: bool,
 ) {
     state.emit_dual(crate::state::AppEvent::SessionCreated {
         session_id: session_id.to_string(),
@@ -734,6 +735,7 @@ pub(crate) fn emit_session_created(
         agent_type,
         display_name,
         parent_session,
+        is_remote,
     });
 }
 

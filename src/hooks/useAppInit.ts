@@ -3,6 +3,7 @@ import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompl
 import { t } from "../i18n";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { pluginRegistry } from "../plugins/pluginRegistry";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
@@ -104,6 +105,8 @@ interface SessionCreatedPayload {
 	display_name?: string | null;
 	/** `$TUIC_SESSION` of the agent that spawned this PTY; absent for other tabs. */
 	parent_session?: string | null;
+	/** Agent-created (`true`) vs human-created (`false`); absent from an older backend. */
+	is_remote?: boolean;
 	/** Present only on an event mirrored from a remote daemon (`remote_mirror.rs`). */
 	__tuic_origin?: unknown;
 }
@@ -870,8 +873,11 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
-		const { session_id, cwd, agent_type, display_name, parent_session } = event.payload;
+		const { session_id, cwd, agent_type, display_name, parent_session, is_remote } = event.payload;
 		const parsedAgentType = parseAgentType(agent_type);
+		// Default to true when the backend omits the field (older backend/test
+		// payload) — matches this listener's historical hardcoded behavior.
+		const isRemote = is_remote ?? true;
 		// A mirrored event describes a session on ANOTHER machine. It is stamped
 		// `__tuic_origin` by `remote_mirror.rs`; building a tab for it attaches the
 		// local transport to a PTY this machine does not run. The mirrored session
@@ -897,9 +903,9 @@ export async function initApp(deps: AppInitDeps) {
 			fontSize: deps.getDefaultFontSize(),
 			name:
 				display_name ||
-				(parsedAgentType
-					? `Session ${terminalsStore.getCount() + 1}`
-					: `PTY: Session ${terminalsStore.getCount() + 1}`),
+				(isRemote && !parsedAgentType
+					? `PTY: Session ${terminalsStore.getCount() + 1}`
+					: `Session ${terminalsStore.getCount() + 1}`),
 			// A spawn-assigned display name is the base title, not a manual rename:
 			// an intent title may refine it and a user rename replaces it, but the
 			// agent's own OSC title (Claude's session title) must not.
@@ -907,7 +913,7 @@ export async function initApp(deps: AppInitDeps) {
 			nameFromSpawn: Boolean(display_name),
 			cwd: cwd ?? null,
 			awaitingInput: null,
-			isRemote: true,
+			isRemote,
 			agentType: parsedAgentType,
 			ptyDescription: null,
 			parentSession: parent_session ?? null,
@@ -1168,17 +1174,22 @@ export async function initApp(deps: AppInitDeps) {
 		// An alias retained for a session no tab ever bound (a desktop-created PTY
 		// seen from a browser) is dead once the session is.
 		terminalsStore.forgetPendingAlias(session_id);
-		// Prefer the persistent remoteSessionTabs map: the store's reverse map may
-		// have been cleared already by Terminal.tsx resetting sessionId on pty-exit.
+		// Prefer the persistent remoteSessionTabs map: Terminal.tsx's pty-exit
+		// handler resets a NON-remote tab's sessionId on exit (a remote tab's
+		// sessionId is left alone for this listener, see below), so the store's
+		// reverse map can already be gone by the time this fires for those.
 		const termId = remoteSessionTabs.get(session_id) ?? terminalsStore.getTerminalForSession(session_id);
 		if (!termId) return;
 
 		remoteSessionTabs.delete(session_id);
 
-		// Countdown + auto-remove is only for MCP-spawned (remote) tabs. Locally-created
-		// tabs are managed by Terminal.tsx's pty-exit handler — applying the rename
-		// here would leave the name stuck forever because the ticker's isRemote
-		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
+		// Countdown + auto-remove, and all shellState/sessionId teardown below, is
+		// only for a remote tab (agent-created, or via our own HTTP client) — this
+		// listener is that tab's sole owner (Terminal.tsx's pty-exit handler
+		// explicitly skips its own mutations for one, see that file). A non-remote
+		// tab is owned entirely by Terminal.tsx instead — applying the rename here
+		// would leave the name stuck forever because the ticker's isRemote guard
+		// aborts on the first tick and the setTimeout's isRemote guard skips removal.
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
@@ -1186,7 +1197,32 @@ export async function initApp(deps: AppInitDeps) {
 
 		const parsedAgentType = parseAgentType(agent_type);
 		handleAgentExitCompletion(termId, parsedAgentType != null);
-		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
+		// Mirrors Terminal.tsx's own (non-remote) pty-exit teardown for an agent
+		// tab — this listener is now the sole owner of that teardown for a remote
+		// one (Terminal.tsx explicitly skips it), so the agentType/resume-banner
+		// fields it used to clear locally must be cleared here instead, or a
+		// remote agent tab's `agentType` would stay stuck forever once its
+		// sessionId goes null and polling has nothing left to detect against.
+		const hadAgent = t0?.agentType != null;
+		terminalsStore.update(termId, {
+			shellState: "exited",
+			sessionId: null,
+			...(hadAgent
+				? {
+						currentTask: null,
+						agentType: null,
+						agentSessionId: null,
+						agentSessionIdIsAuthoritative: false,
+						pendingResumeCommand: null,
+						pendingResumeTitle: null,
+						pendingResumeSource: null,
+					}
+				: {}),
+		});
+		if (hadAgent) {
+			terminalsStore.clearAwaitingInput(termId);
+			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: session_id, terminalId: termId });
+		}
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
 		// and can be cleaned up faster than manually-opened remote sessions. Keyed

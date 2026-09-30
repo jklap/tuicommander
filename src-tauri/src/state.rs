@@ -187,6 +187,12 @@ pub enum AppEvent {
         /// mark it as a sub-agent. `None` for tabs a user or plain client opened.
         #[serde(skip_serializing_if = "Option::is_none")]
         parent_session: Option<String>,
+        /// `true` when this session was created by an agent (MCP, tmux shim,
+        /// AI-agent tools/scheduler) or a raw HTTP caller with no reason to
+        /// opt out; `false` when a human created it, in the app or through
+        /// our own HTTP client. See `RequestedIdentity::is_remote`'s doc
+        /// comment for the full default/opt-out contract.
+        is_remote: bool,
     },
     #[serde(rename = "session-closed")]
     SessionClosed {
@@ -6394,6 +6400,14 @@ pub(crate) struct PtyConfig {
     /// frontend-computed default. Mirrors `PtySession.display_name_is_custom`.
     #[serde(default)]
     pub(crate) display_name_is_custom: bool,
+    /// The desktop-transport twin of `CreateSessionRequest::user_initiated` —
+    /// kept for body-shape parity between IPC and HTTP (`usePty.ts` sends the
+    /// same `config` object to either transport). Accepted but NOT consulted
+    /// on this side: a desktop `create_pty`/`create_pty_with_worktree` call is
+    /// always human-initiated, so `is_remote` stays hardcoded `false` there
+    /// regardless of this field's value.
+    #[serde(default)]
+    pub(crate) user_initiated: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -10060,6 +10074,7 @@ mod tests {
             agent_type: Some(agent_type.to_string()),
             display_name: None,
             parent_session: None,
+            is_remote: true,
         }
     }
 
@@ -10819,6 +10834,7 @@ mod tests {
                 agent_type: Some("claude".to_string()),
                 display_name: None,
                 parent_session: None,
+                is_remote: true,
             },
         );
         assert_eq!(s.agent_session_id, None);

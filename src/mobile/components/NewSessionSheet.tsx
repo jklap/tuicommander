@@ -32,7 +32,8 @@ export function NewSessionSheet(props: NewSessionSheetProps) {
 		setCreating(true);
 		try {
 			const sessionId = await rpc<string>("spawn_agent", {
-				pty_config: { cwd, rows: 24, cols: 80 },
+				// A human launched this from the phone: not an agent-created tab.
+				pty_config: { cwd, rows: 24, cols: 80, user_initiated: true },
 				agent_config: { cwd, agent_type: agent(), prompt: "", print_mode: false, args: [] },
 			});
 			props.onCreated?.(sessionId);

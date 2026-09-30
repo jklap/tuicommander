@@ -301,7 +301,15 @@ when no live identity is bound. `display_name_from_spawn` is true when
 `agent action=spawn` named the session and no user rename has replaced it; a
 non-custom name synced back from an OSC or intent title does not set it. The
 origin fields let browser and desktop clients preserve manual-title protection
-and remote-completion muting across reconnects. For detected agents,
+and remote-completion muting across reconnects.
+
+`is_remote` means "created by an agent" (MCP, tmux shim, or a raw HTTP
+caller such as `curl`) — not network locality. A
+session a human created, in the desktop app or through our own HTTP client
+(the browser UI), is `is_remote: false`. See "Create Session" below for how a
+client opts a session into `is_remote: false`.
+
+For detected agents,
 `state.agent_state` distinguishes PTY
 silence (`idle`) from explicit protocol completion (`completed`); the latter
 requires a parsed `suggest: [ ... ]` marker. Other values are `starting`,
@@ -326,7 +334,8 @@ Content-Type: application/json
   "cols": 80,
   "shell": "/bin/zsh",    // optional
   "cwd": "/path/to/dir",  // optional
-  "alias": "tu-1"         // optional — reclaim a persisted alias
+  "alias": "tu-1",        // optional — reclaim a persisted alias
+  "user_initiated": true  // optional — see below, defaults to false
 }
 ```
 
@@ -339,6 +348,16 @@ honours it only when it still has the `<prefix>-<number>` shape and no live sess
 holds it, and then raises the per-prefix counter past that number so the next
 auto-assigned alias cannot collide. Anything else is ignored and the session receives a
 freshly minted alias.
+
+`user_initiated` is how our own HTTP client (the browser UI) marks a session as
+created by a human rather than an agent — it drives `is_remote: !user_initiated`
+on the registered session. Omitting it (the default) registers `is_remote: true`,
+so a raw `curl` caller with no reason to know this field exists, and every MCP/
+tmux-shim spawn, stay `is_remote: true` with no changes on their side. Also
+honoured on `POST /sessions/worktree` (nested in `config`) and on
+`POST /sessions/agent` (top level; mobile's New Session sheet sends it when a
+human launches an agent). It has no effect on the desktop IPC twins of these
+routes (always human-initiated, accepted for body-shape parity but not consulted).
 
 ### Create Session with Worktree
 
@@ -369,6 +388,9 @@ supported interactive CLIs use native scrollback according to the agent's
 `prevent_alt_screen` setting.
 The child receives its own `TUIC_SESSION`, equal to the returned `session_id`,
 and `GET /sessions` exposes that identity as `tuic_session` immediately.
+The optional `user_initiated` (forwarded from `pty_config.user_initiated`) marks an
+agent a human launched (mobile's New Session sheet) as `is_remote: false`; omitted, the
+session is agent-created (`is_remote: true`), as for any raw HTTP caller.
 
 ### Write to Session
 
@@ -968,7 +990,7 @@ the server is back to the filter the connection was opened with.
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
+| `session-created` | `{session_id, cwd, agent_type, display_name, parent_session, is_remote}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise); `is_remote` is "created by an agent", not network locality — see "List Sessions" above |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
