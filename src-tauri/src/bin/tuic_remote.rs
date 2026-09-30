@@ -127,8 +127,13 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    tuicommander_lib::app_instance::select_app_instance(parsed.instance.as_deref())
-        .map_err(anyhow::Error::msg)?;
+    // `--instance` wins; otherwise honour TUIC_APP_INSTANCE like the desktop
+    // binary, so a dev/test daemon never lands on the production config dir.
+    match parsed.instance.as_deref() {
+        Some(id) => tuicommander_lib::app_instance::select_app_instance(Some(id)),
+        None => tuicommander_lib::app_instance::select_app_instance_from_env(),
+    }
+    .map_err(anyhow::Error::msg)?;
 
     if parsed.set_password {
         return tuicommander_lib::set_password_interactive();
