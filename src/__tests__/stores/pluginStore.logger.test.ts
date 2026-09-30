@@ -18,8 +18,18 @@ describe("pluginStore.getLogger", () => {
 		pluginStore.getLogger("a").info("from a");
 		pluginStore.getLogger("b").info("from b");
 
-		expect(pluginStore.getLogger("a").getEntries().map((e) => e.message)).toEqual(["from a"]);
-		expect(pluginStore.getLogger("b").getEntries().map((e) => e.message)).toEqual(["from b"]);
+		expect(
+			pluginStore
+				.getLogger("a")
+				.getEntries()
+				.map((e) => e.message),
+		).toEqual(["from a"]);
+		expect(
+			pluginStore
+				.getLogger("b")
+				.getEntries()
+				.map((e) => e.message),
+		).toEqual(["from b"]);
 	});
 
 	it("records entries on the logger it returns", () => {
