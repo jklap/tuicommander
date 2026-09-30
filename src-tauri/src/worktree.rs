@@ -1213,11 +1213,7 @@ pub(crate) fn clear_orphan_cleanup_internal(state: &AppState, repo_path: &str, k
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn clear_orphan_cleanup(
-    state: State<'_, Arc<AppState>>,
-    repo_path: String,
-    kept: bool,
-) {
+pub(crate) fn clear_orphan_cleanup(state: State<'_, Arc<AppState>>, repo_path: String, kept: bool) {
     clear_orphan_cleanup_internal(&state, &repo_path, kept);
 }
 
