@@ -1,8 +1,96 @@
 import { describe, expect, it } from "vitest";
-import { generateWorkspaceId, migrateActiveWorkspaceId, migrateRepoWorkspaces } from "../../stores/workspaceIdentity";
+import {
+	generateWorkspaceId,
+	migrateActiveWorkspaceId,
+	migrateRepoWorkspaces,
+	SAVED_TERMINALS_TTL_MS,
+	savedTerminalsFor,
+	type WorkspaceState,
+} from "../../stores/workspaceIdentity";
 import type { SavedTerminal } from "../../types";
 import { compareBranches } from "../../utils/branchSort";
 import { joinPath } from "../../utils/pathUtils";
+
+function baseWorkspace(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
+	return {
+		workspaceId: "main",
+		branchName: "main",
+		kind: "main",
+		parentRepoPath: null,
+		isMain: true,
+		worktreePath: null,
+		terminals: [],
+		hadTerminals: false,
+		lastActiveTerminal: null,
+		additions: 0,
+		deletions: 0,
+		isMerged: false,
+		lastCommitTs: null,
+		...overrides,
+	};
+}
+
+function saved(name: string): SavedTerminal {
+	return { name, cwd: "/repo", fontSize: 14, agentType: null };
+}
+
+describe("savedTerminalsFor()", () => {
+	it("returns the union of every client's saved terminals", () => {
+		const ws = baseWorkspace({
+			savedTerminalsByClient: {
+				clientA: { savedAt: Date.now() - 1000, terminals: [saved("a1")] },
+				clientB: { savedAt: Date.now(), terminals: [saved("b1")] },
+			},
+		});
+		const names = savedTerminalsFor(ws)
+			.map((t) => t.name)
+			.sort();
+		expect(names).toEqual(["a1", "b1"]);
+	});
+
+	it("drops an entry older than SAVED_TERMINALS_TTL_MS", () => {
+		const now = Date.now();
+		const ws = baseWorkspace({
+			savedTerminalsByClient: {
+				stale: { savedAt: now - SAVED_TERMINALS_TTL_MS - 1000, terminals: [saved("old")] },
+				fresh: { savedAt: now, terminals: [saved("new")] },
+			},
+		});
+		expect(savedTerminalsFor(ws).map((t) => t.name)).toEqual(["new"]);
+	});
+
+	it("dedupes across clients on tuicSession, keeping the newer save", () => {
+		const ws = baseWorkspace({
+			savedTerminalsByClient: {
+				older: {
+					savedAt: Date.now() - 1000,
+					terminals: [{ name: "old-name", cwd: "/repo", fontSize: 14, agentType: null, tuicSession: "tab-1" }],
+				},
+				newer: {
+					savedAt: Date.now(),
+					terminals: [{ name: "new-name", cwd: "/repo", fontSize: 14, agentType: null, tuicSession: "tab-1" }],
+				},
+			},
+		});
+		const result = savedTerminalsFor(ws);
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe("new-name");
+	});
+
+	it("never dedupes entries with no tuicSession", () => {
+		const ws = baseWorkspace({
+			savedTerminalsByClient: {
+				a: { savedAt: Date.now() - 1000, terminals: [saved("shell")] },
+				b: { savedAt: Date.now(), terminals: [saved("shell")] },
+			},
+		});
+		expect(savedTerminalsFor(ws)).toHaveLength(2);
+	});
+
+	it("returns an empty array when nothing was ever saved", () => {
+		expect(savedTerminalsFor(baseWorkspace())).toEqual([]);
+	});
+});
 
 /**
  * A record in the exact shape `repositories.json` holds today, captured from a
@@ -92,7 +180,11 @@ describe("workspace identity migration", () => {
 		expect(feature.runCommand).toBe("pnpm dev");
 
 		const main = workspaces.main;
-		expect(main.savedTerminals).toEqual([
+		// The migration is the identity function — it doesn't know about the
+		// legacy flat `savedTerminals` field at all (that fold into
+		// `savedTerminalsByClient` is `normalizeLoadedRepo`'s job, a layer up),
+		// so it rides through `repairIdentity`'s untyped spread unchanged.
+		expect((main as unknown as { savedTerminals?: unknown }).savedTerminals).toEqual([
 			{ id: "term-1", name: "zsh", cwd: "/Users/x/Gits/acme", fontSize: 13, agentType: null },
 		]);
 		expect(main.lastActiveTerminal).toBe("term-1");
@@ -131,7 +223,7 @@ describe("workspace identity migration", () => {
 		const after = Object.fromEntries(
 			Object.entries(migrateRepoWorkspaces(legacy)).map(([key, w]) => [
 				key,
-				[...w.terminals, ...(w.savedTerminals ?? [])],
+				[...w.terminals, ...((w as unknown as { savedTerminals?: SavedTerminal[] }).savedTerminals ?? [])],
 			]),
 		);
 

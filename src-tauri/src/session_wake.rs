@@ -67,6 +67,7 @@ pub(crate) fn ensure_live(state: &Arc<AppState>, reference: &str) -> Result<Stri
             startup_command: command,
             agent_type: record.agent_type.clone(),
             restored: true,
+            ..Default::default()
         },
     )
     .map_err(|(_, Json(error))| error.to_string())?;

@@ -1,6 +1,6 @@
 //! Desktop visibility and remote observation have independent lifetimes.
 use crate::AppState;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(any(feature = "desktop", test))]
 use std::sync::atomic::Ordering;
@@ -13,7 +13,11 @@ pub(crate) struct Visibility {
     windows: Vec<String>,
     watchers: HashMap<String, usize>,
     all_watchers: usize,
-    remote_visible: HashSet<String>,
+    /// Remote claims per viewer (session id -> viewer id -> last claim), so one remote client
+    /// blurring a tab never clears another remote client's claim. Bounded by
+    /// [`MAX_VIEWER_ID_LEN`] and [`MAX_VIEWERS_PER_SESSION`]: viewer ids are
+    /// client-supplied, and without a cap a client could grow this without bound.
+    remote_visible: HashMap<String, HashMap<String, std::time::Instant>>,
     last_remote_activity: HashMap<String, std::time::Instant>,
     last_global_observation: Option<std::time::Instant>,
 }
@@ -22,7 +26,7 @@ impl Visibility {
     pub(crate) fn watched(&self, state: &AppState, id: &str) -> bool {
         self.all_watchers > 0
             || self.watchers.get(id).copied().unwrap_or(0) > 0
-            || self.remote_visible.contains(id)
+            || self.remote_visible.get(id).is_some_and(|v| !v.is_empty())
             || state
                 .ws_clients
                 .get(id)
@@ -61,8 +65,33 @@ fn wake_visible(state: &AppState, id: &str, visible: bool) {
     let _ = (state, id, visible);
 }
 
+/// Fallback viewer for a remote client that sends no `viewer_id` (an older
+/// build): its claims collapse onto one shared key, the pre-per-viewer behaviour.
+pub(crate) const LEGACY_VIEWER_ID: &str = "legacy";
+/// Legit viewer ids (`CLIENT_INSTANCE_ID`, a UUID, [`LEGACY_VIEWER_ID`]) are far
+/// shorter; an oversized one is ignored.
+const MAX_VIEWER_ID_LEN: usize = 128;
+/// Past this, a new viewer's claim evicts the oldest existing one.
+const MAX_VIEWERS_PER_SESSION: usize = 16;
+
 /// IPC visibility belongs to the desktop; HTTP visibility belongs to a remote client.
 pub(crate) fn set_visible(state: &AppState, id: &str, visible: bool, desktop: bool) {
+    set_visible_for_viewer(state, id, visible, desktop, LEGACY_VIEWER_ID);
+}
+
+/// [`set_visible`] for one remote viewer: a remote session stays visible while
+/// ANY remote viewer claims it. `viewer` is ignored for the desktop, which owns
+/// a single claim per session.
+pub(crate) fn set_visible_for_viewer(
+    state: &AppState,
+    id: &str,
+    visible: bool,
+    desktop: bool,
+    viewer: &str,
+) {
+    if !desktop && viewer.len() > MAX_VIEWER_ID_LEN {
+        return;
+    }
     let mut visibility = state.background_visibility.lock();
     if desktop {
         if visibility.saved.is_some() {
@@ -70,9 +99,22 @@ pub(crate) fn set_visible(state: &AppState, id: &str, visible: bool, desktop: bo
         }
         visibility.desktop.insert(id.into(), visible);
     } else if visible {
-        visibility.remote_visible.insert(id.into());
-    } else {
-        visibility.remote_visible.remove(id);
+        let viewers = visibility.remote_visible.entry(id.into()).or_default();
+        if viewers.len() >= MAX_VIEWERS_PER_SESSION
+            && !viewers.contains_key(viewer)
+            && let Some(oldest) = viewers
+                .iter()
+                .min_by_key(|&(_, &claimed)| claimed)
+                .map(|(viewer, _)| viewer.clone())
+        {
+            viewers.remove(&oldest);
+        }
+        viewers.insert(viewer.into(), std::time::Instant::now());
+    } else if let Some(viewers) = visibility.remote_visible.get_mut(id) {
+        viewers.remove(viewer);
+        if viewers.is_empty() {
+            visibility.remote_visible.remove(id);
+        }
     }
     if !desktop {
         visibility
@@ -151,6 +193,18 @@ fn refresh_watch(state: &AppState, visibility: &mut Visibility, id: Option<&str>
             visibility.refresh(state, &id);
         }
     }
+}
+
+/// The remote viewer ids currently claiming `id` (test-only).
+#[cfg(test)]
+pub(crate) fn remote_viewers_for_test(state: &AppState, id: &str) -> Vec<String> {
+    state
+        .background_visibility
+        .lock()
+        .remote_visible
+        .get(id)
+        .map(|viewers| viewers.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub(crate) fn forget_session(state: &AppState, id: &str) {
