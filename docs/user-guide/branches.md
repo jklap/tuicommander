@@ -135,11 +135,11 @@ Right-click any branch for the full context menu:
 
 ## Session Diff Review
 
-Step through everything a Claude Code session changed — open it from the Command Palette ("Session diff review"). It opens as a tab, defaulting to the focused terminal's live agent session (or the most recent session for the repo); use the picker in the tab's toolbar to review a different past session.
+Step through everything a Claude Code session changed — open it from the Command Palette ("Session diff review"). It opens as a tab, defaulting to the focused terminal's live agent session (or the most recent session for the repo); use the picker in the tab's toolbar to review a different past session. The picker's session list refreshes automatically as new sessions appear — no manual refresh needed.
 
 Two ways to read it:
-- **By file** (default) — one row per changed file, showing its cumulative diff for the session with the individual edits that produced it collapsible underneath.
-- **Chronological** — every edit, across every file, in the order the agent actually made them.
+- **By file** (default) — one row per changed file, showing its cumulative diff for the session with the individual edits that produced it collapsible underneath. Click anywhere on a file's header to collapse/expand it (not just the chevron); `<`/`>` in the toolbar move to the previous/next file.
+- **Chronological** — every edit, across every file, in the order the agent actually made them. Click a step's header to collapse it; `<`/`>` move step to step. Each step's header also has `^`/`v` buttons to jump to the previous/next edit of the *same* file, and a **turn** dropdown (one entry per user prompt, showing its time, size, and files touched, with a hover preview) jumps straight to that turn's first edit.
 
 Per step or per file, you can:
 - **Open the file** at that change.
@@ -147,4 +147,30 @@ Per step or per file, you can:
 - **Copy the diff** (a step, a file, or the whole session's combined diff via "Copy all" in the toolbar).
 - **Revert** — a single step (undone via a reverse patch, keeping every later edit — this can fail if a later edit touched the same lines) or a whole file back to what it looked like at the start of the session (byte-exact when TUICommander can find the session's own backup, reconstructed otherwise, or the file is deleted if the session created it).
 
-A file whose starting content can't be determined, or that's changed outside the session since, is flagged rather than silently guessed at. Subagent edits are included by default — untick "Subagent edits" in the toolbar to exclude them.
+A file whose starting content can't be determined, or that's changed outside the session since, is flagged rather than silently guessed at. Subagent edits are included by default — untick "Subagent edits" in the toolbar to exclude them, and their badge shows a friendly name (the subagent's own recorded name, falling back to its description or type) instead of a raw id. Clicking an agent's name jumps to the terminal tab actually running that Claude session, when TUICommander can find one currently open.
+
+**Live updates.** While you're viewing a live session, the tab watches its transcript and updates automatically — no manual refresh:
+- **Chronological mode:** a **Follow** checkbox, on by default, auto-scrolls to new edits as the agent makes them. Turn it off to keep your place — an "N new changes" button appears and jumps to the first one you haven't seen yet.
+- **By-file mode:** a file changed while it's on screen updates in place with a brief highlight so you can see what changed. A brand-new file appends at the bottom with a "New content below" button. A changed file that's scrolled off-screen doesn't update immediately — a "Refresh (N)" button applies every pending update at once.
+
+If the tab isn't the one you're currently looking at, a small dot appears on its icon when a watched session changes — it clears the moment you switch to it.
+
+**Auto-open.** Settings → General → Diffs has an "Auto-open Session Diff Review" option: **Off** (default is Ask) never opens it automatically; **Ask** shows a toast with an "Open" action the moment TUICommander notices an agent editing files; **Auto** opens the tab in the background without switching to it. Either way, it's skipped if a tab for that session is already open.
+
+**Diff display.** The toolbar's diff-options button (also in Settings → General → Diffs) controls ignore-whitespace/case options, soft-wrap, and a per-change line-count truncation threshold — the same settings the [Diff Scroll](#diff-scroll) view uses.
+
+## Diff Scroll
+
+`Cmd+Shift+G` (or the toolbar's "All files" button on any per-file diff tab) opens **Diff Scroll**
+— a dedicated tab showing every changed file (staged and unstaged) in one continuous, scrollable
+view, instead of switching between per-file diff tabs one at a time. Each file section has a
+sticky header with its own addition/deletion stats, an overall total at the top, and `<`/`>`
+buttons to jump file to file. Clicking a header (not just its chevron) collapses/expands that
+file; collapse state follows the file itself, so scrolling doesn't shuffle which files are
+expanded. It's a real tab, not a shared view mode — opening it never switches any other open
+per-file diff tab into the same view.
+
+It refreshes automatically on git changes: a file still on screen that changed gets a brief
+highlight so you can see what changed; one scrolled off-screen shows a "Refresh (N)" button
+instead of silently updating underneath you. Its Split/Inline toggle and diff-options button are
+the same as any per-file diff tab and the same settings Session Diff Review uses.

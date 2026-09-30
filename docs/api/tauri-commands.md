@@ -92,10 +92,10 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `get_repo_info` | `path` | `RepoInfo` | Repo name, branch, status |
-| `get_git_diff` | `path` | `String` | Full git diff |
+| `get_git_diff` | `path, scope?, options?` | `String` | Full git diff. With `options` unset/default, plain `git diff` unchanged. Any non-default whitespace/case option (see [`diff_options.rs`](../backend/git.md#diff-options)) re-diffs each changed file's content through the shared engine instead — above 500 changed files it falls back to plain `git diff`, ignoring `options` |
 | `get_diff_stats` | `path` | `DiffStats` | Addition/deletion counts |
 | `get_changed_files` | `path` | `Vec<ChangedFile>` | Changed files with stats |
-| `get_file_diff` | `path, file` | `String` | Single file diff |
+| `get_file_diff` | `path, file, scope?, untracked?, options?` | `String` | Single file diff. Same `options` behavior as `get_git_diff`; an untracked/new file's old side is always empty, so `options` has no effect there |
 | `get_gutter_changes` | `path, file, scope?` | `Vec<GutterChange>` | Per-line editor gutter/scrollbar change markers (diff parsed in Rust); empty for an untracked file |
 | `get_git_branches` | `path` | `Vec<JSON>` | All branches (sorted) |
 | `get_recent_commits` | `path` | `Vec<JSON>` | Recent git commits |
@@ -134,10 +134,12 @@ Reconstructs a step-by-step, per-file edit review from a Claude Code session tra
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_review_sessions` | `repo_path, limit?, include_counts?, claude_config_dir?` | `Vec<SessionSummary>` | Recent Claude Code sessions for the repo's project slug, newest first. `include_counts` (default false) scans each transcript's edit/file counts — only the first `limit` (default 20, capped 50) entries |
-| `get_session_review` | `repo_path, session_id, include_subagents?, claude_config_dir?` | `SessionReview` | Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts |
+| `list_review_sessions` | `repo_path, limit?, include_counts?, claude_config_dir?` | `Vec<SessionSummary>` | Recent Claude Code sessions for the repo's project slug, newest first. `include_counts` (default false) scans each transcript's edit/file counts — only the first `limit` (default 20, capped 50) entries. Each summary's `tuic_session_id` is resolved from `AppState`'s Claude-session↔TUIC-session map after the pure-disk-reading `_impl` returns |
+| `get_session_review` | `repo_path, session_id, include_subagents?, claude_config_dir?, options?` | `SessionReview` | Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts. `options` is the same whitespace/case `DiffOptions` as `get_git_diff` — included in the review cache key, so two option sets for one session never collide |
 | `revert_session_step` | `repo_path, session_id, tool_use_id, dry_run?, claude_config_dir?` | `RevertResult` | Undo one step, keeping every later step (`git apply --reverse` in-repo; string-substitution reversal out-of-repo). Keyed by the transcript's own `tool_use_id`, never a client-supplied patch. `dry_run` checks feasibility without touching the working tree |
 | `revert_file_to_session_start` | `repo_path, session_id, abs_path, force?, dry_run?, claude_config_dir?` | `RevertResult` | Restore a file to its content at session start (byte-exact backup restore, reconstructed-content write, or delete if the session created it). Refuses when the file has drifted since unless `force: true` |
+| `watch_session_review` | `repo_path, session_id, claude_config_dir?` | `()` | Start (or add a subscriber to) a live filesystem watcher on this session's transcript, its `subagents/` subfolder, and its project directory — ref-counted per `(project_dir, session_id)`. On a debounced (400ms) change it invalidates the cached review and emits `session-review-changed`/`review-sessions-changed`/`agent-edit-observed` (see [`docs/backend/session-review.md`](../backend/session-review.md#live-watcher)) |
+| `unwatch_session_review` | `repo_path, session_id, claude_config_dir?` | `()` | Release one subscriber's ref on the watcher above; tears it down when the count reaches zero |
 
 ## Commit Graph (`git_graph.rs`)
 
