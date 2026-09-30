@@ -1,6 +1,6 @@
 import { type Component, For, type JSX } from "solid-js";
 import { PrStateBadge } from "../Sidebar/PrStateBadge";
-import { BranchIcon } from "../Sidebar/RepoSection";
+import { BranchIcon, UnmergedMarker } from "../Sidebar/RepoSection";
 import s from "./UiLegend.module.css";
 
 // ---------------------------------------------------------------------------
@@ -134,6 +134,15 @@ const PR_BADGE_LEGEND: PrLegendEntry[] = [
 	{ label: "Merged", description: "PR merged", badge: { state: "merged" } },
 ];
 
+const TOOLBAR_COUNT_LEGEND: SymbolEntry[] = [
+	{
+		symbol: "↑N",
+		label: "Ahead",
+		description: "Selected branch has N commits not pushed to its upstream. Absent without an upstream",
+	},
+	{ symbol: "↓N", label: "Behind", description: "Selected branch is N commits behind its upstream" },
+];
+
 const STATS_LEGEND: SymbolEntry[] = [
 	{ symbol: "+N", label: "Additions", description: "Lines added vs main", color: "var(--success)" },
 	{ symbol: "-N", label: "Deletions", description: "Lines removed vs main", color: "var(--diff-del)" },
@@ -214,6 +223,21 @@ export const UiLegend: Component = () => {
 				</div>
 			</div>
 
+			{/* Unmerged marker */}
+			<div class={s.group}>
+				<label class={s.groupLabel}>Branch Markers</label>
+				<p class={s.hint}>Shown at the end of a sidebar branch row</p>
+				<div class={s.grid}>
+					<div class={s.row}>
+						<span class={s.symbol}>
+							<UnmergedMarker />
+						</span>
+						<span class={s.label}>Unmerged</span>
+						<span class={s.desc}>Commits not merged into the default branch. Not a dirty worktree</span>
+					</div>
+				</div>
+			</div>
+
 			{/* PR badges */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>PR Status Badges</label>
@@ -223,6 +247,23 @@ export const UiLegend: Component = () => {
 						{(entry) => (
 							<div class={s.row}>
 								<PrStateBadge compact prNumber={42} {...entry.badge} />
+								<span class={s.label}>{entry.label}</span>
+								<span class={s.desc}>{entry.description}</span>
+							</div>
+						)}
+					</For>
+				</div>
+			</div>
+
+			{/* Toolbar ahead/behind */}
+			<div class={s.group}>
+				<label class={s.groupLabel}>Toolbar Branch Counts</label>
+				<p class={s.hint}>Next to the branch name in the toolbar</p>
+				<div class={s.grid}>
+					<For each={TOOLBAR_COUNT_LEGEND}>
+						{(entry) => (
+							<div class={s.row}>
+								<span class={s.symbol}>{entry.symbol}</span>
 								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>

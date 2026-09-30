@@ -152,6 +152,21 @@ function compactStat(value: number): string {
 	return `${compact.replace(/\.0$/, "")}k`;
 }
 
+/** Marks a branch that has commits not merged into the default branch. Shared with the
+ *  Help > UI legend so the legend renders the marker the sidebar shows. */
+export const UnmergedMarker: Component = () => (
+	<span
+		class={s.branchUnmergedMarker}
+		aria-label="Unmerged commits"
+		data-tooltip="Branch has commits not merged into the default branch. Merge before deleting the branch."
+		data-tooltip-pos="bottom"
+		data-tooltip-align="right"
+		tabIndex={0}
+	>
+		<span aria-hidden="true">↑</span>
+	</span>
+);
+
 export const StatsBadge: Component<{
 	additions: number;
 	deletions: number;
@@ -661,16 +676,7 @@ export const BranchItem: Component<{
 				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || hasDiff()}>
 					<div class={s.branchBadgeStack}>
 						<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
-							<span
-								class={s.branchUnmergedMarker}
-								aria-label="Unmerged commits"
-								data-tooltip="Branch has commits not merged into the default branch. Merge before deleting the branch."
-								data-tooltip-pos="bottom"
-								data-tooltip-align="right"
-								tabIndex={0}
-							>
-								<span aria-hidden="true">↑</span>
-							</span>
+							<UnmergedMarker />
 						</Show>
 						<Show when={pr()}>
 							<span

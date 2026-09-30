@@ -3422,6 +3422,16 @@ fn repository_file() -> PathBuf {
     config_dir().join(REPOSITORIES_FILE)
 }
 
+/// Paths of the registered repositories: the keys of the `repos` map (the single
+/// owner of that shape is `repositories.json`, see `src/stores/repositories.ts`).
+pub(crate) fn registered_repo_paths() -> Vec<String> {
+    load_repositories()
+        .get("repos")
+        .and_then(|r| r.as_object())
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_repositories() -> serde_json::Value {
     load_json_config_from_path(&repository_file())

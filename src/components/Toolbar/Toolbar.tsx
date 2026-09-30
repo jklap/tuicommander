@@ -214,8 +214,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		return getRepoTextColor(activeRepoPath);
 	};
 
-	const getRepoPath = () => props.repoPath;
-	const github = useGitHub(getRepoPath);
+	const launchPath = () => activeBranch()?.worktreePath || props.repoPath;
+	// Ahead/behind belongs to the selected branch's checkout, not the repo root
+	const github = useGitHub(launchPath);
 
 	const aheadBehind = () => {
 		const gs = github.status();
@@ -225,8 +226,6 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		if (gs.behind > 0) return ` ↓${gs.behind}`;
 		return null;
 	};
-
-	const launchPath = () => activeBranch()?.worktreePath || props.repoPath;
 
 	const focusedFilePath = (): string | undefined => {
 		const editTab = editorTabsStore.getActive();
