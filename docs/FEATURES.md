@@ -1462,7 +1462,7 @@ Three pages under **Integrations**. They were one "Services & MCP" tab; each pag
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
 ### 11.8 AI Chat
-ego's own configuration; the `ego_executable` path is on General (**11.1**). Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
+ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` folder (AI Chat workspace, empty = home directory, absolute paths only) are on General (**11.1**). Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
 - Reads and writes **ego's** configuration by running ego: `config ls --json`, `models --json`, `doctor --json`, and `config set model="<slug>"`. All three reads must succeed, so the page is never a partial picture
 - Default model: a picker over every model ego knows, grouped by provider, with unavailable models disabled. A write is followed by a fresh read, so what is shown is what ego persisted. It survives a restart because ego holds it, not TUICommander
 - Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the page does not
