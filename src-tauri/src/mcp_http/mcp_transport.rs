@@ -7368,12 +7368,16 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
             }
         }
     }
-    // Clean up peer agents and inboxes left with no protocol session at all.
+    // Clean up peer agents and inboxes left with no protocol session at all,
+    // except identities someone can still reach: a one-shot `tuic` call ends
+    // its session while its PTY lives on, and dropping the identity would
+    // drop that PTY's inbox. Same rule as the idle reaper.
     let removed_tuic: Vec<String> = state
         .peer_agents
         .iter()
         .filter(|e| e.value().mcp_session_id == sid)
         .map(|e| e.key().clone())
+        .filter(|tuic| state.peer_identity_is_reapable(tuic))
         .collect();
     for tuic in &removed_tuic {
         state.peer_agents.remove(tuic);

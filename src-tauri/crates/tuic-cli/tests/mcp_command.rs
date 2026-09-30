@@ -426,7 +426,10 @@ fn mcp_deletes_its_protocol_session_after_the_call() {
     );
     assert!(output.status.success());
     let (headers, _) = requests.last().unwrap();
-    assert!(headers[0].starts_with("DELETE /mcp HTTP/1.1"), "{headers:?}");
+    assert!(
+        headers[0].starts_with("DELETE /mcp HTTP/1.1"),
+        "{headers:?}"
+    );
     assert!(
         headers
             .iter()
@@ -450,7 +453,11 @@ fn mcp_initialize_names_the_cli_process() {
     let pid = requests[0]
         .0
         .iter()
-        .find_map(|line| line.to_ascii_lowercase().strip_prefix(prefix).map(str::to_owned))
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix(prefix)
+                .map(str::to_owned)
+        })
         .expect("initialize carries x-tuic-client-pid");
     assert!(pid.trim().parse::<u32>().is_ok(), "{pid:?}");
 }
