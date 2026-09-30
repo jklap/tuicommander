@@ -4113,7 +4113,7 @@ fn flush_open_intent_before_session_removal(session_id: &str, state: &AppState) 
     }
 }
 
-fn remove_live_session_state(session_id: &str, state: &AppState) {
+pub(super) fn remove_live_session_state(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
