@@ -826,7 +826,18 @@ export async function initApp(deps: AppInitDeps) {
 	// the terminal area's current split arrangement.
 	listen<{ session_ids: string[]; layout: string }>("tmux-window-layout-requested", (event) => {
 		const { session_ids, layout } = event.payload;
-		paneLayoutStore.arrangeSessionsAsLayout(session_ids, layout);
+		// The backend's payload carries raw PTY session ids, but
+		// arrangeSessionsAsLayout operates on terminal TAB ids — translate
+		// first, same as every other session-keyed listener above. Skipping
+		// this made the call a permanent no-op: none of the raw session ids
+		// ever matched a real tab, so arrangeSessionsAsLayout's "don't
+		// clobber a split it doesn't own" guard always treated the app's own
+		// default group as unrelated and bailed out silently.
+		const termIds = session_ids
+			.map((sessionId) => terminalsStore.getTerminalForSession(sessionId))
+			.filter((id): id is string => id !== null);
+		if (termIds.length === 0) return;
+		paneLayoutStore.arrangeSessionsAsLayout(termIds, layout);
 	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
 
 	// A hardware controller (StreamDock macropad, etc.) asking the UI to

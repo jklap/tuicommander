@@ -645,6 +645,84 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("tmux-window-layout-requested event", () => {
+		// The tmux shim's `select-layout` route hands this listener raw PTY
+		// session ids, but paneLayoutStore.arrangeSessionsAsLayout operates on
+		// terminal TAB ids — the listener must translate via
+		// getTerminalForSession first, same as session-accent-color-changed and
+		// session-renamed above. Without that translation the raw session ids
+		// never match a real tab, so arrangeSessionsAsLayout's "don't clobber a
+		// split it doesn't own" guard always treats the app's own default group
+		// as unrelated and silently bails.
+		type Payload = { session_ids: string[]; layout: string };
+
+		function captureWindowLayoutRequested() {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: Payload }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "tmux-window-layout-requested") callback = handler as typeof callback;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => callback;
+		}
+
+		beforeEach(() => {
+			paneLayoutStore.reset();
+			resetGroupCounter();
+		});
+
+		it("translates PTY session ids to terminal tab ids before building the split", async () => {
+			const getCb = captureWindowLayoutRequested();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+			const term2 = terminalsStore.add(makeTerminal({ sessionId: "sess-b" }));
+
+			getCb()!({ payload: { session_ids: ["sess-a", "sess-b"], layout: "tiled" } });
+
+			// The split must be keyed by the resolved terminal tab ids, never the
+			// raw session ids — asserting on the real tree (not a spy) proves the
+			// translated ids actually produced a working split, not just that
+			// arrangeSessionsAsLayout was called with something.
+			expect(paneLayoutStore.getRoot()?.type).toBe("branch");
+			expect(paneLayoutStore.getGroupForTab(term1)).not.toBeNull();
+			expect(paneLayoutStore.getGroupForTab(term2)).not.toBeNull();
+			expect(paneLayoutStore.getGroupForTab("sess-a")).toBeNull();
+			expect(paneLayoutStore.getGroupForTab("sess-b")).toBeNull();
+		});
+
+		it("drops a session id with no bound terminal instead of passing it through raw", async () => {
+			const getCb = captureWindowLayoutRequested();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+			const arrangeSpy = vi.spyOn(paneLayoutStore, "arrangeSessionsAsLayout");
+
+			// "sess-ghost" has no matching terminal (e.g. its tab hasn't been
+			// created yet, or already closed).
+			getCb()!({ payload: { session_ids: ["sess-a", "sess-ghost"], layout: "tiled" } });
+
+			expect(arrangeSpy).toHaveBeenCalledWith([term1], "tiled");
+			arrangeSpy.mockRestore();
+		});
+
+		it("is a no-op when none of the session ids resolve to a terminal", async () => {
+			const getCb = captureWindowLayoutRequested();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const arrangeSpy = vi.spyOn(paneLayoutStore, "arrangeSessionsAsLayout");
+
+			getCb()!({ payload: { session_ids: ["sess-unknown-1", "sess-unknown-2"], layout: "tiled" } });
+
+			expect(arrangeSpy).not.toHaveBeenCalled();
+			expect(paneLayoutStore.getRoot()).toBeNull();
+			arrangeSpy.mockRestore();
+		});
+	});
+
 	it("refreshes all branch stats", async () => {
 		const deps = createMockDeps();
 		await initApp(deps);
