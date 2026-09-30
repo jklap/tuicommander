@@ -28,7 +28,8 @@ describe("refresh coordinator close guard (#1317, critic)", () => {
 		for (const path of repositoriesStore.getPaths()) repositoriesStore.remove(path);
 		structure = { main: "/repo" };
 		const repo = {
-			getInfo: vi.fn().mockResolvedValue({ branch: "main", is_git_repo: true }),
+			// Only the main checkout exists on disk: linked worktrees in these cases are really deleted.
+			getInfo: vi.fn(async (path: string) => ({ branch: "main", is_git_repo: path === "/repo" })),
 			getRepoStructure: vi.fn(async () => ({ worktree_paths: snapshot(structure), merged_branches: [] })),
 			getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} }),
 			detectOrphanWorktrees: vi.fn().mockResolvedValue([]),

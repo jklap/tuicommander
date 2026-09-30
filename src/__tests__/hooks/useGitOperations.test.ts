@@ -161,6 +161,12 @@ describe("useGitOperations", () => {
 		paneLayoutStore.reset();
 		resetGroupCounter();
 		vi.clearAllMocks();
+		// Linked worktrees under /repo/ are gone from disk unless a test says otherwise.
+		mockRepo.getInfo.mockReset();
+		mockRepo.getInfo.mockImplementation(async (path: string) => {
+			if (path.startsWith("/repo/")) return { branch: "", is_git_repo: false };
+			throw new Error(`unmocked getInfo(${path})`);
+		});
 		mockRepo.pendingOrphanCleanupAnswer.mockResolvedValue(null);
 		mockRepo.assessOrphanCleanup.mockImplementation(async (repoPath: string) =>
 			(await mockRepo.detectOrphanWorktrees(repoPath)).map((path: string) => ({ path, safe: true })),
@@ -2079,6 +2085,46 @@ describe("useGitOperations", () => {
 
 			for (const tid of tids) expect(mockCloseTerminal).toHaveBeenCalledWith(tid, true);
 			for (const name of fresh) expect(repositoriesStore.get("/repo")?.workspaces[name]).toBeUndefined();
+		});
+
+		it("keeps the terminals of worktrees whose checkout is still on disk when the snapshot omits them (#1317 live 2026-10-01 00:30/00:34)", async () => {
+			// Replays the live sequence: worktrees 33-45s old with a tab, a snapshot that lacks
+			// them (coalesced/cached, or judged by a concurrent run), no merge and no removal of
+			// these worktrees. Their directories still exist, so nothing may be closed.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			const live = ["gate/tuic-mutants", "fix/1265-scrollbar"];
+			for (const name of live) {
+				repositoriesStore.setWorkspace("/repo", name, { worktreePath: `/repo/.worktrees/${name}` });
+				const tid = terminalsStore.add(makeTerminal({ name, cwd: `/repo/.worktrees/${name}` }));
+				repositoriesStore.addTerminalToWorkspace("/repo", name, tid);
+			}
+			mockRepo.getInfo.mockImplementation(async (path: string) => ({
+				branch: "x",
+				is_git_repo: path === "/repo" || live.some((name) => path === `/repo/.worktrees/${name}`),
+			}));
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			for (const name of live) expect(repositoriesStore.get("/repo")?.workspaces[name]).toBeDefined();
+		});
+
+		it("keeps the terminals when the checkout probe fails", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			const tid = terminalsStore.add(makeTerminal({ name: "wt", cwd: "/repo/wt" }));
+			repositoriesStore.setWorkspace("/repo", "linked", { worktreePath: "/repo/wt", terminals: [tid] });
+			mockRepo.getInfo.mockRejectedValue(new Error("probe failed"));
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+
+			await gitOps.refreshAllBranchStats("/repo");
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces.linked).toBeDefined();
 		});
 
 		it("closes only live terminals from a deleted linked worktree", async () => {
