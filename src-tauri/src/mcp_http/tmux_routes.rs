@@ -488,6 +488,23 @@ async fn materialize(
         .get(label)
         .and_then(|t| t.find_pane(pane_id).and_then(|p| p.tuic_session_id.clone()))
     {
+        // `pane.tuic_session_id` is recorded (below) BEFORE the shell-readiness
+        // gate runs, so a second concurrent `materialize` call for the same
+        // still-settling pane — a real, documented shape: `tuic-cli`'s own
+        // `respawn-pane` retry-on-eager-materialize comment names exactly this
+        // (a `split-window` that eagerly materializes racing `respawn-pane` for
+        // the same pane) — must not skip the gate just because it hit this fast
+        // path instead of the fresh-spawn path below. `apply_pane_readiness_gate`
+        // is cheap to call redundantly: `wait_for_shell_idle`'s own fast path
+        // returns immediately once the shell is already idle, which is the
+        // common case here (the pane was materialized a while ago).
+        apply_pane_readiness_gate(
+            state,
+            pane_id,
+            &existing,
+            crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+        )
+        .await;
         return Ok(existing);
     }
     // `respawn-pane` — the only caller that ever materializes `new-session`'s
@@ -561,7 +578,44 @@ async fn materialize(
     if let Some(color) = pending_accent_color {
         state.set_pty_accent_color(&spawn, Some(color));
     }
+    // Shell-readiness gate: block until the freshly spawned shell reaches a real
+    // prompt (or we give up), so a caller's very next write — `respawn-pane`'s
+    // launch-command write, in the tmux shim's actual usage — cannot arrive
+    // while the shell is still mid-startup. Closes the p10k-wizard-hijack race
+    // (plans/p10k-wizard-hijack-agent-pane-spawn-race.md) at its source: raw
+    // keystrokes landing during `.zshrc` sourcing used to get eaten by
+    // Instant Prompt's own remediation menu instead of reaching the shell.
+    apply_pane_readiness_gate(
+        state,
+        pane_id,
+        &spawn,
+        crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+    )
+    .await;
     Ok(spawn)
+}
+
+/// Fail-open, not fail-hard: a shell with no detectable prompt marker (no OSC
+/// 133 integration — bash/fish without it sourced) must not hang pane creation
+/// forever, so a timeout only logs rather than erroring — `materialize` always
+/// returns `Ok` regardless of which branch this takes. `wait_for_shell_idle`
+/// unifies both readiness signals already (OSC 133 `'A'` sets `SHELL_IDLE`
+/// immediately; the silence-timer fallback reaches the same state once real
+/// prompt output goes quiet), so this one predicate covers both without new
+/// detection logic. `timeout_ms` is a parameter (not baked into the body) so a
+/// test can exercise the fail-open branch without a multi-second real wait.
+async fn apply_pane_readiness_gate(
+    state: &Arc<AppState>,
+    pane_id: &str,
+    session_id: &str,
+    timeout_ms: u64,
+) {
+    if !crate::mcp_http::mcp_transport::wait_for_shell_idle(state, session_id, timeout_ms).await {
+        tracing::warn!(
+            "materialize: pane {pane_id} (session {session_id}) never reached a ready shell \
+             prompt within {timeout_ms}ms — proceeding anyway rather than hanging pane creation"
+        );
+    }
 }
 
 pub(crate) async fn materialize_pane(
@@ -964,8 +1018,23 @@ mod tests {
             }),
         )
         .await;
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionRenamed {
+        // The shell-readiness gate (`materialize`'s own `apply_pane_readiness_gate`
+        // call, both on the fresh-spawn path above and its "already materialized"
+        // fast path) means a real, still-running shell can emit ordinary
+        // background traffic (e.g. a subsequent `PtyOsc133` prompt marker) on
+        // this same event bus between the subscribe above and the rename below —
+        // drain until `SessionRenamed` turns up rather than assuming it's the
+        // very first event, matching the sibling pattern a few tests below this
+        // one for the identical reason.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionRenamed { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionRenamed {
                 name, is_custom, ..
             }) => {
                 assert_eq!(name, "build");
@@ -989,10 +1058,16 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            rx.try_recv().is_err(),
-            "repeated select-pane -T with an unchanged title must not re-emit session-renamed"
-        );
+        // Same background-traffic caveat as above: assert no `SessionRenamed`
+        // specifically, not that the channel is silent — the still-running real
+        // shell can legitimately put other event kinds (e.g. `PtyOsc133`) on
+        // this bus regardless of the no-op rename.
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
+                "repeated select-pane -T with an unchanged title must not re-emit session-renamed, got {event:?}"
+            );
+        }
 
         // A genuinely different title still renames and emits.
         let _ = rename_pane(
@@ -1004,8 +1079,15 @@ mod tests {
             }),
         )
         .await;
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionRenamed { name, .. }) => {
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionRenamed { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionRenamed { name, .. }) => {
                 assert_eq!(name, "test");
             }
             other => panic!("expected SessionRenamed on a genuine tmux rename, got {other:?}"),
@@ -1399,6 +1481,193 @@ mod tests {
         }
     }
 
+    /// The shell-readiness gate's integration point: a real `materialize()`
+    /// spawn must reach `SHELL_IDLE` before its response is returned. Proves
+    /// `materialize` actually calls the gate (not just that `wait_for_shell_idle`
+    /// works in isolation, which `mcp_transport`'s own tests already cover).
+    #[tokio::test]
+    async fn materialize_shell_readiness_gate_reaches_idle_before_returning() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-readiness-gate";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let shell_state = state
+            .session_maps
+            .shell_states
+            .get(tuic_session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            shell_state,
+            Some(crate::pty::SHELL_IDLE),
+            "materialize must not return until the spawned shell reaches SHELL_IDLE \
+             (or the gate times out, which a real quick shell here should not hit)"
+        );
+    }
+
+    /// Fail-open at the integration point: a session rigged to never reach
+    /// idle must not make `materialize`'s gate call hang — bounded here with a
+    /// short parameterized timeout rather than the real 5s
+    /// `SHELL_READINESS_TIMEOUT_MS`, per this repo's rule against baking a
+    /// load-bearing timing bound into a test's wall-clock budget.
+    #[tokio::test]
+    async fn apply_pane_readiness_gate_does_not_hang_when_shell_never_goes_idle() {
+        use std::sync::atomic::AtomicU8;
+
+        let state = super::super::tests::test_state();
+        state.session_maps.shell_states.insert(
+            "never-idle-pane".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        // Bounded by the test harness itself: if this hangs, the test times out
+        // rather than the suite — proving the gate's own short timeout is what
+        // returns control, not an external bound saving it.
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_pane_readiness_gate(&state, "%0", "never-idle-pane", 50),
+        )
+        .await
+        .expect("apply_pane_readiness_gate must return on its own timeout, not hang");
+    }
+
+    /// Regression for a race a code review caught: `pane.tuic_session_id` is
+    /// recorded (so the "already materialized" fast path can find it) BEFORE
+    /// the fresh-spawn path's own readiness-gate call runs — so a second
+    /// concurrent `materialize` call for the same pane, landing after that
+    /// record but before the first call's gate resolves, used to hit the fast
+    /// path and return immediately with no wait at all, defeating the whole
+    /// point of this feature for exactly the concurrent-caller shape it exists
+    /// to close (`tuic-cli`'s own `respawn-pane` retry comment documents a real
+    /// instance of two callers racing to materialize the same pane). Proven
+    /// here directly against `materialize()`'s fast-path branch: a pane
+    /// already holding a `tuic_session_id` whose shell is rigged to not be
+    /// idle yet must still block the fast path until it is.
+    #[tokio::test]
+    async fn materialize_fast_path_still_waits_for_a_not_yet_idle_shell() {
+        use std::sync::atomic::Ordering;
+
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-fast-path-waits";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        // Materialize it for real once, then rig its shell back to BUSY — this
+        // simulates a second caller's `materialize` landing on the fast path
+        // (pane.tuic_session_id already set) while the shell isn't confirmed
+        // idle right now, without needing genuine spawn-level concurrency.
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        state
+            .session_maps
+            .shell_states
+            .get(&tuic_session_id)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, Ordering::Release);
+
+        let mut waiter = tokio::spawn({
+            let waiting_state = state.clone();
+            let waiting_pane_id = pane_id.clone();
+            async move {
+                materialize_pane(
+                    State(waiting_state),
+                    Path(waiting_pane_id),
+                    label_query(label),
+                    Json(MaterializePaneRequest { cwd: None }),
+                )
+                .await
+                .into_response()
+            }
+        });
+
+        // The load-bearing assertion: with a not-yet-idle shell, the fast path
+        // must NOT have completed yet. A bare final-status check can't catch
+        // this bug — the fast path returns `Ok` either way, with or without
+        // waiting — so this checks ORDERING, not just the eventual outcome.
+        let still_pending = tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiter)
+            .await
+            .is_err();
+        assert!(
+            still_pending,
+            "materialize's fast path must block on a not-yet-idle shell, not return immediately"
+        );
+
+        state
+            .session_maps
+            .shell_states
+            .get(&tuic_session_id)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: tuic_session_id.clone(),
+            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
+        });
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("the fast path must return once idle, not hang")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
     #[test]
     fn resolve_tmux_color_passes_through_real_ansi_names() {
         for name in ["red", "green", "yellow", "blue", "magenta", "cyan"] {
@@ -1572,8 +1841,20 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
+        // Same background-traffic caveat as the rename tests above: the
+        // shell-readiness gate lets a real, still-running shell put other
+        // event kinds (e.g. `PtyOsc133`) on this bus around the same time —
+        // drain until the expected event turns up rather than assuming it's
+        // the very first one.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionAccentColorChanged { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
                 assert_eq!(session_id, tuic_session_id);
                 assert_eq!(color, Some("blue".to_string()));
             }
@@ -1593,10 +1874,15 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            rx.try_recv().is_err(),
-            "the same resolved color from a sibling set-option call must not re-emit"
-        );
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    event,
+                    crate::state::AppEvent::SessionAccentColorChanged { .. }
+                ),
+                "the same resolved color from a sibling set-option call must not re-emit, got {event:?}"
+            );
+        }
     }
 
     /// Mirrors `materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`
@@ -1770,8 +2056,18 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::TmuxWindowLayoutRequested {
+        // Two real materialized panes are already running by the time this
+        // subscribes — same background-traffic caveat as the rename/accent-color
+        // tests above — drain until the expected event turns up.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::TmuxWindowLayoutRequested { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::TmuxWindowLayoutRequested {
                 session_ids,
                 layout,
             }) => {
