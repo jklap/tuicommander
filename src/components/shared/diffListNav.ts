@@ -17,4 +17,9 @@ export interface DiffListNavHandle {
 	 *  `DiffTab`, which doesn't own `BranchDiffScrollView`'s file list) still
 	 *  disable a "next" button at the last row. Reactive, same as `currentIndex`. */
 	rowCount: () => number;
+	/** Row indices currently mounted in the virtualizer's viewport (plus
+	 *  overscan) — lets a caller decide whether a live update to a specific
+	 *  row should flash-apply in place (visible) or hold behind a "Refresh"
+	 *  affordance (not currently rendered). Reactive, same as `currentIndex`. */
+	visibleIndices: () => ReadonlySet<number>;
 }

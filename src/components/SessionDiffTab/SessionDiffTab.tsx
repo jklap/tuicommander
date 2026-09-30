@@ -1,16 +1,22 @@
 import { type Component, createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js";
 import { useRepository } from "../../hooks/useRepository";
+import { listen } from "../../invoke";
+import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
 import type { EditStep, FileReview, RevertResult, SessionReview, SessionSummary } from "../../types/sessionDiff";
 import { cx } from "../../utils";
+import { classifyFingerprintedDiff, classifyNewSteps } from "../../utils/classifyReviewDiff";
 import { writeClipboard } from "../../utils/clipboard";
+import { diffOptionsFromSettings } from "../../utils/diffOptionsFromSettings";
 import { openFileAction } from "../../utils/filePreview";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { DiffOptionsMenu } from "../shared/DiffOptionsMenu";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
@@ -31,7 +37,12 @@ export interface SessionDiffTabProps {
 
 type RevertTarget = { kind: "step"; step: EditStep } | { kind: "file"; group: FileReview };
 
-const REVIEW_REFRESH_DEBOUNCE_MS = 2000;
+/** Fallback-only poll interval for a live session's working-tree-revision
+ *  refresh. Now that `watchSessionReview`'s dedicated events
+ *  (`session-review-changed`) are the primary live-update signal, this exists
+ *  purely as a safety net for when the event transport is unavailable — slow
+ *  enough that it's never the thing actually driving a normal live view. */
+const REVIEW_REFRESH_DEBOUNCE_MS = 10_000;
 
 /** Step-by-step review of everything one Claude Code session changed:
  *  grouped-by-file (default, with each file's cumulative diff and its
@@ -54,6 +65,32 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	const [openStepFiles, setOpenStepFiles] = createSignal<Set<string>>(new Set());
 	const [collapsedSteps, setCollapsedSteps] = createSignal<Set<string>>(new Set());
 	const [listHandle, setListHandle] = createSignal<DiffListNavHandle | null>(null);
+
+	// --- Live updates (session-review-changed / review-sessions-changed) ---
+	/** Chronological mode only: auto-scroll to new steps as they arrive.
+	 *  Defaults on — most reviewers watching a live session want to follow it. */
+	const [followLive, setFollowLive] = createSignal(true);
+	/** Chronological mode, Follow off: steps that arrived since the reviewer
+	 *  last had them in view — powers the "N new changes" pill. Cleared
+	 *  incrementally as the viewport scrolls past each one (see the effect
+	 *  below), not all at once, so scrolling through them naturally drains it. */
+	const [unseenStepIds, setUnseenStepIds] = createSignal<Set<string>>(new Set());
+	/** File mode: abs_paths to flash-highlight right now (a visible file's
+	 *  content just changed) — cleared per-key after the CSS fade via
+	 *  `flashTimers`, not by a single blanket timeout, so a file that flashes
+	 *  again mid-fade restarts its own timer instead of the two colliding. */
+	const [flashKeys, setFlashKeys] = createSignal<Set<string>>(new Set());
+	const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** File mode: a live update touched a file that's currently off-screen —
+	 *  held back rather than applied, so `review()` doesn't silently mutate
+	 *  content the reviewer isn't looking at. `latestFetchedReview` is the
+	 *  full fetch it came from, applied wholesale when the reviewer clicks
+	 *  "Refresh". */
+	const [pendingHiddenCount, setPendingHiddenCount] = createSignal(0);
+	const [latestFetchedReview, setLatestFetchedReview] = createSignal<SessionReview | null>(null);
+	/** File mode: a live update appended a new file below the current scroll
+	 *  position. */
+	const [hasNewFilesBelow, setHasNewFilesBelow] = createSignal(false);
 
 	const [revertTarget, setRevertTarget] = createSignal<RevertTarget | null>(null);
 	const [revertConfirmVisible, setRevertConfirmVisible] = createSignal(false);
@@ -97,12 +134,22 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	}
 
 	let reviewGen = 0;
+	/** Explicit (user-initiated) load: session switch, initial mount, the
+	 *  subagent-filter toggle, a diff-options change, or a post-revert
+	 *  refetch. Always replaces `review()` wholesale — unlike `refreshLiveReview`,
+	 *  there is no "was this already on screen" question here, since the caller
+	 *  itself just asked for this exact data. */
 	async function loadReview(sessionId: string) {
 		setReviewError(null);
 		if (!review()) setReviewLoading(true);
 		const gen = ++reviewGen;
 		try {
-			const result = await repo.getSessionReview(props.repoPath, sessionId, includeSubagents());
+			const result = await repo.getSessionReview(
+				props.repoPath,
+				sessionId,
+				includeSubagents(),
+				diffOptionsFromSettings(),
+			);
 			if (gen !== reviewGen) return;
 			setReview(result);
 			setWarningsDismissed(false);
@@ -115,6 +162,189 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 		}
 	}
 
+	/** Row indices currently in the virtualizer's viewport, mapped to the file
+	 *  they show — only meaningful in "file" mode, where a row IS a file. */
+	function visibleFileAbsPaths(): Set<string> {
+		const handle = listHandle();
+		const result = new Set<string>();
+		if (!handle) return result;
+		const currentRows = rows();
+		for (const idx of handle.visibleIndices()) {
+			const row = currentRows[idx];
+			if (row?.kind === "file") result.add(row.group.abs_path);
+		}
+		return result;
+	}
+
+	/** ~1.5s CSS fade (`.flash` in diffFileList.module.css) — per-key timers so a
+	 *  file that changes again mid-fade restarts its own animation instead of
+	 *  an earlier timer clearing it out from under the new one. */
+	function flashFiles(absPaths: string[]) {
+		if (absPaths.length === 0) return;
+		setFlashKeys((prev) => {
+			const next = new Set(prev);
+			for (const p of absPaths) next.add(p);
+			return next;
+		});
+		for (const p of absPaths) {
+			const existing = flashTimers.get(p);
+			if (existing) clearTimeout(existing);
+			flashTimers.set(
+				p,
+				setTimeout(() => {
+					flashTimers.delete(p);
+					setFlashKeys((prev) => {
+						if (!prev.has(p)) return prev;
+						const next = new Set(prev);
+						next.delete(p);
+						return next;
+					});
+				}, 1500),
+			);
+		}
+	}
+
+	/** A rough "is the reviewer already near the bottom" heuristic — the nav
+	 *  handle only exposes the topmost visible row, not a true bottom-of-range
+	 *  index, so this treats "within 2 rows of the end" as "at the bottom"
+	 *  rather than tracking the virtualizer's own end-of-range math a second
+	 *  time here. */
+	function nearBottom(): boolean {
+		const handle = listHandle();
+		if (!handle) return true;
+		return handle.currentIndex() >= handle.rowCount() - 2;
+	}
+
+	/** Live update (from a `session-review-changed` event for the session
+	 *  currently being viewed): unlike `loadReview`, this does NOT blindly
+	 *  replace `review()`. Chronological mode always applies new steps (the
+	 *  plan's "a change counts as seen once it's been in view" implies the
+	 *  data IS there, just not necessarily scrolled to) and only differs on
+	 *  whether it auto-scrolls (`followLive`) or raises the "N new changes"
+	 *  pill. File mode applies new files and on-screen changes immediately
+	 *  (flashing the latter), but holds an off-screen file's update behind
+	 *  the "Refresh (N)" pill rather than mutating content the reviewer isn't
+	 *  looking at. */
+	async function refreshLiveReview() {
+		const id = selectedSessionId();
+		if (!id) return;
+		const current = review();
+		if (!current) return; // nothing on screen yet — the explicit load path owns this case
+		let fresh: SessionReview;
+		try {
+			fresh = await repo.getSessionReview(props.repoPath, id, includeSubagents(), diffOptionsFromSettings());
+		} catch (err) {
+			// Live-update refresh failures are silent: the explicit loadReview
+			// path (session switch, manual refresh) already surfaces errors for
+			// user-initiated loads, and a transient failure here shouldn't blank
+			// out perfectly good content already on screen.
+			appLogger.error("git", "Failed to refresh a live session review", err);
+			return;
+		}
+		if (fresh.session_id !== current.session_id) return; // session changed under us mid-fetch
+
+		if (viewMode() === "chronological") {
+			const newSteps = classifyNewSteps(current.steps, fresh.steps);
+			setReview(fresh);
+			if (newSteps.length === 0) return;
+			if (followLive()) {
+				queueMicrotask(() => listHandle()?.scrollToIndex(rows().length - 1, { align: "end" }));
+			} else {
+				setUnseenStepIds((prev) => {
+					const next = new Set(prev);
+					for (const step of newSteps) next.add(step.tool_use_id);
+					return next;
+				});
+			}
+			return;
+		}
+
+		// "file" mode
+		const visible = visibleFileAbsPaths();
+		const { newKeys, changedVisible, changedHidden } = classifyFingerprintedDiff(
+			current.files.map((f) => ({ key: f.abs_path, fingerprint: f.revision })),
+			fresh.files.map((f) => ({ key: f.abs_path, fingerprint: f.revision })),
+			visible,
+		);
+
+		if (changedHidden.length === 0) {
+			setReview(fresh);
+			setPendingHiddenCount(0);
+			setLatestFetchedReview(null);
+		} else {
+			// Hybrid: fresh's files, except a changedHidden entry keeps the
+			// CURRENT (old) FileReview object, so it doesn't visually change.
+			const oldByPath = new Map(current.files.map((f) => [f.abs_path, f]));
+			const hiddenSet = new Set(changedHidden);
+			const hybridFiles = fresh.files.map((f) => (hiddenSet.has(f.abs_path) ? (oldByPath.get(f.abs_path) ?? f) : f));
+			setReview({ ...fresh, files: hybridFiles });
+			setPendingHiddenCount(changedHidden.length);
+			setLatestFetchedReview(fresh);
+		}
+		if (changedVisible.length > 0) flashFiles(changedVisible);
+		if (newKeys.length > 0 && !nearBottom()) setHasNewFilesBelow(true);
+	}
+
+	/** "Refresh (N)" pill: apply every held-back off-screen update at once. */
+	function applyPendingHiddenUpdates() {
+		const fresh = latestFetchedReview();
+		if (!fresh) return;
+		setReview(fresh);
+		setPendingHiddenCount(0);
+		setLatestFetchedReview(null);
+	}
+
+	/** "New content below" pill (file mode). */
+	function jumpToNewContentBelow() {
+		listHandle()?.scrollToIndex(Math.max(rows().length - 1, 0), { align: "end" });
+		setHasNewFilesBelow(false);
+	}
+
+	/** "N new changes" pill (chronological mode, Follow off): jumps to the
+	 *  earliest still-unseen step. */
+	function jumpToFirstUnseenStep() {
+		const ids = unseenStepIds();
+		if (ids.size === 0) return;
+		const r = review();
+		if (!r) return;
+		let minStepIndex: number | null = null;
+		for (const step of r.steps) {
+			if (ids.has(step.tool_use_id) && (minStepIndex === null || step.step_index < minStepIndex)) {
+				minStepIndex = step.step_index;
+			}
+		}
+		if (minStepIndex !== null) handleJumpToStep(minStepIndex);
+	}
+
+	// As the viewport scrolls down, drop any unseen step whose row has already
+	// scrolled past the top — it's been "in view" per the plan's own wording
+	// for when a change counts as seen. Strict less-than (not <=) so the row
+	// exactly at the top, which may only just now have appeared, isn't marked
+	// seen before the reviewer could plausibly have looked at it.
+	createEffect(() => {
+		const handle = listHandle();
+		if (!handle || viewMode() !== "chronological") return;
+		const top = handle.currentIndex();
+		const ids = unseenStepIds();
+		if (ids.size === 0) return;
+		const currentRows = rows();
+		const rowIndexByToolUseId = new Map<string, number>();
+		for (let i = 0; i < currentRows.length; i++) {
+			const row = currentRows[i];
+			if (row.kind === "step") rowIndexByToolUseId.set(row.step.tool_use_id, i);
+		}
+		let changed = false;
+		const next = new Set(ids);
+		for (const id of ids) {
+			const rowIdx = rowIndexByToolUseId.get(id);
+			if (rowIdx !== undefined && rowIdx < top) {
+				next.delete(id);
+				changed = true;
+			}
+		}
+		if (changed) setUnseenStepIds(next);
+	});
+
 	function selectSession(sessionId: string, persist = true) {
 		if (sessionId !== selectedSessionId()) {
 			// Clear the previous session's content synchronously — otherwise it
@@ -126,6 +356,12 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 			setCollapsedSteps(new Set<string>());
 			setWarningsDismissed(false);
 			scrollEl()?.scrollTo({ top: 0 });
+			// A new session starts with no live-update backlog of its own.
+			setUnseenStepIds(new Set<string>());
+			setFlashKeys(new Set<string>());
+			setPendingHiddenCount(0);
+			setLatestFetchedReview(null);
+			setHasNewFilesBelow(false);
 		}
 		setSelectedSessionId(sessionId);
 		if (persist) diffTabsStore.setSessionId(props.tabId, sessionId);
@@ -181,6 +417,76 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 		}, REVIEW_REFRESH_DEBOUNCE_MS);
 		onCleanup(() => clearTimeout(liveDebounce));
 	});
+
+	// Starts (or moves) a backend watch on the selected session's transcript —
+	// the source of the `session-review-changed`/`agent-edit-observed` events
+	// this tab and `useAppInit.ts`'s app-level listeners both react to.
+	// Ref-counted on the backend, so overlapping subscribers (this tab plus a
+	// second one open on the same session) are safe.
+	let watchedSessionId: string | null = null;
+	createEffect(() => {
+		const id = selectedSessionId();
+		if (id === watchedSessionId) return;
+		const prevId = watchedSessionId;
+		watchedSessionId = id;
+		if (prevId) void repo.unwatchSessionReview(props.repoPath, prevId);
+		if (id) void repo.watchSessionReview(props.repoPath, id);
+	});
+	onCleanup(() => {
+		if (watchedSessionId) void repo.unwatchSessionReview(props.repoPath, watchedSessionId);
+	});
+
+	// Primary live-update signal: a dedicated event for the exact session
+	// being watched, instead of the coarse revision-bump poll above. Reads
+	// `selectedSessionId()` at EVENT time (not as a tracked effect dependency),
+	// so this subscription is set up once per mount, not re-registered on
+	// every session switch.
+	createEffect(() => {
+		let unlisten: (() => void) | undefined;
+		listen<{ repo_path: string; session_id: string }>("session-review-changed", (event) => {
+			const { repo_path, session_id } = event.payload;
+			if (repo_path === props.repoPath && session_id === selectedSessionId()) void refreshLiveReview();
+		})
+			.then((fn) => {
+				unlisten = fn;
+			})
+			.catch((err) => appLogger.error("app", "Failed to register session-review-changed listener", err));
+		onCleanup(() => unlisten?.());
+	});
+
+	// The session dropdown refreshes itself as new sessions appear or existing
+	// ones grow enough to change their summary (last prompt, counts) — not
+	// only when the picker is opened by hand.
+	createEffect(() => {
+		let unlisten: (() => void) | undefined;
+		listen<{ repo_path: string }>("review-sessions-changed", (event) => {
+			if (event.payload.repo_path === props.repoPath) void loadSessions(true);
+		})
+			.then((fn) => {
+				unlisten = fn;
+			})
+			.catch((err) => appLogger.error("app", "Failed to register review-sessions-changed listener", err));
+		onCleanup(() => unlisten?.());
+	});
+
+	// A whitespace/case diff-option change re-fetches with the new options —
+	// `{defer: true}` skips the redundant fire at mount (the initial
+	// `selectSession` load already reads the current options).
+	createEffect(
+		on(
+			() => [
+				settingsStore.state.diffIgnoreLeadingWhitespace,
+				settingsStore.state.diffIgnoreTrailingWhitespace,
+				settingsStore.state.diffIgnoreWhitespaceAmount,
+				settingsStore.state.diffIgnoreCase,
+			],
+			() => {
+				const id = selectedSessionId();
+				if (id) void loadReview(id);
+			},
+			{ defer: true },
+		),
+	);
 
 	const rows = createMemo(() => {
 		const r = review();
@@ -472,6 +778,10 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 				</button>
 				<Show when={viewMode() === "chronological"}>
 					<TurnPicker turns={review()?.turns ?? []} steps={review()?.steps ?? []} onSelect={handleJumpToStep} />
+					<label class={s.checkboxLabel} title="Auto-scroll to new changes as they arrive">
+						<input type="checkbox" checked={followLive()} onChange={(e) => setFollowLive(e.currentTarget.checked)} />
+						Follow
+					</label>
 				</Show>
 				<button
 					type="button"
@@ -506,7 +816,29 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 				<button type="button" class={s.modeBtn} onClick={handleCopyAll} title="Copy the whole session's combined diff">
 					Copy all
 				</button>
+				<DiffOptionsMenu />
 			</div>
+			<Show when={viewMode() === "chronological" && !followLive() && unseenStepIds().size > 0}>
+				<div class={s.liveUpdateBar}>
+					<button type="button" class={s.pillBtn} onClick={jumpToFirstUnseenStep}>
+						{unseenStepIds().size} new change{unseenStepIds().size > 1 ? "s" : ""}
+					</button>
+				</div>
+			</Show>
+			<Show when={viewMode() === "file" && (hasNewFilesBelow() || pendingHiddenCount() > 0)}>
+				<div class={s.liveUpdateBar}>
+					<Show when={hasNewFilesBelow()}>
+						<button type="button" class={s.pillBtn} onClick={jumpToNewContentBelow}>
+							New content below
+						</button>
+					</Show>
+					<Show when={pendingHiddenCount() > 0}>
+						<button type="button" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
+							Refresh ({pendingHiddenCount()})
+						</button>
+					</Show>
+				</div>
+			</Show>
 			<SearchBar
 				visible={searchVisible()}
 				focusToken={searchFocusToken()}
@@ -542,6 +874,9 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 					<SessionDiffList
 						rows={rows()}
 						mode={mode()}
+						wrap={uiStore.state.diffSoftWrap}
+						maxLines={settingsStore.state.sessionDiffTruncateLines}
+						flashKeys={flashKeys()}
 						onOpenFile={handleOpenFile}
 						onOpenAtLine={handleOpenAtLine}
 						onRevertStep={requestRevertStep}

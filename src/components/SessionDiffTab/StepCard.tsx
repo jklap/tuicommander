@@ -17,6 +17,8 @@ import s from "./SessionDiffTab.module.css";
 export interface StepCardProps {
 	step: EditStep;
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
 	/** Show the file path in this card's own header — used in the flat
 	 *  chronological view; the grouped-by-file view already shows it once. */
 	showFilePath?: boolean;
@@ -249,6 +251,8 @@ export const StepCard: Component<StepCardProps> = (props) => {
 					<DiffViewer
 						diff={props.step.patch}
 						mode={props.mode}
+						wrap={props.wrap}
+						maxLines={props.maxLines}
 						emptyMessage="No change (this step was a no-op)"
 						contentRef={(el) => lineSelection.setContentRef(el)}
 					/>
