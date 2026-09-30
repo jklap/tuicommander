@@ -862,6 +862,19 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
     .collect()
 }
 
+/// Human-readable form of `integration_bases`, for messages.
+fn describe_bases(bases: &[String]) -> String {
+    bases
+        .iter()
+        .map(|base| {
+            base.strip_prefix("refs/heads/")
+                .or_else(|| base.strip_prefix("refs/remotes/"))
+                .unwrap_or(base)
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
 fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, String> {
     for base in bases {
         if is_ancestor(repo, tip, base)? {
@@ -2331,9 +2344,14 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     if delete_branch {
         let branch_proof = (|| -> Result<&'static str, String> {
             match lifecycle.commit_status {
-                WorkspaceCommitStatus::Unmerged => Err(format!(
-                    "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
-                )),
+                WorkspaceCommitStatus::Unmerged => {
+                    let default_branch = get_remote_default_branch(repo_path)?;
+                    let bases = integration_bases(&base_repo, &default_branch);
+                    Err(format!(
+                        "Cannot remove {branch_name}: branch has unmerged commits (compared against {}). Merge it first, or remove the worktree while keeping the branch.",
+                        describe_bases(&bases)
+                    ))
+                }
                 WorkspaceCommitStatus::PushedUnmerged => Ok("remote_tracking"),
                 WorkspaceCommitStatus::Unknown => {
                     Err(lifecycle.error.clone().unwrap_or_else(|| {
@@ -2754,7 +2772,8 @@ pub fn delete_integrated_local_branch_with_pr(
                 "archived"
             } else {
                 return Err(format!(
-                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch"
+                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
+                    describe_bases(&integration_bases(repo, &default_branch))
                 ));
             }
         }
