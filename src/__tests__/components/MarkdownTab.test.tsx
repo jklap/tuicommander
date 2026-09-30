@@ -133,8 +133,15 @@ describe("MarkdownTab agent review actions", () => {
 		await waitFor(() => expect(container.textContent).toContain("Title"));
 		expect(container.querySelector(".cm-editor")).toBeNull();
 		fireEvent.click(screen.getByText("Live"));
+		// Live renders the preview; a click on the heading swaps it for its source editor.
+		const heading = await waitFor(() => {
+			const h = container.querySelector<HTMLElement>("h1[data-comment-source-start]");
+			if (!h) throw new Error("live view not rendered");
+			return h;
+		});
+		fireEvent.click(heading);
 		await waitFor(() => {
-			if (!container.querySelector(".cm-content")) throw new Error("live editor not mounted");
+			if (!container.querySelector(".cm-content")) throw new Error("block editor not mounted");
 		});
 		const view = (await import("@codemirror/view")).EditorView.findFromDOM(
 			container.querySelector(".cm-editor") as HTMLElement,

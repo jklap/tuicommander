@@ -19,7 +19,17 @@ function setup(initial: string, disk: () => string) {
 	const { container } = render(() => <LiveMarkdownEditor content={content()} onSave={onSave} readDisk={readDisk} />);
 	const view = () => EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement) as EditorView;
 	const type = (text: string) => view().dispatch({ changes: { from: 0, insert: text }, userEvent: "input.type" });
-	return { content, setContent, onSave, readDisk, view, type };
+	/** Click the first rendered block, as a user would, to swap it for its source editor. */
+	const open = async () => {
+		const block = await waitFor(() => {
+			const el = container.querySelector<HTMLElement>("[data-comment-source-start]");
+			expect(el).not.toBeNull();
+			return el as HTMLElement;
+		});
+		fireEvent.click(block);
+		await waitFor(() => expect(container.querySelector(".cm-editor")).not.toBeNull());
+	};
+	return { content, setContent, onSave, readDisk, view, type, open, container };
 }
 
 describe("LiveMarkdownEditor disk changes", () => {
@@ -27,12 +37,13 @@ describe("LiveMarkdownEditor disk changes", () => {
 		// catches: stale text shown after an agent rewrote the file
 		const t = setup("old", () => "old");
 		t.setContent("new from agent");
-		await waitFor(() => expect(t.view().state.sliceDoc()).toBe("new from agent"));
+		await waitFor(() => expect(t.container.textContent).toContain("new from agent"));
 	});
 
 	it("keeps a dirty buffer when the file changes on disk", async () => {
 		// catches: local typing thrown away by a reload
 		const t = setup("old", () => "old");
+		await t.open();
 		t.type("mine ");
 		t.setContent("agent text");
 		await new Promise((r) => setTimeout(r, 20));
@@ -43,6 +54,7 @@ describe("LiveMarkdownEditor disk changes", () => {
 		// catches: live save overwrites a concurrent external edit
 		let disk = "old";
 		const t = setup("old", () => disk);
+		await t.open();
 		t.type("mine ");
 		disk = "old + agent edit";
 		fireEvent.click(await screen.findByText("Save"));
@@ -55,6 +67,7 @@ describe("LiveMarkdownEditor disk changes", () => {
 		// catches: no way past the banner
 		let disk = "old";
 		const t = setup("old", () => disk);
+		await t.open();
 		t.type("mine ");
 		disk = "changed";
 		fireEvent.click(await screen.findByText("Save"));
@@ -66,11 +79,13 @@ describe("LiveMarkdownEditor disk changes", () => {
 		// catches: Reload discarded, or the stale content prop re-applied afterwards
 		let disk = "old";
 		const t = setup("old", () => disk);
+		await t.open();
 		t.type("mine ");
 		disk = "changed";
 		fireEvent.click(await screen.findByText("Save"));
 		fireEvent.click(await screen.findByText("Reload"));
-		await waitFor(() => expect(t.view().state.sliceDoc()).toBe("changed"));
+		await waitFor(() => expect(t.container.textContent).toContain("changed"));
+		expect(t.container.querySelector(".cm-editor")).toBeNull();
 		expect(t.onSave).not.toHaveBeenCalled();
 		expect(screen.queryByText("Overwrite")).toBeNull();
 	});
@@ -78,6 +93,7 @@ describe("LiveMarkdownEditor disk changes", () => {
 	it("saves normally when the disk still holds what was loaded", async () => {
 		// catches: guard blocking every save
 		const t = setup("old", () => "old");
+		await t.open();
 		t.type("mine ");
 		fireEvent.click(await screen.findByText("Save"));
 		await waitFor(() => expect(t.onSave).toHaveBeenCalledWith("mine old"));

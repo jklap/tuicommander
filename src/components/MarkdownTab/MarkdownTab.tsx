@@ -603,7 +603,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						onClick={toggleLive}
 						title={
 							liveAvailable() || liveMode()
-								? t("markdownTab.live", "Live edit: marks hidden off the cursor line")
+								? t("markdownTab.live", "Live edit: click a block to edit its source")
 								: t(
 										"markdownTab.liveUnavailable",
 										"Live edit needs LF or CRLF line endings throughout and a file under 500 KB",
@@ -721,6 +721,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						return readFileContent(ft.fsRoot || ft.repoPath, ft.filePath);
 					}}
 					onDirtyChange={setLiveDirty}
+					baseDir={baseDir()}
+					onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
+					fontSize={props.tab.fontSize}
 				/>
 			</Show>
 
