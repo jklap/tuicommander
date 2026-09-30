@@ -302,6 +302,8 @@ See [`docs/backend/session-review.md`](./session-review.md).
 | `GET` | `/repo/session-review?path=&session_id=&include_subagents=` | Full step timeline + per-file cumulative diffs for one session |
 | `POST` | `/repo/session-review/revert-step` | Undo one step, keyed by `tool_use_id`, keeping every later step |
 | `POST` | `/repo/session-review/revert-file` | Restore a file to its session-start content (or delete it if created this session) |
+| `POST` | `/repo/session-review/watch` | Start (or add a ref-counted subscriber to) a live transcript watcher for one session — pushes `session-review-changed`/`review-sessions-changed`/`agent-edit-observed` over `/events` |
+| `POST` | `/repo/session-review/unwatch` | Release one subscriber's ref on the watcher above |
 
 ### Configuration
 
