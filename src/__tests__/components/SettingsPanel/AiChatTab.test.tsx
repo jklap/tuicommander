@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
 import { AiChatTab } from "../../../components/SettingsPanel/tabs/AiChatTab";
-import { HttpRpcError } from "../../../transport";
 import type { EgoCliClient } from "../../../services/egoCli";
+import { HttpRpcError } from "../../../transport";
 import type { EgoCliError, EgoProvider, EgoProviders } from "../../../types/ego";
 
 /** The projection `ego_cli.rs` sends, with only the parts a case cares about. */
