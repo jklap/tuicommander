@@ -127,6 +127,14 @@ Before manual removal, the confirmation distinguishes a branch with no commits o
 
 Both **Archive** and **Delete** remove the worktree, so one-click cleanup asks before merging when the worktree is not known to be clean or has a live terminal session. The confirmation names the sessions and what happens to the files: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, cleanup stops. Post-merge cleanup uses the same review before moving or deleting the checkout.
 
+A branch can be integrated even when its original commits are absent from
+main: squash merges and rebased copies change commit IDs. TUICommander checks
+patches, the result of a virtual merge, and revised copies with matching
+subjects. MCP exposes the reason with `repo branch_integration` or
+`repo branch_integrations`. A content-based result still needs a recovery ref
+at `refs/archive/<branch>` pointing to the current tip before safe branch
+deletion; incomplete or uncertain changes remain protected.
+
 The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 
 Removing a worktree without force also refuses uncommitted changes when the

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Branch integration proofs** — MCP can list integration verdicts for all local branches or query one branch, including its worktrees and proof. The sidebar and branch panel recognise squash merges, no-op merges and revised twin patches. Content-based verdicts require an archive of the current tip before safe deletion.
+
 - **AI Chat toasts and bubbles** — Toasts keep clear of the docked AI Chat panel and return to their usual corner when it closes or is detached. A short user message no longer shows an empty second line: its Copy button moved outside the bubble.
 - **ego Login from Settings** — Each provider under Settings → AI Chat has a Login button that opens a terminal tab running `ego auth login <provider>`; the key never passes through TUICommander.
 

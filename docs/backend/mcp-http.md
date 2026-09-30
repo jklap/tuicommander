@@ -699,7 +699,7 @@ say what was measured, not what the list costs today.
 | `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
-| `repo` | list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
+| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -1150,16 +1150,50 @@ deletion fails after a linked worktree is removed, the action still succeeds
 with `branch_delete_warning` populated so clients can report that the worktree
 was removed but the branch was kept.
 
+### MCP Tool: `repo` — Branch Integration Proofs
+
+`repo action=branch_integrations path=<repo>` returns an array for all local
+branches, including branches without a worktree. `repo action=branch_integration
+path=<repo> branch=<name>` returns one entry. Each includes:
+
+- `branch`, `tip`, `default_branch`, `commit_status`, `integrated`, and `proof`;
+- `archive_required`, `archived`, and `archive_ref` (`refs/archive/<branch>`);
+- `worktree_paths` (including the main checkout when applicable), and `error`
+  when classification cannot establish a verdict.
+
+Proofs use the same classifier as workspace lifecycle, sidebar refresh, branch
+panel and safe deletion. `ancestry`, `integration_ancestry`, `patch_equivalence`,
+`noop_merge`, and `squash_message` are structural evidence. A squash message
+must list every branch subject, either directly or as GitHub `* subject`
+bullets, and a clean virtual merge must also leave the target tree unchanged.
+`github_pr` retains the verified fetched-head proof. `in_sync` means no own
+commits need integrating; the UI still excludes same-tip branches from its
+merged list.
+
+`content_superset` is a heuristic: exact same-subject twin patches ignoring
+only context and hunk coordinates, or 100% of added lines present with their
+multiplicity in the same regular files at the target tip. The latter rejects
+deletions, changed modes, binary files and incomplete final lines. Neither
+subject matches alone nor a partial percentage proves integration. An archive
+at the exact current tip is required before deleting a branch with this proof.
+`integrated` does not mean a checked-out or protected branch can be deleted.
+Unknown verdicts never authorize deletion. The query itself changes no refs,
+index or working files; Git virtual merges may write unreachable Git objects.
+
+Cleanup tools must query this MCP surface instead of duplicating Git checks.
+Refresh the query after archiving; deletion performs a fresh safety check.
+
 ### MCP Tool: `repo` — Local Branch Delete
 
 `repo action=branch_delete` takes `path` and `branch` and returns
 `{ "ok": true, "proof": "..." }` on success. It deletes only the local branch
 ref; it does not remove a worktree or touch a remote ref. The branch must be
 absent from every checkout and must not be the current integration or default
-branch. The same ancestry and merged-PR checks as worktree removal apply; if
-those fail, patch equivalence against the default branch can prove
-a squash-merged branch safe. Merge commits without ancestry or PR proof are
-refused because patch comparison cannot cover their resolution. The final
+branch. The shared integration proofs described above apply. Content-based proofs
+require `refs/archive/<branch>` at the current tip. An archived unmerged tip
+also remains deletable through the existing `archived` recovery rule; that
+does not change its integration verdict. Merge resolution changes are never
+proved by `git cherry` or a same-subject twin comparison alone. The final
 delete compares the ref against the proved tip and refuses a moved ref.
 
 ## Upstream MCP Proxy
