@@ -152,3 +152,34 @@
   text-align: center;
   color: var(--fg-muted);
 }
+
+/* Live-update notice bar: "New content below" / "Refresh (N)" — shared with
+ * SessionDiffTab.module.css's identical rule; kept as a separate copy since
+ * this module has no import relationship with that one. */
+.liveUpdateBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-xs);
+  flex-shrink: 0;
+}
+
+.pillBtn {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--bg-primary);
+  color: var(--accent);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.pillBtn:hover {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-primary));
+}
