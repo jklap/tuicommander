@@ -3615,6 +3615,27 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
     });
 }
 
+/// The live `›` composer row of a Codex screen.
+fn find_codex_prompt_row(rows: &[String]) -> Option<usize> {
+    const CODEX_PROMPT_WINDOW: usize = 4;
+
+    let index = find_live_prompt_row(rows, CODEX_PROMPT_WINDOW, |row| {
+        let t = row.trim_start();
+        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
+            && !t.starts_with("\u{203A}\u{203A}")
+    })?;
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |last| last + 1);
+    // The fourth row only holds the composer when Codex's layout follows it: a blank
+    // row, then the footer. Output rows below a `›` mean it is a history row.
+    if index + CODEX_PROMPT_WINDOW == content_end && !rows[index + 1].trim().is_empty() {
+        return None;
+    }
+    Some(index)
+}
+
 /// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
 ///
 /// `find_chrome_cutoff` cannot be used here: Codex separators delimit tool
@@ -3627,11 +3648,7 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
 fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const PROMPT_NEIGHBORHOOD: usize = 6;
 
-    let Some(prompt_idx) = find_live_prompt_row(rows, |row| {
-        let t = row.trim_start();
-        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
-            && !t.starts_with("\u{203A}\u{203A}")
-    }) else {
+    let Some(prompt_idx) = find_codex_prompt_row(rows) else {
         return AgentScreenActivity::Unknown;
     };
     let start = prompt_idx.saturating_sub(PROMPT_NEIGHBORHOOD);
@@ -3657,8 +3674,10 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// The rendered viewport includes transcript history, so a whole-screen search
 /// can mistake an old submitted prompt or markdown quote for the live composer.
 /// Prefer the structurally detected input box (including tall custom HUDs); if
-/// no box can be identified, accept only the final three non-padding rows.
-fn find_live_prompt_row<F>(rows: &[String], is_prompt: F) -> Option<usize>
+/// no box can be identified, accept only the final `window` non-padding rows: Codex 0.159
+/// draws the composer, a blank row and a two-line footer below it, so Codex passes
+/// a window of four; every other agent passes three.
+fn find_live_prompt_row<F>(rows: &[String], window: usize, is_prompt: F) -> Option<usize>
 where
     F: Fn(&str) -> bool,
 {
@@ -3675,7 +3694,7 @@ where
     {
         return Some(prompt);
     }
-    (content_end.saturating_sub(3)..content_end)
+    (content_end.saturating_sub(window)..content_end)
         .rev()
         .find(|&index| is_prompt(&rows[index]))
 }
@@ -3715,7 +3734,7 @@ fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
 }
 
 fn gemini_prompt_present(rows: &[String]) -> bool {
-    find_live_prompt_row(rows, |row| {
+    find_live_prompt_row(rows, 3, |row| {
         let t = row.trim_start();
         t == ">" || t.starts_with("> ")
     })
@@ -9553,8 +9572,8 @@ pub(crate) fn flush_pending_injections(
 
 /// Codex can swallow the Enter of a queued command (paste-burst suppression)
 /// and keep the text in its composer. True when the tail of `text` is still on
-/// the tracked screen. Only Codex is probed: an Enter on its empty composer is
-/// a no-op, so a stale echo of already-submitted text costs nothing.
+/// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed:
+/// an Enter on its empty composer is a no-op, so a stale echo of already-submitted text costs nothing.
 fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
     let is_codex = state
         .session_maps
@@ -9575,13 +9594,40 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
     let tail: String = chars[chars.len().saturating_sub(COMPOSER_TAIL_CHARS)..]
         .iter()
         .collect();
-    !tail.is_empty()
-        && state
-            .grid
-            .vt_log_buffers
-            .get(session_id)
-            .is_some_and(|vt| squash(&vt.lock().screen_rows().join("\n")).contains(&tail))
+    if tail.is_empty() {
+        return false;
+    }
+    state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
+        let rows = vt.lock().screen_rows();
+        squash(&rows.join("\n")).contains(&tail) || composer_holds_paste_placeholder(&rows)
+    })
 }
+
+/// A long paste collapses to a placeholder that never shows the text. It sits inline
+/// in a wrapped composer, on a continuation row rather than the `›` row. With a live
+/// `›` row found, only that composer block counts (a stale placeholder in history
+/// must not draw a second Enter). A composer wrapped past the prompt window has no
+/// findable `›` row, so the bottom rows are searched instead.
+fn composer_holds_paste_placeholder(rows: &[String]) -> bool {
+    if let Some(prompt) = find_codex_prompt_row(rows) {
+        return rows[prompt..]
+            .iter()
+            .enumerate()
+            .take_while(|(offset, row)| *offset == 0 || !row.trim().is_empty())
+            .any(|(_, row)| row.contains(CODEX_PASTE_PLACEHOLDER));
+    }
+    rows.iter()
+        .rev()
+        .filter(|row| !row.trim().is_empty())
+        .take(COMPOSER_BOTTOM_ROWS)
+        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+}
+
+/// What Codex shows in its composer in place of a long pasted text.
+const CODEX_PASTE_PLACEHOLDER: &str = "[Pasted Content";
+
+/// Non-empty bottom rows searched for the paste placeholder: a wrapped composer plus its footer.
+const COMPOSER_BOTTOM_ROWS: usize = 8;
 
 /// Number of trailing characters of a queued command searched for on screen.
 const COMPOSER_TAIL_CHARS: usize = 32;

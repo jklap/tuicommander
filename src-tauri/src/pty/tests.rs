@@ -11917,6 +11917,123 @@ fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
     assert!(!uncertain, "the retry's Working screen confirms the turn");
 }
 
+/// Real Codex 0.159 PTY capture (2026-09-30): a 1967-character brief typed into
+/// a fresh composer collapses to `[Pasted Content 1967 chars]`. The first Enter
+/// (200 ms after the text, as `CODEX_ENTER_GAP` does) is swallowed and the
+/// placeholder stays in the composer; a bare Enter 5 s later submits and Codex
+/// prints `Working` 0.18 s after it. The composer never shows the text, so the
+/// retry must recognise the placeholder as the queued text.
+#[cfg(unix)]
+#[test]
+fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+
+    let bytes = agent_prompt_fixture("codex-0.159-long-brief-swallowed-enter.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("valid capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let records = capture.records;
+    let inputs: Vec<usize> = (0..records.len())
+        .filter(|&i| records[i].direction == Input)
+        .collect();
+    // Ctrl-U, brief, first Enter, second Enter.
+    assert_eq!(inputs.len(), 4);
+    let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
+    let second_enter = inputs[3];
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-long-brief-swallowed-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in records[..inputs[1]]
+        .iter()
+        .filter(|r| r.direction == Output)
+    {
+        vt.process(&record.data);
+    }
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
+        for record in records[range].iter().filter(|r| r.direction == Output) {
+            reader.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    };
+    let mut seen = Vec::new();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
+        for expected in [b"\x15".as_slice(), brief.as_bytes(), b"\r"] {
+            let write = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(write, expected);
+            seen.push(write);
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        replay(&mut reader, inputs[1]..second_enter);
+        // The terminal also answers the agent's queries through the PTY writer
+        // during the replay; only the retry Enter ends the wait.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(write) = received.recv_timeout(left) else {
+                break;
+            };
+            let is_retry = write == b"\r";
+            seen.push(write);
+            if is_retry {
+                replay(&mut reader, second_enter..records.len());
+                break;
+            }
+        }
+    });
+
+    assert_eq!(
+        seen.iter().filter(|w| w.as_slice() == b"\r").count(),
+        2,
+        "the placeholder in the composer gets exactly one retry Enter"
+    );
+    assert!(
+        !silence.lock().injection_delivery_uncertain,
+        "the retry's Working screen confirms the turn"
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok()).all(|event| !matches!(
+            event,
+            crate::state::AppEvent::McpToast { ref title, .. }
+                if title == "Agent input was not confirmed"
+        )),
+        "no false failure toast"
+    );
+}
+
 /// A retained composer that ignores the retry too stays uncertain; there is no
 /// second retry.
 #[cfg(unix)]
@@ -19675,4 +19792,93 @@ mod grid_delivery_tests {
             "repairing the desktop must not cost the browser a full frame"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// Critic tests for #1312-3ba6: the live-prompt window widened from 3 to 4 rows
+// is shared with Gemini, and the paste-placeholder probe reads 8 bottom rows.
+// ---------------------------------------------------------------------
+
+#[test]
+fn gemini_quote_four_rows_above_the_bottom_is_not_a_ready_prompt() {
+    // catches: the widened 4-row window lets a markdown quote in history read
+    // as the live Gemini composer, flipping a working agent to Ready.
+    let screen: Vec<String> = ["> quoted user prose", "output a", "output b", "output c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_eq!(
+        detect_gemini_screen_activity(&screen),
+        AgentScreenActivity::Unknown
+    );
+}
+
+#[test]
+fn codex_old_prompt_four_rows_above_the_bottom_is_not_ready() {
+    // catches: a submitted `›` row in history, with no live composer, read as Ready.
+    let screen: Vec<String> = ["› earlier prompt", "• Ran ls", "  file_a", "  file_b"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_ne!(
+        detect_codex_screen_activity(&screen),
+        AgentScreenActivity::Ready
+    );
+}
+
+fn codex_state_showing(sid: &str, lines: &[&str]) -> crate::state::AppState {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 100, 2000);
+    vt.process(lines.join("\r\n").as_bytes());
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+}
+
+#[test]
+fn placeholder_in_transcript_history_does_not_trigger_a_retry_enter() {
+    // catches: a stale `[Pasted Content` in an already-submitted transcript row
+    // within the bottom 8 rows makes composer_retains_text true for an EMPTY
+    // composer, so a second Enter is sent for a turn that was already submitted.
+    let state = codex_state_showing(
+        "crit-history-placeholder",
+        &[
+            "› [Pasted Content 1967 chars]",
+            "",
+            "• Ran cargo test",
+            "  ok",
+            "",
+            "› ",
+            "",
+            "  gpt-5 · ~/repo",
+        ],
+    );
+
+    assert!(!composer_retains_text(
+        &state,
+        "crit-history-placeholder",
+        "run the next step please"
+    ));
+}
+
+#[test]
+fn placeholder_probe_counts_non_empty_rows_not_screen_rows() {
+    // catches: the 8-row bound counting blank padding rows, or off-by-one at the edge.
+    let mut inside = vec!["› [Pasted Content 1967 chars]"];
+    inside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8"]); // placeholder is 8th from bottom
+    let state = codex_state_showing("crit-edge-in", &inside);
+    assert!(composer_retains_text(&state, "crit-edge-in", "brief"));
+
+    let mut outside = vec!["› [Pasted Content 1967 chars]"];
+    outside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]); // 9th from bottom
+    let state = codex_state_showing("crit-edge-out", &outside);
+    assert!(!composer_retains_text(&state, "crit-edge-out", "brief"));
 }
