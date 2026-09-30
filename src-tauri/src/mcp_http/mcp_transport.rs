@@ -2751,6 +2751,42 @@ async fn handle_agent_wait(
     serde_json::json!({"met": false, "timed_out": true, "new_messages": 0, "next_since": resume})
 }
 
+/// Secrets the terminal knows whole, so that a read showing only a fragment of
+/// one can still scrub it: the retained log (cached until it changes), and the
+/// screen with the history rows that wrap into it.
+fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
+    let mut secrets = buf.cached_log_secrets(|buf| {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        crate::redaction::secrets_in(&crate::redaction::join_wrapped_rows(
+            log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+        ))
+    });
+    let screen = crate::redaction::join_wrapped_rows(
+        buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
+    );
+    secrets.extend(crate::redaction::secrets_in(&format!(
+        "{}{screen}",
+        buf.screen_head_context()
+    )));
+    secrets
+}
+
+/// Redact the raw byte stream of a session. Patterns alone miss a token that
+/// the line editor redrew across a wrap (the pieces sit between cursor moves),
+/// so every secret found in the whole ring or on the terminal grid is also
+/// scrubbed wherever a fragment of it survives in `window`. (#1281-10e6)
+fn redact_raw_output(
+    state: &Arc<AppState>,
+    session_id: &str,
+    window: &str,
+    mut known: Vec<String>,
+) -> String {
+    if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
+        known.extend(terminal_secrets(&mut vt.lock()));
+    }
+    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &known))
+}
+
 fn handle_session(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -3078,19 +3114,21 @@ fn handle_session(
                         });
                     }
                 };
-                let buf = vt_log.lock();
+                let mut buf = vt_log.lock();
                 let total = buf.total_lines();
                 let oldest = buf.oldest_offset();
                 let scrollback_lines = total - oldest;
 
                 // Delta read: if since_cursor provided, return only new scrollback lines.
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
-                    let (log_lines, new_cursor) = buf.lines_since_owned(since, limit);
-                    let data: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+                    let (log_lines, new_cursor) = buf.lines_since_logical(since, limit);
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
-                    let data = crate::redaction::redact_secrets(&data.join("\n"));
+                    let data = crate::redaction::redact_wrapped_rows(
+                        log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+                        &[],
+                    );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                     insert_optional_value(
                         response
@@ -3108,21 +3146,27 @@ fn handle_session(
                 } else {
                     total.saturating_sub(limit)
                 };
-                let (log_lines, _) = buf.lines_since_owned(offset, limit);
-                let mut all_lines: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+                let (log_lines, _) = buf.lines_since_logical(offset, limit);
+                let mut all_lines: Vec<(String, bool)> =
+                    log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
                 if args["from_line"].is_null() {
-                    let mut screen = buf.screen_rows();
+                    let mut screen: Vec<(String, bool)> = buf
+                        .screen_rows()
+                        .into_iter()
+                        .zip(buf.screen_row_wraps())
+                        .collect();
                     let cutoff = {
-                        let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+                        let refs: Vec<&str> = screen.iter().map(|(row, _)| row.as_str()).collect();
                         crate::chrome::find_empty_input_box_cutoff(&refs)
                     };
                     if let Some(cutoff) = cutoff {
                         screen.truncate(cutoff);
                     }
-                    all_lines.extend(screen.into_iter().filter(|r| !r.is_empty()));
+                    all_lines.extend(screen.into_iter().filter(|(row, _)| !row.is_empty()));
                 }
-                let data = crate::redaction::redact_secrets(&all_lines.join("\n"));
+                let known = terminal_secrets(&mut buf);
+                let data = crate::redaction::redact_wrapped_rows(all_lines, &known);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                 insert_optional_value(
                     response
@@ -3142,8 +3186,24 @@ fn handle_session(
                     });
                 }
             };
-            let (bytes, total_written) = ring.lock().read_last(limit);
-            let data = crate::redaction::redact_secrets(&String::from_utf8_lossy(&bytes));
+            // Read the whole ring: the `limit` window may cut a secret in two,
+            // and the half left in the window can only be scrubbed if the
+            // redaction has seen the other half.
+            let (all_bytes, total_written, ring_secrets) = {
+                let mut ring = ring.lock();
+                let (all_bytes, total_written) = ring.read_last(usize::MAX);
+                let secrets = ring.cached_secrets(|| {
+                    crate::redaction::secrets_in(&String::from_utf8_lossy(&all_bytes))
+                });
+                (all_bytes, total_written, secrets)
+            };
+            let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
+            let data = redact_raw_output(
+                state,
+                session_id,
+                &String::from_utf8_lossy(window),
+                ring_secrets,
+            );
             let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
             insert_optional_value(
                 response
@@ -19807,6 +19867,396 @@ mod tests {
                 "{format} output must say it redacted something: {data}"
             );
         }
+    }
+
+    /// True when `data` holds any 5-character run of `secret`. Oracle for the
+    /// wrapped-token leaks of story 1281-10e6: independent of the redaction
+    /// patterns, and stricter than "the whole token is gone" (a 35-char tail of
+    /// a token is a leak even though the token no longer matches any regex).
+    fn leaks_fragment(data: &str, secret: &str) -> Option<String> {
+        let chars: Vec<char> = secret.chars().collect();
+        chars
+            .windows(5)
+            .map(|w| w.iter().collect::<String>())
+            .find(|gram| data.contains(gram.as_str()))
+    }
+
+    /// What a consumer that strips terminal control codes sees in a raw read.
+    /// Independent of the redaction code: CSI sequences, CR and BS are dropped.
+    fn visible_text(raw: &str) -> String {
+        let mut out = String::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\x1b' if chars.peek() == Some(&'[') => {
+                    chars.next();
+                    for n in chars.by_ref() {
+                        if ('@'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                '\r' | '\x08' => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    const WRAP_SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+    /// Read `session action=output` in every shape a caller can ask for and
+    /// assert that no secret fragment survives.
+    fn assert_no_fragment_in_reads(vt: crate::state::VtLogBuffer, label: &str) {
+        let state = test_state();
+        let sid = "wrap-session".to_string();
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        let reads = [
+            serde_json::json!({ "action": "output", "session_id": sid }),
+            serde_json::json!({ "action": "output", "session_id": sid, "since_cursor": 0 }),
+            serde_json::json!({ "action": "output", "session_id": sid, "from_line": 1 }),
+            serde_json::json!({ "action": "output", "session_id": sid, "limit": 2 }),
+        ];
+        for args in reads {
+            let response = handle_session(&state, &args, None);
+            let data = response["data"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label}: no data in {response}"));
+            if let Some(gram) = leaks_fragment(data, WRAP_SECRET) {
+                panic!("{label}: {args} leaked {gram:?} of the token: {data:?}");
+            }
+        }
+    }
+
+    /// RED (1281-10e6): redaction ran on grid rows, so a token that the line
+    /// editor wrapped leaked whatever part landed on another row than the
+    /// `TOKEN=` prefix. Swept over every start column so the token begins on
+    /// each side of the row boundary, at widths that give 2 and 3+ rows, and
+    /// with double-width characters ahead of it.
+    #[test]
+    fn session_output_redacts_a_secret_wrapped_across_rows() {
+        use crate::state::VtLogBuffer;
+
+        for cols in [20u16, 30, 80] {
+            for prefix_len in 0..cols as usize {
+                for filler in ["a", "日"] {
+                    let prefix = filler.repeat(prefix_len);
+                    let mut vt = VtLogBuffer::new(24, cols, 100);
+                    vt.process(format!("{prefix}GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+                    assert_no_fragment_in_reads(
+                        vt,
+                        &format!("cols={cols} prefix={prefix_len}x{filler}"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The wrapped line scrolls into the durable log a few rows per `process`
+    /// call; the token's rows are then pushed as separate log lines.
+    #[test]
+    fn session_output_redacts_a_wrapped_secret_split_across_scrollback_batches() {
+        use crate::state::VtLogBuffer;
+
+        for cols in [20u16, 37] {
+            let mut vt = VtLogBuffer::new(4, cols, 100);
+            vt.process(format!("echo GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+            for _ in 0..8 {
+                vt.process(b"filler\r\n");
+            }
+            assert_no_fragment_in_reads(vt, &format!("cols={cols} one-row batches"));
+        }
+    }
+
+    /// Every response of every small-window read, individually: a caller that
+    /// polls with a tiny `limit` sees one response at a time.
+    fn assert_windows_never_leak(vt: crate::state::VtLogBuffer, label: &str) {
+        let state = test_state();
+        let sid = "window-session".to_string();
+        let total = vt.total_lines();
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for start in 0..=total {
+            for limit in 1..=3 {
+                for key in ["since_cursor", "from_line"] {
+                    let args = serde_json::json!({
+                        "action": "output", "session_id": sid, key: start, "limit": limit
+                    });
+                    let response = handle_session(&state, &args, None);
+                    let data = response["data"].as_str().unwrap_or("");
+                    if let Some(gram) = leaks_fragment(data, WRAP_SECRET) {
+                        panic!("{label}: {args} leaked {gram:?} of the token: {data:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Scroll a wrapped token into the durable log, then `filler` more lines.
+    fn wrapped_token_in_log(
+        rows: u16,
+        cols: u16,
+        capacity: usize,
+        filler: usize,
+    ) -> crate::state::VtLogBuffer {
+        let mut vt = crate::state::VtLogBuffer::new(rows, cols, capacity);
+        vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+        for _ in 0..filler {
+            vt.process(b"filler\r\n");
+        }
+        vt
+    }
+
+    /// RED (review finding 1): `limit` cut the take mid-token and the cursor
+    /// jumped to the end, so the first row went out alone and unredacted.
+    #[test]
+    fn session_output_small_limit_polls_never_leak_a_wrapped_secret() {
+        for cols in [16u16, 20] {
+            for filler in 3..9 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, cols, 100, filler),
+                    &format!("cols={cols} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// RED (review finding 3): once the head of a wrapped line is evicted from
+    /// the bounded log, its remaining rows cannot be matched by any pattern.
+    #[test]
+    fn session_output_never_leaks_the_tail_of_a_wrapped_secret_whose_head_was_evicted() {
+        for filler in 3..10 {
+            for capacity in 2..5 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, 16, capacity, filler),
+                    &format!("capacity={capacity} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// Review finding 4: rows scrolled off while capture was suppressed (a side
+    /// panel halved the terminal) never reach the log.
+    #[test]
+    fn session_output_never_leaks_a_wrapped_secret_across_suppressed_capture() {
+        for filler_before in 0..6 {
+            for filler_after in 0..6 {
+                let build = || {
+                    let mut vt = crate::state::VtLogBuffer::new(4, 40, 100);
+                    for _ in 0..filler_before {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                    vt.resize(4, 12);
+                    for _ in 0..filler_after {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.resize(4, 40);
+                    vt
+                };
+                let label = format!("before={filler_before} after={filler_after}");
+                assert_no_fragment_in_reads(build(), &label);
+                assert_windows_never_leak(build(), &label);
+            }
+        }
+    }
+
+    /// RED (review finding 2): a redraw that moves the cursor after every
+    /// character leaves no 5-char run in the byte stream.
+    #[test]
+    fn session_output_raw_redacts_a_secret_redrawn_one_character_at_a_time() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        for with_grid in [false, true] {
+            let state = test_state();
+            let sid = "per-char-session".to_string();
+            let mut raw = String::from("echo ");
+            for c in WRAP_SECRET.chars() {
+                raw.push_str(&format!("{c}\x1b[C\x1b[D"));
+            }
+            raw.push_str("\r\n");
+            let mut ring = OutputRingBuffer::new(4096);
+            ring.write(raw.as_bytes());
+            state
+                .session_maps
+                .output_buffers
+                .insert(sid.clone(), parking_lot::Mutex::new(ring));
+            if with_grid {
+                let mut vt = VtLogBuffer::new(24, 80, 100);
+                vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                state
+                    .grid
+                    .vt_log_buffers
+                    .insert(sid.clone(), parking_lot::Mutex::new(vt));
+            }
+            let response = handle_session(
+                &state,
+                &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+                None,
+            );
+            let data = response["data"].as_str().expect("raw data");
+            assert_eq!(
+                leaks_fragment(&visible_text(data), WRAP_SECRET),
+                None,
+                "with_grid={with_grid}: {data:?}"
+            );
+        }
+    }
+
+    /// Cost of the reads agents poll: a full 10k-line log and a full 2 MB ring
+    /// with a secret every 50 lines. Run with `--run-ignored only --no-capture`.
+    #[test]
+    #[ignore = "timing measurement, not an assertion"]
+    fn session_output_read_cost_on_a_full_log() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "cost-session".to_string();
+        let mut ring = OutputRingBuffer::new(crate::state::OUTPUT_RING_BUFFER_CAPACITY);
+        let mut vt = VtLogBuffer::new(24, 80, 10_000);
+        let mut n = 0;
+        while ring.total_written() < 2 * crate::state::OUTPUT_RING_BUFFER_CAPACITY as u64 {
+            let line = if n % 50 == 0 {
+                format!("export GITHUB_TOKEN={WRAP_SECRET} # {n}")
+            } else {
+                format!(
+                    "\x1b[32m   Compiling\x1b[0m crate-{n} v1.{n}.0 (/Users/dev/project/crates/crate-{n}) done in 0.{n}s"
+                )
+            };
+            ring.write(format!("{line}\r\n").as_bytes());
+            if n < 12_000 {
+                vt.process(format!("{line}\r\n").as_bytes());
+            }
+            n += 1;
+        }
+        eprintln!("log lines={} ring lines={n}", vt.total_lines());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for (name, args) in [
+            (
+                "tail",
+                serde_json::json!({ "action": "output", "session_id": sid }),
+            ),
+            (
+                "raw",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            ),
+            (
+                "raw limit=100000",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw", "limit": 100000 }),
+            ),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..15 {
+                let start = std::time::Instant::now();
+                let response = handle_session(&state, &args, None);
+                times.push(start.elapsed());
+                assert!(response["data"].is_string());
+            }
+            times.sort();
+            eprintln!("COST {name}: median={:?} max={:?}", times[7], times[14]);
+        }
+    }
+
+    /// Reflow on a column change re-wraps rows the shell never wrapped.
+    #[test]
+    fn session_output_redacts_a_secret_after_a_resize() {
+        use crate::state::VtLogBuffer;
+
+        for (from, to) in [(220u16, 80u16), (80, 30), (30, 220)] {
+            let mut vt = VtLogBuffer::new(24, from, 100);
+            vt.process(format!("echo GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+            vt.resize(24, to);
+            assert_no_fragment_in_reads(vt, &format!("resize {from}->{to}"));
+        }
+    }
+
+    /// `format=raw` keeps ANSI, so it cannot be cleaned by re-reading the grid.
+    /// These are the bytes zsh 5.9 really wrote to an 80-column pty for the
+    /// story's command: the typed echo is redrawn around the wrap (` \r`,
+    /// `ESC[K`, an overwritten `t`), then the command's own output follows.
+    #[test]
+    fn session_output_raw_redacts_a_secret_the_line_editor_wrapped() {
+        use crate::OutputRingBuffer;
+
+        let state = test_state();
+        let sid = "wrap-raw-session".to_string();
+        let raw = "e\x08echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrs \r\x1b[Kt\rtuvwxyz0123456789\x1b[?2004l\r\r\n\
+                   GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\r\n";
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            None,
+        );
+        let data = response["data"].as_str().expect("raw data");
+        assert_eq!(
+            leaks_fragment(&visible_text(data), secret),
+            None,
+            "raw leaked: {data:?}"
+        );
+        assert!(data.contains("[REDACTED]"), "{data:?}");
+    }
+
+    /// A token typed with no echo of it elsewhere (`read`-less `export`) is
+    /// known to the terminal grid only; the raw read must still scrub the
+    /// fragments the redraw left in the byte stream.
+    #[test]
+    fn session_output_raw_redacts_a_wrapped_secret_seen_only_by_the_grid() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "wrap-raw-grid-session".to_string();
+        let raw = format!(
+            "export GITHUB_TOKEN={} \r\x1b[K{}\r\n",
+            &WRAP_SECRET[..20],
+            &WRAP_SECRET[20..]
+        );
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+        let mut vt = VtLogBuffer::new(24, 40, 100);
+        vt.process(format!("export GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            None,
+        );
+        let data = response["data"].as_str().expect("raw data");
+        assert_eq!(
+            leaks_fragment(&visible_text(data), WRAP_SECRET),
+            None,
+            "raw leaked: {data:?}"
+        );
     }
 
     /// The tail read is what an orchestrator pays for on every check of a child:

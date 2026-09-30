@@ -889,6 +889,34 @@ impl TerminalGrid {
         }
     }
 
+    /// Per screen row: true when the row soft-wraps into the next one.
+    pub fn screen_row_wraps(&self) -> Vec<bool> {
+        (0..self.term.grid().screen_lines())
+            .map(|i| self.row_wrapped(Line(i as i32)))
+            .collect()
+    }
+
+    /// True when the newest history row soft-wraps into the row below it.
+    pub fn newest_history_row_wraps(&self) -> bool {
+        self.term.grid().history_size() > 0 && self.row_wrapped(Line(-1))
+    }
+
+    /// Text of the history rows that soft-wrap into screen row 0: the head of a
+    /// logical line that is partly out of view. Empty when row 0 starts a line.
+    pub fn screen_head_context(&self) -> String {
+        let mut rows = Vec::new();
+        let mut line = -1;
+        while let Some(text) = self.row_to_text(Line(line)) {
+            if !self.row_wrapped(Line(line)) {
+                break;
+            }
+            rows.push(text);
+            line -= 1;
+        }
+        rows.reverse();
+        rows.concat()
+    }
+
     /// Borrowed view of the cached screen rows — avoids cloning when the caller
     /// only needs `&[String]` and holds the lock.  Returns `None` only when
     /// `process()` has never been called (empty `prev_rows`).
@@ -1278,6 +1306,8 @@ impl TerminalGrid {
             spans,
             cols: num_cols as u16,
             chrome: false,
+            wrapped: self.row_wrapped(line),
+            partial: false,
         }
     }
 
@@ -1323,6 +1353,7 @@ impl TerminalGrid {
             if is_continuation {
                 if let Some(prev) = result.last_mut() {
                     prev.spans.extend(log_line.spans);
+                    prev.wrapped = log_line.wrapped;
                 } else {
                     result.push(log_line);
                 }
