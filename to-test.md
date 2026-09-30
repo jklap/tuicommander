@@ -7511,6 +7511,8 @@ test can't produce.
   distinct sessions / 32 subscribers per session) refreshes only via the slow fallback (10 s after a working-tree change),
   and closing that tab never stops the other tab's updates.
 - [ ] Run the single aggregate `./scripts/check-gate.sh` once on the rebased tree. On the
-  pre-rebase `wip` branch it was blocked by the permission classifier for its last commit (each
-  piece run separately there); after the replay onto main it has not been run against this
-  series at all — per-pick replay checks were targeted only.
+  pre-rebase `wip` branch the gate first got blocked by the permission classifier (at
+  `c29a9018b`) and then passed in full at that branch's tip of the time, `5c40f3de5` (exit 0,
+  7108 Rust tests passed / 16 skipped, vitest, plugin tests, both audits). That result does NOT
+  carry over: after the replay onto main it has not been run against this series at all —
+  per-pick replay checks were targeted only.
