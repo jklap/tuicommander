@@ -79,6 +79,7 @@ interface RustAppConfig {
 	ego_executable?: string;
 	/** Optional ego user-config profile for AI Chat ACP launches. */
 	ego_profile?: string;
+	ai_chat_workspace?: string;
 }
 
 // Default values
@@ -325,6 +326,7 @@ interface SettingsStoreState {
 	 */
 	egoExecutable: string;
 	egoProfile: string;
+	aiChatWorkspace: string;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -377,6 +379,7 @@ function createSettingsStore() {
 		inlineBlameEnabled: true,
 		egoExecutable: "",
 		egoProfile: "",
+		aiChatWorkspace: "",
 	});
 
 	// Cache of the last loaded config, refreshed on hydrate and each persist.
@@ -445,6 +448,7 @@ function createSettingsStore() {
 		config.inline_blame_enabled = state.inlineBlameEnabled;
 		config.ego_executable = state.egoExecutable;
 		config.ego_profile = state.egoProfile;
+		config.ai_chat_workspace = state.aiChatWorkspace;
 		return config;
 	}
 
@@ -553,6 +557,7 @@ function createSettingsStore() {
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 				setState("egoExecutable", config.ego_executable ?? "");
 				setState("egoProfile", config.ego_profile ?? "");
+				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
 				hydrated = true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
@@ -812,6 +817,16 @@ function createSettingsStore() {
 				return false;
 			}
 			setState("egoProfile", name);
+			save();
+			return true;
+		},
+
+		/** Set the folder AI Chat runs in. Empty means the host home directory;
+		 *  anything else must be absolute, as the backend requires. */
+		setAiChatWorkspace(path: string): boolean {
+			const value = path.trim();
+			if (value !== "" && !/^([/\\]|[A-Za-z]:[/\\])/.test(value)) return false;
+			setState("aiChatWorkspace", value);
 			save();
 			return true;
 		},
