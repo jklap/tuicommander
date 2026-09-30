@@ -663,6 +663,102 @@ mod tests {
         assert!(error.contains("Direct daemon does not report a build target"));
     }
 
+    #[cfg(not(windows))]
+    fn upload_headers(content_length: Option<u64>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tuic-target", env!("TUIC_TARGET_TRIPLE").parse().unwrap());
+        headers.insert("x-tuic-sha256", "0".repeat(64).parse().unwrap());
+        headers.insert("x-tuic-confirmed-sessions", "0".parse().unwrap());
+        if let Some(length) = content_length {
+            headers.insert(
+                axum::http::header::CONTENT_LENGTH,
+                length.to_string().parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    /// Streams `sizes` bytes per chunk into `upload_inner` against a scratch daemon
+    /// executable. The digest never matches, so an upload that passes the size
+    /// limit ends in the sha256 check instead of replacing anything.
+    #[cfg(not(windows))]
+    async fn upload_chunks(sizes: &[usize]) -> (StatusCode, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tuic-remote");
+        std::fs::write(&executable, b"daemon").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        state.remote_update = Some(RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let largest = *sizes.iter().max().unwrap();
+        let shared = axum::body::Bytes::from(vec![0u8; largest]);
+        let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> =
+            sizes.iter().map(|size| Ok(shared.slice(..*size))).collect();
+        let body = Body::from_stream(futures_util::stream::iter(chunks));
+        let error = upload_inner(&state, &upload_headers(None), body)
+            .await
+            .expect_err("a zero-filled upload never matches the digest");
+        assert_eq!(std::fs::read(&executable).unwrap(), b"daemon");
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            1,
+            "a rejected upload must not leave its staging file behind"
+        );
+        error
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `>=` in the declared Content-Length check: an upload of exactly
+    // the limit would be refused with 413 before the daemon state is even read.
+    #[tokio::test]
+    async fn declared_length_equal_to_limit_is_not_rejected_but_one_more_is() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let (status, _) = upload_inner(
+            &state,
+            &upload_headers(Some(MAX_UPDATE_BYTES)),
+            Body::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+        let (status, _) = upload_inner(
+            &state,
+            &upload_headers(Some(MAX_UPDATE_BYTES + 1)),
+            Body::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `>=` and `>` -> `==` on the streamed byte count: exactly the
+    // limit reaches the sha256 check (`>=` and `==` reject it as too large).
+    #[tokio::test]
+    async fn streamed_body_of_exactly_the_limit_reaches_the_digest_check() {
+        const MIB: usize = 1024 * 1024;
+        let (status, message) = upload_chunks(&[MIB; 512]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(message, "remote binary sha256 mismatch");
+    }
+
+    #[cfg(not(windows))]
+    // Catches `>` -> `==` on the streamed byte count: the running total steps over
+    // the limit without ever landing on it, so only a `>` comparison refuses it.
+    #[tokio::test]
+    async fn streamed_body_that_steps_past_the_limit_is_rejected() {
+        const MIB: usize = 1024 * 1024;
+        let mut sizes = vec![MIB; 511];
+        sizes.push(MIB + 1);
+        let (status, message) = upload_chunks(&sizes).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(message, "remote binary too large");
+    }
+
     #[test]
     fn identity_detects_an_older_binary_even_with_the_same_version() {
         let remote = BuildIdentity {
