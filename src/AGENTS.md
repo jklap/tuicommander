@@ -322,6 +322,38 @@ not a filter on `promoted` itself, so it doesn't reopen the "~22 tests use
 synthetic non-live ids" problem the badge-display fix above had to route
 around.
 
+**`setScope()` restored the pane layout on a scope switch but never
+reconciled `terminalsStore.state.activeId` — found live 2026-09-30.** With
+one terminal manually promoted while viewing a terminal in a repo's own
+auto-consolidated scope (i.e. `isActive()` already `true` for a *different*
+scope), clicking the Global Workspace pill changed the tab strip's displayed
+name (`TabBar.tsx`'s `activeTerminals()` reacts to `isActive()`/scope
+immediately) but left the previous scope's terminal's content on screen.
+`activate()` and `resetActiveLayout()` both reconcile `activeId` to the
+newly-shown layout's `activeTabId` after restoring it (see Bug 1c above) —
+`setScope()`'s own `syncToPaneStore()` call did not, so `activeId` kept
+pointing at the OLD scope's terminal. This is only visible with a
+single-pane layout: `TerminalArea.tsx`'s flat rendering path (used whenever
+`paneLayoutStore.isSplit()` is false, i.e. exactly one promoted terminal)
+gates content visibility purely on `terminalsStore.state.activeId`, with no
+reference to the pane layout's own `activeTabId` at all — a 2+-member
+layout is a `branch` and defers to the pane's own `activeTabId` instead, so
+the same staleness there is invisible. Fixed by adding the identical
+`activeGroup?.activeTabId` → `terminalsStore.setActive(...)` reconciliation
+directly inside `setScope()`, gated on `isActive()` being true after the
+scope swap (a `setScope()` call made while inactive is either followed by
+an explicit `activate()`, which already does this reconciliation itself —
+`GlobalWorkspaceEntry.tsx`, the `toggleGlobalWorkspace` shortcut,
+`syncScopeForActiveRepo` when the repo has members — or deliberately leaves
+the workspace inactive, e.g. `syncScopeForActiveRepo`'s exit path). Any
+future code path that swaps `paneLayoutStore`'s contents without going
+through `activate()`/`resetActiveLayout()`/`setScope()` needs this same
+reconciliation — the pane-layout's `activeTabId` and `terminalsStore
+.state.activeId` are two independent pieces of state that only *look*
+redundant because `activate()` keeps them in sync by convention, not by any
+enforced invariant.
+
+
 ## SolidJS `<For>` Index Staleness
 
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
