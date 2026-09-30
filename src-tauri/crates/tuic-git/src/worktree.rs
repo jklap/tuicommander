@@ -2335,6 +2335,17 @@ pub fn delete_local_branch_impl(
     Ok(())
 }
 
+/// Ref under which the coordinator preserves a retired branch tip.
+pub fn archive_ref_name(branch_name: &str) -> String {
+    format!("refs/archive/{branch_name}")
+}
+
+/// True when `refs/archive/<branch>` points at exactly `tip`: the branch's work
+/// is preserved. An archive taken before later commits does not qualify.
+fn archived_at_tip(repo: &Path, branch_name: &str, tip: &str) -> bool {
+    rev_at(repo, &archive_ref_name(branch_name)).is_ok_and(|archived| archived == tip)
+}
+
 /// A linked checkout is never detached or removed by this operation.
 pub fn delete_integrated_local_branch(
     repo_path: &str,
@@ -2398,12 +2409,17 @@ pub fn delete_integrated_local_branch_with_pr(
             let bases = integration_bases(repo, &default_branch);
             if patches_integrated(repo, &bases, &tip)? {
                 "patch_equivalence"
+            } else if archived_at_tip(repo, branch_name, &tip) {
+                "archived"
             } else {
                 return Err(format!(
                     "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
                     describe_bases(&bases)
                 ));
             }
+        }
+        WorkspaceCommitStatus::PushedUnmerged if archived_at_tip(repo, branch_name, &tip) => {
+            "archived"
         }
         WorkspaceCommitStatus::PushedUnmerged => {
             return Err(format!(

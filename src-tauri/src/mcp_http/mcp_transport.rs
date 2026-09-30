@@ -1286,7 +1286,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
@@ -3840,10 +3840,16 @@ async fn handle_worktree(
             };
             match tokio::task::spawn_blocking(move || {
                 crate::worktree::delete_integrated_local_branch(&path, &branch)
+                    .map(|proof| (proof, branch))
             })
             .await
             {
-                Ok(Ok(proof)) => serde_json::json!({"ok":true,"proof":proof}),
+                Ok(Ok(("archived", branch))) => serde_json::json!({
+                    "ok":true,
+                    "proof":"archived",
+                    "archive_ref":tuic_git::worktree::archive_ref_name(&branch)
+                }),
+                Ok(Ok((proof, _))) => serde_json::json!({"ok":true,"proof":proof}),
                 Ok(Err(error)) => serde_json::json!({"error":error}),
                 Err(error) => {
                     serde_json::json!({"error":format!("branch deletion task failed: {error}")})
@@ -8831,6 +8837,107 @@ mod tests {
                 .is_ok(),
             "the remote-tracking ref must remain untouched"
         );
+    }
+
+    fn branch_exists(repo: &std::path::Path, reference: &str) -> bool {
+        crate::git_cli::git_cmd(repo)
+            .args(["show-ref", "--verify", reference])
+            .run_silent()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn branch_delete_accepts_archived_tip() {
+        let (_temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "feat/superseded"]);
+        branch_delete_commit(&repo, "superseded.txt", "only on this branch\n");
+        git(&["branch", "archive-src"]);
+        git(&["update-ref", "refs/archive/feat/superseded", "archive-src"]);
+        git(&["branch", "-D", "archive-src"]);
+        git(&["checkout", "integration"]);
+
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"feat/superseded"}),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["proof"], "archived", "{response}");
+        assert_eq!(
+            response["archive_ref"], "refs/archive/feat/superseded",
+            "{response}"
+        );
+        assert!(!branch_exists(&repo, "refs/heads/feat/superseded"));
+        assert!(branch_exists(&repo, "refs/archive/feat/superseded"));
+    }
+
+    #[tokio::test]
+    async fn branch_delete_refuses_stale_archive() {
+        let (_temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "moved"]);
+        branch_delete_commit(&repo, "first.txt", "archived\n");
+        git(&["update-ref", "refs/archive/moved", "moved"]);
+        branch_delete_commit(&repo, "second.txt", "committed after archiving\n");
+        git(&["checkout", "integration"]);
+
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"moved"}),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("unmerged")),
+            "{response}"
+        );
+        assert!(branch_exists(&repo, "refs/heads/moved"));
+    }
+
+    #[tokio::test]
+    async fn branch_delete_refuses_checked_out_or_default() {
+        let (temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "wt-branch"]);
+        branch_delete_commit(&repo, "wt.txt", "unique\n");
+        git(&["checkout", "integration"]);
+        // The default branch carries a commit that only it holds, archived at its exact tip.
+        git(&["checkout", "main"]);
+        branch_delete_commit(&repo, "main-only.txt", "default only\n");
+        git(&["checkout", "integration"]);
+        let linked = temp.path().join("linked");
+        git(&["worktree", "add", linked.to_str().unwrap(), "wt-branch"]);
+        for branch in ["wt-branch", "main", "integration"] {
+            git(&["update-ref", &format!("refs/archive/{branch}"), branch]);
+        }
+
+        let state = test_state();
+        let path = repo.to_string_lossy();
+        for (branch, reason) in [
+            ("wt-branch", "checked out"),
+            ("main", "default"),
+            ("integration", "current"),
+        ] {
+            let response = handle_repo(
+                &state,
+                &serde_json::json!({"action":"branch_delete","path":path,"branch":branch}),
+                false,
+            )
+            .await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|e| e.to_lowercase().contains(reason)),
+                "{branch}: {response}"
+            );
+            assert!(branch_exists(&repo, &format!("refs/heads/{branch}")));
+        }
     }
 
     #[tokio::test]
