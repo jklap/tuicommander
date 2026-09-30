@@ -9,23 +9,60 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // loading/error states, its diffGen stale-response guard, and onOpenFile
 // wiring — not the shared list/viewer's own rendering (covered by
 // DiffFileList.test.tsx / DiffViewer.test.tsx).
-const h = vi.hoisted(() => ({ getDiff: vi.fn(), openFileAction: vi.fn() }));
-vi.mock("../../components/shared/DiffFileList", () => ({
+const h = vi.hoisted(() => ({
+	getDiff: vi.fn(),
+	openFileAction: vi.fn(),
+	navScrollToIndex: vi.fn(),
+	navCurrentIndex: 0,
+	navVisibleIndices: new Set<number>() as ReadonlySet<number>,
+}));
+vi.mock("../../components/shared/DiffFileList", async (importOriginal) => ({
+	// Real implementation kept: BranchDiffScrollView's own live-update
+	// classification calls this directly (not through the mocked component)
+	// to fingerprint each file's content.
+	sectionToRawDiff: (await importOriginal<typeof import("../../components/shared/DiffFileList")>()).sectionToRawDiff,
 	DiffFileList: (props: {
 		files: Array<{ path: string; additions: number; deletions: number }>;
 		mode: string;
+		wrap?: boolean;
+		maxLines?: number;
+		flashKeys?: ReadonlySet<string>;
 		header?: JSX.Element;
 		onOpenFile?: (path: string) => void;
-	}) => (
-		<div data-testid="mock-file-list" data-mode={props.mode}>
-			{props.header}
-			{props.files.map((f) => (
-				<button type="button" data-testid={`file-${f.path}`} onClick={() => props.onOpenFile?.(f.path)}>
-					{f.path}
-				</button>
-			))}
-		</div>
-	),
+		ref?: (handle: {
+			scrollToIndex: (i: number, opts?: { align?: string }) => void;
+			currentIndex: () => number;
+			rowCount: () => number;
+			visibleIndices: () => ReadonlySet<number>;
+		}) => void;
+	}) => {
+		props.ref?.({
+			scrollToIndex: h.navScrollToIndex,
+			currentIndex: () => h.navCurrentIndex,
+			// Real `DiffFileList`'s own handle derives this from `props.files.length`
+			// live — matched here rather than a static test double, since
+			// BranchDiffScrollView's "is the reviewer near the bottom" check reads
+			// it AFTER applying a fresh (possibly longer) file list.
+			rowCount: () => props.files.length,
+			visibleIndices: () => h.navVisibleIndices,
+		});
+		return (
+			<div
+				data-testid="mock-file-list"
+				data-mode={props.mode}
+				data-wrap={String(props.wrap ?? false)}
+				data-max-lines={String(props.maxLines ?? 0)}
+				data-flash-keys={[...(props.flashKeys ?? [])].join(",")}
+			>
+				{props.header}
+				{props.files.map((f) => (
+					<button type="button" data-testid={`file-${f.path}`} onClick={() => props.onOpenFile?.(f.path)}>
+						{f.path}
+					</button>
+				))}
+			</div>
+		);
+	},
 	// Real implementation kept: BranchDiffScrollView calls this directly (not
 	// through the mocked component) to prune its own collapse-state set.
 	fileRowKeys: (files: Array<{ path: string }>) => {
@@ -47,6 +84,7 @@ vi.mock("../../utils/filePreview", () => ({
 
 import { BranchDiffScrollView } from "../../components/DiffTab/BranchDiffScrollView";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 
 const REPO = "/repo";
@@ -63,6 +101,9 @@ describe("BranchDiffScrollView", () => {
 	beforeEach(() => {
 		h.getDiff.mockReset();
 		h.openFileAction.mockReset();
+		h.navScrollToIndex.mockReset();
+		h.navCurrentIndex = 0;
+		h.navVisibleIndices = new Set();
 	});
 	afterEach(() => {
 		// setDiffViewMode() schedules a debounced save(); cancel it so it
@@ -77,8 +118,9 @@ describe("BranchDiffScrollView", () => {
 		render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
 		await settle();
 
-		expect(h.getDiff).toHaveBeenCalledWith(REPO);
-		expect(h.getDiff).toHaveBeenCalledWith(REPO, "staged");
+		const noOptions = { ignoreLeadingWs: false, ignoreTrailingWs: false, ignoreWsAmount: false, ignoreCase: false };
+		expect(h.getDiff).toHaveBeenCalledWith(REPO, undefined, noOptions);
+		expect(h.getDiff).toHaveBeenCalledWith(REPO, "staged", noOptions);
 		const calls = h.getDiff.mock.calls;
 		// staged.txt's own file entry must render before unstaged.txt's.
 		const list = document.querySelectorAll("button[data-testid^='file-']");
@@ -185,5 +227,110 @@ describe("BranchDiffScrollView", () => {
 		expect(stats?.textContent).toContain("2");
 		expect(stats?.textContent).toContain("+3");
 		expect(stats?.textContent).toContain("-2");
+	});
+
+	describe("live updates", () => {
+		it("a changed file that's currently visible flashes on a revision bump, fading after ~1.5s", async () => {
+			vi.useFakeTimers();
+			try {
+				h.getDiff.mockImplementation((_path: string, scope?: string) =>
+					Promise.resolve(scope === "staged" ? "" : diffFor("a.txt")),
+				);
+				const { getByTestId } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
+				await vi.advanceTimersByTimeAsync(0);
+				h.navVisibleIndices = new Set([0]); // the only file is on screen
+
+				h.getDiff.mockImplementation((_path: string, scope?: string) =>
+					Promise.resolve(
+						scope === "staged" ? "" : "diff --git a/a.txt b/a.txt\n@@ -1,1 +1,1 @@\n-old\n+something else entirely\n",
+					),
+				);
+				repositoriesStore.bumpRevision(REPO);
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(getByTestId("mock-file-list").dataset.flashKeys).toBe("a.txt#0");
+				await vi.advanceTimersByTimeAsync(1600);
+				expect(getByTestId("mock-file-list").dataset.flashKeys).toBe("");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("a changed file that's off-screen is held behind a 'Refresh (N)' pill until clicked", async () => {
+			h.getDiff.mockImplementation((_path: string, scope?: string) =>
+				Promise.resolve(scope === "staged" ? "" : diffFor("a.txt")),
+			);
+			const { getByText, queryByText, getByTestId } = render(() => (
+				<BranchDiffScrollView repoPath={REPO} mode="split" />
+			));
+			await settle();
+			h.navVisibleIndices = new Set(); // off-screen
+
+			h.getDiff.mockImplementation((_path: string, scope?: string) =>
+				Promise.resolve(
+					scope === "staged" ? "" : "diff --git a/a.txt b/a.txt\n@@ -1,1 +1,1 @@\n-old\n+something else\n",
+				),
+			);
+			repositoriesStore.bumpRevision(REPO);
+			await settle();
+
+			// Held back — the original content is still what's rendered.
+			expect(getByTestId("file-a.txt")).toBeTruthy();
+			expect(getByTestId("mock-file-list").dataset.flashKeys).toBe("");
+			const refreshPill = getByText("Refresh (1)");
+			refreshPill.click();
+			await settle();
+			expect(queryByText("Refresh (1)")).toBeNull();
+		});
+
+		it("a new file appended below the current scroll position shows 'New content below', which scrolls to it on click", async () => {
+			// `rowCount()` mirrors the real component's own `props.files.length`
+			// (see the mock above), so "near the bottom" is evaluated against the
+			// list's length AFTER the new file lands — a reviewer scrolled to the
+			// very top of a 3-file list is clearly not near the bottom of the
+			// 4-file list the appended file makes it.
+			h.getDiff.mockImplementation((_path: string, scope?: string) =>
+				Promise.resolve(scope === "staged" ? "" : [diffFor("a.txt"), diffFor("b.txt"), diffFor("c.txt")].join("")),
+			);
+			const { getByText } = render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
+			await settle();
+			h.navCurrentIndex = 0;
+
+			h.getDiff.mockImplementation((_path: string, scope?: string) =>
+				Promise.resolve(
+					scope === "staged" ? "" : [diffFor("a.txt"), diffFor("b.txt"), diffFor("c.txt"), diffFor("d.txt")].join(""),
+				),
+			);
+			repositoriesStore.bumpRevision(REPO);
+			await settle();
+
+			const pill = getByText("New content below");
+			pill.click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(3, { align: "end" }); // 4 files -> last index 3
+		});
+
+		it("re-fetches with the active whitespace/case options, and refetches again when they change", async () => {
+			h.getDiff.mockImplementation((_path: string, scope?: string) =>
+				Promise.resolve(scope === "staged" ? "" : diffFor("a.txt")),
+			);
+			render(() => <BranchDiffScrollView repoPath={REPO} mode="split" />);
+			await settle();
+			const initial = h.getDiff.mock.calls.length;
+
+			settingsStore.setDiffIgnoreCase(true);
+			try {
+				await settle();
+				expect(h.getDiff.mock.calls.length).toBeGreaterThan(initial);
+				expect(h.getDiff).toHaveBeenLastCalledWith(REPO, "staged", {
+					ignoreLeadingWs: false,
+					ignoreTrailingWs: false,
+					ignoreWsAmount: false,
+					ignoreCase: true,
+				});
+			} finally {
+				settingsStore.setDiffIgnoreCase(false);
+				settingsStore._testCancelPendingSave();
+			}
+		});
 	});
 });

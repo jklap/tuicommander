@@ -36,12 +36,15 @@ export function fileRowKeys(files: DiffFileSection[]): string[] {
 const FileSection: Component<{
 	file: DiffFileSection;
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
 	collapsed: boolean;
 	onToggleCollapsed: () => void;
 	onOpen?: () => void;
+	flash?: boolean;
 }> = (props) => {
 	return (
-		<div class={s.fileSection}>
+		<div class={cx(s.fileSection, props.flash && s.flash)}>
 			<div
 				class={s.fileHeader}
 				role="button"
@@ -80,7 +83,12 @@ const FileSection: Component<{
 			</div>
 			<Show when={!props.collapsed}>
 				<div class={s.fileDiff}>
-					<DiffViewer diff={sectionToRawDiff(props.file)} mode={props.mode} />
+					<DiffViewer
+						diff={sectionToRawDiff(props.file)}
+						mode={props.mode}
+						wrap={props.wrap}
+						maxLines={props.maxLines}
+					/>
 				</div>
 			</Show>
 		</div>
@@ -90,6 +98,11 @@ const FileSection: Component<{
 export interface DiffFileListProps {
 	files: DiffFileSection[];
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
+	/** Row keys (per `fileRowKeys()`) to flash-highlight right now — a live
+	 *  refresh just applied to a file that was already visible. */
+	flashKeys?: ReadonlySet<string>;
 	/** When provided, clicking a file path opens it (working-tree view). */
 	onOpenFile?: (path: string) => void;
 	/** Exposes the scroll container element (for Cmd+F search). */
@@ -165,14 +178,17 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 	});
 
 	const [currentIndex, setCurrentIndex] = createSignal(0);
+	const [visibleIndices, setVisibleIndices] = createSignal<ReadonlySet<number>>(new Set());
 	createEffect(() => {
 		const items = virtualizer.getVirtualItems();
 		if (items.length > 0) setCurrentIndex(items[0].index);
+		setVisibleIndices(new Set(items.map((i) => i.index)));
 	});
 	props.ref?.({
 		scrollToIndex: (index, opts) => virtualizer.scrollToIndex(index, { align: opts?.align ?? "auto" }),
 		currentIndex,
 		rowCount: () => props.files.length,
+		visibleIndices,
 	});
 
 	return (
@@ -200,9 +216,12 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 										<FileSection
 											file={props.files[vi.index]}
 											mode={props.mode}
+											wrap={props.wrap}
+											maxLines={props.maxLines}
 											collapsed={isCollapsed(props.files[vi.index], key())}
 											onToggleCollapsed={() => toggleCollapsed(key())}
 											onOpen={props.onOpenFile ? () => props.onOpenFile?.(props.files[vi.index].path) : undefined}
+											flash={props.flashKeys?.has(key()) ?? false}
 										/>
 									)}
 								</Show>
