@@ -70,6 +70,11 @@ pub(crate) fn ensure_live(state: &Arc<AppState>, reference: &str) -> Result<Stri
             display_name: None,
             display_name_is_custom: false,
             extra_env: Vec::new(),
+            // Unchanged from before origin tracking: `spawn_pty_session` used to
+            // hardcode `true`. A suspended record keeps no origin, and the
+            // frontend re-binds its existing suspended tab (the `session-created`
+            // listener's `suspended` branch) without reading this flag.
+            is_remote: true,
         },
     )
     .map_err(|(_, Json(error))| error.to_string())?;

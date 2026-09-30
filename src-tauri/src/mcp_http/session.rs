@@ -746,6 +746,7 @@ pub(super) fn register_pty_session(
 ) {
     let cwd = session.cwd.clone();
     let display_name = session.display_name.clone();
+    let is_remote = session.is_remote;
 
     state
         .session_maps
@@ -796,6 +797,7 @@ pub(super) fn register_pty_session(
             agent_type,
             display_name,
             parent_session,
+            is_remote,
         );
     } else {
         state.emit_pty_event(crate::pty::session_created_event(
@@ -805,6 +807,7 @@ pub(super) fn register_pty_session(
             agent_type,
             display_name,
             parent_session,
+            is_remote,
         ));
     }
     // After `SessionCreated`, on both transports now that the desktop half of
@@ -820,7 +823,6 @@ pub(super) fn register_pty_session(
 /// new one: its stable TUIC identity, requested PTY key, and terminal alias.
 /// Resume preserves the TUIC identity while minting a fresh PTY key. A requested
 /// PTY key or alias is honoured only when nothing live holds it.
-#[derive(Default)]
 pub(crate) struct RequestedIdentity {
     pub session_id: Option<String>,
     pub tuic_session: Option<String>,
@@ -840,6 +842,29 @@ pub(crate) struct RequestedIdentity {
     /// before the shell execs, so it's visible to `.zshenv`/`.zshrc`/`.zshrc.d`
     /// like every other spawn-time env var.
     pub extra_env: Vec<(String, String)>,
+    /// Whether this session should register as `is_remote: true`. Defaults to
+    /// `true` (see `Default` impl below) — every caller that doesn't
+    /// explicitly set this is an agent/MCP/tmux-shim spawn or a raw HTTP
+    /// caller (curl) with no reason to opt out. `create_session`/
+    /// `create_session_with_worktree` are the only callers that ever set this
+    /// to `false`, driven by `CreateSessionRequest::user_initiated`.
+    pub is_remote: bool,
+}
+
+impl Default for RequestedIdentity {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            tuic_session: None,
+            alias: None,
+            startup_command: None,
+            agent_type: None,
+            display_name: None,
+            display_name_is_custom: false,
+            extra_env: Vec::new(),
+            is_remote: true,
+        }
+    }
 }
 
 /// Apply caller-requested extra env vars to a freshly built PTY command.
@@ -1069,7 +1094,7 @@ fn spawn_pty_launch(
             display_name: requested.display_name,
             display_name_is_custom: requested.display_name_is_custom,
             display_name_from_spawn: false,
-            is_remote: true,
+            is_remote: requested.is_remote,
             shell: shell.clone(),
         },
         rows,
@@ -1123,6 +1148,7 @@ pub(super) async fn create_session(
                 alias: body.alias,
                 display_name: body.display_name,
                 display_name_is_custom: body.display_name_is_custom,
+                is_remote: !body.user_initiated,
                 ..Default::default()
             },
         )
@@ -1551,6 +1577,7 @@ pub(super) async fn create_session_with_worktree(
                 alias: body.config.alias,
                 display_name: body.config.display_name,
                 display_name_is_custom: body.config.display_name_is_custom,
+                is_remote: !body.config.user_initiated,
                 ..Default::default()
             },
         )
@@ -3072,6 +3099,7 @@ mod tests {
                 Some("ego".into()),
                 Some("child".into()),
                 Some("parent".into()),
+                true,
             );
             let payload = crate::event_wire::event_payload(&event);
             assert!(payload.get("tuic_session").is_some());
@@ -6204,6 +6232,7 @@ mod tests {
                     alias: None,
                     display_name: None,
                     display_name_is_custom: false,
+                    user_initiated: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "warm-test-branch".to_string(),
@@ -6311,6 +6340,7 @@ mod tests {
                     alias: None,
                     display_name: None,
                     display_name_is_custom: false,
+                    user_initiated: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "sync-test-branch".to_string(),
@@ -6350,10 +6380,9 @@ mod tests {
         );
     }
 
-    /// Characterization test, written before the origin-tracking change lands:
-    /// today `POST /sessions` always registers `is_remote: true`, with no way
-    /// for a client to opt out. Once `user_initiated` exists on the request
-    /// body, this flips to asserting `!user_initiated` still yields `true`.
+    /// `POST /sessions` with no `user_initiated` (or explicitly `false`) is
+    /// agent-created by default — a raw HTTP/curl caller with no reason to
+    /// know this field exists must stay `is_remote: true`.
     #[tokio::test]
     async fn create_session_registers_is_remote_true_by_default() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
@@ -6368,6 +6397,7 @@ mod tests {
                 alias: None,
                 display_name: None,
                 display_name_is_custom: false,
+                user_initiated: false,
             }),
         )
         .await
@@ -6391,11 +6421,55 @@ mod tests {
             .is_remote;
         assert!(
             is_remote,
-            "POST /sessions must default to is_remote: true today"
+            "POST /sessions with no user_initiated must default to is_remote: true"
         );
     }
 
-    /// Same characterization as above, for the worktree-creating twin route.
+    /// The opt-in twin of the test above: our own HTTP client (the browser UI)
+    /// sets `user_initiated: true`, which must register `is_remote: false`.
+    #[tokio::test]
+    async fn create_session_with_user_initiated_registers_is_remote_false() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session(
+            State(state.clone()),
+            Json(CreateSessionRequest {
+                rows: None,
+                cols: None,
+                shell: None,
+                cwd: None,
+                session_id: None,
+                alias: None,
+                display_name: None,
+                display_name_is_custom: false,
+                user_initiated: true,
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id");
+        let is_remote = state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .expect("session registered")
+            .lock()
+            .is_remote;
+        assert!(
+            !is_remote,
+            "user_initiated: true must register is_remote: false"
+        );
+    }
+
+    /// Same as above, for the worktree-creating twin route.
     #[cfg(unix)]
     #[tokio::test]
     #[serial_test::serial]
@@ -6414,6 +6488,7 @@ mod tests {
                     alias: None,
                     display_name: None,
                     display_name_is_custom: false,
+                    user_initiated: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "is-remote-default-branch".to_string(),
@@ -6440,7 +6515,57 @@ mod tests {
             .is_remote;
         assert!(
             is_remote,
-            "POST /sessions/worktree must default to is_remote: true today"
+            "POST /sessions/worktree with no user_initiated must default to is_remote: true"
+        );
+    }
+
+    /// The opt-in twin of the test above, for the worktree route.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_session_with_worktree_and_user_initiated_registers_is_remote_false() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session_with_worktree(
+            State(state.clone()),
+            Json(CreateSessionWithWorktreeRequest {
+                config: CreateSessionRequest {
+                    rows: None,
+                    cols: None,
+                    shell: None,
+                    cwd: None,
+                    session_id: None,
+                    alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
+                    user_initiated: true,
+                },
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "is-remote-opt-in-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY/worktree not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id");
+        let is_remote = state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .expect("session registered")
+            .lock()
+            .is_remote;
+        assert!(
+            !is_remote,
+            "user_initiated: true must register is_remote: false"
         );
     }
 
@@ -6473,6 +6598,39 @@ mod tests {
             is_remote,
             "default RequestedIdentity must register is_remote: true"
         );
+    }
+
+    /// `create_session`/`create_session_with_worktree` set `is_remote: false`
+    /// on the `RequestedIdentity` they pass in when the caller opted in via
+    /// `user_initiated: true` — `spawn_pty_session` must honor that override
+    /// rather than the `RequestedIdentity` default.
+    #[tokio::test]
+    async fn spawn_pty_session_honors_an_explicit_is_remote_false() {
+        let state = super::super::tests::test_state();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            shell,
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity {
+                is_remote: false,
+                ..Default::default()
+            },
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        let is_remote = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .expect("session registered")
+            .lock()
+            .is_remote;
+        assert!(!is_remote, "explicit is_remote: false must be honored");
     }
 
     #[test]

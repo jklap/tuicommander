@@ -226,7 +226,7 @@ export interface TerminalData {
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
 	isRemote: boolean; // Runs on a configured remote connection, not merely created through HTTP/MCP
-	isExternallyCreated: boolean; // Created via HTTP/MCP; owns cleanup, tab decoration and completion policy
+	isExternallyCreated: boolean; // Created by an agent (MCP/tmux-shim/raw HTTP), not by a human via the app or our own HTTP client (`user_initiated`); owns cleanup, tab decoration and completion policy
 	// Live backend hook evidence, never restored from persistence: codex's
 	// validated `codex_binding.session_id`, or claude's hook-reported
 	// `SessionState.agent_session_id` (tuic-hook `ccsession`, tied to this exact
