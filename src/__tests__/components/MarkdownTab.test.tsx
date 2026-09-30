@@ -450,6 +450,38 @@ describe("MarkdownTab agent review actions", () => {
 		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
 	});
 
+	it("shows the agent controls after a checkbox tick in a file without tweak comments, and sends without a tweak count", async () => {
+		fileContent = "- [ ] Approve the plan\n";
+		addAgent("Reviewer", "session-one", "/repo");
+		const tabId = mdTabsStore.add("/repo", "docs/answers.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const checkbox = await waitFor(() => {
+			const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+			expect(box).not.toBeNull();
+			return box as HTMLInputElement;
+		});
+		expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull();
+
+		fireEvent.click(checkbox);
+		const send = await screen.findByRole("button", { name: "Send changes to agent" });
+		expect(screen.getByRole("combobox", { name: "Review agent" })).not.toBeNull();
+		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+		fireEvent.click(send);
+
+		await waitFor(() =>
+			expect(mockRpc).toHaveBeenCalledWith("enqueue_agent_command", {
+				sessionId: "session-one",
+				text: expect.stringMatching(
+					/^Open \/repo\/docs\/answers\.md, re-read the whole file.*checkbox.*user's answer/s,
+				),
+			}),
+		);
+		const sent = mockRpc.mock.calls.find(([method]) => method === "enqueue_agent_command")?.[1].text as string;
+		expect(sent).not.toMatch(/\b0 embedded|tweak review/);
+		// The edit has been delivered: with no tweaks left, the controls go away until the next edit.
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Send changes to agent" })).toBeNull());
+	});
+
 	it.each([
 		["../src/main.rs:42", "/repo/src/main.rs", "src/main.rs", 42],
 		["../LICENSE", "/repo/LICENSE", "LICENSE", undefined],

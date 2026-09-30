@@ -98,6 +98,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
 	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
 	const [sendingChanges, setSendingChanges] = createSignal(false);
+	// True once this tab wrote the file (checkbox, tweak, live edit) and no agent has been told yet.
+	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
 	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 	const repo = useRepository();
 	const pty = usePty();
@@ -402,6 +404,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				return false;
 			}
 			setContent(updatedContent);
+			setEditedSinceSend(true);
 			return true;
 		} catch (err) {
 			appLogger.error("app", "writeTweakedSource: write failed", err);
@@ -523,6 +526,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const hasReviewChanges = () => reviewComments().length > 0 || editedSinceSend();
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
 		if (tab.type !== "file") return [];
@@ -545,14 +549,17 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const sessionId = selectedAgentSession();
 		const path = fullPath()?.replace(/[\r\n\0]/g, "");
 		const count = reviewComments().length;
-		if (!sessionId || !path || count === 0 || sendingChanges()) return;
+		if (!sessionId || !path || !hasReviewChanges() || sendingChanges()) return;
 		setSendingChanges(true);
 		try {
 			const noun = count === 1 ? "comment" : "comments";
+			const tweaks = count > 0 ? `apply the ${count} embedded tweak review ${noun}, ` : "";
+			const cleanup = count > 0 ? "remove each resolved tweak marker, and leave" : "and leave";
 			const outcome = await pty.enqueueCommand(
 				sessionId,
-				`Open ${path}, re-read the whole file: apply the ${count} embedded tweak review ${noun}, treat every other change since your last write (checkbox toggles, edited text) as the user's answer, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+				`Open ${path}, re-read the whole file: ${tweaks}treat every other change since your last write (checkbox toggles, edited text) as the user's answer, ${cleanup} unrelated files unchanged.`,
 			);
+			setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
 			toastsStore.add(
@@ -636,7 +643,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							{t("markdownTab.diffBtn", "Diff")}
 						</button>
 					</Show>
-					<Show when={reviewComments().length > 0}>
+					<Show when={hasReviewChanges()}>
 						<div class={s.agentActions}>
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
