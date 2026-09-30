@@ -155,12 +155,30 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		recentlyProcessedBranches.set(`${repoPath}::${branchName}`, now);
 	};
 
+	// When each workspace key was first seen by a refresh of its repo, keyed by
+	// repoPath. The backend coalesces and caches worktree_paths (GIT_CACHE_TTL,
+	// 60s), so a snapshot requested after a worktree was created can still have
+	// been computed before it. A key that appears after the repo's first refresh
+	// is not judged deleted until a snapshot requested CREATION_GRACE_WINDOW_MS
+	// later. Keys present at the first refresh are old (-Infinity): persisted
+	// rows from a previous session are pruned at once. (#1317)
+	const workspaceFirstSeen = new Map<string, Map<string, number>>();
+	const trackFirstSeen = (repoPath: string, keys: Set<string>, now: number): Map<string, number> => {
+		const known = workspaceFirstSeen.get(repoPath);
+		const next = new Map<string, number>();
+		for (const key of keys) next.set(key, known ? (known.get(key) ?? now) : Number.NEGATIVE_INFINITY);
+		workspaceFirstSeen.set(repoPath, next);
+		return next;
+	};
+
 	const refreshRepoOnce = async (repoPath: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
 		// Snapshot branch keys before any await so we can detect user-triggered
 		// removals that happen while async ops are in-flight (race condition guard).
 		const priorBranchKeys = new Set(Object.keys(repo.workspaces));
+		const requestedAt = Date.now();
+		const firstSeen = trackFirstSeen(repoPath, priorBranchKeys, requestedAt);
 		// Non-git directories: check if they became a git repo
 		if (repo.isGitRepo === false) {
 			try {
@@ -268,6 +286,14 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// worktree by the time the first repo-changed refresh fires.
 				if (isRecentlyCreated(repoPath, branchName)) {
 					appLogger.info("git", `refreshAllBranchStats: CREATION GRACE skipping "${branchName}" (just created)`, {
+						repoPath,
+					});
+					continue;
+				}
+				// The snapshot was requested after the workspace entered the store, but
+				// it may still be a cached/coalesced answer older than the checkout.
+				if (requestedAt - (firstSeen.get(branchName) ?? requestedAt) < CREATION_GRACE_WINDOW_MS) {
+					appLogger.info("git", `refreshAllBranchStats: SNAPSHOT MAY PREDATE "${branchName}" — not judging it deleted`, {
 						repoPath,
 					});
 					continue;

@@ -2049,6 +2049,38 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces.fresh).toBeDefined();
 		});
 
+		it("keeps the terminals of worktrees created in one burst when the next structure snapshot still predates them (#1317)", async () => {
+			vi.setSystemTime(new Date("2026-10-01T00:25:00Z"));
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+			await gitOps.refreshAllBranchStats("/repo");
+
+			// Three MCP-created worktrees enter the store and get terminals. The next refresh
+			// STARTS after they exist (so they are in priorBranchKeys), but the backend
+			// coalesces/caches worktree_paths and answers with a map computed before them.
+			const fresh = ["fix/1322", "fix/1276", "fix/1088"];
+			const tids = fresh.map((name) => {
+				repositoriesStore.setWorkspace("/repo", name, { worktreePath: `/repo/.worktrees/${name}` });
+				const tid = terminalsStore.add(makeTerminal({ name, cwd: `/repo/.worktrees/${name}` }));
+				repositoriesStore.addTerminalToWorkspace("/repo", name, tid);
+				return tid;
+			});
+			vi.setSystemTime(new Date("2026-10-01T00:25:05Z"));
+			await gitOps.refreshAllBranchStats("/repo");
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			for (const name of fresh) expect(repositoriesStore.get("/repo")?.workspaces[name]).toBeDefined();
+
+			// The protection is bounded: a snapshot requested after the grace window is trusted.
+			vi.setSystemTime(new Date("2026-10-01T00:26:10Z"));
+			await gitOps.refreshAllBranchStats("/repo");
+
+			for (const tid of tids) expect(mockCloseTerminal).toHaveBeenCalledWith(tid, true);
+			for (const name of fresh) expect(repositoriesStore.get("/repo")?.workspaces[name]).toBeUndefined();
+		});
+
 		it("closes only live terminals from a deleted linked worktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
