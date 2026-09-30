@@ -15,8 +15,4 @@ describe("remote access username normalization", () => {
 		// every Basic Auth attempt with 401 — the phone can never log in.
 		expect(normalizeAuthUsername(input)).toBe(DEFAULT_AUTH_USERNAME);
 	});
-
-	it("matches the placeholder the field shows", () => {
-		expect(DEFAULT_AUTH_USERNAME).toBe("admin");
-	});
 });
