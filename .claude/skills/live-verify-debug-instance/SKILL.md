@@ -94,6 +94,28 @@ that instance's own `config.json` to set `services.server.enabled: true` (and pi
 mistake for the instance failing to start at all — check that config file before assuming a
 startup failure. (Confirmed twice in real use, 2026-09-21.)
 
+## 2b. Frontend-only changes: `window.__TUIC__` works over `agent-browser eval` too, not just MCP `invoke_js`
+
+If the change is pure frontend state (a SolidJS store, no Rust/IPC involvement at all — e.g.
+`globalWorkspaceStore`), HTTP alone proves nothing, and you don't need to fall back to blind UI
+clicking either. Load the debug instance's own frontend in `agent-browser`
+(`open https://127.0.0.1:9877/` — same self-signed-cert handling as curl, use
+`--ignore-https-errors` / `AGENT_BROWSER_IGNORE_HTTPS_ERRORS=true`) and call
+`window.__TUIC__.store('<name>')` / `.terminals()` etc. via `agent-browser eval "..."` exactly like
+MCP `debug invoke_js` does against the orchestrator — it's the same debug registry, just reached
+over CDP instead of the Tauri IPC bridge. This gives you exact, structured state (not "does it look
+right in a screenshot") for a UI-driven repro, and composes with real clicks: click through the UI
+to set up a scenario, then `eval` the store to assert on it precisely, instead of parsing a
+screenshot by eye. If a specific field you need isn't in the snapshot yet, add it to that store's
+`registerDebugSnapshot(...)` call as part of the fix — cheap, and it's what makes the *next*
+session's live-check for this exact feature possible without re-deriving the technique.
+
+**Registering a scratch repo without a native folder picker:** the "Add Repository" dialog has a
+browser-mode-safe fallback — a plain `<textbox>` accepting an absolute path, not just a native
+`open_dialog` folder picker. Click "Add Repository", fill the textbox with a scratch repo path
+(`git init` a throwaway dir first, never one of Boss's real repos), click "Add". No need to
+construct a `PUT /config/repositories` versioned delta by hand for this.
+
 ## 3. If you must drive the UI: scope every click
 
 Prefer `agent-browser` (stealth wrapper, `@ref` CDP clicks resolved against a live accessibility
@@ -132,7 +154,11 @@ AGENTS.md's Visual section.
   (AGENTS.md's isolation caveat). `PUT /config` with the original values, then `GET /config` to
   confirm.
 - **Repos**: don't leave a scratch repo registered in the app (`GET /config/repositories`);
-  don't touch or add terminals in Boss's real repos.
+  don't touch or add terminals in Boss's real repos. Removing it via the UI/HTTP requires
+  constructing `PUT /config/repositories`'s versioned delta (`{id, before, after}` per repo) —
+  simpler once the instance is already stopped: hand-edit that instance's own
+  `repositories.json` directly (remove the key from `repos`, drop it from `repoOrder`, clear
+  `activeRepoPath` if it pointed there) before restarting or discarding the instance.
 - **Terminals**: if you accidentally wrote to a real session (see step 3's recovery), verify it's
   clean via `/terminal/lines` before moving on.
 
