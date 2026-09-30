@@ -1082,6 +1082,9 @@ pub struct OutputRingBuffer {
     write_pos: usize,
     /// Total bytes ever written (monotonic). Consumers use this to detect missed data.
     pub total_written: u64,
+    /// Caller-computed secrets of the whole ring, valid while `total_written`
+    /// is unchanged.
+    secret_cache: Option<(u64, Vec<String>)>,
 }
 
 impl OutputRingBuffer {
@@ -1091,7 +1094,21 @@ impl OutputRingBuffer {
             capacity,
             write_pos: 0,
             total_written: 0,
+            secret_cache: None,
         }
+    }
+
+    /// `compute()` for the ring's current content, recomputed only after a
+    /// write: polling agents read far more often than the ring changes.
+    pub fn cached_secrets(&mut self, compute: impl FnOnce() -> Vec<String>) -> Vec<String> {
+        if let Some((written, secrets)) = &self.secret_cache
+            && *written == self.total_written
+        {
+            return secrets.clone();
+        }
+        let secrets = compute();
+        self.secret_cache = Some((self.total_written, secrets.clone()));
+        secrets
     }
 
     /// Bytes this ring holds. The buffer is allocated full at construction, so
@@ -10506,6 +10523,8 @@ mod tests {
                 },
                 cols: 0,
                 chrome: false,
+                wrapped: false,
+                partial: false,
             })
             .collect()
     }
@@ -10905,6 +10924,8 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         assert_eq!(line.text(), "hello world");
     }
@@ -10952,6 +10973,8 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         let json = serde_json::to_value(&line).unwrap();
         let spans = json["spans"].as_array().unwrap();
@@ -10974,6 +10997,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "normal output");
@@ -10988,6 +11013,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11005,6 +11032,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11029,6 +11058,8 @@ mod tests {
                 }],
                 cols: 0,
                 chrome: false,
+                wrapped: false,
+                partial: false,
             };
             line.strip_structural_tokens();
             assert!(
@@ -11050,6 +11081,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
@@ -11064,6 +11097,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "The intent: of this code is clear");
@@ -11079,6 +11114,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented suggest should be stripped");
@@ -11093,6 +11130,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented intent should be stripped");
@@ -11108,6 +11147,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11125,6 +11166,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
