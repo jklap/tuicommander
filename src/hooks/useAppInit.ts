@@ -13,7 +13,7 @@ import { appLogger } from "../stores/appLogger";
 import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
-import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
+import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
@@ -295,14 +295,12 @@ function assignSessionToRepoBranch(
 	// with a count. Stable and elsewhere beats visible and arbitrary. `repoPath`
 	// stays null above, so `reconcileTerminalOwnership` still walks the tab home
 	// the moment a repo claims its cwd.
-	// DEFERRED (2026-09-10) — the sidebar entry reads `hasPromoted()`, which counts
-	// only the CURRENT scope, so while `useWorktreeConsolidation` holds the store on
-	// a repo scope this tab is parked correctly but its badge is not on screen. It
-	// is still reachable (the session exists, reconcile re-homes it on registration)
-	// and consolidation is opt-in, so this waits for a real report rather than a
-	// speculative change to what the badge counts.
+	// `promote` always targets `MANUAL_SCOPE` (see its doc comment) regardless of
+	// whatever scope is ambient, and the sidebar badge reads that scope
+	// specifically too — so this parked tab's badge is always on screen, even
+	// while `useWorktreeConsolidation` holds the store on a repo scope.
 	terminalsStore.setRepoPath(terminalId, null);
-	globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
+	globalWorkspaceStore.promote(terminalId);
 
 	// Which repo the user would have to register to fix this. Without it the
 	// warning named only the symptom.

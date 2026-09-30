@@ -26,7 +26,9 @@ vi.mock("../../stores/ui", async () => {
 vi.mock("../../stores/settings", () => ({
 	settingsStore: { isAiChatEnabled: () => true, state: { suggestFollowups: false } },
 }));
-vi.mock("../../stores/globalWorkspace", () => ({ globalWorkspaceStore: { isActive: () => false } }));
+vi.mock("../../stores/globalWorkspace", () => ({
+	globalWorkspaceStore: { isActive: () => false, isManualWorkspaceActive: () => false },
+}));
 vi.mock("../../stores/diffTabs", () => ({
 	diffTabsStore: { add: () => {}, getIds: () => [], state: { activeId: null } },
 }));

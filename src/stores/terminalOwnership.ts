@@ -1,7 +1,7 @@
 import { batch } from "solid-js";
 import { pathStartsWith } from "../utils/pathUtils";
 import { appLogger } from "./appLogger";
-import { globalWorkspaceStore, MANUAL_SCOPE } from "./globalWorkspace";
+import { globalWorkspaceStore } from "./globalWorkspace";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
@@ -66,7 +66,7 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 			const current = repositoriesStore.findOwnerForTerminal(terminalId);
 			if (current) repositoriesStore.removeTerminalFromWorkspace(current.repoPath, current.workspaceId, terminalId);
 			terminalsStore.setRepoPath(terminalId, null);
-			globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
+			globalWorkspaceStore.promote(terminalId);
 			continue;
 		}
 
@@ -164,7 +164,7 @@ export function removeWorktreeWorkspace(repoPath: string, workspaceId: string): 
 			reconcileTerminalOwnership(id);
 			if (!repositoriesStore.findOwnerForTerminal(id)) {
 				terminalsStore.setRepoPath(id, null);
-				globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+				globalWorkspaceStore.promote(id);
 			}
 		}
 	});

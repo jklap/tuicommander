@@ -43,7 +43,7 @@ function parkedAgent() {
 		makeTerminal({ name: "parity-ego", sessionId: "ego-session", agentType: "ego", cwd: "/unregistered/ego" }),
 	);
 	terminalsStore.update(id, { shellState: "idle" });
-	globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+	globalWorkspaceStore.promote(id);
 	return id;
 }
 
@@ -159,7 +159,9 @@ describe("Activity Dashboard session navigation", () => {
 		const previous = coordinator();
 		const agent = parkedAgent();
 		globalWorkspaceStore.setScope(repoPath);
-		globalWorkspaceStore.promote(previous);
+		// `promote` always targets MANUAL_SCOPE; a repo's consolidated scope is
+		// filled by `syncScopeMembers` (what `useWorktreeConsolidation` does).
+		globalWorkspaceStore.syncScopeMembers(repoPath, [previous]);
 		globalWorkspaceStore.activate();
 
 		navigateToTerminal(agent);
