@@ -19793,3 +19793,92 @@ mod grid_delivery_tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// Critic tests for #1312-3ba6: the live-prompt window widened from 3 to 4 rows
+// is shared with Gemini, and the paste-placeholder probe reads 8 bottom rows.
+// ---------------------------------------------------------------------
+
+#[test]
+fn gemini_quote_four_rows_above_the_bottom_is_not_a_ready_prompt() {
+    // catches: the widened 4-row window lets a markdown quote in history read
+    // as the live Gemini composer, flipping a working agent to Ready.
+    let screen: Vec<String> = ["> quoted user prose", "output a", "output b", "output c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_eq!(
+        detect_gemini_screen_activity(&screen),
+        AgentScreenActivity::Unknown
+    );
+}
+
+#[test]
+fn codex_old_prompt_four_rows_above_the_bottom_is_not_ready() {
+    // catches: a submitted `›` row in history, with no live composer, read as Ready.
+    let screen: Vec<String> = ["› earlier prompt", "• Ran ls", "  file_a", "  file_b"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_ne!(
+        detect_codex_screen_activity(&screen),
+        AgentScreenActivity::Ready
+    );
+}
+
+fn codex_state_showing(sid: &str, lines: &[&str]) -> std::sync::Arc<crate::state::AppState> {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 100, 2000);
+    vt.process(lines.join("\r\n").as_bytes());
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+}
+
+#[test]
+fn placeholder_in_transcript_history_does_not_trigger_a_retry_enter() {
+    // catches: a stale `[Pasted Content` in an already-submitted transcript row
+    // within the bottom 8 rows makes composer_retains_text true for an EMPTY
+    // composer, so a second Enter is sent for a turn that was already submitted.
+    let state = codex_state_showing(
+        "crit-history-placeholder",
+        &[
+            "› [Pasted Content 1967 chars]",
+            "",
+            "• Ran cargo test",
+            "  ok",
+            "",
+            "› ",
+            "",
+            "  gpt-5 · ~/repo",
+        ],
+    );
+
+    assert!(!composer_retains_text(
+        &state,
+        "crit-history-placeholder",
+        "run the next step please"
+    ));
+}
+
+#[test]
+fn placeholder_probe_counts_non_empty_rows_not_screen_rows() {
+    // catches: the 8-row bound counting blank padding rows, or off-by-one at the edge.
+    let mut inside = vec!["› [Pasted Content 1967 chars]"];
+    inside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8"]); // placeholder is 8th from bottom
+    let state = codex_state_showing("crit-edge-in", &inside);
+    assert!(composer_retains_text(&state, "crit-edge-in", "brief"));
+
+    let mut outside = vec!["› [Pasted Content 1967 chars]"];
+    outside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]); // 9th from bottom
+    let state = codex_state_showing("crit-edge-out", &outside);
+    assert!(!composer_retains_text(&state, "crit-edge-out", "brief"));
+}
