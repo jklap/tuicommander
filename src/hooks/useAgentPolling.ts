@@ -5,10 +5,19 @@ import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
 import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
 import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
+import { verifyAndBuildResumeCommand } from "../utils/agentSession";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
+
+type BackendResumableSession = {
+	agent_type: string;
+	session_id: string;
+	title?: string | null;
+	cwd?: string | null;
+	end_reason?: string | null;
+};
 
 type BackendSessionState = {
 	shell_state?: string;
@@ -21,6 +30,12 @@ type BackendSessionState = {
 	declared_background_work?: boolean;
 	queued_commands?: number;
 	last_activity_ms?: number;
+	resumable_session?: BackendResumableSession | null;
+	// Hook-reported session id (`tuic-hook`'s `ccsession` verb) — set only for
+	// a hook-instrumented Claude session, exact by construction. See
+	// `applySessionState`'s handling: this is preferred over disk-discovery's
+	// own `agentSessionId` write whenever present.
+	agent_session_id?: string | null;
 };
 
 type SessionLifecycleResponse = {
@@ -92,6 +107,17 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		lastActivityAt: state?.last_activity_ms ?? null,
 		...(shellState !== undefined ? { shellState } : {}),
 	});
+	// Issue #119's residual gap: prefer the hook-reported session id (exact,
+	// tied to this exact pty's own OSC stream) over whatever disk-discovery
+	// wrote — always wins when present, never actively cleared from mere
+	// absence here (that's `detectAgentForTerminal`'s job, at the same points
+	// it already clears `agentSessionId` on an agent-type transition).
+	if (state?.agent_session_id) {
+		terminalsStore.update(termId, {
+			agentSessionId: state.agent_session_id,
+			agentSessionIdIsAuthoritative: true,
+		});
+	}
 	if (wasAwaiting !== isAwaiting) {
 		pluginRegistry.dispatchStructuredEvent(
 			"awaiting",
@@ -99,6 +125,61 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 			sessionId,
 		);
 	}
+	applyResumableSession(termId, state?.resumable_session ?? null);
+}
+
+/**
+ * Offer a resume banner for the exit snapshot the backend took the instant it
+ * confirmed a hook-instrumented Claude session exited (`resumable_session` on
+ * `SessionState`, `clear_agent_type_on_confirmed_shell` in pty.rs). Dedups on
+ * `resumeOfferedFor` so a re-published, unchanged snapshot never re-verifies.
+ * The "a later ccsession cleared it" branch is one of two independent clears
+ * for a stale exit banner — see `detectAgentForTerminal`'s own clear for the
+ * other (a differently-typed agent starting next, which never touches
+ * `resumable_session` at all).
+ */
+function applyResumableSession(termId: string, resumable: BackendResumableSession | null): void {
+	const current = terminalsStore.get(termId);
+	if (!current) return;
+	if (!resumable) {
+		if (current.pendingResumeSource === "exit") {
+			terminalsStore.update(termId, {
+				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
+			});
+		}
+		return;
+	}
+	if (current.resumeOfferedFor === resumable.session_id) return;
+	terminalsStore.update(termId, { resumeOfferedFor: resumable.session_id });
+
+	const agentType = toAgentType(resumable.agent_type);
+	if (!agentType) return; // no other agent reports a hook-provided session id today
+
+	verifyAndBuildResumeCommand(
+		agentType,
+		resumable.cwd ?? current.cwd ?? null,
+		current.tuicSession ?? null,
+		resumable.session_id,
+		current.agentLaunchCommand ?? null,
+	)
+		.then((cmd) => {
+			if (!cmd) return;
+			// Terminal may have been removed, or a newer resumable_session may
+			// have superseded this one, while the verify round-trip was in flight.
+			const stillCurrent = terminalsStore.get(termId);
+			if (!stillCurrent || stillCurrent.resumeOfferedFor !== resumable.session_id) return;
+			terminalsStore.update(termId, {
+				pendingResumeCommand: cmd,
+				pendingResumeTitle: resumable.title ?? null,
+				pendingResumeSource: "exit",
+			});
+		})
+		.catch((e) => {
+			appLogger.warn("terminal", "Exit resume command verification failed", { error: String(e) });
+		});
 }
 
 /**
@@ -258,7 +339,39 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 
 		// Reset agent-specific state carried over from the previous agent.
 		if (prevAgentType !== null) {
-			terminalsStore.update(termId, { agentSessionId: null });
+			terminalsStore.update(termId, { agentSessionId: null, agentSessionIdIsAuthoritative: false });
+		}
+
+		// A fresh agent starting in this pane makes a lingering exit-sourced
+		// resume banner stale — belt-and-suspenders alongside the
+		// `resumable_session`-driven clear in `applySessionState` below, which
+		// only fires for a NEW Claude `ccsession` and would never see (e.g.) a
+		// different agent type launching next in the same pane.
+		//
+		// Re-read the store fresh here (not the `current` snapshot taken
+		// before the `await` above) and check `resumeOfferedFor`, not just
+		// `pendingResumeSource === "exit"` — `applyResumableSession` sets
+		// `resumeOfferedFor` synchronously but only sets `pendingResumeSource`
+		// after its own `verifyAndBuildResumeCommand` round-trip resolves.
+		// Checking `pendingResumeSource` alone left a window where a new agent
+		// starting WHILE that verify is still in flight wouldn't clear
+		// `resumeOfferedFor` — the verify's `.then()` re-checks it, found it
+		// unchanged, and went on to show a stale banner for the old (now
+		// superseded) session over the new live one. Clearing on
+		// `resumeOfferedFor !== null` closes that window: the in-flight
+		// verify's own guard (`stillCurrent.resumeOfferedFor !== resumable.session_id`)
+		// then correctly sees it's been cleared and bails out.
+		const freshForClear = terminalsStore.get(termId);
+		if (
+			agentType !== null &&
+			(freshForClear?.pendingResumeSource === "exit" || freshForClear?.resumeOfferedFor != null)
+		) {
+			terminalsStore.update(termId, {
+				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
+			});
 		}
 
 		// Notify start of new agent AFTER updating the store so filtered plugins
@@ -277,7 +390,15 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 	// Attempt session discovery when an agent is running.
 	// Agents with sessionDiscovery: always re-discover (session ID changes after /clear, /new, etc.).
 	// Agents without sessionDiscovery: nothing to discover.
-	if (agentType !== null) {
+	// Skipped entirely once `agentSessionIdIsAuthoritative` is true (issue
+	// #119's residual gap) — re-read fresh, not the pre-await `current`
+	// snapshot, since a hook-reported push can land while this function was
+	// awaiting `get_session_foreground_process` above. Running discovery
+	// anyway risks two things a skip avoids: the heuristic overwriting a
+	// known-correct id with a wrong one, and this tab claiming a session id
+	// (via `claimedIds`) that a DIFFERENT, non-hook-instrumented tab actually
+	// needs for its own discovery.
+	if (agentType !== null && !terminalsStore.get(termId)?.agentSessionIdIsAuthoritative) {
 		const disc = AGENTS[agentType].sessionDiscovery;
 		if (disc) {
 			const cwd = current.cwd ?? null;
@@ -315,7 +436,15 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 						envOverrides: {},
 					},
 				);
-				if (found && found.sessionId !== current.agentSessionId) {
+				// Re-check freshness right before writing: a hook-reported push can
+				// land during the two awaits above (leaf-pid read, then this
+				// discovery call itself) — don't let a heuristic result that's now
+				// stale overwrite an id that just became authoritative.
+				if (
+					found &&
+					found.sessionId !== current.agentSessionId &&
+					!terminalsStore.get(termId)?.agentSessionIdIsAuthoritative
+				) {
 					appLogger.debug(
 						"app",
 						`[AgentDetect] ${termId} discovered agentSessionId "${found.sessionId}" (was "${current.agentSessionId}")`,

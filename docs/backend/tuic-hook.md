@@ -35,17 +35,28 @@ flags exactly as they did before derivation existed.
 
 | `hook_event_name` | derived `state` | derived scrape | derived `toolfail` |
 |---|---|---|---|
-| `SessionStart` | `busy` | `session_id`, `cwd`, `transcript_path` | — |
-| `UserPromptSubmit` | `prompt` (busy + the scrollbar's user-prompt tick, #1388 — never `busy`, or every tool call would tick too) | — | — |
+| `SessionStart` | `busy` | `session_id`, `cwd`, `transcript_path`, `session_title` | — |
+| `UserPromptSubmit` | `prompt` (busy + the scrollbar's user-prompt tick, #1388 — never `busy`, or every tool call would tick too) | `session_title` | — |
 | `PreToolUse` | `busy` | `tool_name` | — |
 | `PostToolUse` | `busy` | `tool_name` | — |
 | `PostToolUseFailure` | *(none)* | `tool_name` | from `exit_code` if present, else sentinel `1` — suppressed entirely if `is_interrupt` is `true` |
 | `Notification` | `awaiting` | `message`, `notification_type` | — |
 | `Stop` | `idle` | `background_tasks` | — |
 | `StopFailure` | `idle` | `background_tasks` | fixed `1` |
-| `SessionEnd` | `idle` | — | — |
+| `SessionEnd` | `idle` | `session_id`, `cwd`, `transcript_path`, `session_title`, `reason` | — |
 | `Elicitation` | `awaiting` | — | — |
 | `ElicitationResult` | `busy` | — | — |
+
+`UserPromptSubmit`'s `session_title` re-scrape (not just `SessionStart`) is how a
+mid-session `/rename` reaches the receiving end — Claude Code's hook payload carries
+the CURRENT title on every fire, and `SessionStart`'s own title is only ever the
+session's title as of its very first fire. `SessionEnd`'s re-scrape of the full
+session-metadata trio plus title exists so the exit-resume-banner feature
+(`pty.rs`'s `clear_agent_type_on_confirmed_shell`) has the session's identity/title
+available at the exact moment the turn ends, not just at its start. `reason` is
+scraped raw and unclassified (Claude Code's `SessionEnd` reason string isn't a
+documented closed set) — recorded for diagnostics only, never a gate on whether a
+resume banner shows.
 
 An unrecognized or absent `hook_event_name` derives nothing at all — only explicit
 flags apply in that case, same as before derivation existed.
@@ -88,6 +99,8 @@ practice.
 | `--emit-notify` | Forces the `message` scrape (legacy alias). |
 | `--emit-notification-type` | Forces the `notification_type` scrape. Unlike its siblings above, not a legacy alias — `notification_type` scraping was introduced alongside derivation, so no pre-derivation settings entry could ever reference it; kept only for parity with the other `scrape_*` override flags. |
 | `--emit-background-tasks` | Forces the `background_tasks` scrape. Not a legacy alias, same as `--emit-notification-type` — kept only for parity with the other `scrape_*` override flags. |
+| `--emit-title` | Forces the `session_title` scrape. Not a legacy alias — introduced alongside the exit-resume-banner feature, kept only for parity. |
+| `--emit-end-reason` | Forces the `reason` scrape. Not a legacy alias, same as `--emit-title`. |
 | `--version` | Prints `tuic-hook <version>` and exits. Bypasses the `TUIC_SESSION` gate — used by `hook_binary`'s startup drift check outside any agent session. |
 | `--help`, `-h` | Prints a usage summary (this table, condensed) and exits. Also bypasses the `TUIC_SESSION` gate. |
 
@@ -111,6 +124,8 @@ A JSON object, read in full on every fire (bounded to 1 MiB — see
 | `exit_code` | `PostToolUseFailure`'s `toolfail` derivation (or `--toolfail-from-stdin`). Accepts a JSON number or a numeric string. Claude Code's real `PostToolUseFailure` payload doesn't send this field at all (its schema is `tool_name`, `tool_input`, `tool_use_id`, `error`, `is_interrupt?`, `duration_ms?`) — in practice this always falls back to the sentinel `1`, unless `is_interrupt` is `true` (see below). |
 | `is_interrupt` | `PostToolUseFailure`: if `true` (a tool call cancelled via Esc, not a real failure), suppresses the `toolfail` emission entirely rather than falling back to the sentinel. |
 | `background_tasks` | `Stop`/`StopFailure`'s scrape (or `--emit-background-tasks`). An array of `{id, type, status, description, command}` objects Claude Code includes when a backgrounded tool call (e.g. a `run_in_background` Bash command) is still outstanding as the turn ends. Extracted as the raw, comma-joined `status` of every entry — e.g. `"running,completed"` — **not** reduced to a "still running" boolean here (see `crates/tuic-hook/AGENTS.md`'s rule against baking Claude Code's evolving vocabulary into this binary); the receiving end (`pty.rs`'s `"bgtasks"` OSC arm) decides which status values mean "still running". Present-but-empty (`[]`) still emits — a real "nothing outstanding" observation, comma-joined into an empty string — distinct from the field being absent entirely, which emits nothing and leaves the receiving end's prior value untouched. |
+| `session_title` | `SessionStart`/`UserPromptSubmit`/`SessionEnd`'s scrape (or `--emit-title`). Claude Code's own session name — auto-generated, or set via `/rename`. Powers the exit-time resume banner's title (see `alacritty-integration.md`'s `cctitle` verb entry). |
+| `reason` | `SessionEnd`'s scrape (or `--emit-end-reason`). Claude Code's own end-of-session reason string — not a documented closed set, scraped raw and unclassified like `background_tasks`' statuses. Diagnostics only; never a gate on whether the resume banner shows. |
 
 Missing, empty-string, or malformed fields are all treated as absent — "omit this
 verb" for free-text fields, "fall back to the sentinel `1`" for `exit_code`. Malformed
@@ -163,7 +178,7 @@ ESC ] 7770 ; verb=payload ESC \
 
 One sequence per verb, all verbs for one fire concatenated into a single buffer and
 delivered in one `write_all`. `state` and `toolfail` are emitted verbatim (fixed
-enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype`/`bgtasks`
+enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype`/`bgtasks`/`cctitle`/`ccend`
 are percent-encoded (RFC 3986 unreserved set) since they carry free text that could
 otherwise contain the OSC `;` delimiter or control bytes. `toolfail` is always
 partitioned ahead of every other verb on the wire, regardless of derivation/argv

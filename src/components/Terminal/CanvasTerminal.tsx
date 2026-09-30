@@ -161,6 +161,11 @@ export interface CanvasTerminalProps {
 	onResume?: () => void;
 	onResumeDismiss?: () => void;
 	hasPendingResume?: boolean;
+	/** True for an exit-sourced resume banner: click-only, stays until
+	 *  dismissed — keys pass straight through, none of the Space/Enter-accept
+	 *  or any-other-key-dismisses handling below applies. False (or absent)
+	 *  for the restore-time banner, which keeps that existing behavior. */
+	pendingResumeIsClickOnly?: boolean;
 	onCwdChange?: (id: string, cwd: string) => void;
 	onFocus?: () => void;
 	onRef?: (ref: CanvasTerminalRef) => void;
@@ -3212,8 +3217,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return;
 			}
 
-			// Resume banner: Space/Enter accept, other keys dismiss
-			if (props.hasPendingResume) {
+			// Resume banner: Space/Enter accept, other keys dismiss. Exit-sourced
+			// banners are click-only — this whole branch is skipped for them, so
+			// every key falls through to normal terminal input handling below
+			// while the banner stays up until explicitly clicked/dismissed.
+			if (props.hasPendingResume && !props.pendingResumeIsClickOnly) {
 				if (e.key === " " || e.key === "Enter") {
 					e.preventDefault();
 					props.onResume?.();

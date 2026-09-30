@@ -7413,3 +7413,25 @@ section. All of the below needs a rebuilt build to check.
 - **Tab close still does a real close** — while Global Workspace is showing, click a tab's `×`.
   Confirm the terminal is actually gone (not just removed from the Global Workspace view) —
   check it no longer appears anywhere, including that terminal's own repo in the sidebar.
+
+## Resume banner on Claude Code exit, with session title (**Rust change — needs `make dev` restart**)
+- `tuic-hook` now scrapes `session_title` on SessionStart/UserPromptSubmit/SessionEnd and the
+  raw `reason` string on SessionEnd (new `cctitle`/`ccend` OSC 7770 verbs); `pty.rs` writes the
+  live session id/title/cwd into `SessionState` and takes a `resumable_session` snapshot the
+  moment the shell reclaims the foreground from Claude (`snapshot_resumable_session_on_agent_exit`). See
+  `src-tauri/AGENTS.md`'s "Agent Session Management" section, "Exit-time resume banner".
+- **Verify after rebuild + restart:** open a throwaway terminal, run real `claude`, use
+  `/rename foo`, send one prompt, then `/exit`. Expect a banner reading something like
+  `Resume "foo" — click to resume` to appear in that pane (it appears once the next
+  foreground observation sees the shell back — the next PTY chunk, e.g. the prompt redraw). Confirm typing at the shell prompt passes through normally with the banner
+  still visible (it's click-only, unlike the restore-time banner's Space/Enter behavior).
+  Click the banner and confirm it runs `claude --resume <id>` and the resumed session shows the
+  same conversation. Then click the × on a fresh occurrence and confirm it dismisses without
+  resuming. Separately, restore a branch/workspace with a saved agent tab and confirm that
+  banner still shows its title too.
+- **Also verify issue #119's hardening:** open 2+ Claude tabs in the SAME repo folder (matching
+  the original bug report's shape), let each reach an idle prompt, then check each tab resumes
+  its OWN conversation (not all landing in the same one). `SessionState.agent_session_id` is now
+  visible on `GET /sessions` (or `debug action=explain_state`) per-session — confirm each tab
+  reports a different id there, and that `terminalsStore.agentSessionIdIsAuthoritative` (via
+  browser devtools / a temporary log) is `true` for each once its own hook has fired.

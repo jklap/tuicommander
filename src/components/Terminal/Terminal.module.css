@@ -77,6 +77,13 @@
   font-style: italic;
 }
 
+.resumeBannerText {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .resumeDismiss {
   background: none;
   border: none;

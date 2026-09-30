@@ -206,6 +206,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 					agentIntent: t.agentIntent ?? null,
 					lastPrompt: t.lastPrompt ? t.lastPrompt.slice(0, SAVED_PROMPT_MAX_CHARS) : null,
 					suspended: t.suspended,
+					agentSessionTitle: t.pendingResumeTitle ?? null,
 				});
 			}
 
