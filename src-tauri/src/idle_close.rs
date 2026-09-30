@@ -694,4 +694,190 @@ mod tests {
         sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
         assert!(!state.session_maps.sessions.contains_key(child));
     }
+
+    // ---- critic-1319: adversarial cases for the BLOCKED hold and the close reason ----
+
+    #[cfg(unix)]
+    fn critic_mail(
+        id: &str,
+        from: &str,
+        content: &str,
+        timestamp: u64,
+    ) -> crate::state::AgentMessage {
+        crate::state::AgentMessage {
+            id: id.into(),
+            from_tuic_session: from.into(),
+            from_name: from.into(),
+            content: content.into(),
+            timestamp,
+            delivered_via_channel: false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn critic_child(state: &Arc<AppState>, child: &str, dir: &std::path::Path) {
+        live_child(state, child, dir.to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+    }
+
+    #[cfg(unix)]
+    fn critic_temp() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("idle-close-critic-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap()
+    }
+
+    /// Two sweeps 15 minutes apart: the first starts the window, the second matures it.
+    #[cfg(unix)]
+    fn critic_sweep_to_maturity(state: &Arc<AppState>) {
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(state, &mut tracker, 0, &[]);
+        sweep_with_commands(state, &mut tracker, 900_000, &[]);
+    }
+
+    #[derive(Clone)]
+    struct CriticLogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CriticLogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CriticLogSink {
+        type Writer = CriticLogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Catches: idle close still logging `close_requested` (or the reason being dropped),
+    /// so the cause of an idle kill is invisible in the log (criterion 3).
+    #[cfg(unix)]
+    #[test]
+    fn idle_close_of_an_unblocked_child_logs_reason_idle_close() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "quiet-child", temp.path());
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(CriticLogSink(output.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || critic_sweep_to_maturity(&state));
+        assert!(!state.session_maps.sessions.contains_key("quiet-child"));
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("Closing session"), "{log}");
+        assert!(log.contains("reason=\"idle_close\""), "{log}");
+        assert!(!log.contains("close_requested"), "{log}");
+    }
+
+    /// Catches: the hold keying on any earlier BLOCKED instead of the LAST mail, so a
+    /// child that reported BLOCKED and later finished with RESULT is kept open for ever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_that_mailed_blocked_then_result_is_closed() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox("parent", critic_mail("m2", "c", "RESULT: done", 20));
+        critic_sweep_to_maturity(&state);
+        assert!(!state.session_maps.sessions.contains_key("c"));
+    }
+
+    /// Catches: a lifecycle notice (`tuic-auto-*`) that TUIC itself files for the child
+    /// after its BLOCKED being treated as the child's last mail, so the hold is lost and
+    /// the blocked child is closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lifecycle_notice_after_blocked_does_not_release_the_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox(
+            "parent",
+            critic_mail("tuic-auto-state-1", "c", "state idle", 20),
+        );
+        critic_sweep_to_maturity(&state);
+        assert!(state.session_maps.sessions.contains_key("c"));
+    }
+
+    /// Catches: the hold matching on the parent's inbox without filtering by sender, so
+    /// one child's BLOCKED keeps every sibling open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sibling_blocked_does_not_hold_a_child_with_no_mail() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "quiet", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "other", "BLOCKED: box down", 10));
+        critic_sweep_to_maturity(&state);
+        assert!(!state.session_maps.sessions.contains_key("quiet"));
+    }
+
+    /// Catches: the hold living only in the parent's bounded inbox (capacity 100): once
+    /// the BLOCKED mail is evicted by later traffic from other children, the blocked
+    /// child is closed while it still waits for an answer.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_hold_survives_parent_inbox_overflow_from_other_senders() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(
+                "parent",
+                critic_mail(&format!("noise-{index}"), "other", "RESULT: x", 11 + index as u64),
+            );
+        }
+        critic_sweep_to_maturity(&state);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "BLOCKED mail was evicted from the parent inbox and the child was closed"
+        );
+    }
+
+    /// Catches: comparing the parent inbox's logical clock with the child inbox's clock.
+    /// A burst of same-millisecond mail makes the parent clock run ahead of wall time, so
+    /// a reply stamped with the real time is judged older than BLOCKED and never releases.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reply_releases_the_hold_even_when_parent_clock_ran_ahead() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        for index in 0..20 {
+            state.push_agent_inbox(
+                "parent",
+                critic_mail(&format!("burst-{index}"), "other", "RESULT: x", 1_000),
+            );
+        }
+        // Stored as 1_020 by the per-recipient logical clock.
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 1_000));
+        // The parent answers 5 ms later in wall time.
+        state.push_agent_inbox("c", critic_mail("reply", "parent", "box is back", 1_005));
+        state.agent_read_cursor.insert("c".into(), 1_005);
+        critic_sweep_to_maturity(&state);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "the parent replied, the hold must be released"
+        );
+    }
 }
