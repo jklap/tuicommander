@@ -145,7 +145,9 @@ describe("notificationsStore", () => {
 		it("uses the native notifier even when the WebView Notification permission is denied", async () => {
 			await withUnfocusedDesktop(async () => {
 				store.syncAcpAttention([{ id: "connection-1:permission-1", kind: "permission" }]);
-				await vi.waitFor(() => expect(nativeSend).toHaveBeenCalledWith({ title: "AI Chat needs input", body: "Permission requested" }));
+				await vi.waitFor(() =>
+					expect(nativeSend).toHaveBeenCalledWith({ title: "AI Chat needs input", body: "Permission requested" }),
+				);
 			});
 		});
 
