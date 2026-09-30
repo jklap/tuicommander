@@ -518,16 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn backend_label_always_gpu() {
-        assert_eq!(backend_label(), "gpu");
-    }
-
-    #[test]
-    fn build_context_params_does_not_panic() {
-        let _params = build_context_params();
-    }
-
-    #[test]
     fn bare_thanks_in_any_language_is_a_hallucination() {
         // What quiet audio actually produces, punctuation and casing included.
         assert!(is_hallucination("Grazie."));

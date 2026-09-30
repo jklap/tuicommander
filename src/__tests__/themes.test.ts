@@ -382,15 +382,17 @@ describe("themes", () => {
 	});
 
 	describe("ANSI color mapping", () => {
-		it("maps ANSI colors to camelCase terminal theme keys", async () => {
+		it("maps each ansi array position to its named terminal theme key", async () => {
+			// Catches an off-by-one or swapped key order: toBeDefined passed for any mapping.
 			invoke.mockResolvedValueOnce(FIXTURES);
 			const { loadThemes, getTerminalTheme } = await import("../themes");
 			await loadThemes();
 
 			const theme = getTerminalTheme("dracula");
-			expect(theme.black).toBeDefined();
-			expect(theme.red).toBeDefined();
-			expect(theme.brightWhite).toBeDefined();
+			expect(theme.black).toBe("#000000");
+			expect(theme.red).toBe("#cd3131");
+			expect(theme.brightBlack).toBe("#666666");
+			expect(theme.brightWhite).toBe("#ffffff");
 		});
 	});
 });
