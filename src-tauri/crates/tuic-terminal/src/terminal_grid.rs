@@ -2866,19 +2866,37 @@ mod tests {
         for (step, rec) in outputs.enumerate() {
             let before = grid.scrollback_count();
             if let Some((_, r, c)) = resize_at.filter(|(at, _, _)| *at == step) {
+                let history_of = |g: &TerminalGrid| -> Vec<String> {
+                    match g.scrollback_count() {
+                        0 => Vec::new(),
+                        n => g.read_rows_in_range(0, n - 1),
+                    }
+                };
                 let flat = |g: &TerminalGrid| -> Vec<String> {
                     g.read_rows_in_range(0, g.total_lines() - 1)
                         .into_iter()
                         .filter(|t| !t.trim().is_empty())
                         .collect()
                 };
-                let content = flat(&grid);
+                let old_rows = grid.total_lines() - grid.scrollback_count();
+                let (old_history, old_content) = (history_of(&grid), flat(&grid));
                 grid.resize_with_mode(r, c, ReflowMode::All);
-                assert_eq!(
-                    flat(&grid),
-                    content,
-                    "{name}: a rows-only resize lost or reordered lines"
-                );
+                if (r as usize) < old_rows {
+                    // Shrinking drops non-blank rows below the cursor by design, and
+                    // pushes the top of the screen into history: the old history
+                    // must survive as the prefix.
+                    assert_eq!(
+                        &history_of(&grid)[..old_history.len()],
+                        &old_history[..],
+                        "{name}: shrinking the screen changed existing history"
+                    );
+                } else {
+                    assert_eq!(
+                        flat(&grid),
+                        old_content,
+                        "{name}: growing the screen lost or reordered lines"
+                    );
+                }
                 // The all-time origin may shift with the new row count: rebuild.
                 committed.clear();
                 next_index = 0;
@@ -2992,17 +3010,23 @@ mod tests {
     /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
     #[test]
     fn history_rows_survive_the_scrollback_cap_over_real_captures() {
-        let mut trimmed = 0;
-        for (name, capture) in fixture_captures() {
-            for k in [0, 5] {
-                let stats = replay_history_contract(&name, &capture, 40, k, None);
-                trimmed += stats.committed_rows.saturating_sub(40);
-            }
+        // One long session: every fixture back to back on the same grid.
+        let mut all = fixture_captures();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        let geometry = all[0].1.geometry;
+        let records: Vec<_> = all.into_iter().flat_map(|(_, c)| c.records).collect();
+        let session = crate::pty_capture::DecodedCapture { geometry, records };
+        for k in [0, 5] {
+            let stats = replay_history_contract("all fixtures", &session, 10, k, None);
+            assert!(
+                stats.committed_rows > 10,
+                "the session never exceeded the cap: the test proves nothing"
+            );
         }
-        assert!(trimmed > 0, "no capture ever exceeded the cap: the test proves nothing");
     }
 
-    /// A rows-only resize in the middle of a redraw keeps every line, in order.
+    /// A rows-only resize in the middle of a redraw keeps history intact (shrink) and
+    /// every line in order (grow).
     #[test]
     fn history_content_survives_a_resize_during_redraw_over_real_captures() {
         for (name, capture) in fixture_captures() {
