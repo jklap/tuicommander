@@ -395,6 +395,18 @@ fn link_pending_children_to_parent(
 /// HTTP header the bridge asserts to declare its TUIC peer identity. A PTY
 /// agent inherits it from its tab; ACP-hosted ego receives a host-issued UUID.
 pub(super) const TUIC_SESSION_HEADER: &str = "x-tuic-session";
+/// Pid of the bridge or CLI process that sent the request, logged on initialize.
+pub(super) const CLIENT_PID_HEADER: &str = "x-tuic-client-pid";
+
+/// The pid a client reported, or `""`. Digits only: the value reaches the log
+/// verbatim, so anything else is dropped rather than written.
+pub(super) fn client_pid_header(headers: &HeaderMap) -> &str {
+    headers
+        .get(CLIENT_PID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty() && v.len() <= 10 && v.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or("")
+}
 
 /// Bind an MCP session to a TUIC peer identity: upsert `peer_agents`
 /// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
@@ -6844,6 +6856,7 @@ pub(super) async fn mcp_post(
                 client = client_name.unwrap_or("unknown"),
                 mcp_session = %session_id,
                 tuic_session = tuic_session_header.unwrap_or(""),
+                client_pid = client_pid_header(&headers),
                 presented_session = match &init_kind {
                     InitializeKind::Reconnected { presented } => presented.as_str(),
                     _ => "",
@@ -7359,12 +7372,16 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
             }
         }
     }
-    // Clean up peer agents and inboxes left with no protocol session at all.
+    // Clean up peer agents and inboxes left with no protocol session at all,
+    // except identities someone can still reach: a one-shot `tuic` call ends
+    // its session while its PTY lives on, and dropping the identity would
+    // drop that PTY's inbox. Same rule as the idle reaper.
     let removed_tuic: Vec<String> = state
         .peer_agents
         .iter()
         .filter(|e| e.value().mcp_session_id == sid)
         .map(|e| e.key().clone())
+        .filter(|tuic| state.peer_identity_is_reapable(tuic))
         .collect();
     for tuic in &removed_tuic {
         state.peer_agents.remove(tuic);
@@ -7953,6 +7970,22 @@ mod tests {
     #[cfg(unix)]
     use crate::OutputRingBuffer;
     use base64::Engine;
+
+    /// Catches: a storm that cannot be traced to a process (no pid logged), or a
+    /// client-supplied header written to the log verbatim (log injection).
+    #[test]
+    fn client_pid_is_logged_only_when_it_is_a_plain_pid() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(CLIENT_PID_HEADER, value.parse().unwrap());
+            headers
+        };
+        assert_eq!(client_pid_header(&with("4242")), "4242");
+        assert_eq!(client_pid_header(&with("42 INFO forged")), "");
+        assert_eq!(client_pid_header(&with("")), "");
+        assert_eq!(client_pid_header(&with("12345678901")), "");
+        assert_eq!(client_pid_header(&HeaderMap::new()), "");
+    }
 
     fn upstream_passthrough_result() -> serde_json::Value {
         serde_json::json!({
@@ -12792,6 +12825,115 @@ mod tests {
         assert!(!state.orchestrator_peers.contains(TEST_UUID_A));
         assert!(!state.mcp.session_to_mcp.contains_key(TEST_UUID_A));
         assert!(!state.mcp.to_session.contains_key("mcp-primary"));
+    }
+
+    /// Critic 1148. `tuic` now sends DELETE when every CLI call ends, so the last
+    /// (often only) protocol session of a PTY identity is torn down after each
+    /// command. The reaper keeps an identity with a live PTY addressable
+    /// (`peer_identity_is_reapable`); DELETE must not destroy what the reaper
+    /// keeps. Catches: mail for a live terminal deleted after every `tuic agent
+    /// send` run from that terminal, so a reply finds no peer and no inbox.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ending_the_only_cli_session_of_a_live_pty_keeps_its_peer_and_mail() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-cli-owner", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-cli-owner");
+        apply_initialize_identity(&state, "mcp-cli-call", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-cli-call");
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "msg-reply".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "reply to the CLI caller".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        end_mcp_session(&state, "mcp-cli-call").await;
+
+        assert!(
+            state.peer_agents.contains_key(TEST_UUID_A),
+            "a PTY that is still alive must stay addressable after its CLI session ends"
+        );
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-reply")),
+            "mail for a live terminal must survive the CLI call that opened the session"
+        );
+        assert!(!state.mcp.to_session.contains_key("mcp-cli-call"));
+    }
+
+    /// Critic 1148. The CLI sends DELETE from Drop and cannot know whether the
+    /// reaper or an earlier DELETE already removed the session. Catches: a
+    /// repeated or unknown-session DELETE removing a different session's state.
+    #[tokio::test]
+    async fn repeated_and_unknown_deletes_leave_other_sessions_alone() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-gone", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-gone");
+        apply_initialize_identity(&state, "mcp-stays", Some(TEST_UUID_B));
+        live_mcp_session(&state, "mcp-stays");
+
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-never-existed").await;
+        let response = mcp_delete(State(Arc::clone(&state)), HeaderMap::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert!(state.mcp.sessions.contains_key("mcp-stays"));
+        assert!(state.peer_agents.contains_key(TEST_UUID_B));
+        assert!(state.mcp.to_session.contains_key("mcp-stays"));
+        assert!(!state.peer_agents.contains_key(TEST_UUID_A));
+    }
+
+    /// Critic 1148. The pid header is client-controlled and reaches the log.
+    /// Catches: a validator using `char::is_numeric` or a length check on the
+    /// wrong side, letting signs, hex, exponents, whitespace, non-ASCII or
+    /// multi-line values through, or dropping a legitimate 10-digit pid.
+    #[test]
+    fn client_pid_header_accepts_only_ascii_digit_runs_up_to_ten() {
+        let value = |bytes: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                CLIENT_PID_HEADER,
+                axum::http::HeaderValue::from_bytes(bytes).unwrap(),
+            );
+            headers
+        };
+        assert_eq!(client_pid_header(&value(b"4294967295")), "4294967295");
+        assert_eq!(client_pid_header(&value(b"1")), "1");
+        for rejected in [
+            &b"+123"[..],
+            b"-1",
+            b"0x1f",
+            b"1e5",
+            b"12 34",
+            b" 123",
+            b"123 ",
+            b"12\t34",
+            b"12\"34",
+            b"\xef\xbc\x91\xef\xbc\x92",
+            b"\xff",
+        ] {
+            assert_eq!(
+                client_pid_header(&value(rejected)),
+                "",
+                "{:?} must not reach the log",
+                String::from_utf8_lossy(rejected)
+            );
+        }
+        let mut two = HeaderMap::new();
+        two.append(CLIENT_PID_HEADER, "111".parse().unwrap());
+        two.append(CLIENT_PID_HEADER, "222".parse().unwrap());
+        assert_eq!(client_pid_header(&two), "111");
     }
 
     #[test]
