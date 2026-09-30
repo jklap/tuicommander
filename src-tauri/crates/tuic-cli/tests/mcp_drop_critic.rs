@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+const PEERS: &[&str] = &["agent", "list-peers", "--json"];
+const INBOX: &[&str] = &["agent", "inbox", "--json"];
+
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, PartialEq)]
@@ -83,6 +86,7 @@ fn tool_body(text: &str, is_error: bool) -> String {
 }
 
 fn run(
+    args: &[&str],
     mode: Mode,
     tuic_session: Option<&str>,
     tool_text: &str,
@@ -146,7 +150,7 @@ fn run(
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_tuic"));
     command
-        .args(["agent", "list-peers", "--json"])
+        .args(args)
         .env("TUIC_SOCKET", &path)
         .env_remove("TUIC_SESSION");
     if let Some(sid) = tuic_session {
@@ -172,7 +176,13 @@ fn methods(seen: &[Seen]) -> Vec<&str> {
 /// the pid, or sending it twice.
 #[test]
 fn one_delete_follows_the_call_and_names_session_identity_and_pid() {
-    let (output, seen, _) = run(Mode::Normal, Some("peer-crit"), "{\"peers\":[]}", false);
+    let (output, seen, _) = run(
+        PEERS,
+        Mode::Normal,
+        Some("peer-crit"),
+        "{\"peers\":[]}",
+        false,
+    );
     assert!(
         output.status.success(),
         "{}",
@@ -201,7 +211,7 @@ fn one_delete_follows_the_call_and_names_session_identity_and_pid() {
 /// DELETE before the register or once per inner call instead of once at the end.
 #[test]
 fn an_external_caller_releases_its_session_once_after_register_and_call() {
-    let (output, seen, _) = run(Mode::Normal, None, "{\"ok\":true}", false);
+    let (output, seen, _) = run(INBOX, Mode::Normal, None, "{\"ok\":true}", false);
     assert!(
         output.status.success(),
         "{}",
@@ -215,6 +225,7 @@ fn an_external_caller_releases_its_session_once_after_register_and_call() {
 #[test]
 fn a_failed_tool_call_still_releases_the_session() {
     let (output, seen, _) = run(
+        PEERS,
         Mode::Normal,
         Some("peer-crit"),
         "{\"error\":\"boom\"}",
@@ -237,6 +248,7 @@ fn a_failed_tool_call_still_releases_the_session() {
 #[test]
 fn a_server_that_never_answers_delete_cannot_hold_the_command() {
     let (output, seen, elapsed) = run(
+        PEERS,
         Mode::HangOnDelete,
         Some("peer-crit"),
         "{\"peers\":[]}",
@@ -263,6 +275,7 @@ fn a_server_that_never_answers_delete_cannot_hold_the_command() {
 #[test]
 fn a_server_gone_before_delete_does_not_change_the_outcome() {
     let (output, seen, _) = run(
+        PEERS,
         Mode::VanishAfterCall,
         Some("peer-crit"),
         "{\"peers\":[]}",
@@ -280,7 +293,7 @@ fn a_server_gone_before_delete_does_not_change_the_outcome() {
 #[test]
 fn no_delete_is_sent_when_initialize_never_produced_a_session() {
     for mode in [Mode::InitFails, Mode::InitWithoutSession] {
-        let (output, seen, _) = run(mode, Some("peer-crit"), "{}", false);
+        let (output, seen, _) = run(PEERS, mode, Some("peer-crit"), "{}", false);
         assert!(!output.status.success());
         assert_eq!(methods(&seen), ["POST"]);
     }
