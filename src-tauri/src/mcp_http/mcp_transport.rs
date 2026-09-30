@@ -1937,7 +1937,7 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "create" | "input" | "kill" | "close")
+    matches!(action, "create" | "input" | "kill" | "close" | "resize")
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
@@ -3225,17 +3225,14 @@ fn handle_session(
             if let Err(msg) = super::validate_terminal_size(rows, cols) {
                 return serde_json::json!({"error": msg});
             }
-            let entry = match state.session_maps.sessions.get(session_id) {
-                Some(e) => e,
-                None => return serde_json::json!({"error": "Session not found"}),
-            };
-            if let Err(e) = entry.lock().master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }) {
-                return serde_json::json!({"error": format!("Resize failed: {}", e)});
+            // Same core as HTTP resize_session: grid before SIGWINCH, same-dims no-op.
+            match crate::pty::resize_session_core(state, session_id, rows, cols) {
+                Ok(Some(frame)) => crate::pty::send_grid_frame(state, session_id, frame),
+                Ok(None) => {}
+                Err(e) if e.starts_with("Session not found") => {
+                    return serde_json::json!({"error": "Session not found"});
+                }
+                Err(e) => return serde_json::json!({"error": format!("Resize failed: {}", e)}),
             }
             serde_json::json!({"ok": true})
         }
@@ -17794,6 +17791,146 @@ mod tests {
 
     fn non_loopback_addr() -> SocketAddr {
         "192.168.1.42:12345".parse().unwrap()
+    }
+
+    /// Story 1285-df56: the MCP arm resized only the PTY master, so the grid
+    /// (and terminal/scroll-info) kept the old geometry.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_updates_grid_dimensions() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_A, TEST_SPAWN_CWD);
+        state.grid.vt_log_buffers.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 500)),
+        );
+
+        let response = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "resize", "session_id": TEST_UUID_A, "rows": 30, "cols": 100}),
+            None,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        let vt = state.grid.vt_log_buffers.get(TEST_UUID_A).unwrap();
+        let vt = vt.lock();
+        assert_eq!((vt.grid_screen_lines(), vt.grid_columns()), (30, 100));
+    }
+
+    #[cfg(unix)]
+    async fn mcp_resize(state: &Arc<AppState>, session_id: &str) -> serde_json::Value {
+        handle_mcp_tool_call(
+            state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "resize", "session_id": session_id, "rows": 30, "cols": 100}),
+            None,
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_of_unknown_session_is_an_error() {
+        let state = test_state();
+        let response = mcp_resize(&state, TEST_UUID_A).await;
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("Session not found")),
+            "{response}"
+        );
+        assert!(response.get("ok").is_none(), "{response}");
+    }
+
+    /// A master whose resize ioctl always fails; everything else is the real PTY.
+    #[cfg(unix)]
+    struct FailingResizeMaster(Box<dyn portable_pty::MasterPty + Send>);
+
+    #[cfg(unix)]
+    impl portable_pty::MasterPty for FailingResizeMaster {
+        fn resize(&self, _size: PtySize) -> Result<(), anyhow::Error> {
+            Err(anyhow::anyhow!("injected resize failure"))
+        }
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            self.0.get_size()
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn std::io::Read + Send>, anyhow::Error> {
+            self.0.try_clone_reader()
+        }
+        fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, anyhow::Error> {
+            self.0.take_writer()
+        }
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            self.0.process_group_leader()
+        }
+        fn as_raw_fd(&self) -> Option<portable_pty::unix::RawFd> {
+            self.0.as_raw_fd()
+        }
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            self.0.tty_name()
+        }
+    }
+
+    /// The error must reach the caller, and a repeat of the same request must
+    /// retry the PTY instead of being swallowed by the same-dims no-op guard.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_reports_pty_failure_and_retries() {
+        use crate::state::PtySession;
+        use portable_pty::{CommandBuilder, native_pty_system};
+
+        let state = test_state();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let child = pair
+            .slave
+            .spawn_command(CommandBuilder::new("true"))
+            .expect("spawn test PTY child");
+        let writer = pair.master.take_writer().expect("open test PTY writer");
+        state.session_maps.sessions.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(PtySession {
+                writer: Arc::new(parking_lot::Mutex::new(writer)),
+                master: Box::new(FailingResizeMaster(pair.master)),
+                _child: child,
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                cwd: Some(TEST_SPAWN_CWD.to_string()),
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "true".to_string(),
+            }),
+        );
+        state.grid.vt_log_buffers.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 500)),
+        );
+
+        for attempt in 1..=2 {
+            let response = mcp_resize(&state, TEST_UUID_A).await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("injected resize failure")),
+                "attempt {attempt}: {response}"
+            );
+            assert!(
+                response.get("ok").is_none(),
+                "attempt {attempt}: {response}"
+            );
+        }
     }
 
     // search_tools
