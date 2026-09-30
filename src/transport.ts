@@ -1562,7 +1562,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup/pending?repoPath=${p("repoPath")}` }),
 	},
 	clear_orphan_cleanup: {
-		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath } }),
+		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath, kept: args.kept } }),
 	},
 	remove_orphan_worktree: {
 		map: (args) => ({

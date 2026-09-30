@@ -562,6 +562,9 @@ pub(super) struct AnswerOrphanCleanupRequest {
 pub(super) struct ClearOrphanCleanupRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
+    /// The dialog ended in Keep; other clients must see that instead of a cleared entry.
+    #[serde(default)]
+    pub kept: bool,
 }
 
 #[derive(Deserialize)]

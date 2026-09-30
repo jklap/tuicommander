@@ -463,7 +463,7 @@ pub(super) async fn clear_orphan_cleanup_http(
     if let Err(error) = validate_repo_path(&body.repo_path) {
         return error.into_response();
     }
-    state.pending_orphan_cleanup.remove(&body.repo_path);
+    crate::worktree::clear_orphan_cleanup_internal(&state, &body.repo_path, body.kept);
     Json(serde_json::Value::Null).into_response()
 }
 
