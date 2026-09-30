@@ -4404,3 +4404,4 @@ or credential is touched.
 ## Branch integration proofs (story 1295-a2ce)
 
 - [ ] After Boss restarts `make dev` or rebuilds the release, query `repo action=branch_integrations` and `repo action=branch_integration` on throwaway fixtures and confirm the new proof fields are available. Check that an integrated squash branch appears in the branch panel and sidebar, and a content-based proof requires an archive of the current tip before safe deletion. Automated real-Git lifecycle, MCP and deletion checks passed; the installed process has not been restarted to load this Rust change.
+- [ ] After a manual `make dev` restart, call `repo action=progress_list` with no input on the live tuicommander journal (2400+ entries). The first page has 8 entries and is under 16384 B (was 17545 B with 10 entries, 2026-09-30). Story 1088-4783 GREEN criterion.
