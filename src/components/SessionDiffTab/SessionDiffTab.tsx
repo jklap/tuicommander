@@ -81,6 +81,10 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	 *  again mid-fade restarts its own timer instead of the two colliding. */
 	const [flashKeys, setFlashKeys] = createSignal<Set<string>>(new Set());
 	const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	onCleanup(() => {
+		for (const t of flashTimers.values()) clearTimeout(t);
+		flashTimers.clear();
+	});
 	/** File mode: a live update touched a file that's currently off-screen —
 	 *  held back rather than applied, so `review()` doesn't silently mutate
 	 *  content the reviewer isn't looking at. `latestFetchedReview` is the
@@ -423,18 +427,22 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 	// this tab and `useAppInit.ts`'s app-level listeners both react to.
 	// Ref-counted on the backend, so overlapping subscribers (this tab plus a
 	// second one open on the same session) are safe.
-	let watchedSessionId: string | null = null;
+	// Only a watch the backend accepted is released: an unwatch with no ref of
+	// its own would drop another subscriber's.
+	let watched: { id: string; accepted: Promise<boolean> } | null = null;
+	const release = (w: { id: string; accepted: Promise<boolean> } | null) => {
+		if (w)
+			void w.accepted.then((ok) => {
+				if (ok) void repo.unwatchSessionReview(props.repoPath, w.id);
+			});
+	};
 	createEffect(() => {
 		const id = selectedSessionId();
-		if (id === watchedSessionId) return;
-		const prevId = watchedSessionId;
-		watchedSessionId = id;
-		if (prevId) void repo.unwatchSessionReview(props.repoPath, prevId);
-		if (id) void repo.watchSessionReview(props.repoPath, id);
+		if (id === (watched?.id ?? null)) return;
+		release(watched);
+		watched = id ? { id, accepted: repo.watchSessionReview(props.repoPath, id) } : null;
 	});
-	onCleanup(() => {
-		if (watchedSessionId) void repo.unwatchSessionReview(props.repoPath, watchedSessionId);
-	});
+	onCleanup(() => release(watched));
 
 	// Primary live-update signal: a dedicated event for the exact session
 	// being watched, instead of the coarse revision-bump poll above. Reads

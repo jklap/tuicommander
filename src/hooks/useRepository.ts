@@ -271,11 +271,16 @@ export function useRepository() {
 	 *  the project directory doesn't exist yet) only means live updates won't
 	 *  arrive, not that the review itself is unavailable, so this swallows
 	 *  rather than throws, matching `listReviewSessions`. */
-	async function watchSessionReview(repoPath: string, sessionId: string): Promise<void> {
+	/** Resolves `true` only when the backend took a ref — a refused watch (no
+	 *  project dir yet, or a watcher cap) holds none, so its caller must not
+	 *  `unwatchSessionReview` for it. */
+	async function watchSessionReview(repoPath: string, sessionId: string): Promise<boolean> {
 		try {
 			await invoke<void>("watch_session_review", { repoPath, sessionId });
+			return true;
 		} catch (err) {
 			appLogger.error("git", "Failed to watch session review", err);
+			return false;
 		}
 	}
 
