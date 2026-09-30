@@ -525,7 +525,7 @@
 	"markdownTab.addCommentCancel": "Cancel",
 	"markdownTab.saveLive": "Save",
 	"markdownTab.liveDiscard": "Discard unsaved changes?",
-	"markdownTab.live": "Live edit: marks hidden off the cursor line",
+	"markdownTab.live": "Live edit: click a block to edit its source",
 	"markdownTab.liveUnavailable": "Live edit needs LF or CRLF line endings throughout and a file under 500 KB",
 	"markdownTab.liveBtn": "Live",
 	"markdownTab.liveReadFailed": "Couldn't save",
