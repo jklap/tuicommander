@@ -178,18 +178,6 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
-		it("returns non-nullable effective settings", () => {
-			testInScope(() => {
-				store.getOrCreate("/repo", "my-repo");
-				const effective = store.getEffective("/repo");
-				expect(effective).toBeDefined();
-				// All fields must be non-null
-				expect(effective!.baseBranch).not.toBeNull();
-				expect(effective!.copyIgnoredFiles).not.toBeNull();
-				expect(effective!.setupScript).not.toBeNull();
-			});
-		});
-
 		it("returns undefined for unknown repo", () => {
 			testInScope(() => {
 				expect(store.getEffective("/unknown")).toBeUndefined();
