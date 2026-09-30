@@ -640,10 +640,18 @@ end-to-end UI timing still needs a human check:
   confirm the Context bar/intent-parsing still activates normally on first
   launch — this is the exact scenario the regression above would have broken
   (the preset getting wiped before the launcher even ran).
-- [ ] Hit `GET http://127.0.0.1:9877/sessions/{id}/foreground` (the `:9877`
+- [x] Hit `GET http://127.0.0.1:9877/sessions/{id}/foreground` (the `:9877`
   test instance's HTTP API) on a session before and after exiting an agent in
   it, confirming the returned `agent` name — and, indirectly via the
   idle-threshold behavior, the mirror — updates over HTTP too, not just IPC.
+  _(verified 2026-09-30 against the orchestrator's `:9876` HTTP API on a
+  throwaway scratch session: `{"agent":null}` before launch, `{"agent":"claude"}`
+  confirmed while an interactive session was running, `{"agent":null}` again
+  immediately after a real `/exit` (typed text + a separate literal Enter
+  keypress — a `\n` byte embedded in the same write does NOT submit Claude
+  Code's composer, it just inserts a newline) was actually submitted and the
+  shell prompt genuinely returned. Confirms the mirror clears correctly over
+  HTTP, not just IPC.)_
 
 ## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
 
