@@ -4,7 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
 /** CodeMirror 6 theme using the app's CSS variables for consistent look */
-const editorTheme = EditorView.theme(
+export const editorTheme = EditorView.theme(
 	{
 		"&": {
 			width: "100%",
@@ -127,8 +127,8 @@ const editorTheme = EditorView.theme(
 	{ dark: true },
 );
 
-/** Syntax highlighting colors */
-const highlightStyle = HighlightStyle.define([
+/** Colours for code tokens; also used for fenced code inside Live markdown. */
+const codeTokenStyles = [
 	{ tag: tags.keyword, color: "#bb9af7" },
 	{ tag: tags.controlKeyword, color: "#bb9af7" },
 	{ tag: tags.operator, color: "#89ddff" },
@@ -149,6 +149,14 @@ const highlightStyle = HighlightStyle.define([
 	{ tag: tags.propertyName, color: "#73daca" },
 	{ tag: tags.tagName, color: "#f7768e" },
 	{ tag: tags.attributeName, color: "#bb9af7" },
+];
+
+/** Code tokens only: leaves markdown prose to the caller's own styling. */
+export const codeHighlightStyle = HighlightStyle.define(codeTokenStyles);
+
+/** Syntax highlighting colors */
+const highlightStyle = HighlightStyle.define([
+	...codeTokenStyles,
 	{ tag: tags.heading, color: "#7aa2f7", fontWeight: "bold" },
 	{ tag: tags.emphasis, fontStyle: "italic" },
 	{ tag: tags.strong, fontWeight: "bold" },

@@ -6,11 +6,14 @@ import {
 	type Range as CmRange,
 	EditorState,
 	type Extension,
+	Prec,
+	StateEffect,
 	StateField,
 	Transaction,
 	type TransactionSpec,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import {
 	findSourceMatch,
 	findTweakSyntax,
@@ -80,6 +83,69 @@ interface LiveValue {
 
 const hide = Decoration.replace({});
 const HEADING = /^ATXHeading([1-6])$/;
+const TASK_MARK = /^\[([ xX~])\](?=\s|$)/;
+const BULLETS = ["\u2022", "\u25E6", "\u25AA"];
+/** Preview list padding, in em per nesting level. */
+const LIST_INDENT_EM = 2;
+
+/** Whether the editor has focus. Off focus nothing is "the cursor line", so every mark hides. */
+export const setLiveFocus = StateEffect.define<boolean>();
+const focusField = StateField.define<boolean>({
+	create: () => true,
+	update: (value, tr) => tr.effects.reduce((v, e) => (e.is(setLiveFocus) ? e.value : v), value),
+});
+
+class BulletWidget extends WidgetType {
+	constructor(readonly glyph: string) {
+		super();
+	}
+	eq(other: BulletWidget) {
+		return other.glyph === this.glyph;
+	}
+	toDOM() {
+		const el = document.createElement("span");
+		el.className = "cm-live-bullet";
+		el.textContent = this.glyph;
+		return el;
+	}
+}
+
+/** Source spelling of the next state, cycling like the preview: [ ] -> [x] -> [~] -> [ ]. */
+const NEXT_MARK: Record<string, string> = { " ": "x", x: "~", X: "~", "~": " " };
+
+class CheckboxWidget extends WidgetType {
+	/** `from` is the `[`; it belongs to `eq` so a reused DOM node never carries a stale position. */
+	constructor(
+		readonly mark: string,
+		readonly from: number,
+	) {
+		super();
+	}
+	eq(other: CheckboxWidget) {
+		return other.mark === this.mark && other.from === this.from;
+	}
+	toDOM(view: EditorView) {
+		const el = document.createElement("input");
+		el.type = "checkbox";
+		el.className = "cm-live-checkbox";
+		el.checked = this.mark !== " " && this.mark !== "~";
+		el.indeterminate = this.mark === "~";
+		el.addEventListener("mousedown", (ev) => ev.preventDefault());
+		el.addEventListener("click", (ev) => {
+			ev.preventDefault();
+			const at = this.from + 1;
+			const current = view.state.sliceDoc(at, at + 1);
+			view.dispatch({
+				changes: { from: at, to: at + 1, insert: NEXT_MARK[current] ?? current },
+				userEvent: "input.checkbox",
+			});
+		});
+		return el;
+	}
+	ignoreEvent() {
+		return true;
+	}
+}
 
 /** Lines (1-based, inclusive) touched by any selection range. */
 function selectedLineSpans(state: EditorState): Range[] {
@@ -111,7 +177,7 @@ function buildLive(state: EditorState): LiveValue {
 	}
 
 	const marks: Range[] = [];
-	const selected = selectedLineSpans(state);
+	const selected = state.field(focusField) ? selectedLineSpans(state) : [];
 	const revealed = (from: number, to: number) => {
 		const a = doc.lineAt(from).number;
 		const b = doc.lineAt(to).number;
@@ -136,6 +202,10 @@ function buildLive(state: EditorState): LiveValue {
 				}
 				return;
 			}
+			if (ref.name === "ListMark" && ref.node.parent?.name === "ListItem") {
+				listItem(ref.node, doc, decos, revealed, overlapsTweak);
+				return;
+			}
 			const styleClass = INLINE_STYLE[ref.name];
 			if (styleClass) decos.push(Decoration.mark({ class: styleClass }).range(ref.from, ref.to));
 			const markName = INLINE_MARK[ref.name];
@@ -157,6 +227,44 @@ function buildLive(state: EditorState): LiveValue {
 	return { decorations: Decoration.set(decos, true), marks, tweakRegions, tweakAtomic, spans, standalone };
 }
 
+/** Preview-style list item: bullet or number in the marker column, task marks as checkboxes. */
+function listItem(
+	mark: SyntaxNode,
+	doc: EditorState["doc"],
+	decos: CmRange<Decoration>[],
+	revealed: (from: number, to: number) => boolean,
+	overlapsTweak: (from: number, to: number) => boolean,
+) {
+	const line = doc.lineAt(mark.from);
+	if (revealed(line.from, line.to)) return;
+	// A marker after other text (blockquote, nested container) stays source.
+	if (doc.sliceString(line.from, mark.from).trim() !== "") return;
+	let depth = -1;
+	for (let n: SyntaxNode | null = mark.node.parent; n; n = n.parent) if (n.name === "ListItem") depth++;
+	const ordered = mark.node.parent?.parent?.name === "OrderedList";
+	const contentFrom = doc.sliceString(mark.to, mark.to + 1) === " " ? mark.to + 1 : mark.to;
+	if (overlapsTweak(line.from, contentFrom)) return;
+	decos.push(
+		Decoration.line({
+			attributes: { style: `padding-left:${(depth + 1) * LIST_INDENT_EM}em;text-indent:-${LIST_INDENT_EM}em` },
+		}).range(line.from),
+	);
+	if (ordered) {
+		if (mark.from > line.from) decos.push(hide.range(line.from, mark.from));
+		decos.push(Decoration.mark({ class: "cm-live-olmark" }).range(mark.from, contentFrom));
+	} else {
+		decos.push(
+			Decoration.replace({ widget: new BulletWidget(BULLETS[depth % BULLETS.length]) }).range(line.from, contentFrom),
+		);
+	}
+	const task = TASK_MARK.exec(doc.sliceString(contentFrom, Math.min(line.to, contentFrom + 4)));
+	if (task && !overlapsTweak(contentFrom, contentFrom + 3)) {
+		decos.push(
+			Decoration.replace({ widget: new CheckboxWidget(task[1], contentFrom) }).range(contentFrom, contentFrom + 3),
+		);
+	}
+}
+
 const INLINE_STYLE: Record<string, string> = {
 	Emphasis: "cm-live-em",
 	StrongEmphasis: "cm-live-strong",
@@ -173,7 +281,13 @@ const INLINE_MARK: Record<string, string> = {
 const liveField = StateField.define<LiveValue>({
 	create: buildLive,
 	update(value, tr) {
-		if (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState)) return buildLive(tr.state);
+		if (
+			tr.docChanged ||
+			tr.selection ||
+			tr.effects.some((e) => e.is(setLiveFocus)) ||
+			syntaxTree(tr.state) !== syntaxTree(tr.startState)
+		)
+			return buildLive(tr.state);
 		return value;
 	},
 	provide: (f) => EditorView.decorations.from(f, (v) => v.decorations),
@@ -279,16 +393,44 @@ const tweakGuard = EditorState.transactionFilter.of((tr): TransactionSpec | read
 	return { changes: safe, annotations: Transaction.userEvent.of(event), scrollIntoView: true };
 });
 
-const liveTheme = EditorView.baseTheme({
-	".cm-live-h1": { fontSize: "1.6em", fontWeight: "700" },
-	".cm-live-h2": { fontSize: "1.4em", fontWeight: "700" },
-	".cm-live-h3": { fontSize: "1.2em", fontWeight: "700" },
-	".cm-live-h4, .cm-live-h5, .cm-live-h6": { fontWeight: "700" },
+/**
+ * The preview's look, read from the same tokens as `markdown-content.css`
+ * (a test compares the two). Headings are line decorations, so the rule under h1/h2 spans the line.
+ */
+const liveTheme = EditorView.theme({
+	".cm-scroller": { fontFamily: "var(--font-ui)", fontSize: "var(--font-lg)" },
+	".cm-content": { padding: "16px", lineHeight: "1.6", color: "var(--fg-primary)" },
+	".cm-line": { padding: "0" },
+	".cm-live-h1, .cm-live-h2, .cm-live-h3, .cm-live-h4, .cm-live-h5, .cm-live-h6": {
+		fontWeight: "600",
+		lineHeight: "1.25",
+	},
+	".cm-live-h1, .cm-live-h2": {
+		borderBottomWidth: "1px",
+		borderBottomStyle: "solid",
+		borderBottomColor: "var(--border)",
+		paddingBottom: "0.3em",
+	},
+	".cm-live-h1": { fontSize: "2em" },
+	".cm-live-h2": { fontSize: "1.5em" },
+	".cm-live-h3": { fontSize: "1.25em" },
+	".cm-live-h4": { fontSize: "1em" },
+	".cm-live-h5": { fontSize: "0.875em" },
+	".cm-live-h6": { fontSize: "0.85em", color: "var(--fg-secondary)" },
 	".cm-live-strong": { fontWeight: "700" },
 	".cm-live-em": { fontStyle: "italic" },
 	".cm-live-strike": { textDecoration: "line-through" },
-	".cm-live-code": { fontFamily: "var(--font-mono)", background: "var(--bg-tertiary)", borderRadius: "3px" },
-	".cm-live-link": { color: "var(--accent)", textDecoration: "underline" },
+	".cm-live-code": {
+		fontFamily: "var(--font-mono)",
+		fontSize: "85%",
+		padding: "0.2em 0.4em",
+		backgroundColor: "rgba(175, 184, 193, 0.2)",
+		borderRadius: "var(--radius-lg)",
+	},
+	".cm-live-link": { color: "var(--accent)", textDecoration: "none" },
+	".cm-live-bullet, .cm-live-olmark": { display: "inline-block", minWidth: "2em", textIndent: "0" },
+	".cm-live-bullet": { textAlign: "center" },
+	".cm-live-checkbox": { margin: "0 0.5em 0 0", verticalAlign: "middle", cursor: "pointer" },
 	".tweak-highlight": {
 		background: "color-mix(in srgb, var(--tweak-highlight) 25%, transparent)",
 		borderBottom: "1.5px solid color-mix(in srgb, var(--tweak-highlight) 70%, transparent)",
@@ -299,10 +441,12 @@ const liveTheme = EditorView.baseTheme({
 /** Live-preview extension: hidden marks, tweak presentation, atomic markers, edit guard. */
 export function liveMarkdown(): Extension {
 	return [
+		focusField,
 		liveField,
 		EditorView.atomicRanges.of((view) => view.state.field(liveField).tweakAtomic),
 		tweakGuard,
-		liveTheme,
+		EditorView.focusChangeEffect.of((_state, focused) => setLiveFocus.of(focused)),
+		Prec.high(liveTheme),
 	];
 }
 
