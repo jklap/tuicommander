@@ -155,12 +155,47 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		recentlyProcessedBranches.set(`${repoPath}::${branchName}`, now);
 	};
 
+	// When each workspace key was first seen by a refresh of its repo, keyed by
+	// repoPath. The backend coalesces and caches worktree_paths (GIT_CACHE_TTL,
+	// 60s), so a snapshot requested after a worktree was created can still have
+	// been computed before it. A key that appears after the repo's first refresh
+	// is not judged deleted until a snapshot requested CREATION_GRACE_WINDOW_MS
+	// later. Keys present at the first refresh are old (-Infinity): persisted
+	// rows from a previous session are pruned at once. (#1317)
+	const workspaceFirstSeen = new Map<string, Map<string, number>>();
+	const trackFirstSeen = (repoPath: string, keys: Set<string>, now: number): Map<string, number> => {
+		const known = workspaceFirstSeen.get(repoPath);
+		const next = new Map<string, number>();
+		for (const key of keys) next.set(key, known ? (known.get(key) ?? now) : Number.NEGATIVE_INFINITY);
+		workspaceFirstSeen.set(repoPath, next);
+		return next;
+	};
+
+	// A probe that never settles (dead mount, stuck git status) would hold
+	// refreshInFlight forever, so it is bounded; timeout and error both mean "not gone".
+	const CHECKOUT_PROBE_TIMEOUT_MS = 5_000;
+	const isCheckoutGone = async (worktreePath: string): Promise<boolean> => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const timeout = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("checkout probe timed out")), CHECKOUT_PROBE_TIMEOUT_MS);
+			});
+			return !(await Promise.race([deps.repo.getInfo(worktreePath), timeout])).is_git_repo;
+		} catch {
+			return false;
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+
 	const refreshRepoOnce = async (repoPath: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
 		// Snapshot branch keys before any await so we can detect user-triggered
 		// removals that happen while async ops are in-flight (race condition guard).
 		const priorBranchKeys = new Set(Object.keys(repo.workspaces));
+		const requestedAt = Date.now();
+		const firstSeen = trackFirstSeen(repoPath, priorBranchKeys, requestedAt);
 		// Non-git directories: check if they became a git repo
 		if (repo.isGitRepo === false) {
 			try {
@@ -240,6 +275,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		const storeIds = new Set(terminalsStore.getIds());
 		const toRemove: string[] = [];
 		const terminalsToClose: string[] = [];
+		const probeCandidates: Array<{ branchName: string; worktreePath: string; terminals: string[] }> = [];
 
 		const active = currentRepo.activeWorkspaceId;
 		// A branch switch changes the workspace id, not the checkout directory.
@@ -283,6 +319,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					markProcessed(repoPath, branchName);
 					continue;
 				}
+				// The snapshot was requested after the workspace entered the store, but
+				// it may still be a cached/coalesced answer older than the checkout.
+				if (requestedAt - (firstSeen.get(branchName) ?? requestedAt) < CREATION_GRACE_WINDOW_MS) {
+					appLogger.info(
+						"git",
+						`refreshAllBranchStats: SNAPSHOT MAY PREDATE "${branchName}" — not judging it deleted`,
+						{
+							repoPath,
+						},
+					);
+					continue;
+				}
 				// Branch has live terminals — only keep it if the worktree path
 				// is the main repo checkout (HEAD switched away). If the worktree
 				// directory was deleted externally, close the orphaned terminals
@@ -290,20 +338,17 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				const branchState = currentRepo.workspaces[branchName];
 				const hasLiveTerminals = branchState?.terminals.some((id) => storeIds.has(id));
 				if (hasLiveTerminals) {
-					const isLinkedWorktree = branchState.worktreePath && branchState.worktreePath !== repoPath;
-					if (isLinkedWorktree) {
-						// Linked worktree was removed externally — close its terminals
-						appLogger.info(
-							"terminal",
-							`refreshAllBranchStats: closing terminals for deleted worktree "${branchName}"`,
-							{
-								terminals: branchState.terminals,
-								worktreePath: branchState.worktreePath,
-							},
-						);
-						terminalsToClose.push(...branchState.terminals.filter((id) => storeIds.has(id)));
-						toRemove.push(branchName);
-						markProcessed(repoPath, branchName);
+					const linkedPath = branchState.worktreePath !== repoPath ? branchState.worktreePath : null;
+					if (linkedPath) {
+						// A snapshot that omits the worktree is not proof it is gone: the backend
+						// serves coalesced/cached worktree_paths and concurrent runs can judge it
+						// with different snapshots. Closing a session is irreversible, so the
+						// directory is probed after the loop (concurrently). (#1317)
+						probeCandidates.push({
+							branchName,
+							worktreePath: branchState.worktreePath,
+							terminals: branchState.terminals,
+						});
 					} else {
 						appLogger.info("terminal", `refreshAllBranchStats: keeping "${branchName}" — has live terminals`, {
 							terminals: branchState.terminals,
@@ -315,6 +360,27 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				markProcessed(repoPath, branchName);
 			}
 		}
+
+		const gone = await Promise.all(probeCandidates.map((c) => isCheckoutGone(c.worktreePath)));
+		probeCandidates.forEach(({ branchName, worktreePath, terminals }, i) => {
+			if (!gone[i]) {
+				// Keep the row too: its terminals are filed under it.
+				appLogger.info(
+					"terminal",
+					`refreshAllBranchStats: keeping "${branchName}" — snapshot omits it but its checkout is still on disk`,
+					{ worktreePath },
+				);
+				return;
+			}
+			// Linked worktree was removed externally — close its terminals
+			appLogger.info("terminal", `refreshAllBranchStats: closing terminals for deleted worktree "${branchName}"`, {
+				terminals,
+				worktreePath,
+			});
+			terminalsToClose.push(...terminals.filter((id) => storeIds.has(id)));
+			toRemove.push(branchName);
+			markProcessed(repoPath, branchName);
+		});
 
 		if (toRemove.length > 0) {
 			appLogger.info("terminal", `refreshAllBranchStats removing branches from ${repoPath}`, {
