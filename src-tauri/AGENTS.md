@@ -243,6 +243,39 @@ run `pnpm exec vitest run` directly and check whether the `Tests` line shows 0 r
 so, this is that known flake, not your change. Use `./scripts/check-gate.sh` (or `make
 check-gate`), which detects and calls this out automatically.
 
+**Audio-device-enumeration tests can stall behind an un-granted macOS permission prompt — not
+a code bug.** Found 2026-09-30 (pre-rebase `wip` branch) running the full gate after an unrelated
+`to-test.md`-only change: `cargo nextest run --workspace` hit its 120 s hard kill (`slow-timeout`
+in `.config/nextest.toml`) on five tests that enumerate real CoreAudio devices through cpal. The
+first cpal query waits on a system permission dialog (main's `audio_enumeration::ENUMERATION_TIMEOUT`
+comment names the microphone prompt) when it was never granted for the process running the tests,
+and in a headless run nothing is there to answer it. On this tree the five behave differently:
+
+- `notification_sound::tests::list_output_devices_has_at_most_one_default_and_no_duplicate_names`,
+  `::resolve_output_stream_falls_back_to_default_for_an_unknown_device_name` and
+  `::resolve_output_stream_opens_a_named_device_when_one_is_available` call
+  `notification_sound::list_output_devices`/`resolve_output_stream` directly
+  (`rodio::cpal::default_host().output_devices()`/`default_output_device()`, unbounded), so they
+  can still block until nextest kills them at 120 s.
+- The device ROUTES are bounded: `GET /audio/output-devices` (`list_audio_output_devices_http` →
+  `notification_sound::list_audio_output_devices`) and `GET /dictation/devices`
+  (`dictation::commands::list_audio_devices` → `tuic_dictation::audio::list_input_devices`,
+  microphone enumeration, `dictation` feature only) both run through
+  `audio_enumeration::run_bounded` with `ENUMERATION_TIMEOUT` (30 s). So
+  `mcp_http::config_routes::tests::list_audio_output_devices_http_returns_a_device_array` FAILS
+  after ~30 s (a 500 instead of a 200) rather than hanging, and
+  `mcp_http::tests::every_dictation_and_os_integration_path_has_a_route` — whose route sweep probes
+  `GET /dictation/devices` and only asserts "not 404/405" — just takes ~30 s and passes.
+
+This is the same *shape* as the "interactive Keychain" precondition in the ignored-tests table
+above, but these are ordinary `#[test]`s, so they stall or fail the gate instead of being skipped.
+If `check-gate`/`cargo nextest` stalls or fails on exactly these names and your diff doesn't touch
+`notification_sound.rs`, `audio_enumeration.rs`, `tuic-dictation`'s `audio.rs` or the device
+routes, grant/confirm the prompt for the terminal/process running the tests (System Settings →
+Privacy & Security, or let it appear once and click through it interactively) and re-run — do not
+treat it as a regression from whatever you just changed.
+
+
 ## Building
 
 **NEVER use `cargo build --release` directly.** It produces a binary that points to the Vite dev server (`localhost:1420`) instead of embedding frontend assets — result: white screen. Always use `make build` or `pnpm tauri build`, which runs `beforeBuildCommand` (frontend build + sidecar) and embeds the dist/ into the binary.
