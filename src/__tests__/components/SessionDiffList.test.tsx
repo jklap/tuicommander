@@ -10,8 +10,9 @@ vi.mock("../../components/ui/DiffViewer", () => ({
 	DiffViewer: (props: { diff: string }) => <div data-testid="diff-stub">{props.diff}</div>,
 }));
 
-import type { SessionRow } from "../../components/SessionDiffTab/buildRows";
+import type { SessionRow, StepRowData } from "../../components/SessionDiffTab/buildRows";
 import { SessionDiffList, type SessionDiffListProps } from "../../components/SessionDiffTab/SessionDiffList";
+import type { DiffListNavHandle } from "../../components/shared/diffListNav";
 import type { EditStep, FileReview } from "../../types/sessionDiff";
 
 function fileGroup(overrides: Partial<FileReview> = {}): FileReview {
@@ -34,9 +35,48 @@ function fileGroup(overrides: Partial<FileReview> = {}): FileReview {
 	};
 }
 
+function editStep(overrides: Partial<EditStep> = {}): EditStep {
+	return {
+		step_index: 0,
+		tool_use_id: "toolu_1",
+		timestamp: null,
+		kind: "edit",
+		abs_path: "/repo/a.ts",
+		rel_path: "a.ts",
+		in_repo: true,
+		patch: "@@ -1,1 +1,1 @@\n-a\n+b\n",
+		additions: 1,
+		deletions: 1,
+		is_sidechain: false,
+		agent_name: null,
+		user_modified: false,
+		replace_all: false,
+		turn_index: 0,
+		turn_started_at: null,
+		prompt_preview: null,
+		agent_id: null,
+		agent_display_name: null,
+		...overrides,
+	};
+}
+
+function stepEntry(overrides: Partial<EditStep> = {}, entryOverrides: Partial<StepRowData> = {}): StepRowData {
+	return {
+		step: editStep(overrides),
+		collapsed: false,
+		prevSameFileStepIndex: null,
+		nextSameFileStepIndex: null,
+		...entryOverrides,
+	};
+}
+
+function stepRow(overrides: Partial<EditStep> = {}, entryOverrides: Partial<StepRowData> = {}): SessionRow {
+	return { kind: "step", ...stepEntry(overrides, entryOverrides) };
+}
+
 function fileRow(
 	overrides: Partial<FileReview> = {},
-	rowOverrides: Partial<{ expanded: boolean; stepsOpen: boolean; steps: EditStep[] }> = {},
+	rowOverrides: Partial<{ expanded: boolean; stepsOpen: boolean; steps: StepRowData[] }> = {},
 ): SessionRow {
 	return {
 		kind: "file",
@@ -58,6 +98,8 @@ const baseProps: Omit<SessionDiffListProps, "rows"> = {
 	onCopyFile: noop,
 	onToggleExpanded: noop,
 	onToggleStepsOpen: noop,
+	onToggleStepCollapsed: noop,
+	onJumpToStep: noop,
 };
 
 describe("SessionDiffList", () => {
@@ -121,6 +163,35 @@ describe("SessionDiffList", () => {
 		setRows([fileRow({ abs_path: "/repo/z.ts", display_path: "z.ts" })]);
 		expect(queryByText("a.ts")).toBeNull();
 		expect(getByText("z.ts")).toBeTruthy();
+	});
+
+	it("exposes a nav handle whose currentIndex tracks the virtualizer's own first-visible row", () => {
+		let handle: DiffListNavHandle | undefined;
+		const rows = [fileRow({ abs_path: "/repo/a.ts" }), fileRow({ abs_path: "/repo/b.ts" })];
+		render(() => <SessionDiffList rows={rows} {...baseProps} ref={(h) => (handle = h)} />);
+		expect(handle).toBeTruthy();
+		expect(handle?.currentIndex()).toBe(0);
+	});
+
+	it("scrollToIndex on the nav handle drives the scroll container's own scrollTo (happy-dom doesn't reflect scrollTop back from it)", () => {
+		let handle: DiffListNavHandle | undefined;
+		const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+		const rows = Array.from({ length: 5 }, (_, i) => fileRow({ abs_path: `/repo/${i}.ts` }));
+		render(() => <SessionDiffList rows={rows} {...baseProps} ref={(h) => (handle = h)} />);
+		handle?.scrollToIndex(4);
+		expect(scrollToSpy).toHaveBeenCalled();
+		scrollToSpy.mockRestore();
+	});
+
+	it("stepRow's collapsed/prevSameFileStepIndex/nextSameFileStepIndex reach StepCard's ^/v buttons", () => {
+		const jumpTargets: number[] = [];
+		const rows = [stepRow({ step_index: 5 }, { prevSameFileStepIndex: 2, nextSameFileStepIndex: 9 })];
+		const { getByTitle } = render(() => (
+			<SessionDiffList rows={rows} {...baseProps} onJumpToStep={(i) => jumpTargets.push(i)} />
+		));
+		getByTitle("Jump to the earlier change to this file").click();
+		getByTitle("Jump to the later change to this file").click();
+		expect(jumpTargets).toEqual([2, 9]);
 	});
 
 	// NOTE: the sticky-header-offset bug (shared/diffFileList.module.css's
