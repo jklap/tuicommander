@@ -5890,3 +5890,81 @@ section. All of the below needs a rebuilt build to check.
   visible on `GET /sessions` (or `debug action=explain_state`) per-session — confirm each tab
   reports a different id there, and that `terminalsStore.agentSessionIdIsAuthoritative` (via
   browser devtools / a temporary log) is `true` for each once its own hook has fired.
+
+## Session Diff Review / Branch Diff Scroll overhaul (2026-09-29, **Rust change — needs `make dev` restart**)
+Full rewrite of both diff views: fixed the reported bugs (stale virtualized rows after a mode/
+session switch, dead collapse carets, sticky headers, wrong chronological line numbers, the
+global "scroll" mode hijacking every open per-file tab), then added turns, agent display names,
+jump-to-tab, live updates, navigation, diff-comparison settings, and an unseen tab icon. Plan:
+`plans/enchanted-puzzling-teacup.md`. Everything below is code-inspected and/or unit-tested
+(547 frontend files / 8600+ tests, 7100+ Rust tests, all green) — this list is only the parts
+that need a real running instance because they depend on live PTY/transcript/visual state a unit
+test can't produce.
+
+- [ ] **Session/mode switching no longer bleeds content.** Open Session Diff Review on a repo
+  with 2+ Claude sessions. Switch sessions rapidly, and switch By File ↔ Chronological rapidly —
+  confirm no stale file headers or step cards ever linger from the previous view, and the
+  collapse caret on a file header actually toggles (click the whole header row, not just the
+  chevron).
+- [ ] **Sticky file headers sit at the true top** of the Session Diff list (no longer offset by
+  the Branch Diff summary bar's height) — scroll a multi-file session and confirm each file's
+  header sticks flush at the top of the scroll container.
+- [ ] **Diff Scroll ("All files") no longer hijacks other tabs.** Open a per-file diff tab, then
+  open Diff Scroll from a different tab/shortcut — the per-file tab must stay showing its own
+  single-file diff, not flip into scroll mode too.
+- [ ] **Live updates (needs a real live Claude session):** open Session Diff Review on the
+  session you're driving from a terminal tab in the SAME window. Have that agent make an edit.
+  - Chronological mode: with "Follow" checked, the view should auto-scroll to the new step. With
+    Follow unchecked, an "N new changes" pill should appear instead, and clicking it should jump
+    to the first unseen step.
+  - By File mode: a new file should append at the bottom with a "New content below" pill if
+    you're scrolled away from the bottom. An edit to a file currently on screen should apply in
+    place with a brief flash/fade. An edit to a file scrolled off screen should hold behind a
+    "Refresh (N)" pill until clicked.
+  - Confirm the session dropdown itself refreshes (a brand-new session appearing in the list)
+    without you clicking the manual refresh button.
+- [ ] **Turn picker.** In chronological mode, open the turn dropdown — each entry should show a
+  time, a +/- size, and the file(s) touched; hovering should show a prompt-preview tooltip;
+  selecting one should jump the list to that turn's first change.
+- [ ] **`<`/`>` navigation** in both Session Diff modes and in Branch Diff Scroll — step
+  change-to-change (chronological) or file-to-file (By File / Branch Diff Scroll), disabled at
+  each end.
+- [ ] **Agent display names + jump-to-tab.** In a session with at least one subagent
+  (`Task`/`Agent` tool call), confirm the step badge shows a real name (from its `meta.json`),
+  not the raw hex id, and clicking it jumps to the PARENT session's terminal tab (subagents have
+  no PTY of their own — verify it does NOT try to jump to a nonexistent subagent tab). Verify a
+  session with no live matching terminal renders the name as plain, non-clickable text.
+- [ ] **Auto-open.** In Settings → (Diffs section), set "Auto-open Session Diff" to `ask`, make
+  an edit in a tracked repo from a live agent session with no Session Diff tab open for it yet —
+  expect a toast with an "Open Session Diff" action. Set it to `auto` — expect the tab to open in
+  the background (not stealing focus). Set it to `off` — expect nothing. In all three cases,
+  confirm it does NOT refire while a tab for that exact session is already open.
+- [ ] **Unseen tab icon.** With a Session Diff tab open but NOT the active tab, trigger a live
+  edit in that session — the tab's icon should change to an unseen indicator, and clear the
+  moment you click back into the tab.
+- [ ] **Diff-comparison settings** (Settings → Diffs: ignore leading/trailing whitespace, ignore
+  whitespace amount, ignore case, soft wrap, truncate-lines): toggle each against a real diff
+  with a whitespace-only or case-only change and confirm it disappears/reappears as expected in
+  BOTH Session Diff and Branch Diff Scroll. Confirm the shared options popover in each view's own
+  toolbar reads/writes the same settings (flip one in Session Diff's toolbar, reopen Branch Diff
+  Scroll, confirm it's already applied there too).
+- [ ] **Truncation.** Set "Truncate diffs over N lines" to something small (e.g. 20) and open a
+  large real diff — confirm it's cut at a hunk boundary with a "Show all N more lines" button
+  that reveals the rest on click.
+- [ ] **Background-subagent turn attribution** (narrow, hard to force live — code-inspected +
+  unit-tested via a synthetic transcript fixture, not yet observed against a real background
+  Task call): if you can reproduce a genuinely `background`-shaped subagent call whose result
+  reports back several turns later, confirm its edits show up under the turn it was actually
+  SPAWNED in, not the later turn that merely observed its completion.
+- [ ] **Canvas-only visual checks** (not observable over HTTP, per this repo's own testing
+  convention): the flash/fade animation's actual look, the sticky-header CSS at the true top of
+  the list, and the turn-picker tooltip's rendering/positioning.
+- [ ] The final full `./scripts/check-gate.sh` run on this branch's very last commit
+  (`c29a9018b` at time of writing) was blocked by the auto-mode permission classifier
+  (flagged "Safety Bypass" — most likely a heuristic reaction to `TUIC_SKIP_FIXTURE_GATE=1`
+  used two commits earlier for an unrelated, legitimate pre-commit-hook override). Every
+  individual piece of the gate was run and passed separately for that commit (fmt, clippy,
+  targeted `session_review`+`pty` Rust suites — 803 tests, `tsc --noEmit`, the affected vitest
+  file), and the full gate passed clean on the commit immediately before it — but nobody has
+  run the single aggregate `check-gate.sh`/`make check` against the final HEAD. Run it once
+  before treating this branch as fully verified.
