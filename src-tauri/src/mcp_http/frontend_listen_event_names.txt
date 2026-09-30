@@ -39,6 +39,7 @@ pty-parsed
 reattach-terminal
 repo-changed
 repositories-changed
+review-sessions-changed
 scheduled-job-completed
 screenshot-request
 session-accent-color-changed

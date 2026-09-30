@@ -321,8 +321,7 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 	// signal (`session-review-changed`) — Branch Diff Scroll/per-file diff
 	// tabs have no such concept, so `unseen` is never set on them.
 	const isUnseen = () => diffTabsStore.state.activeId !== props.id && !!tab()?.unseen;
-	const unseenIconId = () =>
-		resolveIconId(settingsStore.state.indicatorOverrides, "diffTab.unseen");
+	const unseenIconId = () => resolveIconId(settingsStore.state.indicatorOverrides, "diffTab.unseen");
 	return (
 		<Show when={tab()}>
 			<div

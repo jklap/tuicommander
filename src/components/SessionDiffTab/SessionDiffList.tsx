@@ -2,6 +2,7 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import type { EditStep, FileReview } from "../../types/sessionDiff";
+import { cx } from "../../utils";
 import fl from "../shared/diffFileList.module.css";
 import type { DiffListNavHandle } from "../shared/diffListNav";
 import { DiffViewer } from "../ui/DiffViewer";
@@ -13,6 +14,11 @@ import { StepCard } from "./StepCard";
 interface SessionRowContentProps {
 	row: () => SessionRow;
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
+	/** This row's file just changed via a live update while visible — apply a
+	 *  brief flash-and-fade so the user can eyeball what changed. */
+	flash?: boolean;
 	onOpenFile: (path: string) => void;
 	onOpenAtLine: (step: EditStep, line: number) => void;
 	onRevertStep: (step: EditStep) => void;
@@ -60,7 +66,7 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 		<>
 			<Show when={fileRow()}>
 				{(fr) => (
-					<div class={fl.fileSection}>
+					<div class={cx(fl.fileSection, props.flash && fl.flash)}>
 						<SessionFileHeader
 							group={fr().group}
 							stepCount={fr().steps.length}
@@ -77,6 +83,8 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 								<DiffViewer
 									diff={fr().group.cumulative_patch}
 									mode={props.mode}
+									wrap={props.wrap}
+									maxLines={props.maxLines}
 									emptyMessage={
 										fr().group.base_source === "unknown"
 											? "Can't compute a cumulative diff for this file"
@@ -91,6 +99,8 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 											<StepCard
 												step={entry.step}
 												mode={props.mode}
+												wrap={props.wrap}
+												maxLines={props.maxLines}
 												collapsed={entry.collapsed}
 												onToggleCollapsed={() => props.onToggleStepCollapsed(entry.step.tool_use_id)}
 												onOpenAtLine={props.onOpenAtLine}
@@ -111,6 +121,8 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 					<StepCard
 						step={sr().step}
 						mode={props.mode}
+						wrap={props.wrap}
+						maxLines={props.maxLines}
 						showFilePath
 						collapsed={sr().collapsed}
 						onToggleCollapsed={() => props.onToggleStepCollapsed(sr().step.tool_use_id)}
@@ -129,6 +141,11 @@ const SessionRowContent: Component<SessionRowContentProps> = (props) => {
 export interface SessionDiffListProps {
 	rows: SessionRow[];
 	mode: DiffViewMode;
+	wrap?: boolean;
+	maxLines?: number;
+	/** `abs_path`s of file rows to flash-highlight right now — a live update
+	 *  just applied to a row that was already visible. */
+	flashKeys?: ReadonlySet<string>;
 	onOpenFile: (path: string) => void;
 	onOpenAtLine: (step: EditStep, line: number) => void;
 	onRevertStep: (step: EditStep) => void;
@@ -186,17 +203,20 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 
 	// `getVirtualItems()` is already Solid's own reactive read for this
 	// virtualizer (used below inside `<For>`) — tracking it here too keeps
-	// `currentIndex` live as the user scrolls, without reimplementing any of
-	// the virtualizer's own range math.
+	// `currentIndex`/`visibleIndices` live as the user scrolls, without
+	// reimplementing any of the virtualizer's own range math.
 	const [currentIndex, setCurrentIndex] = createSignal(0);
+	const [visibleIndices, setVisibleIndices] = createSignal<ReadonlySet<number>>(new Set());
 	createEffect(() => {
 		const items = virtualizer.getVirtualItems();
 		if (items.length > 0) setCurrentIndex(items[0].index);
+		setVisibleIndices(new Set(items.map((i) => i.index)));
 	});
 	props.ref?.({
 		scrollToIndex: (index, opts) => virtualizer.scrollToIndex(index, { align: opts?.align ?? "auto" }),
 		currentIndex,
 		rowCount: () => props.rows.length,
+		visibleIndices,
 	});
 
 	return (
@@ -212,6 +232,10 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 				<For each={virtualizer.getVirtualItems()}>
 					{(vi) => {
 						const row = () => props.rows[vi.index];
+						const isFlashing = () => {
+							const r = row();
+							return r.kind === "file" && (props.flashKeys?.has(r.group.abs_path) ?? false);
+						};
 						return (
 							<div
 								data-index={vi.index}
@@ -223,6 +247,9 @@ export const SessionDiffList: Component<SessionDiffListProps> = (props) => {
 										<SessionRowContent
 											row={row}
 											mode={props.mode}
+											wrap={props.wrap}
+											maxLines={props.maxLines}
+											flash={isFlashing()}
 											onOpenFile={props.onOpenFile}
 											onOpenAtLine={props.onOpenAtLine}
 											onRevertStep={props.onRevertStep}
