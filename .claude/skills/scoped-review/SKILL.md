@@ -46,11 +46,23 @@ into its context, or into sub-teammates it already spawned with that wrong scope
    For a specific commit range instead: `git diff <base>..<head> -- <paths> > /tmp/scoped-review-diff.txt`.
 
 2. **Do NOT invoke `Skill({skill: "code-review"})` or `Skill({skill: "security-review"})`** —
-   route around them entirely. Use a plain `Agent()` call instead, with a subagent type suited
-   to the review:
-   - Code review: `subagent_type: "code-reviewer-pro"`
-   - Security review: `subagent_type: "security-auditor"`
-   - Either also works fine as `"general-purpose"` if those aren't available.
+   route around them entirely. Use a plain `Agent()` call instead.
+
+   **Prefer `subagent_type: "fork"` inside TUICommander.** A named-persona type (e.g.
+   `"code-reviewer-pro"`, `"security-auditor"`) can materialize as a real TUIC-managed pane
+   teammate whose tool-permission requests don't reliably route back to the spawning session —
+   confirmed 2026-09-29: two review agents launched this way sat at `agent_state: working` in
+   `session action=list` for 30+ minutes with zero progress, stuck on "Waiting for team lead
+   approval" for a plain `Read` call. That state is indistinguishable from a genuinely long
+   review via `ListAgents`/`session action=list` alone. A `fork` runs in-process and inherits
+   the caller's own permission mode directly — no separate approval hop, no stall risk — and
+   the reviewer persona itself doesn't matter much here since step 3's prompt already tells the
+   agent exactly what kind of review to perform and what to look for.
+
+   If you do use a named-persona type (e.g. because you want its specific system prompt) and a
+   review shows `agent_state: working` with no change across 2+ status checks, use
+   `session action=output` on its pane BEFORE assuming it's just slow — a stuck approval prompt
+   means `TaskStop` it and relaunch as a `fork`; waiting longer will not resolve it.
 
 3. **The agent's prompt must open with an explicit scope override**, naming the exact file path
    and forbidding it from computing its own scope. For example:

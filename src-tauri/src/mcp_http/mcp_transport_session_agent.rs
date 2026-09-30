@@ -17,6 +17,7 @@ use super::mcp_transport_catalogue::AGENT_ACTIONS;
 use super::mcp_transport_catalogue::SESSION_ACTIONS;
 use super::mcp_transport_catalogue::TASK_ACTIONS;
 use super::mcp_transport_peer::INITIAL_PROMPT_DELIVERY_TIMEOUT;
+use super::mcp_transport_peer::PEER_IDENTITY_BIND_LOCK;
 use super::mcp_transport_peer::TASK_POLL_INTERVAL_MS;
 use super::mcp_transport_peer::caller_task_identities;
 use super::mcp_transport_peer::handle_messaging;
@@ -444,6 +445,177 @@ pub(crate) async fn wait_for_shell_idle(
         session_wait_met(s, session_id, "idle")
     })
     .await
+}
+
+/// Whether `agent action=spawn` should withhold the prompt from launch argv
+/// and deliver it later via the mailbox once this session's MCP identity has
+/// bound, instead of embedding it directly in the launch command. See
+/// [`wait_for_mcp_identity_bound`]'s doc comment for why. Scoped to Claude,
+/// interactive-only spawns: print-mode is one-shot with no later delivery
+/// opportunity, and every other agent type's MCP-tool-availability
+/// characteristics haven't been verified.
+///
+/// This flag alone does nothing — it must be threaded into `finalize_spawn_args`
+/// (via `McpSpawnArgs::defer_for_mcp_bind`) at EVERY call site that can produce
+/// a claude default-template argv, not just the one reached when a caller
+/// explicitly passes `binary_path`. A first version of this fix only wired it
+/// into that one manual branch and missed the far more common
+/// `agent_type: "claude"` + no `binary_path` + no run config path (which
+/// resolves `Some(ResolvedRunConfig { args: None, .. })` and takes the
+/// `default_prompt_args` template branch instead) — a code review caught that
+/// the fix was effectively dead for its own motivating scenario. If you add a
+/// FOURTH way to reach the default-template argv shape, check it against this
+/// flag too.
+///
+/// Shared (via [`spawn_deferred_prompt_delivery`]) by all three spawn paths that can
+/// produce a claude default-template argv with an embedded prompt: this MCP tool's
+/// `"spawn"` action, `agent_routes::spawn_agent_session` (`POST /sessions/agent`), and the
+/// desktop `agent::spawn_agent` Tauri command.
+///
+/// No other spawn path embeds a structured prompt in an interactive Claude argv on this
+/// codebase (there is no in-process agent loop or `spawn_session_for_agent`), so these
+/// three are the complete set.
+pub(crate) fn should_defer_prompt_for_mcp_bind(agent_type: Option<&str>, print_mode: bool) -> bool {
+    agent_type == Some("claude") && !print_mode
+}
+
+/// Bound for [`wait_for_mcp_identity_bound`] — how long `agent action=spawn`
+/// waits for a freshly launched Claude session's own MCP client to complete
+/// its `initialize` handshake before delivering the deferred initial prompt
+/// anyway. Same 5s default as [`SHELL_READINESS_TIMEOUT_MS`], kept as its own
+/// named constant since the two gates wait on unrelated signals (shell prompt
+/// readiness vs. this process's own MCP connection) and may need to be tuned
+/// independently once real handshake latency is measured.
+pub(crate) const MCP_IDENTITY_BIND_TIMEOUT_MS: u64 = 5_000;
+
+/// Block until `tuic_session`'s MCP identity has bound a real MCP protocol
+/// session (`PeerAgent.mcp_session_id` non-empty), or `timeout_ms` elapses.
+///
+/// `agent action=spawn` pre-inserts a `PeerAgent` row for every managed child
+/// at spawn time, before the child's own process has even started — with
+/// `mcp_session_id: String::new()` — specifically so the peer is addressable
+/// immediately (`list_peers`, `send`) independent of whether its own MCP
+/// bridge ever connects. That means `state.peer_agents.contains_key(...)` is
+/// true from the very first instant and is USELESS as a "has this session's
+/// own MCP handshake completed" signal — the real signal is whether
+/// `mcp_session_id` has been overwritten by [`apply_initialize_identity`]'s
+/// real bind, which only happens once the child's own `claude` process
+/// performs its `initialize` request against this server.
+///
+/// Deliberately a short poll, not event-driven like [`wait_for_shell_idle`]:
+/// `apply_initialize_identity`/`bind_peer_identity_locked` are pure map
+/// writes with no event-bus notification on a fresh bind, so there is
+/// nothing to subscribe to. A 50ms poll against a `DashMap` lookup is cheap.
+///
+/// Fail-open by design, matching `wait_for_shell_idle`: returns `false` on
+/// timeout rather than erroring. The caller (`agent action=spawn`'s deferred
+/// prompt delivery) proceeds and delivers the prompt anyway on a timeout —
+/// best-effort, never blocks the child forever.
+pub(crate) async fn wait_for_mcp_identity_bound(
+    state: &Arc<AppState>,
+    tuic_session: &str,
+    timeout_ms: u64,
+) -> bool {
+    let is_bound = |s: &Arc<AppState>| {
+        s.peer_agents
+            .get(tuic_session)
+            .is_some_and(|peer| !peer.mcp_session_id.is_empty())
+    };
+    if is_bound(state) {
+        return true;
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if is_bound(state) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+    }
+}
+
+/// Deliver a prompt withheld from launch argv by [`should_defer_prompt_for_mcp_bind`]:
+/// wait (bounded, fail-open — see [`wait_for_mcp_identity_bound`]) for `tuic_session`'s
+/// own MCP identity to bind, then deliver via the same two primitives the general
+/// (non-orchestrator) branch of `agent action=send` uses for any managed recipient with
+/// no live wait/channel already open — `push_agent_inbox`, then
+/// `pty::deliver_notice_to_managed_pty(..., PEER_MAIL_WAKE)` to type the "[TUIC] message
+/// available" notice into the terminal, then `pty::settle_terminal_delivery` to record the
+/// outcome — so a fast-answering child never gets to look at an incomplete tool list for
+/// its very first turn. The `send` handler's optional live-SSE-channel fast path and
+/// Waiter/orchestrator-registration branches are not reachable here (nobody has registered
+/// a wait or a channel for a session that has not even started yet), so this is
+/// behaviorally the same path `send` would take for this exact recipient at this exact
+/// moment — INCLUDING its `PEER_IDENTITY_BIND_LOCK` existence check immediately before
+/// delivery (below), so a session killed/retired during the up-to-5s wait never gets a
+/// message filed under an identity that no longer exists, exactly like `send`'s own "never
+/// file under an identity removed a moment later" guarantee.
+///
+/// Detached via `tokio::spawn` internally rather than awaited — the caller (any spawn path)
+/// must keep returning immediately, unaffected by this wait.
+///
+/// `from_tuic_session`: the caller-agent's own identity to attribute the delivered message
+/// to, or `None` when there is no caller identity (an HTTP/desktop-IPC-originated spawn has
+/// no agent-to-agent caller). `None` becomes an empty-string sentinel on the delivered
+/// `AgentMessage`, never `tuic_session` itself — falling back to the recipient's own id
+/// would make the message claim to be from itself (this file's own
+/// `enqueue_state_change_to_parent` guards against the identical self-referential shape).
+///
+/// Shared by every spawn path that can defer a Claude prompt this way: the MCP
+/// `agent action=spawn` tool (`handle_agent_with_parent_cwd`), `POST /sessions/agent`
+/// (`agent_routes::spawn_agent_session`), and the desktop `spawn_agent` Tauri command
+/// (`agent::spawn_agent`). Originally implemented inline only in the first of those; kept as
+/// exactly one function once the other two needed the identical sequence, rather than
+/// widening the visibility of `PEER_IDENTITY_BIND_LOCK`/`push_agent_inbox`/
+/// `deliver_notice_to_managed_pty`/`settle_terminal_delivery` piecemeal into other files.
+pub(crate) fn spawn_deferred_prompt_delivery(
+    state: Arc<AppState>,
+    tuic_session: String,
+    from_tuic_session: Option<String>,
+    prompt: String,
+) {
+    let gate_from = from_tuic_session.unwrap_or_default();
+    tokio::spawn(async move {
+        wait_for_mcp_identity_bound(&state, &tuic_session, MCP_IDENTITY_BIND_TIMEOUT_MS).await;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let msg = crate::state::AgentMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            from_tuic_session: gate_from,
+            from_name: "tuic".to_string(),
+            content: prompt,
+            timestamp: now_ms,
+            delivered_via_channel: false,
+        };
+        let msg_id = msg.id.clone();
+        let filed = {
+            let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+            if state.peer_agents.contains_key(&tuic_session) {
+                state.push_agent_inbox(&tuic_session, msg);
+                true
+            } else {
+                false
+            }
+        };
+        if !filed {
+            // The session was killed/retired during the wait — nothing to deliver
+            // into and nothing to wake. Matches `send`'s own "recipient not
+            // registered" outcome; this path never surfaces an error to anyone
+            // since there is no caller left waiting on this specific spawn's
+            // prompt delivery.
+            return;
+        }
+        let outcome = crate::pty::deliver_notice_to_managed_pty(
+            &state,
+            &tuic_session,
+            crate::pty::PEER_MAIL_WAKE,
+        );
+        crate::pty::settle_terminal_delivery(&state, &tuic_session, &msg_id, outcome);
+    });
 }
 
 /// `session action=wait` — block (server-side) until the session is idle or has
@@ -1750,6 +1922,7 @@ pub(super) fn resolve_effective_spawn_cwd(
 /// field here is a function of the ids passed in: the response carries no static
 /// prose block, because the operational workflow it would otherwise repeat lives
 /// in `agent(register).workflow`, which the caller has already read.
+#[allow(clippy::too_many_arguments)] // every arg is an independent, unrelated response field
 pub(super) fn spawn_response(
     session_id: &str,
     task_id: &str,
@@ -1758,6 +1931,7 @@ pub(super) fn spawn_response(
     caller_tuic: Option<&str>,
     codex_wrapper_warning: Option<&str>,
     prompt_deferred: bool,
+    prompt_deferred_for_mcp_bind: bool,
 ) -> serde_json::Value {
     let mut response = serde_json::json!({
         "session_id": session_id,
@@ -1784,6 +1958,24 @@ pub(super) fn spawn_response(
         obj.insert(
             "prompt_delivery".to_string(),
             serde_json::json!("queued — the child must reach its ready prompt first; a prompt_delivery_failed notice follows if it does not, and carries the prompt for re-delivery"),
+        );
+    }
+    // Mutually exclusive with the field above — a spawn is never both
+    // prefill-only-deferred (codex) and MCP-bind-deferred (claude). See
+    // `wait_for_mcp_identity_bound`'s doc comment. Named to warn about the one
+    // real ordering hazard this mechanism has: a caller that immediately
+    // follows up with `agent action=send` is not gated on the same wait, so
+    // that follow-up can land in the child's inbox BEFORE this original prompt.
+    if prompt_deferred_for_mcp_bind && let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "prompt_delivery".to_string(),
+            serde_json::json!(format!(
+                "queued — withheld from launch until this session's own MCP identity binds \
+                 (up to {}ms, fail-open), so it never has to answer with an incomplete tool \
+                 list. A follow-up agent(action=send) issued right after this spawn is NOT \
+                 gated on the same wait and can arrive before this prompt does.",
+                MCP_IDENTITY_BIND_TIMEOUT_MS
+            )),
         );
     }
     if let Some(warning) = codex_wrapper_warning
@@ -1913,6 +2105,19 @@ pub(super) fn handle_agent_with_parent_cwd(
                 .or_else(|| resolved.as_ref().and_then(|rc| rc.model.as_deref()));
             let codex_wrapper_warning =
                 codex_wrapper_launch_warning(effective_agent_type.as_deref(), &binary_path);
+            let print_mode_flag = args["print_mode"].as_bool().unwrap_or(false);
+            // Close the MCP-handshake readiness race (see `wait_for_mcp_identity_bound`'s
+            // doc comment): a freshly spawned Claude process can answer its very first
+            // turn before its own MCP client has finished connecting to this server, so
+            // it never sees any `mcp__tuicommander__*` tools for that turn. Scoped to
+            // Claude, interactive-only spawns — print-mode is one-shot with no later
+            // delivery opportunity, and other agent types' MCP-tool-availability
+            // characteristics haven't been verified. Further scoped to the plain
+            // default-template spawn shape below (no run config, no explicit `args`) —
+            // the common case this session's own testing used; explicit-args and
+            // run-config spawns are left on today's unchanged behavior.
+            let defer_prompt_for_mcp_bind =
+                should_defer_prompt_for_mcp_bind(effective_agent_type.as_deref(), print_mode_flag);
 
             let requested_name = match args.get("name") {
                 Some(value) => match value.as_str().map(str::trim) {
@@ -1999,6 +2204,14 @@ pub(super) fn handle_agent_with_parent_cwd(
             // Initial prompt withheld from argv for prefill-only TUIs (codex):
             // queued into pending_injections after session registration below.
             let mut deferred_initial_prompt: Option<String> = None;
+            // Separate from the above: a Claude prompt withheld from argv so it can be
+            // delivered via the mailbox (`push_agent_inbox`) once this session's own MCP
+            // identity has bound — see `defer_prompt_for_mcp_bind`'s doc comment above.
+            // Deliberately not folded into `deferred_initial_prompt`/`pending_injections`:
+            // that mechanism's flush trigger is shell/TUI-idle detection, an unrelated
+            // readiness signal, and is shared, already-delicate machinery this fix has no
+            // need to touch.
+            let mut deferred_prompt_for_mcp_bind: Option<String> = None;
             let mut launch_args: Vec<String> = Vec::new();
 
             if let Some(raw_args) = args.get("args").and_then(|a| a.as_array()) {
@@ -2012,18 +2225,23 @@ pub(super) fn handle_agent_with_parent_cwd(
                     .filter_map(|arg| arg.as_str().map(ToOwned::to_owned))
                     .collect();
                 let agent_type = effective_agent_type.as_deref().unwrap_or_default();
-                let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
-                    agent_type,
-                    args: &explicit_args,
-                    prompt: &effective_prompt,
-                    model: effective_model,
-                    print_mode: args["print_mode"].as_bool().unwrap_or(false),
-                    output_format: args["output_format"].as_str(),
-                    default_template: false,
-                }) {
-                    Ok(m) => m,
-                    Err(e) => return serde_json::json!({"error": e}),
-                };
+                let (final_args, deferred, _deferred_mcp_bind) =
+                    match compose_mcp_spawn_args(McpSpawnArgs {
+                        agent_type,
+                        args: &explicit_args,
+                        prompt: &effective_prompt,
+                        model: effective_model,
+                        print_mode: args["print_mode"].as_bool().unwrap_or(false),
+                        output_format: args["output_format"].as_str(),
+                        default_template: false,
+                        // Explicit user-authored args are always authoritative —
+                        // never deferred for MCP-bind reasons (also always `None`
+                        // from `compose_mcp_spawn_args` on this branch regardless).
+                        defer_for_mcp_bind: false,
+                    }) {
+                        Ok(m) => m,
+                        Err(e) => return serde_json::json!({"error": e}),
+                    };
                 deferred_initial_prompt = deferred;
                 launch_args.extend(final_args);
             } else if let Some(ref rc) = resolved {
@@ -2034,18 +2252,21 @@ pub(super) fn handle_agent_with_parent_cwd(
                     // subcommand configs must not be rewritten into PTY delivery.
                     let agent_type = effective_agent_type.as_deref().unwrap_or_default();
                     if rc.default_config && is_direct_codex_executable(&binary_path) {
-                        let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
-                            agent_type,
-                            args: rc_args,
-                            prompt: &effective_prompt,
-                            model: effective_model,
-                            print_mode: args["print_mode"].as_bool().unwrap_or(false),
-                            output_format: args["output_format"].as_str(),
-                            default_template: false,
-                        }) {
-                            Ok(args) => args,
-                            Err(error) => return serde_json::json!({"error": error}),
-                        };
+                        let (final_args, deferred, _deferred_mcp_bind) =
+                            match compose_mcp_spawn_args(McpSpawnArgs {
+                                agent_type,
+                                args: rc_args,
+                                prompt: &effective_prompt,
+                                model: effective_model,
+                                print_mode: args["print_mode"].as_bool().unwrap_or(false),
+                                output_format: args["output_format"].as_str(),
+                                default_template: false,
+                                // A user-authored run config is authoritative (never deferred).
+                                defer_for_mcp_bind: false,
+                            }) {
+                                Ok(args) => args,
+                                Err(error) => return serde_json::json!({"error": error}),
+                            };
                         deferred_initial_prompt = deferred;
                         launch_args.extend(final_args);
                     } else {
@@ -2072,7 +2293,7 @@ pub(super) fn handle_agent_with_parent_cwd(
                     let agent_type = effective_agent_type.as_deref().unwrap_or_default();
                     match crate::agent::default_prompt_args(agent_type) {
                         Some(template) => {
-                            let (final_args, deferred) =
+                            let (final_args, deferred, deferred_mcp_bind) =
                                 match compose_mcp_spawn_args(McpSpawnArgs {
                                     agent_type,
                                     args: &template,
@@ -2081,11 +2302,19 @@ pub(super) fn handle_agent_with_parent_cwd(
                                     print_mode: args["print_mode"].as_bool().unwrap_or(false),
                                     output_format: args["output_format"].as_str(),
                                     default_template: true,
+                                    // The realistic call shape (`agent_type: "claude"`,
+                                    // no `binary_path`, no run config authored for
+                                    // "claude") resolves `rc.args: None` and lands
+                                    // exactly here — this is the branch that MUST
+                                    // honor the flag, not just the manual `binary_path`
+                                    // override branch further below.
+                                    defer_for_mcp_bind: defer_prompt_for_mcp_bind,
                                 }) {
                                     Ok(m) => m,
                                     Err(e) => return serde_json::json!({"error": e}),
                                 };
                             deferred_initial_prompt = deferred;
+                            deferred_prompt_for_mcp_bind = deferred_mcp_bind;
                             launch_args.extend(final_args);
                         }
                         None => {
@@ -2100,19 +2329,29 @@ pub(super) fn handle_agent_with_parent_cwd(
                 // No run config, no explicit args — default MCP param logic
                 if is_direct_codex_executable(&binary_path) {
                     let template = crate::agent::default_prompt_args("codex").unwrap_or_default();
-                    let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
-                        agent_type: "codex",
-                        args: &template,
-                        prompt: &effective_prompt,
-                        model: effective_model,
-                        print_mode: args["print_mode"].as_bool().unwrap_or(false),
-                        output_format: args["output_format"].as_str(),
-                        default_template: true,
-                    }) {
-                        Ok(m) => m,
-                        Err(e) => return serde_json::json!({"error": e}),
-                    };
+                    let (final_args, deferred, deferred_mcp_bind) =
+                        match compose_mcp_spawn_args(McpSpawnArgs {
+                            agent_type: "codex",
+                            args: &template,
+                            prompt: &effective_prompt,
+                            model: effective_model,
+                            print_mode: args["print_mode"].as_bool().unwrap_or(false),
+                            output_format: args["output_format"].as_str(),
+                            default_template: true,
+                            // Always false in practice — `effective_agent_type` is
+                            // already forced to "codex" by `resolve_spawn_agent_type`
+                            // whenever `is_direct_codex_executable` is true, so
+                            // `defer_prompt_for_mcp_bind` (computed off that same
+                            // resolved type) is already false here. Passed through
+                            // honestly rather than hardcoded, so this call site's
+                            // contract matches the shared function's real one.
+                            defer_for_mcp_bind: defer_prompt_for_mcp_bind,
+                        }) {
+                            Ok(m) => m,
+                            Err(e) => return serde_json::json!({"error": e}),
+                        };
                     deferred_initial_prompt = deferred;
+                    deferred_prompt_for_mcp_bind = deferred_mcp_bind;
                     launch_args.extend(final_args);
                 } else {
                     if args["print_mode"].as_bool().unwrap_or(false) {
@@ -2126,7 +2365,11 @@ pub(super) fn handle_agent_with_parent_cwd(
                         launch_args.push("--model".to_string());
                         launch_args.push(model.to_string());
                     }
-                    launch_args.push(effective_prompt.clone());
+                    if defer_prompt_for_mcp_bind {
+                        deferred_prompt_for_mcp_bind = Some(effective_prompt.clone());
+                    } else {
+                        launch_args.push(effective_prompt.clone());
+                    }
                 }
             }
             if let Some(agent_type) = effective_agent_type.as_deref() {
@@ -2331,6 +2574,24 @@ pub(super) fn handle_agent_with_parent_cwd(
             );
             state.agent_inbox.entry(session_id.clone()).or_default();
 
+            // Computed before the `if let Some(prompt_text) = deferred_prompt_for_mcp_bind`
+            // block below moves it — feeds `spawn_response`'s own deferral notice.
+            let prompt_deferred_for_mcp_bind = deferred_prompt_for_mcp_bind.is_some();
+
+            // Deliver a prompt withheld from argv by `defer_prompt_for_mcp_bind` above.
+            // See `spawn_deferred_prompt_delivery`'s doc comment for the full mechanism.
+            // `caller_tuic` is `None`, not `Some(session_id.clone())`, when there's no
+            // caller identity — falling back to the recipient's own id would make the
+            // delivered message claim to be from itself.
+            if let Some(prompt_text) = deferred_prompt_for_mcp_bind {
+                spawn_deferred_prompt_delivery(
+                    Arc::clone(state),
+                    session_id.clone(),
+                    caller_tuic.clone(),
+                    prompt_text,
+                );
+            }
+
             // Bidirectional communication additionally needs an identified
             // parent. The child receives TUIC_PARENT + the spawn preamble; the
             // parent receives the child target in the response below.
@@ -2385,6 +2646,7 @@ pub(super) fn handle_agent_with_parent_cwd(
                 caller_tuic.as_deref(),
                 codex_wrapper_warning.as_deref(),
                 prompt_deferred,
+                prompt_deferred_for_mcp_bind,
             )
         }
         other => serde_json::json!({"error": format!(
@@ -2691,20 +2953,41 @@ pub(super) fn finalize_explicit_spawn_args(
 /// Applied ONLY to the built-in `default_prompt_args` template path — a
 /// user-authored run config (e.g. codex `["exec", "{prompt}"]`) is authoritative
 /// and must never be rewritten behind the user's back.
+///
+/// Returns `(argv, deferred_for_pending_injection, deferred_for_mcp_bind)` — two
+/// independent deferred-prompt slots, never both `Some` for the same spawn.
+/// `deferred_for_pending_injection` (prefill-only TUIs, e.g. codex) is flushed by
+/// BUSY→IDLE detection; `deferred_for_mcp_bind` (Claude only, see
+/// `wait_for_mcp_identity_bound`'s doc comment) is flushed once this session's
+/// own MCP identity binds. They are kept as separate `Option`s rather than one
+/// shared slot specifically so the two unrelated readiness signals that flush
+/// them can never be confused for one another. `defer_for_mcp_bind` is
+/// `false` whenever `agent_type` isn't `"claude"` (the caller already computed
+/// that via `should_defer_prompt_for_mcp_bind`) — checked here as a plain `bool`
+/// input rather than re-deriving it, so this function has one source of truth
+/// for "should this spawn's prompt ride in argv."
 pub(super) fn finalize_spawn_args(
     agent_type: &str,
     merged: &[String],
     prompt: &str,
-) -> (Vec<String>, Option<String>) {
+    defer_for_mcp_bind: bool,
+) -> (Vec<String>, Option<String>, Option<String>) {
     if crate::agent::prompt_prefill_only(agent_type) {
         let argv = merged
             .iter()
             .filter(|a| !a.contains("{prompt}"))
             .cloned()
             .collect();
-        (argv, Some(prompt.to_string()))
+        (argv, Some(prompt.to_string()), None)
+    } else if defer_for_mcp_bind {
+        let argv = merged
+            .iter()
+            .filter(|a| !a.contains("{prompt}"))
+            .cloned()
+            .collect();
+        (argv, None, Some(prompt.to_string()))
     } else {
-        (substitute_prompt_in_args(merged, prompt), None)
+        (substitute_prompt_in_args(merged, prompt), None, None)
     }
 }
 
@@ -2789,11 +3072,20 @@ pub(super) struct McpSpawnArgs<'a> {
     pub(super) print_mode: bool,
     pub(super) output_format: Option<&'a str>,
     pub(super) default_template: bool,
+    /// See `finalize_spawn_args`'s doc comment. Only meaningful when
+    /// `default_template` is true — explicit/user-authored args are always
+    /// authoritative and never deferred for MCP-bind reasons.
+    pub(super) defer_for_mcp_bind: bool,
 }
+
+/// `(argv, deferred_for_pending_injection, deferred_for_mcp_bind)` — see
+/// `finalize_spawn_args`'s doc comment for what the two `Option`s mean and why
+/// they're never both `Some` for the same spawn.
+pub(super) type SpawnArgsAndDeferrals = (Vec<String>, Option<String>, Option<String>);
 
 pub(super) fn compose_mcp_spawn_args(
     spawn: McpSpawnArgs<'_>,
-) -> Result<(Vec<String>, Option<String>), String> {
+) -> Result<SpawnArgsAndDeferrals, String> {
     let merged = merge_mcp_params_into_args(
         spawn.agent_type,
         spawn.args,
@@ -2803,13 +3095,16 @@ pub(super) fn compose_mcp_spawn_args(
         spawn.default_template,
     )?;
     if spawn.default_template {
-        Ok(finalize_spawn_args(spawn.agent_type, &merged, spawn.prompt))
-    } else {
-        Ok(finalize_explicit_spawn_args(
+        Ok(finalize_spawn_args(
             spawn.agent_type,
             &merged,
             spawn.prompt,
+            spawn.defer_for_mcp_bind,
         ))
+    } else {
+        let (argv, deferred) =
+            finalize_explicit_spawn_args(spawn.agent_type, &merged, spawn.prompt);
+        Ok((argv, deferred, None))
     }
 }
 

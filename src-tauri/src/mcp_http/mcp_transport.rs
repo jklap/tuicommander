@@ -126,7 +126,7 @@ use super::mcp_transport_peer::TAKEOVER_REJECT_SUMMARY_INTERVAL;
 #[cfg(test)]
 use super::mcp_transport_peer::TASK_POLL_INTERVAL_MS;
 pub(super) use super::mcp_transport_peer::TUIC_SESSION_HEADER;
-use super::mcp_transport_peer::apply_initialize_identity;
+pub(super) use super::mcp_transport_peer::apply_initialize_identity;
 pub(super) use super::mcp_transport_peer::client_pid_header;
 use super::mcp_transport_peer::drop_identity_buffers;
 use super::mcp_transport_peer::handle_agent_wait;
@@ -204,6 +204,8 @@ use super::mcp_transport_session_agent::resolve_spawn_pty_description;
 pub(super) use super::mcp_transport_session_agent::session_output;
 #[cfg(test)]
 use super::mcp_transport_session_agent::session_wait_met;
+pub(crate) use super::mcp_transport_session_agent::should_defer_prompt_for_mcp_bind;
+pub(crate) use super::mcp_transport_session_agent::spawn_deferred_prompt_delivery;
 #[cfg(test)]
 use super::mcp_transport_session_agent::spawn_response;
 #[cfg(test)]
@@ -214,6 +216,8 @@ use super::mcp_transport_session_agent::suspend_refusal;
 use super::mcp_transport_session_agent::translate_special_key;
 #[cfg(test)]
 use super::mcp_transport_session_agent::uses_agent_command_injection;
+#[cfg(test)]
+use super::mcp_transport_session_agent::wait_for_mcp_identity_bound;
 pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.

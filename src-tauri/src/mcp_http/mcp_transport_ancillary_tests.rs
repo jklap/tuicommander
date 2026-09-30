@@ -2345,6 +2345,424 @@ async fn repo_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
     assert_eq!(response, serde_json::json!({"state": "unknown"}));
 }
 
+#[test]
+fn should_defer_prompt_for_mcp_bind_scopes_to_interactive_claude_only() {
+    assert!(should_defer_prompt_for_mcp_bind(Some("claude"), false));
+    assert!(
+        !should_defer_prompt_for_mcp_bind(Some("claude"), true),
+        "print-mode is one-shot with no later delivery opportunity"
+    );
+    assert!(
+        !should_defer_prompt_for_mcp_bind(Some("codex"), false),
+        "other agent types' MCP-tool-availability characteristics are unverified"
+    );
+    assert!(!should_defer_prompt_for_mcp_bind(None, false));
+}
+
+/// `wait_for_mcp_identity_bound` must not be satisfied merely by the
+/// `PeerAgent` row `agent action=spawn` pre-inserts for every managed child —
+/// that row exists from the very first instant with `mcp_session_id: ""`
+/// (see the function's own doc comment), so `peer_agents.contains_key(...)`
+/// would be a no-op gate. Only a real `apply_initialize_identity` bind
+/// (setting `mcp_session_id`) may satisfy it.
+#[tokio::test]
+async fn wait_for_mcp_identity_bound_ignores_the_pre_inserted_placeholder_row() {
+    let state = test_state();
+    let tuic = uuid::Uuid::new_v4().to_string();
+    state.peer_agents.insert(
+        tuic.clone(),
+        crate::state::PeerAgent {
+            tuic_session: tuic.clone(),
+            mcp_session_id: String::new(),
+            name: "agent".to_string(),
+            project: None,
+            registered_at: 0,
+        },
+    );
+    let met = wait_for_mcp_identity_bound(&state, &tuic, 50).await;
+    assert!(
+        !met,
+        "a placeholder row with an empty mcp_session_id must not satisfy the gate"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_mcp_identity_bound_returns_true_once_a_real_bind_lands() {
+    let state = test_state();
+    // `apply_initialize_identity` requires the header to be a well-formed UUID
+    // (`is_valid_uuid`) — a human-readable test key like "will-bind" is silently
+    // ignored, which is exactly the mistake this test would otherwise hide.
+    let tuic = uuid::Uuid::new_v4().to_string();
+    state.peer_agents.insert(
+        tuic.clone(),
+        crate::state::PeerAgent {
+            tuic_session: tuic.clone(),
+            mcp_session_id: String::new(),
+            name: "agent".to_string(),
+            project: None,
+            registered_at: 0,
+        },
+    );
+    let waiting_state = Arc::clone(&state);
+    let waiting_tuic = tuic.clone();
+    let waiter = tokio::spawn(async move {
+        wait_for_mcp_identity_bound(&waiting_state, &waiting_tuic, 1_000).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        apply_initialize_identity(&state, "mcp-real-bind", Some(&tuic)),
+        "apply_initialize_identity must accept a well-formed UUID header"
+    );
+    assert!(
+        waiter.await.unwrap(),
+        "wait_for_mcp_identity_bound must return true once mcp_session_id is populated"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_mcp_identity_bound_fails_open_on_timeout() {
+    let state = test_state();
+    let tuic = uuid::Uuid::new_v4().to_string();
+    state.peer_agents.insert(
+        tuic.clone(),
+        crate::state::PeerAgent {
+            tuic_session: tuic.clone(),
+            mcp_session_id: String::new(),
+            name: "agent".to_string(),
+            project: None,
+            registered_at: 0,
+        },
+    );
+    let met = wait_for_mcp_identity_bound(&state, &tuic, 50).await;
+    assert!(
+        !met,
+        "wait_for_mcp_identity_bound must return false rather than hang when the identity never binds"
+    );
+}
+
+/// Both spawn tests below force `agent_type: "claude"` through the real
+/// spawn handler using a stand-in binary (`/bin/cat`/`/usr/bin/true`, not a
+/// real `claude`) — which means `agent_hook_launch::augment_args` also
+/// fires for real (it's keyed on `agent_type`, not on which binary is
+/// actually behind it) and appends `--settings <config_dir>/agent-hooks/
+/// claude.json` by default (`native_status_signals` defaults to `true`).
+/// A stand-in binary that doesn't understand that flag exits immediately,
+/// which tears the session down and removes its `peer_agents` entry before
+/// the test can observe anything — this is exactly what happened before
+/// this override was added. Disabling `native_status_signals` for
+/// `"claude"` here keeps the stand-in binary running for the duration of
+/// the test, matching what `LONG_LIVED_TEST_BINARY`'s own comment promises.
+/// Reads/writes the process-global `CONFIG_DIR_OVERRIDE`
+/// (`AGENTS.md`'s "MCP `initialize` Instructions: Per-Agent Config Tests
+/// Must Be `#[serial_test::serial]`" hazard), hence `#[serial]` on both
+/// call sites below. Inlined rather than factored into a shared helper:
+/// `set_config_dir_override` returns `impl Drop`, an opaque type that
+/// can't be named as part of a helper's own return type.
+fn claude_agents_config_with_native_status_signals_disabled() -> crate::config::AgentsConfig {
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "claude".to_string(),
+        crate::config::AgentSettings {
+            native_status_signals: Some(false),
+            ..Default::default()
+        },
+    );
+    agents_cfg
+}
+
+/// End-to-end: an interactive Claude spawn withholds the prompt from argv
+/// (verified indirectly — the inbox starts empty rather than already
+/// carrying the prompt) and delivers it into the mailbox once this
+/// session's MCP identity binds, without the caller ever having to await
+/// that delivery (`agent action=spawn` itself must keep returning
+/// immediately — see the `tokio::spawn` note at the call site).
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn agent_spawn_defers_claude_prompt_until_mcp_identity_binds() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    crate::config::save_agents_config(
+        crate::config::AgentsConfig::default(),
+        claude_agents_config_with_native_status_signals_disabled(),
+    )
+    .expect("save agents config");
+    let state = test_state();
+    let spawned = handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &serde_json::json!({
+            "action": "spawn",
+            "name": "defer-child",
+            "prompt": "the real deferred task",
+            "agent_type": "claude",
+            "binary_path": LONG_LIVED_TEST_BINARY,
+        }),
+        None,
+        None,
+    )
+    .await;
+    assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+    let session_id = spawned["session_id"]
+        .as_str()
+        .expect("spawn returns a session id")
+        .to_string();
+
+    assert!(
+        state
+            .agent_inbox
+            .get(&session_id)
+            .is_none_or(|inbox| inbox.is_empty()),
+        "the prompt must not be pushed to the inbox before the MCP identity binds"
+    );
+
+    assert!(
+        apply_initialize_identity(&state, "mcp-defer-child", Some(&session_id)),
+        "apply_initialize_identity must accept this session's own (valid UUID) id"
+    );
+
+    // 60s, not 2s: a full-workspace `cargo nextest run` (thousands of
+    // processes contending for CPU/exec) has been observed to push this
+    // well past 2s, and even past 10s, even though the real work (a poll
+    // loop plus one inbox push) is near-instant under normal load — the
+    // outer bound here needs real margin over what's actually being
+    // awaited, not a number that happens to work in isolation. Still
+    // comfortably under nextest's own 120s hard-kill
+    // (`src-tauri/.config/nextest.toml`'s `slow-timeout`). See "Which
+    // timing assertions are load-bearing" in this crate's own AGENTS.md.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if state
+            .agent_inbox
+            .get(&session_id)
+            .is_some_and(|inbox| inbox.iter().any(|m| m.content == "the real deferred task"))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "deferred prompt never reached the inbox after the MCP identity bound"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// Print-mode spawns must be completely unaffected by the deferral above —
+/// they are one-shot with no later delivery opportunity, so the prompt
+/// must stay in the initial launch and the inbox must never gain a
+/// deferred entry for one.
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn agent_spawn_does_not_defer_a_print_mode_claude_prompt() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    crate::config::save_agents_config(
+        crate::config::AgentsConfig::default(),
+        claude_agents_config_with_native_status_signals_disabled(),
+    )
+    .expect("save agents config");
+    let state = test_state();
+    let spawned = handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &serde_json::json!({
+            "action": "spawn",
+            "name": "print-mode-child",
+            "prompt": "a one-shot task",
+            "agent_type": "claude",
+            "print_mode": true,
+            "binary_path": SHORT_LIVED_TEST_BINARY,
+        }),
+        None,
+        None,
+    )
+    .await;
+    assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+    let session_id = spawned["session_id"]
+        .as_str()
+        .expect("spawn returns a session id")
+        .to_string();
+
+    apply_initialize_identity(&state, "mcp-print-mode-child", Some(&session_id));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        state
+            .agent_inbox
+            .get(&session_id)
+            .is_none_or(|inbox| inbox.is_empty()),
+        "a print-mode spawn must never gain a deferred-prompt inbox entry"
+    );
+}
+
+/// Restores the process-wide `PATH` on drop, including on an early return or
+/// panic — this test mutates a process-global to make `which claude` resolve
+/// to a stand-in binary, and a test that panics without restoring it would
+/// corrupt every other test's binary detection for the rest of the process.
+struct PathGuard(Option<String>);
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(prior) => unsafe { std::env::set_var("PATH", prior) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+}
+
+/// The critical case a code review caught missing from the two tests above:
+/// both of those pass `binary_path` explicitly, which forces `resolved: None`
+/// and routes into the ONE branch that already checked
+/// `defer_prompt_for_mcp_bind` correctly — masking that every other branch
+/// capable of producing a claude default-template argv did not. This test
+/// omits `binary_path` entirely and instead makes `which claude` (real PATH
+/// lookup, `detect_agent_binary`) resolve to a stand-in binary, so the spawn
+/// takes the exact route an ordinary `agent_type: "claude"` call takes:
+/// `resolve_run_config` Pass 2 (no run config literally named "claude") →
+/// `ResolvedRunConfig { args: None, .. }` → the `default_prompt_args`
+/// template branch. Before the fix, this test failed exactly as the review
+/// predicted: the prompt landed in launch argv immediately, so the "inbox is
+/// empty before bind" assertion below failed.
+///
+/// **Requires `cargo nextest`'s per-test-process isolation — flaky/hangs
+/// under plain `cargo test`'s shared-process thread model.** This test
+/// mutates the process-global `PATH`; under `cargo test`'s default (many
+/// threads sharing one process), a *different*, unrelated, concurrently
+/// running test that also resolves `"claude"` via a bare PATH lookup (no
+/// `binary_path`) can transiently see this test's mutated `PATH` and get
+/// routed to this test's own stand-in binary too — confirmed to produce a
+/// real hang during development (an earlier, long-lived stand-in blocked
+/// on stdin took an unrelated thread down with it). `#[serial_test::serial]`
+/// only serializes against *other* `#[serial]` tests, not against every
+/// test in the binary, so it does not fully close this gap under
+/// `cargo test`. `cargo nextest` (what `check-gate.sh`/CI actually run)
+/// sidesteps the entire class of risk by giving every test its own OS
+/// process — this test's `PATH` mutation can never be observed outside
+/// its own process. If you ever need to run just this test via plain
+/// `cargo test`, do it in isolation (`--exact` this test's name) rather
+/// than alongside the rest of this file's ~6000 other tests.
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_shape() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    crate::config::save_agents_config(
+        crate::config::AgentsConfig::default(),
+        claude_agents_config_with_native_status_signals_disabled(),
+    )
+    .expect("save agents config");
+
+    // The stand-in MUST stay alive long enough for the deferred-delivery
+    // task to actually run — using `SHORT_LIVED_TEST_BINARY` (`/usr/bin/true`)
+    // here was tried and is a genuine bug, not just slow: `true` exits in
+    // milliseconds, which fires this codebase's own PTY-exit cleanup
+    // (`retire_peer_identity`, `pty.rs`) that removes BOTH `peer_agents`
+    // and `agent_inbox` for the session. That races the deferred task's own
+    // `PEER_IDENTITY_BIND_LOCK` existence check (this fix's Warning-1 guard)
+    // — under real full-`cargo nextest run` load the PTY exit reliably wins
+    // the race, so the guard correctly (by its own logic) skips delivery
+    // into what is by then a genuinely torn-down session, and NO amount of
+    // extra polling deadline ever helps (confirmed: failed identically at
+    // 10s and again at 60s — this is not a timing margin problem).
+    //
+    // So: a long-lived stand-in is required, but a bare symlink to
+    // `LONG_LIVED_TEST_BINARY` (`/bin/cat`) hangs `get_binary_version`'s
+    // `--version`/`-v` probes — BSD `cat -v` with no file operand reads
+    // stdin forever, blocking `Command::output()` (confirmed cause of an
+    // earlier full hang here). This tiny wrapper script answers both
+    // version probes instantly without touching stdin, then `exec`s into
+    // `LONG_LIVED_TEST_BINARY` for any other invocation (the real spawn,
+    // launched with an empty/near-empty argv since the prompt is
+    // withheld) — safe specifically because `cargo nextest` (what
+    // `check-gate.sh`/CI actually run — see the note below) gives every
+    // test its own OS process, so no other test can ever invoke this
+    // stand-in unexpectedly through this test's mutated `PATH`.
+    let bin_dir = tempfile::TempDir::new().expect("bin tempdir");
+    let fake_claude = bin_dir.path().join("claude");
+    std::fs::write(
+        &fake_claude,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --version|-v) exit 0 ;;\nesac\nexec {LONG_LIVED_TEST_BINARY}\n"
+        ),
+    )
+    .expect("write fake claude script");
+    let mut perms = std::fs::metadata(&fake_claude)
+        .expect("stat fake claude")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(&fake_claude, perms).expect("chmod fake claude");
+
+    let prior_path = std::env::var("PATH").ok();
+    let _path_guard = PathGuard(prior_path.clone());
+    let new_path = match &prior_path {
+        Some(p) => format!("{}:{p}", bin_dir.path().display()),
+        None => bin_dir.path().display().to_string(),
+    };
+    unsafe { std::env::set_var("PATH", new_path) };
+
+    let state = test_state();
+    let spawned = handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &serde_json::json!({
+            "action": "spawn",
+            "name": "ordinary-defer-child",
+            "prompt": "the real deferred task via the ordinary call shape",
+            "agent_type": "claude",
+        }),
+        None,
+        None,
+    )
+    .await;
+    assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+    let session_id = spawned["session_id"]
+        .as_str()
+        .expect("spawn returns a session id")
+        .to_string();
+
+    assert!(
+        state
+            .agent_inbox
+            .get(&session_id)
+            .is_none_or(|inbox| inbox.is_empty()),
+        "the prompt must not be pushed to the inbox before the MCP identity binds \
+         — if this fails, the ordinary no-binary_path call shape is not deferring \
+         the prompt at all (the bug the code review caught)"
+    );
+
+    assert!(
+        apply_initialize_identity(&state, "mcp-ordinary-defer-child", Some(&session_id)),
+        "apply_initialize_identity must accept this session's own (valid UUID) id"
+    );
+
+    // 60s, not 2s — see the identical note in
+    // `agent_spawn_defers_claude_prompt_until_mcp_identity_binds` above;
+    // this test additionally does a real PATH-based binary lookup and a
+    // real subprocess spawn (not just `binary_path` pointing straight at
+    // a known path), so it's hit this margin problem twice already: first
+    // at ~3.9s (10s deadline was not yet in place), then again at ~11.7s
+    // even with a 10s deadline. Both observed under a full-workspace
+    // `cargo nextest run`, never in isolation.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if state.agent_inbox.get(&session_id).is_some_and(|inbox| {
+            inbox
+                .iter()
+                .any(|m| m.content == "the real deferred task via the ordinary call shape")
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "deferred prompt never reached the inbox after the MCP identity bound"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn repo_worktree_setup_status_reports_the_outcome_after_create() {
     // An MCP client that just created a worktree with a configured setup
