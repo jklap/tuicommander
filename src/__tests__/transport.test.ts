@@ -2010,6 +2010,7 @@ describe("transport", () => {
 		// than derived from the mappers: a test that rebuilt the path the same
 		// way the code does would agree with any typo.
 		it.each([
+			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],

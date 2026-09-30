@@ -47,6 +47,46 @@ pub(crate) fn ego_config(state: &AppState) -> Result<EgoAcpConfig, AcpClientErro
     })
 }
 
+/// The directory every AI Chat conversation runs in, from the
+/// `ai_chat_workspace` setting; empty means the home directory of this host.
+///
+/// Resolved here so the desktop and a browser get the same answer for the host
+/// that runs ego. A configured folder that does not exist is created; every
+/// refusal names the setting, because the person has to edit it to recover.
+pub(crate) async fn workspace_root(state: &AppState) -> Result<PathBuf, AcpClientError> {
+    let configured = state.config.read().ai_chat_workspace.trim().to_string();
+    let unusable = |reason: String| {
+        AcpClientError::invalid_input(format!(
+            "AI Chat workspace (setting ai_chat_workspace) is unusable: {reason}"
+        ))
+    };
+    let path = if configured.is_empty() {
+        dirs::home_dir().ok_or_else(|| unusable("the home directory is unavailable".into()))?
+    } else {
+        PathBuf::from(&configured)
+    };
+    if !path.is_absolute() {
+        return Err(unusable(format!(
+            "{} is not an absolute path",
+            path.display()
+        )));
+    }
+    tokio::fs::create_dir_all(&path)
+        .await
+        .map_err(|error| unusable(format!("cannot create {}: {error}", path.display())))?;
+    tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|error| unusable(format!("cannot open {}: {error}", path.display())))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn acp_workspace_root(
+    state: State<'_, Arc<AppState>>,
+) -> Result<PathBuf, AcpClientError> {
+    workspace_root(&state).await
+}
+
 pub(crate) async fn connect(
     state: &Arc<AppState>,
     root: PathBuf,
@@ -526,6 +566,67 @@ mod tests {
 
     use super::*;
     use crate::acp::{AcpClientEvent, AcpEventJournal};
+
+    fn state_with_workspace(value: &str) -> AppState {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().ai_chat_workspace = value.to_string();
+        state
+    }
+
+    /// Catches: connect refused on a machine without ~/Gits because the root is
+    /// composed from a hardcoded folder name instead of configuration.
+    #[tokio::test]
+    async fn an_unset_workspace_is_the_home_directory_never_a_fixed_folder() {
+        let state = state_with_workspace("");
+        let home = std::fs::canonicalize(dirs::home_dir().unwrap()).unwrap();
+        assert_eq!(workspace_root(&state).await.unwrap(), home);
+    }
+
+    /// Catches: the setting is read but ignored, so a user's chosen folder never applies.
+    #[tokio::test]
+    async fn a_configured_workspace_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with_workspace(dir.path().to_str().unwrap());
+        assert_eq!(
+            workspace_root(&state).await.unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+    }
+
+    /// Catches: a missing configured folder falls through to the generic
+    /// "invalid ACP root" refusal at canonicalize.
+    #[tokio::test]
+    async fn a_missing_configured_workspace_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("chat").join("root");
+        let state = state_with_workspace(wanted.to_str().unwrap());
+        let root = workspace_root(&state).await.unwrap();
+        assert!(wanted.is_dir());
+        assert_eq!(root, std::fs::canonicalize(&wanted).unwrap());
+    }
+
+    /// Catches: a bad setting is reported without naming it, leaving the user
+    /// with no idea what to edit.
+    #[tokio::test]
+    async fn an_unusable_workspace_names_the_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let under_file = file.join("sub");
+        for bad in [
+            "relative/path".to_string(),
+            file.to_string_lossy().into_owned(),
+            under_file.to_string_lossy().into_owned(),
+        ] {
+            let state = state_with_workspace(&bad);
+            let error = workspace_root(&state).await.unwrap_err();
+            assert!(
+                error.message.contains("ai_chat_workspace"),
+                "{bad}: {}",
+                error.message
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_conversation_peer_survives_reconnect_and_app_restart() {

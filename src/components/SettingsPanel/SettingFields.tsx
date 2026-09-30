@@ -79,6 +79,8 @@ export const SettingInput: Component<{
 	label: string;
 	value: string;
 	onInput: (value: string) => unknown;
+	/** Fires when the field loses focus, for checks that would reject a half-typed value. */
+	onBlur?: () => void;
 	placeholder?: string;
 	hint?: string;
 	type?: "text" | "password" | "number";
@@ -91,6 +93,7 @@ export const SettingInput: Component<{
 			onInput={(e) => {
 				if (props.onInput(e.currentTarget.value) === false) e.currentTarget.value = props.value;
 			}}
+			onBlur={() => props.onBlur?.()}
 			placeholder={props.placeholder}
 		/>
 		<Show when={props.hint}>

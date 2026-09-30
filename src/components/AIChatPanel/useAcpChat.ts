@@ -47,7 +47,7 @@ let binding: { connectionId: AcpConnectionId; sessionId: AcpSessionId | null } |
 /** The start in flight, so a second send while ego launches waits for it. */
 let starting: Promise<Started | null> | null = null;
 
-/** Where every chat runs, resolved once from the home directory. */
+/** Where every chat runs, asked of the backend once. */
 let workspaceRoot: Promise<string> | null = null;
 
 /** Tabs are one list for the app, not one per repository. */
@@ -77,17 +77,13 @@ export function resetAcpChatBindings(): void {
 	refused.clear();
 }
 
-/** `~/Gits`, the root every chat session runs in. */
+/** The root every chat session runs in, as the backend resolves it from the
+ *  `ai_chat_workspace` setting. */
 function chatRoot(): Promise<string> {
-	workspaceRoot ??= invoke<string>("get_home_directory")
-		.then((home) => {
-			const separator = home.includes("\\") && !home.includes("/") ? "\\" : "/";
-			return `${home.replace(/[/\\]+$/, "")}${separator}Gits`;
-		})
-		.catch((failure: unknown) => {
-			workspaceRoot = null;
-			throw failure;
-		});
+	workspaceRoot ??= invoke<string>("acp_workspace_root").catch((failure: unknown) => {
+		workspaceRoot = null;
+		throw failure;
+	});
 	return workspaceRoot;
 }
 

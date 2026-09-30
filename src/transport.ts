@@ -274,6 +274,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// The bodies carry exactly the arguments the Tauri command takes, because
 	// the client's refusals are computed in Rust and must be identical on both
 	// transports — a body that dropped a field would move a decision here.
+	acp_workspace_root: {
+		map: () => ({ method: "GET", path: "/acp/workspace" }),
+	},
 	acp_connect: {
 		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
 	},
