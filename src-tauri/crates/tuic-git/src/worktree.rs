@@ -8437,6 +8437,108 @@ branch refs/heads/feat
         );
     }
 
+    fn add_extra_branches_1295(repo: &Path, count: usize) {
+        for n in 0..count {
+            git_cmd(repo)
+                .args(["branch", &format!("extra-1295-{n:02}"), "audit-1295"])
+                .run()
+                .unwrap();
+        }
+    }
+
+    fn listed_branches_1295(repo: &Path) -> Vec<String> {
+        git_cmd(repo)
+            .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+            .run()
+            .unwrap()
+            .stdout
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn branch_integrations_never_exceed_the_worker_bound_and_look_up_each_branch_once_1295() {
+        // Catches: one thread per branch (unbounded fan-out hammers `gh` and trips
+        // its rate limit), and a worker index race that skips or repeats a branch.
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 18);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let calls = std::sync::Mutex::new(Vec::<String>::new());
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            calls.lock().unwrap().push(branch.to_string());
+            std::thread::sleep(Duration::from_millis(60));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            false
+        })
+        .unwrap();
+        assert!(
+            peak.load(Ordering::SeqCst) <= BRANCH_INTEGRATION_WORKERS,
+            "more than {BRANCH_INTEGRATION_WORKERS} lookups in flight: {}",
+            peak.load(Ordering::SeqCst)
+        );
+        let mut calls = calls.into_inner().unwrap();
+        calls.sort();
+        let mut deduped = calls.clone();
+        deduped.dedup();
+        assert_eq!(calls, deduped, "a branch was looked up more than once");
+        for n in 0..18 {
+            assert!(
+                calls.contains(&format!("extra-1295-{n:02}")),
+                "extra-1295-{n:02} was never looked up"
+            );
+        }
+        assert_eq!(listed.len(), listed_branches_1295(&repo).len());
+    }
+
+    #[test]
+    fn branch_integrations_keep_listing_order_when_later_branches_finish_first_1295() {
+        // Catches: results returned in completion order instead of listing order
+        // (earlier-listed branches are made the slowest here).
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 12);
+        let expected = listed_branches_1295(&repo);
+        let total = expected.len() as u64;
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            let index = expected.iter().position(|b| b == branch).unwrap() as u64;
+            std::thread::sleep(Duration::from_millis((total - index) * 25));
+            false
+        })
+        .unwrap();
+        assert_eq!(
+            listed.iter().map(|e| e.branch.clone()).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn branch_integrations_attach_each_lookup_result_to_its_own_branch_1295() {
+        // Catches: a result paired with a neighbouring branch after the concurrent
+        // collect-and-sort (only extra-1295-05 is proven by a pull request).
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        add_extra_branches_1295(&repo, 10);
+        let listed = branch_integrations_with_pr(&repo, |_, branch, _| {
+            std::thread::sleep(Duration::from_millis(20));
+            branch == "extra-1295-05"
+        })
+        .unwrap();
+        for entry in &listed {
+            assert_eq!(
+                entry.proof == Some("github_pr"),
+                entry.branch == "extra-1295-05",
+                "wrong pull request proof on {}",
+                entry.branch
+            );
+            assert_eq!(
+                entry.tip,
+                rev_at(&repo, &format!("refs/heads/{}", entry.branch)).unwrap()
+            );
+        }
+    }
+
     #[test]
     fn squash_merged_branch_is_integrated_1295() {
         let (_temp, repo, wt) = integration_1295_fixture(true, false);
