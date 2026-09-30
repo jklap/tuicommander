@@ -182,6 +182,7 @@ function aiChatWorkspaceInput(container: HTMLElement): HTMLInputElement {
 
 describe("GeneralTab AI Chat workspace", () => {
 	beforeEach(() => {
+		settingsStore.setAiChatWorkspace("");
 		mockInvoke.mockImplementation((cmd: string) => {
 			if (cmd === "get_home_directory") return Promise.resolve("/home/somebody");
 			return Promise.resolve(cmd === "load_config" ? {} : undefined);
@@ -208,13 +209,45 @@ describe("GeneralTab AI Chat workspace", () => {
 		await waitFor(() => expect(aiChatWorkspaceInput(container).placeholder).toBe("/home/somebody"));
 	});
 
-	it("refuses a relative path, keeps the saved one, and says why", () => {
+	/** Types the way a person does: each character lands after what the field shows now. */
+	function typeSlowly(input: HTMLInputElement, text: string): void {
+		for (const char of text) fireEvent.input(input, { target: { value: input.value + char } });
+	}
+
+	// Catches: reverting the input on a keystroke that is only invalid mid-typing,
+	// which makes "C:\\Users\\x" impossible to type by hand.
+	it("saves a Windows path typed one character at a time", () => {
+		const { container } = render(() => <GeneralTab />);
+		const input = aiChatWorkspaceInput(container);
+		typeSlowly(input, "C:\\Users\\x");
+		expect(input.value).toBe("C:\\Users\\x");
+		expect(settingsStore.state.aiChatWorkspace).toBe("C:\\Users\\x");
+		expect(container.textContent).not.toContain("must be an absolute path");
+	});
+
+	// Catches: a relative path saved, or refused without telling the person why.
+	it("keeps a relative path as typed, saves nothing, and says why on blur", () => {
 		settingsStore.setAiChatWorkspace("/srv/chat");
 		const { container } = render(() => <GeneralTab />);
 		const input = aiChatWorkspaceInput(container);
-		fireEvent.input(input, { target: { value: "relative/dir" } });
-		expect(input.value).toBe("/srv/chat");
-		expect(settingsStore.state.aiChatWorkspace).toBe("/srv/chat");
+		// Select-all and type over the saved path.
+		fireEvent.input(input, { target: { value: "f" } });
+		typeSlowly(input, "oo");
+		expect(input.value).toBe("foo");
+		expect(container.textContent).not.toContain("must be an absolute path");
+		fireEvent.blur(input);
 		expect(container.textContent).toContain("must be an absolute path");
+		expect(settingsStore.state.aiChatWorkspace).toBe("/srv/chat");
+	});
+
+	it("drops the hint once the draft becomes absolute", () => {
+		const { container } = render(() => <GeneralTab />);
+		const input = aiChatWorkspaceInput(container);
+		fireEvent.input(input, { target: { value: "foo" } });
+		fireEvent.blur(input);
+		fireEvent.input(input, { target: { value: "/foo" } });
+		fireEvent.blur(input);
+		expect(container.textContent).not.toContain("must be an absolute path");
+		expect(settingsStore.state.aiChatWorkspace).toBe("/foo");
 	});
 });
