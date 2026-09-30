@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
+import type { DiffListNavHandle } from "../shared/diffListNav";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { DiffViewer } from "../ui/DiffViewer";
 import { BranchDiffScrollView } from "./BranchDiffScrollView";
@@ -206,6 +207,12 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	 *  all-files call site), not by a shared global view mode, so opening it
 	 *  can never hijack any other open per-file DiffTab. */
 	const isScrollTab = () => props.filePath === "";
+	const [scrollListHandle, setScrollListHandle] = createSignal<DiffListNavHandle | null>(null);
+	function goToAdjacentScrollFile(delta: number) {
+		const handle = scrollListHandle();
+		if (!handle) return;
+		handle.scrollToIndex(Math.max(handle.currentIndex() + delta, 0), { align: "center" });
+	}
 
 	/** One-sided diffs (new/deleted files) only support unified view */
 	const isOneSided = (): boolean => {
@@ -374,6 +381,31 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 						<path d="M2 2h12v1H2zm0 3h12v1H2zm0 3h10v1H2zm0 3h8v1H2z" />
 					</svg>
 				</button>
+				<Show when={isScrollTab()}>
+					<button
+						class={s.modeBtn}
+						onClick={() => goToAdjacentScrollFile(-1)}
+						disabled={!scrollListHandle() || (scrollListHandle()?.currentIndex() ?? 0) <= 0}
+						title={t("diffScroll.prevFile", "Previous file")}
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M10 3l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+						</svg>
+					</button>
+					<button
+						class={s.modeBtn}
+						onClick={() => goToAdjacentScrollFile(1)}
+						disabled={
+							!scrollListHandle() ||
+							(scrollListHandle()?.currentIndex() ?? 0) >= (scrollListHandle()?.rowCount() ?? 1) - 1
+						}
+						title={t("diffScroll.nextFile", "Next file")}
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+						</svg>
+					</button>
+				</Show>
 				<div style={{ "margin-left": "auto" }}>
 					<button
 						class={s.modeBtn}
@@ -404,6 +436,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					contentRef={(el) => {
 						contentRef = el;
 					}}
+					ref={setScrollListHandle}
 				/>
 			</Show>
 			<Show when={!isScrollTab()}>

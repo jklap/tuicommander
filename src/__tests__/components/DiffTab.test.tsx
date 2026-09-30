@@ -12,7 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the large-diff gate. Real diff rendering is covered by DiffViewer.test.tsx;
 // hunk-click/line-drag-driven paths are covered by useLineSelection.test.ts
 // and sendDiffComment.test.ts, which don't need a rendered DiffViewer at all.
-const h = vi.hoisted(() => ({ invoke: vi.fn() }));
+const h = vi.hoisted(() => ({
+	invoke: vi.fn(),
+	navScrollToIndex: vi.fn(),
+	navCurrentIndex: 0,
+	navRowCount: 1,
+}));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../components/ui/DiffViewer", () => ({
 	DiffViewer: (props: { diff: string }) => <div data-testid="diff-stub">{props.diff}</div>,
@@ -21,8 +26,20 @@ vi.mock("../../components/ui/DiffViewer", () => ({
 // renders through the (also mocked) shared DiffFileList — stubbed here so
 // these tests exercise only DiffTab's own scroll-mode branch, not the
 // all-files view's own rendering (covered by BranchDiffScrollView.test.tsx).
+// The stub still forwards `ref` with a fake nav handle so DiffTab's own
+// `<`/`>` toolbar wiring (which lives in DiffTab, not BranchDiffScrollView)
+// is testable here too.
 vi.mock("../../components/DiffTab/BranchDiffScrollView", () => ({
-	BranchDiffScrollView: () => <div data-testid="scroll-view-stub" />,
+	BranchDiffScrollView: (props: {
+		ref?: (handle: { scrollToIndex: (i: number) => void; currentIndex: () => number; rowCount: () => number }) => void;
+	}) => {
+		props.ref?.({
+			scrollToIndex: h.navScrollToIndex,
+			currentIndex: () => h.navCurrentIndex,
+			rowCount: () => h.navRowCount,
+		});
+		return <div data-testid="scroll-view-stub" />;
+	},
 }));
 
 import { DiffTab } from "../../components/DiffTab/DiffTab";
@@ -134,6 +151,9 @@ describe("DiffTab scroll mode", () => {
 		h.invoke.mockReset();
 		h.invoke.mockResolvedValue("diff --git a/f.ts b/f.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n");
 		uiStore.setDiffViewMode("split");
+		h.navScrollToIndex.mockReset();
+		h.navCurrentIndex = 0;
+		h.navRowCount = 1;
 	});
 	afterEach(() => {
 		uiStore.setDiffViewMode("split");
@@ -172,6 +192,35 @@ describe("DiffTab scroll mode", () => {
 		// open per-file DiffTab into scroll mode at once.
 		expect(queryB("diff-stub")).not.toBeNull();
 		expect(queryB("scroll-view-stub")).toBeNull();
+	});
+
+	it("the </> file-nav buttons only render in scroll mode and are absent for a single-file tab", async () => {
+		const { queryByTitle } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath={FILE} />);
+		await settle();
+		expect(queryByTitle("Previous file")).toBeNull();
+		expect(queryByTitle("Next file")).toBeNull();
+	});
+
+	it("'Previous file' is disabled at the first file, 'Next file' calls scrollToIndex(currentIndex + 1)", async () => {
+		h.navCurrentIndex = 0;
+		h.navRowCount = 3;
+		const { getByTitle } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath="" />);
+		await settle();
+
+		expect((getByTitle("Previous file") as HTMLButtonElement).disabled).toBe(true);
+		getByTitle("Next file").click();
+		expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+	});
+
+	it("'Next file' is disabled at the last file, 'Previous file' calls scrollToIndex(currentIndex - 1)", async () => {
+		h.navCurrentIndex = 2;
+		h.navRowCount = 3;
+		const { getByTitle } = render(() => <DiffTab tabId="t1" repoPath={REPO} filePath="" />);
+		await settle();
+
+		expect((getByTitle("Next file") as HTMLButtonElement).disabled).toBe(true);
+		getByTitle("Previous file").click();
+		expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
 	});
 });
 

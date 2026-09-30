@@ -24,7 +24,7 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 			| {
 					kind: "file";
 					group: { abs_path: string; display_path: string };
-					steps: Array<{ tool_use_id: string; rel_path: string | null; abs_path: string }>;
+					steps: Array<{ step: { tool_use_id: string; rel_path: string | null; abs_path: string } }>;
 					expanded: boolean;
 			  }
 			| { kind: "step"; step: { tool_use_id: string; rel_path: string | null; abs_path: string } }
@@ -36,54 +36,62 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 		onCopyFile: (group: never) => void;
 		onToggleExpanded: (absPath: string) => void;
 		onJumpToAgent?: () => void;
-	}) => (
-		<div data-testid="stub-list">
-			{props.onJumpToAgent && (
-				<button type="button" data-testid="jump-to-agent" onClick={() => props.onJumpToAgent?.()}>
-					jump to agent
-				</button>
-			)}
-			{props.rows.map((row) =>
-				row.kind === "file" ? (
-					<div>
-						<span>{row.group.display_path}</span>
-						<button type="button" title="Toggle expanded" onClick={() => props.onToggleExpanded(row.group.abs_path)}>
-							{row.expanded ? "collapse" : "expand"}
-						</button>
-						<button
-							type="button"
-							title="Revert this file to its session-start content"
-							onClick={() => props.onRevertFile(row.group as never)}
-						>
-							revert file
-						</button>
-						<button type="button" title="Copy this file's diff" onClick={() => props.onCopyFile(row.group as never)}>
-							copy file
-						</button>
-						<button type="button" onClick={() => props.onOpenFile(row.group.abs_path)}>
-							open file
-						</button>
-						{row.expanded &&
-							row.steps.map((step) => (
-								<div>
-									<span data-testid="step-path">{step.rel_path ?? step.abs_path}</span>
-									<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(step as never)}>
-										revert step
-									</button>
-								</div>
-							))}
-					</div>
-				) : (
-					<div>
-						<span>{row.step.rel_path ?? row.step.abs_path}</span>
-						<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(row.step as never)}>
-							revert step
-						</button>
-					</div>
-				),
-			)}
-		</div>
-	),
+		ref?: (handle: { scrollToIndex: (i: number) => void; currentIndex: () => number }) => void;
+	}) => {
+		props.ref?.({ scrollToIndex: h.navScrollToIndex, currentIndex: () => h.navCurrentIndex });
+		return (
+			<div data-testid="stub-list">
+				{props.onJumpToAgent && (
+					<button type="button" data-testid="jump-to-agent" onClick={() => props.onJumpToAgent?.()}>
+						jump to agent
+					</button>
+				)}
+				{props.rows.map((row) =>
+					row.kind === "file" ? (
+						<div>
+							<span>{row.group.display_path}</span>
+							<button type="button" title="Toggle expanded" onClick={() => props.onToggleExpanded(row.group.abs_path)}>
+								{row.expanded ? "collapse" : "expand"}
+							</button>
+							<button
+								type="button"
+								title="Revert this file to its session-start content"
+								onClick={() => props.onRevertFile(row.group as never)}
+							>
+								revert file
+							</button>
+							<button type="button" title="Copy this file's diff" onClick={() => props.onCopyFile(row.group as never)}>
+								copy file
+							</button>
+							<button type="button" onClick={() => props.onOpenFile(row.group.abs_path)}>
+								open file
+							</button>
+							{row.expanded &&
+								row.steps.map((entry) => (
+									<div>
+										<span data-testid="step-path">{entry.step.rel_path ?? entry.step.abs_path}</span>
+										<button
+											type="button"
+											title="Revert just this step"
+											onClick={() => props.onRevertStep(entry.step as never)}
+										>
+											revert step
+										</button>
+									</div>
+								))}
+						</div>
+					) : (
+						<div>
+							<span>{row.step.rel_path ?? row.step.abs_path}</span>
+							<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(row.step as never)}>
+								revert step
+							</button>
+						</div>
+					),
+				)}
+			</div>
+		);
+	},
 }));
 
 const h = vi.hoisted(() => ({
@@ -91,6 +99,8 @@ const h = vi.hoisted(() => ({
 	getSessionReview: vi.fn(),
 	revertSessionStep: vi.fn(),
 	revertFileToSessionStart: vi.fn(),
+	navScrollToIndex: vi.fn(),
+	navCurrentIndex: 0,
 }));
 vi.mock("../../hooks/useRepository", () => ({
 	useRepository: () => ({
@@ -204,6 +214,8 @@ describe("SessionDiffTab", () => {
 		h.getSessionReview.mockReset().mockResolvedValue(review());
 		h.revertSessionStep.mockReset();
 		h.revertFileToSessionStart.mockReset();
+		h.navScrollToIndex.mockReset();
+		h.navCurrentIndex = 0;
 		diffTabsStore.clearAll();
 		tabId = diffTabsStore.addSessionReview(REPO);
 	});
@@ -427,7 +439,9 @@ describe("SessionDiffTab", () => {
 		// one resolves.
 		expect(queryAllByText("a.ts").length).toBe(0);
 
-		resolveSecond(review({ session_id: "sess-2", files: [fileGroup({ abs_path: "/repo/z.ts", display_path: "z.ts" })] }));
+		resolveSecond(
+			review({ session_id: "sess-2", files: [fileGroup({ abs_path: "/repo/z.ts", display_path: "z.ts" })] }),
+		);
 		await settle();
 		expect(getByText("z.ts")).toBeTruthy();
 	});
@@ -521,6 +535,89 @@ describe("SessionDiffTab", () => {
 			const { queryByTestId } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
 			await settle();
 			expect(queryByTestId("jump-to-agent")).toBeNull();
+		});
+	});
+
+	describe("navigation: </> buttons and the turn picker", () => {
+		it("the turn picker is shown only in chronological mode", async () => {
+			const { getByText, queryByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+			expect(queryByText(/^Turns \(/)).toBeNull();
+
+			getByText("Chronological").click();
+			expect(getByText(/^Turns \(/)).toBeTruthy();
+
+			getByText("By file").click();
+			expect(queryByText(/^Turns \(/)).toBeNull();
+		});
+
+		it("clicking '>' calls the list's scrollToIndex with currentIndex + 1, clamped to the last row", async () => {
+			h.getSessionReview.mockResolvedValue(
+				review({ files: [fileGroup({ abs_path: "/repo/a.ts" }), fileGroup({ abs_path: "/repo/b.ts" })] }),
+			);
+			h.navCurrentIndex = 0;
+			const { getByTitle } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTitle("Next file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+
+			h.navScrollToIndex.mockClear();
+			h.navCurrentIndex = 999; // past the end — clamp to rows().length - 1 (2 files here).
+			getByTitle("Next file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+		});
+
+		it("clicking '<' calls scrollToIndex with currentIndex - 1, clamped to 0", async () => {
+			// currentIndex starts at 1 (not 0) — a currentIndex of 0 disables the
+			// "Previous file" button, and a disabled real <button> never fires
+			// its click handler at all, which isn't what this test is about.
+			h.getSessionReview.mockResolvedValue(
+				review({ files: [fileGroup({ abs_path: "/repo/a.ts" }), fileGroup({ abs_path: "/repo/b.ts" })] }),
+			);
+			h.navCurrentIndex = 1;
+			const { getByTitle } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByTitle("Previous file").click();
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(0, { align: "center" });
+		});
+
+		it("selecting a turn in the picker resolves its first step_index to a row and jumps to it", async () => {
+			h.getSessionReview.mockResolvedValue(
+				review({
+					steps: [step({ step_index: 0, tool_use_id: "toolu_a" }), step({ step_index: 3, tool_use_id: "toolu_b" })],
+					turns: [
+						{
+							turn_index: 0,
+							started_at: null,
+							prompt_preview: "First turn",
+							step_indices: [0],
+							additions: 1,
+							deletions: 1,
+							files: ["a.ts"],
+						},
+						{
+							turn_index: 1,
+							started_at: null,
+							prompt_preview: "Second turn",
+							step_indices: [3],
+							additions: 1,
+							deletions: 1,
+							files: ["b.ts"],
+						},
+					],
+				}),
+			);
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await settle();
+
+			getByText("Chronological").click();
+			getByText("Turns (2)").click();
+			getByText("b.ts").closest("button")?.click();
+
+			// step_index 3 is chronological row 1 (steps sorted by step_index: [0, 3]).
+			expect(h.navScrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
 		});
 	});
 });
