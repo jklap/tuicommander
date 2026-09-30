@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Represents a git worktree
@@ -2655,19 +2655,39 @@ pub fn branch_integration_with_pr(
     })
 }
 
+/// Branches classified at once. Each one may wait on a GitHub lookup, so a
+/// sequential listing of dozens of unmerged branches outlasts the MCP timeout.
+const BRANCH_INTEGRATION_WORKERS: usize = 6;
+
 pub fn branch_integrations_with_pr(
     repo: &Path,
-    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool + Sync,
 ) -> Result<Vec<BranchIntegration>, String> {
-    let branches = git_cmd(repo)
+    let listed = git_cmd(repo)
         .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
         .run()
         .map_err(|error| format!("Cannot list branches: {error}"))?;
-    branches
-        .stdout
-        .lines()
-        .map(|branch| branch_integration_with_pr(repo, branch, &pr_proves_tip))
-        .collect()
+    let branches: Vec<&str> = listed.stdout.lines().collect();
+    let next = AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::with_capacity(branches.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..BRANCH_INTEGRATION_WORKERS.min(branches.len()) {
+            scope.spawn(|| {
+                while let Some(branch) = branches.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let result = branch_integration_with_pr(repo, branch, &pr_proves_tip);
+                    results
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((branch, result));
+                }
+            });
+        }
+    });
+    let mut results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    results.sort_by_key(|(branch, _)| branches.iter().position(|listed| listed == branch));
+    results.into_iter().map(|(_, result)| result).collect()
 }
 
 /// A linked checkout is never detached or removed by this operation.
@@ -8376,6 +8396,45 @@ branch refs/heads/feat
         git_cmd(&repo).args(["commit", "--amend", "-m", "Poc 00170/wiz 5.0 pre (#189)\n\n* first.txt\n\n* fix(hud): add Opus 4.7 to pricing table (#343-d76a)"]).run().unwrap();
         let query = branch_integration_with_pr(&repo, "audit-1295", |_, _, _| false).unwrap();
         assert_eq!(query.proof, Some("squash_message"));
+    }
+
+    #[test]
+    fn branch_integrations_look_up_pull_requests_concurrently_in_listing_order_1295() {
+        // Catches: a sequential listing pays every GitHub lookup in turn, so a
+        // repo with dozens of unmerged branches outlasts the MCP timeout.
+        let (_temp, repo, _wt) = integration_1295_fixture(true, true);
+        for n in 0..8 {
+            git_cmd(&repo)
+                .args(["branch", &format!("extra-1295-{n}"), "audit-1295"])
+                .run()
+                .unwrap();
+        }
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let listed = branch_integrations_with_pr(&repo, |_, _, _| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            false
+        })
+        .unwrap();
+        assert!(
+            peak.load(Ordering::SeqCst) > 1,
+            "pull request lookups ran one at a time"
+        );
+        let expected = git_cmd(&repo)
+            .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert_eq!(
+            listed
+                .iter()
+                .map(|entry| entry.branch.as_str())
+                .collect::<Vec<_>>(),
+            expected.lines().collect::<Vec<_>>()
+        );
     }
 
     #[test]
