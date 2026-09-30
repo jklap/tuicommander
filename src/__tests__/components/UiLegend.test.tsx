@@ -17,3 +17,26 @@ describe("UiLegend PR markers", () => {
 		expect(container.querySelectorAll(".prMarkPending").length).toBe(2);
 	});
 });
+
+/**
+ * Every marker the sidebar or toolbar renders must be explained. Add a marker
+ * there, add its legend entry here: the row is keyed by what the user sees.
+ */
+describe("UiLegend branch markers", () => {
+	it("explains the unmerged-commits marker with the sidebar's own component", () => {
+		const { container } = render(() => <UiLegend />);
+		const marker = container.querySelector(".branchUnmergedMarker");
+
+		expect(marker?.getAttribute("aria-label")).toBe("Unmerged commits");
+		expect(container.textContent).toContain("Not a dirty worktree");
+	});
+
+	it("explains the toolbar ahead and behind counts", () => {
+		const { container } = render(() => <UiLegend />);
+		const text = container.textContent ?? "";
+
+		expect(text).toContain("↑N");
+		expect(text).toContain("↓N");
+		expect(text).toContain("Absent without an upstream");
+	});
+});
