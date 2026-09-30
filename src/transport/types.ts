@@ -149,7 +149,13 @@ export interface SubscribePtyOptions {
 	 * Delivered on both transports from one backend signal.
 	 */
 	onActivity?: () => void;
-	onTitle?: (title: string) => void;
+	/**
+	 * A backend-applied tab name for this session (OSC title applied by
+	 * `osc_title.rs`, its exit-time restore, tmux/MCP renames), from the
+	 * per-session WebSocket's `renamed` frame. Desktop-local sessions hear the
+	 * same change through the global `session-renamed` listener instead.
+	 */
+	onRenamed?: (name: string, isCustom: boolean) => void;
 	onParsed?: (event: WsParsedEvent) => void;
 	/** Called when WebSocket drops and reconnect is attempted (browser mode only). */
 	onReconnecting?: (attempt: number, maxAttempts: number) => void;

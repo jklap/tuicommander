@@ -31,3 +31,11 @@ export function buildEnvFromEntries(entries: readonly EnvVarEntry[]): Record<str
 	}
 	return env;
 }
+
+/** A legal environment variable name: starts with an ASCII letter or `_`, the
+ *  rest ASCII alphanumeric or `_`. Mirrors the backend's `valid_custom_env_key`
+ *  (`src-tauri/src/config.rs`) exactly — defense-in-depth only, the backend
+ *  independently re-validates at the point of use and is the real enforcement. */
+export function isValidEnvVarKey(key: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+}

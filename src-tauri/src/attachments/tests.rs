@@ -115,7 +115,7 @@ async fn second_instance_startup_preserves_live_session_uploads() {
         first.log_buffer.clone(),
     );
     let bytes = std::fs::read(&receipt.path);
-    crate::pty::cleanup_session("live-first-instance", &first);
+    crate::pty::cleanup_session("live-first-instance", &first, "closed");
     drop(second);
     assert_eq!(
         bytes.expect("second instance startup deleted a live session's attachment"),

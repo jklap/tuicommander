@@ -193,6 +193,8 @@ fn is_relayable(event: &AppEvent) -> bool {
             | AppEvent::McpOAuthStart { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::DirChanged { .. }
+            // D.7: OSC 52 clipboard text must never leave the host via a relay.
+            | AppEvent::PtyClipboardStore { .. }
     )
 }
 
@@ -700,6 +702,17 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_store_text_never_leaves_the_host_via_a_relay() {
+        assert!(
+            !is_relayable(&AppEvent::PtyClipboardStore {
+                session_id: "s1".to_string(),
+                text: "secret".to_string(),
+            }),
+            "D.7: OSC 52 clipboard text must never be relayed off the host"
+        );
+    }
+
+    #[test]
     fn desktop_only_instructions_are_not_relayed() {
         for event in [
             AppEvent::UiTab {
@@ -742,6 +755,7 @@ mod tests {
             AppEvent::SessionClosed {
                 session_id: "s1".to_string(),
                 reason: "exit".to_string(),
+                agent_type: None,
             },
             AppEvent::RepoChanged {
                 repo_path: "/repo".to_string(),

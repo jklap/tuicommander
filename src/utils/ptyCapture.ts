@@ -43,10 +43,12 @@ function adopt(next: unknown): void {
 }
 
 export const ptyCaptureStore = {
-	/** True when the tap is recording exactly this session. */
+	/** True when the tap is recording this session — either because it's the
+	 *  exact session filtered on, or because the tap has no filter at all
+	 *  (recording every session, e.g. the `-d '{"enabled":true}'` curl form). */
 	isRecording(sessionId: string): boolean {
 		const state = status();
-		return state.enabled && state.session_filter === sessionId;
+		return state.enabled && (state.session_filter == null || state.session_filter === sessionId);
 	},
 
 	/** Bytes written so far for this session, as of the last refresh. */
@@ -60,6 +62,28 @@ export const ptyCaptureStore = {
 		} catch (err) {
 			appLogger.debug("app", "[Capture] status read failed", err);
 		}
+	},
+
+	/**
+	 * Apply a status the caller already has in hand — the `pty-capture-changed`
+	 * push event's payload — without a redundant IPC round-trip. Kept distinct
+	 * from `refresh()`, which fetches; this only adopts.
+	 *
+	 * Merges rather than replacing: the event payload carries only `enabled`/
+	 * `session_filter` (no byte counts), and this window's own `toggle()` calling
+	 * `invoke("set_pty_capture", ...)` triggers this exact event as a side effect —
+	 * so this listener firing after `toggle()`'s own `adopt(next)` (ordering
+	 * between an SSE/Tauri push and an in-flight invoke's response is not
+	 * guaranteed) must not stomp the richer `dir`/`sessions` `next` just set,
+	 * or `toggle()`'s own `bytes(sessionId)` read moments later reports 0
+	 * even though the real capture file has content.
+	 */
+	applyStatus(next: { enabled: boolean; session_filter?: string | null }): void {
+		if (typeof next?.enabled !== "boolean") {
+			appLogger.debug("app", "[Capture] ignoring malformed pty-capture-changed payload", next);
+			return;
+		}
+		setStatus((prev) => ({ ...prev, enabled: next.enabled, session_filter: next.session_filter ?? null }));
 	},
 
 	/**

@@ -32,11 +32,6 @@ export async function subscribePty(
 		// No `paused` guard: an exit is lifecycle, not data. Desktop has no
 		// reconnect to eventually notice a dead session, so suppressing it here
 		// would lose it for good.
-		const unlistenTitle = opts.onTitle
-			? await listen<string>(`pty-title-${sessionId}`, (event) => {
-					if (!paused) opts.onTitle?.(event.payload);
-				})
-			: undefined;
 		const unlistenExit = await listen(`pty-exit-${sessionId}`, () => {
 			onExit();
 		});
@@ -50,7 +45,6 @@ export async function subscribePty(
 			disposed = true;
 			Promise.resolve(unlistenActivity() as unknown).catch(() => {});
 			Promise.resolve(unlistenExit() as unknown).catch(() => {});
-			if (unlistenTitle) Promise.resolve(unlistenTitle() as unknown).catch(() => {});
 		};
 		return Object.assign(dispose, {
 			pause: () => {
@@ -107,9 +101,11 @@ export async function subscribePty(
 					case "output":
 						onData(frame.data as string);
 						break;
-					case "title":
-						if (typeof frame.title === "string") opts.onTitle?.(frame.title);
+					case "renamed": {
+						const renamed = frame as Record<string, unknown>;
+						if (typeof renamed.name === "string") opts.onRenamed?.(renamed.name, renamed.is_custom === true);
 						break;
+					}
 					case "activity":
 						opts.onActivity?.();
 						break;

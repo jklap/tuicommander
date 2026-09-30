@@ -69,19 +69,25 @@ describe("worktree placement lifecycle regressions", () => {
 		await testInScopeAsync(async () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
+			// Per-client snapshot (B.5, savedTerminalsByClient); a `test` client key.
 			repositoriesStore.setWorkspace(REPO, "feature", {
-				savedTerminals: [
-					{
-						name: "Codex",
-						cwd: REPO,
-						fontSize: 14,
-						agentType: "codex",
-						agentSessionId: null,
-						tuicSession: "stable-peer",
-						agentLaunchCommand: null,
-						suspended: true,
+				savedTerminalsByClient: {
+					test: {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "Codex",
+								cwd: REPO,
+								fontSize: 14,
+								agentType: "codex",
+								agentSessionId: null,
+								tuicSession: "stable-peer",
+								agentLaunchCommand: null,
+								suspended: true,
+							},
+						],
 					},
-				],
+				},
 			});
 			const persisted = JSON.parse(
 				JSON.stringify({
@@ -141,13 +147,18 @@ describe("worktree placement lifecycle regressions", () => {
 			await testInScopeAsync(async () => {
 				repositoriesStore.setWorkspace(REPO, "feature", {
 					hadTerminals,
-					savedTerminals: cwds.map((cwd, index) => ({
-						name: `saved-${index}`,
-						cwd,
-						fontSize: 14,
-						agentType: "codex",
-						suspended: true,
-					})),
+					savedTerminalsByClient: {
+						test: {
+							savedAt: Date.now(),
+							terminals: cwds.map((cwd, index) => ({
+								name: `saved-${index}`,
+								cwd,
+								fontSize: 14,
+								agentType: "codex",
+								suspended: true,
+							})),
+						},
+					},
 				});
 				const oldIds = cwds.map((_, index) => `old-${index}`);
 				mockInvoke.mockImplementation(async (command) =>

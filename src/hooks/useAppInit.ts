@@ -10,6 +10,7 @@ import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavig
 import { activityStore } from "../stores/activityStore";
 import { startAgentSettingsSync } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
+import { CLIENT_INSTANCE_ID } from "../stores/clientInstance";
 import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
@@ -37,6 +38,7 @@ import { toastsStore } from "../stores/toasts";
 import { tunnelsStore } from "../stores/tunnels";
 import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
+import { savedTerminalsFor } from "../stores/workspaceIdentity";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
 import { getSessionConnection } from "../transportRuntime";
@@ -45,14 +47,19 @@ import { classifyFile, isImageFile } from "../utils/filePreview";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
+import { ptyCaptureStore } from "../utils/ptyCapture";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspendedSessions";
 import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
 import { parseTuicFilePath } from "../utils/tuicFilePath";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
-/** Track PTY sessions created by the browser client so we only close our own on unload */
-export const browserCreatedSessions = new Set<string>();
+/** PTY sessions created by THIS client (desktop or browser). Since B.4 removed
+ *  the `beforeunload` auto-close, this set's only remaining purpose is to
+ *  drop the create-echo for a session this client is itself mid-creating —
+ *  never "sessions we might kill" (nothing in this file kills a session on
+ *  unload anymore, on either transport). */
+export const locallyCreatedSessions = new Set<string>();
 
 /** Remote (MCP) sessionId → termId. Persists even after Terminal.tsx nulls sessionId
  *  on exit, so the session-closed listener can find the tab to auto-remove. */
@@ -358,7 +365,111 @@ function stopSettingsSync(): void {
 	settingsSyncStops.clear();
 }
 
+/** Re-assert that this client still shows its active terminal's session.
+ *  `terminalsStore.setActive` only asserts on a tab switch; a remote client's
+ *  assertion is also what refreshes the backend's remote-activity grace
+ *  (`background_mode::hidden`), so without this a tab a browser user keeps
+ *  looking at could age into standby. Rides the 30 s snapshot timer. */
+function reassertActiveSessionVisible(): void {
+	const activeId = terminalsStore.state.activeId;
+	const sessionId = activeId ? terminalsStore.get(activeId)?.sessionId : null;
+	if (!sessionId) return;
+	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
+/** One entry of `deps.pty.listActiveSessions()`'s result. */
+type ActiveSessionEntry = Awaited<ReturnType<AppInitDeps["pty"]["listActiveSessions"]>>[number];
+
+/**
+ * Adopt (or reconcile) every surviving PTY session into the store — the core
+ * of B.7's fix. Extracted so the init path and its retry-after-failure path
+ * run the exact same logic instead of two copies that can drift.
+ *
+ * `baseline` is a snapshot of each already-known terminal's shell-state
+ * revision, taken BEFORE this call — it lets a session-created event that
+ * inserted the terminal while this list was in flight win over a stale shell
+ * snapshot from the list itself. See the call site for how it's built.
+ */
+function applySessionList(
+	sessions: ActiveSessionEntry[],
+	baseline: Map<string, { terminalId: string; shellStateRevision: number }>,
+	savedFor: (session: ActiveSessionEntry) => SavedTerminal | undefined,
+	deps: AppInitDeps,
+): void {
+	if (sessions.length === 0) return;
+	// Re-adopt surviving PTY sessions. `is_remote` records launch provenance;
+	// only `connection_id` identifies execution on another machine.
+	appLogger.info("app", `PTY reconnect: found ${sessions.length} surviving session(s)`);
+	for (const session of sessions) {
+		const existingId = terminalsStore.getTerminalForSession(session.session_id);
+		const saved = savedFor(session);
+		const id =
+			existingId ??
+			terminalsStore.add(
+				{
+					sessionId: session.session_id,
+					fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
+					name: session.display_name || terminalsStore.nextDefaultName(),
+					nameIsCustom: session.display_name_is_custom ?? false,
+					ptyDescription: session.pty_description ?? null,
+					isRemote: Boolean(session.connection_id),
+					isExternallyCreated: session.is_remote ?? false,
+					agentType: parseAgentType(session.state?.agent_type),
+					cwd: session.cwd,
+					awaitingInput: null,
+					agentSessionId: saved?.agentSessionId ?? null,
+					agentLaunchCommand: saved?.agentLaunchCommand ?? null,
+				},
+				saved?.frontendId,
+			);
+		// A session-created event can insert this terminal while the surviving-session
+		// request is pending. Reconcile its independent lifecycle fields too, but do
+		// not let the older shell snapshot overwrite a newer shell-state event.
+		const sessionBaseline = baseline.get(session.session_id);
+		const currentRevision = terminalsStore.getShellStateRevision(id);
+		const canApplySnapshotShell =
+			!existingId ||
+			(sessionBaseline
+				? sessionBaseline.terminalId === existingId && sessionBaseline.shellStateRevision === currentRevision
+				: currentRevision === 0);
+		terminalsStore.update(id, {
+			...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
+			isRemote: Boolean(session.connection_id),
+			...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
+			...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
+			// Only the row survives a reload, and only the backend knows where the
+			// name came from: every OSC/intent title is synced back as non-custom.
+			nameFromSpawn: session.display_name_from_spawn === true,
+			parentSession: session.parent_session ?? null,
+			placementPath: null,
+			...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
+			...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
+			// The Context bar mounts once intent or prompt is known. Waiting for the
+			// lifecycle sync shows it after the terminal has measured, and the
+			// transient taller PTY height duplicates the agent's rows in history.
+			// The snapshot is complete, as in useAgentPolling: absence retracts.
+			agentIntent: session.state?.agent_intent ?? null,
+			lastPrompt: session.state?.last_prompt ?? null,
+			ptyDescription: session.pty_description ?? null,
+			...(session.alias ? { alias: session.alias } : {}),
+			agentState: session.state?.agent_state ?? null,
+			awaitingInput: session.state?.awaiting_input === true ? "question" : null,
+			awaitingInputConfident: session.state?.question_confident === true,
+			backgroundWork: session.state?.background_work ?? false,
+			lastActivityAt: session.state?.last_activity_ms ?? null,
+			declaredBackgroundWork: session.state?.declared_background_work ?? false,
+		});
+		if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
+
+		assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+	}
+	terminalsStore.setActive(terminalsStore.getIds()[0]);
+}
+
+/** Bounded retry delays for a failed initial `listActiveSessions` call (B.7). */
+const SESSION_LIST_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+
 export async function initApp(deps: AppInitDeps) {
 	const settingsGeneration = ++settingsSyncGeneration;
 	stopSettingsSync();
@@ -406,6 +517,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (snapshots.size > 0) {
 			repositoriesStore.snapshotTerminals(snapshots);
 		}
+		reassertActiveSessionVisible();
 	}, SNAPSHOT_INTERVAL_MS);
 
 	// Snapshot terminal metadata, flush pending saves, and close PTY sessions on app exit
@@ -418,22 +530,33 @@ export async function initApp(deps: AppInitDeps) {
 		paneLayoutStore.flushSave();
 		mdTabsStore.saveForReload();
 
-		// 1. Snapshot terminal metadata per repo/branch before closing
+		// Snapshot terminal metadata per repo/branch before closing.
+		//
+		// This handler used to also close every PTY session this browser
+		// client created (`for (const sid of ...) deps.pty.close(sid)`).
+		// Removed (B.4): `beforeunload` fires on a plain page refresh (F5)
+		// exactly like a real tab close, and `deps.pty.close` is a REAL kill
+		// of the shared backend PTY process — there is no such thing as a
+		// client-local "detach." A browser-created session is byte-identical
+		// to a desktop-created one once it exists (`is_remote` is the only
+		// structural difference), and persistent PTYs surviving a client
+		// disconnect is the explicit point of the remote/PWA feature. On
+		// reload the client re-adopts live sessions via `listActiveSessions`
+		// (see the init path below) rather than re-spawning, so nothing
+		// leaks by leaving this out — and the deliberate "close this tab"
+		// user action still kills the session on both transports via its own
+		// explicit call to `deps.pty.close`.
+		//
+		// Rejected alternatives: closing only "empty/unused" sessions
+		// (unknowable client-side — a fresh agent tab that hasn't printed
+		// yet is exactly the one that must not be killed); an
+		// `ephemeral: true` opt-in flag (new wire surface for a behavior
+		// nobody asked for, needs backend liveness tracking that doesn't
+		// exist); a user-facing setting (a footgun either default is wrong
+		// for someone).
 		const snapshots = collectTerminalSnapshots();
 		if (snapshots.size > 0) {
 			repositoriesStore.snapshotTerminals(snapshots);
-		}
-
-		// 2. Close PTY sessions — but NOT in Tauri mode during webview reloads
-		// (Vite HMR, manual reload). The Rust backend survives the reload and
-		// list_active_sessions will re-adopt the surviving sessions on re-init.
-		// In Tauri, real quit is handled by the Rust close policy which
-		// calls app.exit() — beforeunload during quit is a no-op for PTY cleanup.
-		if (!isTauri()) {
-			// Browser only closes sessions it created — leave Tauri-created ones alive
-			for (const sid of browserCreatedSessions) {
-				deps.pty.close(sid).catch(() => {});
-			}
 		}
 	});
 
@@ -826,7 +949,7 @@ export async function initApp(deps: AppInitDeps) {
 		.getPaths()
 		.flatMap((repoPath) =>
 			Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {}).flatMap(([workspaceId, branch]) =>
-				(branch.savedTerminals ?? []).map((tab) => ({ repoPath, workspaceId, tab })),
+				savedTerminalsFor(branch).map((tab) => ({ repoPath, workspaceId, tab })),
 			),
 		);
 	terminalsStore.reserveSnapshotIds(savedTabs.map(({ tab }) => tab.frontendId));
@@ -848,8 +971,10 @@ export async function initApp(deps: AppInitDeps) {
 		// (The desktop window never hears this name from a mirror at all; the SSE
 		// transport carries the whole stream, so the guard lives here too.)
 		if (event.payload.__tuic_origin !== undefined) return;
-		// Skip if this session was created by the local browser client or is already tracked
-		if (browserCreatedSessions.has(session_id)) return;
+		// Skip if this session was created by this client itself (either
+		// transport — see `locallyCreatedSessions`'s doc comment) or is
+		// already tracked.
+		if (locallyCreatedSessions.has(session_id)) return;
 		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
 		if (existing) return;
 		const suspended = terminalsStore.getIds().find((id) => {
@@ -938,7 +1063,14 @@ export async function initApp(deps: AppInitDeps) {
 	// back does not emit, so this cannot loop.
 	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
-		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
+		// Backend-originated (OSC title via osc_title.rs, tmux, MCP): the backend
+		// already holds this name, so it must not be echoed back as a rename.
+		if (termId)
+			terminalsStore.update(
+				termId,
+				{ name: event.payload.name, nameIsCustom: event.payload.is_custom },
+				{ echo: false },
+			);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
 	listen<{ record: SuspendedSession; __tuic_origin?: unknown }>("session-suspended", (event) => {
@@ -993,6 +1125,13 @@ export async function initApp(deps: AppInitDeps) {
 		const termId = terminalsStore.getTerminalForSession(session_id);
 		if (termId) terminalsStore.update(termId, { standby });
 	}).catch((err) => appLogger.error("app", "Failed to register session-standby listener", err));
+
+	// Live tab-bar "recording" badge — pushed regardless of whether the
+	// diagnostics-capture tap was toggled via this window, another window,
+	// or a raw curl POST to /diagnostics/capture from outside the app.
+	listen<{ enabled: boolean; session_filter?: string | null }>("pty-capture-changed", (event) => {
+		ptyCaptureStore.applyStatus(event.payload);
+	}).catch((err) => appLogger.error("app", "Failed to register pty-capture-changed listener", err));
 
 	// Listen for UI tab open/update requests from MCP tools
 	listen<{
@@ -1144,15 +1283,21 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
-		// and can be cleaned up faster than manually-opened remote sessions.
-		const autoCloseMs = agent_type ? AGENT_TAB_AUTOCLOSE_MS : REMOTE_TAB_AUTOCLOSE_MS;
+		// and can be cleaned up faster than manually-opened remote sessions. Keyed
+		// off the PARSED type, not the raw field's truthiness — an unrecognized
+		// agent name string must not accidentally pick the short timer.
+		const autoCloseMs = parsedAgentType != null ? AGENT_TAB_AUTOCLOSE_MS : REMOTE_TAB_AUTOCLOSE_MS;
 
 		appLogger.info("app", `Remote session closed: ${session_id} — tab ${termId} auto-close in ${autoCloseMs}ms`);
 
-		// Countdown in the tab name so the user sees when it will vanish
+		// Countdown in the tab name so the user sees when it will vanish. `{
+		// echo: false }`: this is cosmetic-only display text, never the
+		// session's real display name — previously this relied on `sessionId`
+		// already being nulled above to implicitly suppress the echo, which
+		// broke silently if that write's ordering ever changed.
 		const baseName = t0?.name ?? termId;
 		let remaining = Math.round(autoCloseMs / 1000);
-		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` });
+		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
 		const ticker = setInterval(() => {
 			remaining--;
 			const t = terminalsStore.get(termId);
@@ -1160,7 +1305,7 @@ export async function initApp(deps: AppInitDeps) {
 				clearInterval(ticker);
 				return;
 			}
-			terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` });
+			terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
 		}, 1000);
 
 		setTimeout(() => {
@@ -1214,87 +1359,80 @@ export async function initApp(deps: AppInitDeps) {
 			survivingSessionBaseline.set(terminal.sessionId, { terminalId, shellStateRevision });
 		}
 	}
-	let survivingSessions: Awaited<ReturnType<typeof deps.pty.listActiveSessions>> = [];
+	// Tri-state: distinguish "call succeeded, authoritative list (possibly
+	// empty)" from "call failed, unknown state" (B.7). Only the former may run
+	// the removal loop below — on failure, `survivingSessions` staying `[]`
+	// must NOT be read as "authoritatively zero sessions", or a network blip
+	// or auth failure wipes every pre-init terminal for nothing.
+	const savedFor = (session: ActiveSessionEntry) =>
+		savedBySession.get(session.session_id) ?? savedByTuic.get(session.tuic_session);
+	let survivingSessions: ActiveSessionEntry[] = [];
+	let sessionListFetchFailed = false;
 	try {
 		survivingSessions = await deps.pty.listActiveSessions();
 	} catch (err) {
-		appLogger.warn("app", "Failed to list active sessions (server unreachable or auth failure)", err);
+		sessionListFetchFailed = true;
+		appLogger.error("app", "Failed to list active sessions (server unreachable or auth failure)", err);
 	}
 
-	// Clear only terminal IDs that existed before initialization. A session-created
-	// event may have added a valid remote tab while listActiveSessions was pending.
-	for (const id of preInitTerminalIds) {
-		terminalsStore.remove(id);
-	}
-
-	// Re-adopt surviving PTY sessions or start fresh. `is_remote` records launch
-	// provenance; only `connection_id` identifies execution on another machine.
-	if (survivingSessions.length > 0) {
-		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
-		for (const session of survivingSessions) {
-			const existingId = terminalsStore.getTerminalForSession(session.session_id);
-			const saved = savedBySession.get(session.session_id) ?? savedByTuic.get(session.tuic_session);
-			const id =
-				existingId ??
-				terminalsStore.add(
-					{
-						sessionId: session.session_id,
-						fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
-						name: session.display_name || terminalsStore.nextDefaultName(),
-						nameIsCustom: session.display_name_is_custom ?? false,
-						ptyDescription: session.pty_description ?? null,
-						isRemote: Boolean(session.connection_id),
-						isExternallyCreated: session.is_remote ?? false,
-						agentType: parseAgentType(session.state?.agent_type),
-						cwd: session.cwd,
-						awaitingInput: null,
-						agentSessionId: saved?.agentSessionId ?? null,
-						agentLaunchCommand: saved?.agentLaunchCommand ?? null,
-					},
-					saved?.frontendId,
-				);
-			// A session-created event can insert this terminal while the surviving-session
-			// request is pending. Reconcile its independent lifecycle fields too, but do
-			// not let the older shell snapshot overwrite a newer shell-state event.
-			const baseline = survivingSessionBaseline.get(session.session_id);
-			const currentRevision = terminalsStore.getShellStateRevision(id);
-			const canApplySnapshotShell =
-				!existingId ||
-				(baseline
-					? baseline.terminalId === existingId && baseline.shellStateRevision === currentRevision
-					: currentRevision === 0);
-			terminalsStore.update(id, {
-				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
-				isRemote: Boolean(session.connection_id),
-				...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
-				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
-				// Only the row survives a reload, and only the backend knows where the
-				// name came from: every OSC/intent title is synced back as non-custom.
-				nameFromSpawn: session.display_name_from_spawn === true,
-				parentSession: session.parent_session ?? null,
-				placementPath: null,
-				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
-				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
-				// The Context bar mounts once intent or prompt is known. Waiting for the
-				// lifecycle sync shows it after the terminal has measured, and the
-				// transient taller PTY height duplicates the agent's rows in history.
-				// The snapshot is complete, as in useAgentPolling: absence retracts.
-				agentIntent: session.state?.agent_intent ?? null,
-				lastPrompt: session.state?.last_prompt ?? null,
-				ptyDescription: session.pty_description ?? null,
-				...(session.alias ? { alias: session.alias } : {}),
-				agentState: session.state?.agent_state ?? null,
-				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
-				awaitingInputConfident: session.state?.question_confident === true,
-				backgroundWork: session.state?.background_work ?? false,
-				lastActivityAt: session.state?.last_activity_ms ?? null,
-				declaredBackgroundWork: session.state?.declared_background_work ?? false,
-			});
-			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
-
-			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+	if (!sessionListFetchFailed) {
+		// Clear only terminal IDs that existed before initialization. A session-created
+		// event may have added a valid remote tab while listActiveSessions was pending.
+		for (const id of preInitTerminalIds) {
+			terminalsStore.remove(id);
 		}
-		terminalsStore.setActive(terminalsStore.getIds()[0]);
+		applySessionList(survivingSessions, survivingSessionBaseline, savedFor, deps);
+	} else {
+		// Leave every pre-init terminal untouched and skip the eager
+		// adopt-and-place loop entirely — there is nothing authoritative to
+		// adopt from yet. Still place any surviving terminal that already has
+		// a sessionId: normalizeLoadedRepo already blanked branch.terminals on
+		// hydrate, so without this it would be created but unreachable until
+		// a retry succeeds (which, per B.6, now lands in the Global Workspace
+		// rather than being silently dropped either way).
+		for (const terminalId of preInitTerminalIds) {
+			const terminal = terminalsStore.get(terminalId);
+			if (terminal?.sessionId) {
+				assignSessionToRepoBranch(
+					terminal.sessionId,
+					terminalId,
+					terminal.cwd ?? null,
+					deps.registerRepo,
+					deps.refreshAllBranchStats,
+				);
+			}
+		}
+
+		// Bounded retry: on first success, run the EXACT same adopt-and-prune
+		// logic the init path runs above, so a transient blip self-heals
+		// without a manual reload. Not a fresh call to initApp — this project
+		// stays within the current one, and later init steps (repo/branch
+		// restore, polling) have already run by the time a delayed retry
+		// lands, so this only recovers TAB EXISTENCE, not the cosmetic
+		// active-terminal-in-branch selection those later steps performed.
+		void (async () => {
+			for (const delayMs of SESSION_LIST_RETRY_DELAYS_MS) {
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+				try {
+					const retrySessions = await deps.pty.listActiveSessions();
+					// Same unconditional removal the immediate-success path uses —
+					// an authoritative list finally arrived, so every pre-init id
+					// (including one the immediate-failure fallback above
+					// provisionally re-placed) is superseded by what this fresh
+					// list actually confirms.
+					for (const id of preInitTerminalIds) {
+						terminalsStore.remove(id);
+					}
+					applySessionList(retrySessions, survivingSessionBaseline, savedFor, deps);
+					appLogger.info("app", `PTY reconnect recovered after a retry (${delayMs}ms)`);
+					return;
+				} catch (err) {
+					appLogger.warn("app", `Retry of listActiveSessions failed (waited ${delayMs}ms)`, err);
+				}
+			}
+			appLogger.error("app", "Failed to list active sessions after all retries — giving up");
+			toastsStore.add("Couldn't reach the backend", "Some terminal tabs may be missing until you reload.", "error");
+		})();
 	}
 
 	// A suspended tab has no live PTY to discover, even without live siblings.
@@ -1320,9 +1458,18 @@ export async function initApp(deps: AppInitDeps) {
 		}
 		// Consume this snapshot so a later lazy branch restore cannot duplicate it.
 		const workspace = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
-		repositoriesStore.setWorkspace(repoPath, workspaceId, {
-			savedTerminals: workspace?.savedTerminals?.filter((saved) => saved !== tab),
-		});
+		// Every client's key (B.5): `savedTerminalsFor` hands out the stored objects.
+		const byClient = workspace?.savedTerminalsByClient;
+		if (byClient) {
+			repositoriesStore.setWorkspace(repoPath, workspaceId, {
+				savedTerminalsByClient: Object.fromEntries(
+					Object.entries(byClient).map(([client, entry]) => [
+						client,
+						{ ...entry, terminals: entry.terminals.filter((saved) => saved !== tab) },
+					]),
+				),
+			});
+		}
 	}
 
 	try {
