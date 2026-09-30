@@ -67,7 +67,7 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
  *  4. idle      → --fg-muted  (no open terminal on this branch)
  *  5. base      → --warning (main) or --success (worktree)
  */
-export const BranchIcon: Component<{
+export interface BranchIconProps {
 	isMainBranch: boolean;
 	isMainWorktree: boolean;
 	isShell?: boolean;
@@ -76,15 +76,23 @@ export const BranchIcon: Component<{
 	hasBusy?: boolean;
 	hasUnseen?: boolean;
 	branchHasTerminals?: boolean;
-}> = (props) => {
-	const iconShape = () => {
-		if (props.hasError) return "error";
-		if (props.hasQuestion) return "question";
-		if (props.isShell) return "shell";
-		if (props.isMainWorktree && props.isMainBranch) return "star";
-		if (props.isMainWorktree) return "branch";
-		return "worktree";
-	};
+}
+
+/** Every shape a sidebar row icon can take. The Help > UI legend must explain each. */
+export const BRANCH_ICON_SHAPES = ["error", "question", "shell", "star", "branch", "worktree"] as const;
+type BranchIconShape = (typeof BRANCH_ICON_SHAPES)[number];
+
+export function branchIconShape(props: BranchIconProps): BranchIconShape {
+	if (props.hasError) return "error";
+	if (props.hasQuestion) return "question";
+	if (props.isShell) return "shell";
+	if (props.isMainWorktree && props.isMainBranch) return "star";
+	if (props.isMainWorktree) return "branch";
+	return "worktree";
+}
+
+export const BranchIcon: Component<BranchIconProps> = (props) => {
+	const iconShape = () => branchIconShape(props);
 
 	/** Single source of truth for icon color — priority cascade.
 	 *  Error > question > busy > unseen > idle > base.
