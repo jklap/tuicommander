@@ -259,11 +259,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// would otherwise be read as deleted and its terminals killed. The next
 				// refresh sees it with a snapshot that postdates it.
 				if (!priorBranchKeys.has(branchName)) {
-					appLogger.info(
-						"git",
-						`refreshAllBranchStats: SNAPSHOT PREDATES "${branchName}" — not judging it deleted`,
-						{ repoPath },
-					);
+					appLogger.info("git", `refreshAllBranchStats: SNAPSHOT PREDATES "${branchName}" — not judging it deleted`, {
+						repoPath,
+					});
 					continue;
 				}
 				// Skip branches just created — git may not have fully registered the
