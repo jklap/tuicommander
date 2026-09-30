@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, configure, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toastsStore } from "../../stores/toasts";
 import MobileApp from "../MobileApp";
@@ -40,6 +40,12 @@ const session: SessionInfo = {
 	worktree_branch: "main",
 	state: { awaiting_input: false, rate_limited: false, last_activity_ms: 1, agent_type: "codex" },
 };
+
+// Every wait below polls for its condition; the deadlines only bound a hang.
+// The 1s waitFor and 5s test defaults expire when a loaded full-suite run
+// starves this file of CPU, and the test deadline must outlast the wait.
+configure({ asyncUtilTimeout: 20_000 });
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const guide = "# Guide\n\nThird line of the guide.\n";
 
@@ -107,8 +113,10 @@ describe("mobile session output links", () => {
 		const view = render(() => <MobileApp />);
 		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "docs/guide.md:3" })));
 		const editor = (await waitFor(() => view.getByRole("textbox", { name: "File content" }))) as HTMLTextAreaElement;
-		expect(editor.value).toBe(guide);
-		expect(editor.selectionStart).toBe(guide.indexOf("Third line"));
+		await waitFor(() => {
+			expect(editor.value).toBe(guide);
+			expect(editor.selectionStart).toBe(guide.indexOf("Third line"));
+		});
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
 		await fireEvent.click(view.getByRole("button", { name: "/secret/private.md" }));
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/outside.*registered repository/i));
