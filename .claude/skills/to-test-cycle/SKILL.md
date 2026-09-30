@@ -115,6 +115,22 @@ known to wander outside a narrow ask (memory `feedback_fork_scope_overrun_on_nar
 `feedback_code_review_subagent_ran_git_checkout`); catch it immediately, not at the end of the
 session.
 
+**A fork can come back with a security-policy flag and zero tool calls instead of a real
+failure — that is not the same as "the task was impossible," and don't re-run it as-is.**
+Observed 2026-09-30: a fork prompted to spin up a standalone instance AND spawn real Claude
+processes against the live orchestrator (steps A/B of a verification ask) returned in ~7s with a
+`SECURITY WARNING: ... [Interfere With Workloads]` and `tool_uses: 0` — it never actually started
+the instance, ran a curl, or touched the orchestrator; its "report" text was suspiciously just an
+echo of the coordinator's own prior status update, not independent findings. Treat this exact
+shape (near-zero duration, zero tool calls, a security-warning wrapper) as "this fork never
+executed," not as "verified impossible" — do not write up its text as evidence of anything, and
+do not blindly retry the identical broad prompt expecting a different outcome. Narrow the ask
+instead: split "start a standalone instance and test HTTP-only" (safe, no orchestrator, no real
+agent-process spawning) from "cautiously probe the live orchestrator via MCP" (the part that
+likely triggered the flag) into two separate steps, and consider doing the riskier half directly
+in the primary session rather than forking it at all — that is what actually worked this session
+(see the standalone-instance mechanics captured in step 2 below, all run directly, no fork).
+
 **Not everything belongs in a fork.** Deciding what an item means, classifying a fix as
 small-vs-large, designing the actual fix, and writing the regression test are understanding-heavy
 work this session should keep doing itself — delegating "based on the findings, fix the bug" to a
@@ -290,6 +306,35 @@ debug-instance skill's cleanup section).
 Read the fork's verdict; spot-check anything surprising per step 1's "evidence, not ground truth"
 rule. If everything verifies clean: skip to step 9.
 
+**Rung 4 (browser/UI) mechanics, found running this skill 2026-09-30 — worth the few extra
+commands so this doesn't get re-discovered every time:**
+
+- **Before assuming a Command-Palette-action bullet is browser-testable at all, check
+  `src/components/CommandPalette/CommandPalette.tsx`'s `BROWSER_ACTION_IDS`/
+  `BROWSER_ACTION_PREFIXES`.** An action id absent from both is filtered out of the palette in
+  web mode unconditionally — this has nothing to do with `isPerfDebug()` or any other runtime
+  flag, and toggling `window.__TUIC__.setPerfDebug(true)` first will not make it appear. Confirmed
+  live: `toggle-diagnostics-capture` is a real desktop-only action by this gate, not a
+  test-harness limitation — spend one `grep` here before concluding a browser session "couldn't
+  find" an action.
+- **`agent-browser`'s `--ignore-https-errors`/`AGENT_BROWSER_IGNORE_HTTPS_ERRORS` only takes
+  effect on a genuinely fresh session** (confirms memory `feedback_agent_browser_https_flag_ignored`
+  for this specific instance/self-signed-cert shape too) — if `open` fails with
+  `ERR_CERT_AUTHORITY_INVALID` even with the flag set, `agent-browser --session <name> close` and
+  reopen under a **new** session name with the flag, rather than retrying the same session.
+- **Use `snapshot -i` to get `@eN` refs, then click the ref — a bare `text=...`/CSS-ish selector
+  string is not this CLI's syntax** and fails with "Element not found" even for text that's
+  visibly on screen. `agent-browser skills get core` has the real reference if a selector keeps
+  failing.
+- **Toggling a debug flag via `eval` (e.g. `setPerfDebug`) after the Command Palette is already
+  open does not retroactively change what's listed** — the action list is (re)computed when the
+  palette opens, not reactively while it's open. Close (`Escape`) and reopen after changing the
+  flag, not just re-search inside the still-open palette.
+- **A raw curl against a diagnostics-style endpoint (not gated behind the palette) is a clean way
+  to verify a live-UI-update bullet without needing the gated action at all** — e.g. `POST
+  /diagnostics/capture` plus a screenshot proved the live-badge-appears/clears behavior fully,
+  independent of whether the Command Palette action itself is reachable in browser mode.
+
 ## 7. If verification surfaces an issue
 
 **Research before proposing anything.** Read the actual source at the point of failure yourself
@@ -367,6 +412,20 @@ checked boxes behind; the file's own convention is "delete once verified," not "
 this removal per step 8's fixup rule (the commit that ADDED the section to `to-test.md` is what
 you're checking against — often, but not always, the same commit that implemented the feature).
 
+**A third outcome, distinct from step 7's small-fix/large-plan split: the fix is real and
+unit-tested, but live end-to-end confirmation is genuinely incomplete — update in place, don't
+remove, don't write a plan doc either (there's no open design question, just an incomplete live
+check).** Hit this 2026-09-30 on the MCP-handshake-deadlock item: the fix and its regression
+tests were already solid, live testing against a real spawned process proved the specific
+mechanism now fires (a measurable, named signal — e.g. `turn_epoch` advancing — changed from the
+pre-fix behavior), but full "the agent visibly completes" confirmation hit an environment-specific
+obstacle (see step 6's browser/rung-4 notes and step 2's MCP-bridge note) that a cleaner rig or
+the orchestrator could close later. In this case: fold the new evidence into the item's own text
+(what's now confirmed, with the concrete signal/command that proved it; what's still open, with
+the two concrete follow-up options), check off whichever bullets that evidence actually verifies,
+and leave the "do not delete" bullet in place, reworded to reflect the new state rather than
+the original bug report. Commit as a fixup exactly like any other update to the section.
+
 ## 10. Offer the next item
 
 - **One-by-one mode**: summarize what happened (verified clean / fixed+verified / deferred with a
@@ -391,6 +450,19 @@ a fork is a good fit again for investigating a specific failing test's output if
 step 1's rule of thumb — then re-run the full gate until it's clean. Only then give the final
 summary: which items were verified/fixed/deferred, links to any plan docs written, and the exact
 `git log` of commits made this session (so the user can review before squashing).
+
+**Before treating a gate failure as caused by this session's work, check whether it's the known
+audio-device-enumeration hang** (`src-tauri/AGENTS.md`'s Tests section, added 2026-09-30):
+`notification_sound::tests::*` (device listing/playback) and the HTTP routes that touch the same
+path can block for the full 120s nextest timeout — not fail, hang — behind an un-granted macOS
+audio-device permission prompt that nothing in a headless run can click through. Five tests, same
+shape, all timing out at exactly 120s each is the signature; `git log` on the affected files
+(confirm they weren't touched this session) rules out a real regression in under a minute. If it's
+this: don't attempt a code fix (it needs either the permission granted interactively, or a
+deliberate scope decision from the user about whether to fix the missing timeout in
+`notification_sound::list_output_devices` itself) — ask the user whether to grant the permission
+now and re-run, or accept the gate as failing-for-a-known-reason this session and say so plainly
+in the final summary rather than either hiding it or blocking on it unasked.
 
 ## 12. Keep this skill current
 
