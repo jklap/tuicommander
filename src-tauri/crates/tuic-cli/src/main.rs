@@ -1765,8 +1765,14 @@ mod tests {
 
     #[test]
     fn agent_peer_filter_uses_path_name() {
-        let parsed = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"]);
-        assert!(parsed.is_ok(), "{}", parsed.err().unwrap());
+        let cli = Cli::try_parse_from(["tuic", "agent", "list-peers", "--path", "/repo"])
+            .expect("parse list-peers");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Agent {
+                action: super::AgentAction::ListPeers { path, .. }
+            }) if path.as_deref() == Some("/repo")
+        ));
     }
 
     #[test]
