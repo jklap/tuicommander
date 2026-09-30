@@ -3071,6 +3071,27 @@ impl ChunkProcessor {
                             // Diff Review's "jump to tab" feature; see
                             // `AppState::claude_session_map`/`tuic_to_claude_session`
                             // and `tuic_session_for_claude_session`).
+                            // A TUIC session that emits several distinct
+                            // `ccsession` values over its life (a `claude
+                            // --resume` into a new session id, an agent
+                            // restart, or — since this is PTY output, i.e.
+                            // attacker-controlled input — a crafted OSC 7770
+                            // sequence a `cat`'d file or hostile script could
+                            // emit repeatedly) must not accumulate one
+                            // `claude_session_map` entry per value forever.
+                            // Only the CURRENT mapping for this TUIC session
+                            // is ever meaningful, so retire the old one first.
+                            // `remove_if`: another tab may have taken that
+                            // Claude session over since (a `claude --resume`
+                            // in a second pane) — its mapping is not ours to drop.
+                            if let Some((_, old_claude_id)) =
+                                state.tuic_to_claude_session.remove(session_id)
+                                && old_claude_id != claude_session_id
+                            {
+                                state
+                                    .claude_session_map
+                                    .remove_if(&old_claude_id, |_, owner| owner == session_id);
+                            }
                             state
                                 .claude_session_map
                                 .insert(claude_session_id.clone(), session_id.to_string());

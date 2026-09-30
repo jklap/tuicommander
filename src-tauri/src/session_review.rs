@@ -55,10 +55,11 @@ pub(crate) struct SessionSummary {
     pub has_subagents: bool,
     /// The TUIC PTY session currently running this Claude session, if any —
     /// resolved from `AppState::tuic_session_for_claude_session`, which this
-    /// disk-reading module has no access to. Always `None` here; populated by
-    /// the transport layer that has `AppState` (today: the HTTP routes in
-    /// `mcp_http::session_review_routes`; the desktop Tauri command does not
-    /// yet thread `AppState` through `list_review_sessions`, a known gap).
+    /// disk-reading module has no access to. Always `None` from
+    /// `list_review_sessions_impl` itself; populated by each transport-layer
+    /// caller that does have `AppState` — the `list_review_sessions` Tauri
+    /// command and the `list_sessions_http` HTTP route both do this today, by
+    /// calling `*_impl` and then filling this field in per session.
     pub tuic_session_id: Option<String>,
 }
 
@@ -204,7 +205,8 @@ pub(crate) struct SessionReview {
     /// Non-fatal parse problems — render as a dismissible banner, never swallow.
     pub warnings: Vec<String>,
     pub included_subagents: bool,
-    /// See `SessionSummary::tuic_session_id` — same deferred-population note.
+    /// See `SessionSummary::tuic_session_id` — same "populated by the
+    /// transport-layer caller, not by the `_impl` function" note.
     pub tuic_session_id: Option<String>,
     /// One entry per distinct turn, in the same order turns first appear in
     /// `steps` (which is itself chronological, so this is turn_index order).
@@ -360,6 +362,13 @@ fn line_is_interesting(line: &str) -> bool {
         // records too (already let through above), so this only adds the
         // ones that were previously rejected: real human prompts.
         || line.contains("\"type\":\"user\"")
+        // An assistant record that issues a tool_use call — needed so a
+        // background-shaped Agent/Task call's spawning turn can be recovered
+        // from `tool_call_prompt_ids` instead of only the (possibly much
+        // later) turn its result happened to land in. Checking for both
+        // substrings keeps the cheap pre-filter from admitting every
+        // assistant text/thinking-only record too.
+        || (line.contains("\"type\":\"assistant\"") && line.contains("\"tool_use\""))
 }
 
 /// Raw per-step facts lifted straight out of one `toolUseResult`.
@@ -651,7 +660,26 @@ struct TranscriptScan {
     /// spawning a further nested subagent is not resolved by this; it falls
     /// through to `assign_turns`'s "attach to whichever turn is open"
     /// fallback instead).
+    ///
+    /// This is a **fallback**, consulted only when `tool_call_prompt_ids` has
+    /// no entry for the tool_use_id — see that field's doc comment for why a
+    /// background-shaped Agent/Task call needs `tool_call_prompt_ids`
+    /// specifically, not this map, as the primary source.
     tool_result_prompt_ids: HashMap<String, String>,
+    /// `tool_use_id -> promptId` captured from the **assistant** record that
+    /// *issues* a tool_use call — i.e. the turn the call was made in, not the
+    /// turn its result happened to land in. For an ordinary synchronous tool
+    /// call these are the same turn, so `tool_result_prompt_ids` would give
+    /// an identical answer — but a background-shaped Agent/Task call
+    /// (`meta.json`'s `requestShape: "background"`) can report its result
+    /// several turns later, after the conversation has moved on. Using the
+    /// result's own `promptId` in that case would misattribute the whole
+    /// subagent's edits (which actually happened during the ORIGINAL
+    /// spawning turn) to whatever later turn merely observed the result.
+    /// This map is checked first in `build_session_review_full`; falling
+    /// through to `tool_result_prompt_ids` only covers a transcript shape
+    /// where the spawning assistant record was, for some reason, never seen.
+    tool_call_prompt_ids: HashMap<String, String>,
 }
 
 /// One streaming pass over one transcript, appending into `out`.
@@ -732,12 +760,17 @@ fn scan_transcript(
     Ok(())
 }
 
-/// Populates `TranscriptScan::prompts` and `::tool_result_prompt_ids` from
-/// one already-parsed "user"-type record. Runs for every such record
-/// (whether or not it also becomes a `RawEdit`) — see `assign_turns` for
-/// how the two maps this builds are consumed.
+/// Populates `TranscriptScan::prompts`, `::tool_result_prompt_ids`, and
+/// `::tool_call_prompt_ids` from one already-parsed transcript record. Runs
+/// for every "user" or "assistant" record (whether or not it also becomes a
+/// `RawEdit`) — see `assign_turns` for how the maps this builds are consumed.
 fn capture_turn_info(v: &serde_json::Value, out: &mut TranscriptScan) {
-    if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+    let record_type = v.get("type").and_then(|t| t.as_str());
+    if record_type == Some("assistant") {
+        capture_tool_call_prompt_ids(v, out);
+        return;
+    }
+    if record_type != Some("user") {
         return;
     }
     let prompt_id = v.get("promptId").and_then(|p| p.as_str());
@@ -787,6 +820,34 @@ fn capture_turn_info(v: &serde_json::Value, out: &mut TranscriptScan) {
         .to_string();
     let preview = first_line_truncated(&text, 160);
     out.prompts.entry(pid.to_string()).or_insert((ts, preview));
+}
+
+/// Populates `TranscriptScan::tool_call_prompt_ids` from one already-parsed
+/// "assistant"-type record: every `tool_use` block in its content names the
+/// call's own `id` (a tool_use_id), which we pair with the record's own
+/// `promptId` — the turn the call was actually issued in.
+fn capture_tool_call_prompt_ids(v: &serde_json::Value, out: &mut TranscriptScan) {
+    let Some(pid) = v.get("promptId").and_then(|p| p.as_str()) else {
+        return;
+    };
+    let Some(content) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return;
+    };
+    for block in content {
+        if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+            continue;
+        }
+        let Some(tool_use_id) = block.get("id").and_then(|i| i.as_str()) else {
+            continue;
+        };
+        out.tool_call_prompt_ids
+            .entry(tool_use_id.to_string())
+            .or_insert_with(|| pid.to_string());
+    }
 }
 
 /// First line of `s`, trimmed and truncated to `max_chars` (char-boundary
@@ -1221,11 +1282,17 @@ fn build_session_review_full(
         }
         let Some(hex_id) = agent_name else { continue };
         let meta = read_subagent_meta(sub);
-        let parent_prompt_id = meta
-            .tool_use_id
-            .as_deref()
-            .and_then(|tuid| scan.tool_result_prompt_ids.get(tuid))
-            .cloned();
+        // Prefer the CALL-time promptId (the turn the Agent/Task call was
+        // actually issued in) over the result-time one — a background-shaped
+        // call's result can land several turns later, which would otherwise
+        // misattribute every one of this subagent's edits to that later
+        // turn. See `TranscriptScan::tool_call_prompt_ids`'s doc comment.
+        let parent_prompt_id = meta.tool_use_id.as_deref().and_then(|tuid| {
+            scan.tool_call_prompt_ids
+                .get(tuid)
+                .or_else(|| scan.tool_result_prompt_ids.get(tuid))
+                .cloned()
+        });
         subagent_parent_prompt_id.insert(hex_id.clone(), parent_prompt_id);
         subagent_display_names.insert(hex_id.clone(), meta.display_name.unwrap_or(hex_id));
     }
@@ -1802,24 +1869,24 @@ pub(crate) async fn list_review_sessions_impl(
 
 // ─────────────────────────── Cache ──────────────────────────────────────────
 
+/// `(transcript path, include_subagents, options)` — the full cache key.
+/// `include_subagents` and `options` are part of the MAP KEY, not just a
+/// freshness check on a single per-path slot: distinct combinations for the
+/// same session must be able to coexist in the cache (up to
+/// `MAX_CACHED_REVIEWS`), or toggling the "subagent edits" checkbox / a
+/// whitespace-diff option back and forth thrashes a single slot instead of
+/// caching each variant.
+type ReviewCacheKey = (PathBuf, bool, DiffOptions);
+
 struct CachedReview {
     len: u64,
     mtime: std::time::SystemTime,
-    /// Part of the cache key, not just informational: a cached review built
-    /// with one value of `include_subagents` must never be served back for a
-    /// request with the other value, or toggling the "subagent edits"
-    /// checkbox silently no-ops until the transcript's mtime happens to
-    /// change for an unrelated reason.
-    include_subagents: bool,
-    /// Also part of the cache key: a revert/growth of a *subagent*
-    /// transcript never touches the main transcript's own (len, mtime), so
-    /// without this a session with subagent edits could keep serving a
-    /// stale review indefinitely after a subagent transcript grew.
+    /// Also part of freshness, though not part of the map key: a
+    /// revert/growth of a *subagent* transcript never touches the main
+    /// transcript's own (len, mtime), so without this a session with
+    /// subagent edits could keep serving a stale review indefinitely after a
+    /// subagent transcript grew.
     subagent_fp: SubagentFingerprint,
-    /// Also part of the cache key: two different whitespace/case option
-    /// sets for the same session must never collide — otherwise whichever
-    /// was computed first would keep being served back for the other.
-    options: DiffOptions,
     /// Monotonic use counter for LRU eviction — see `next_use_tick`. Not a
     /// wall-clock timestamp: two entries touched within the same instant
     /// must still have a well-defined "least recently used" answer.
@@ -1880,8 +1947,8 @@ fn next_use_tick() -> u64 {
 
 const MAX_CACHED_REVIEWS: usize = 4;
 
-fn review_cache() -> &'static Mutex<HashMap<PathBuf, CachedReview>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedReview>>> = OnceLock::new();
+fn review_cache() -> &'static Mutex<HashMap<ReviewCacheKey, CachedReview>> {
+    static CACHE: OnceLock<Mutex<HashMap<ReviewCacheKey, CachedReview>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1893,14 +1960,10 @@ fn get_cached_review(
     let meta = std::fs::metadata(transcript).ok()?;
     let mtime = meta.modified().ok()?;
     let subagent_fp = subagent_fingerprint_for_transcript(transcript);
+    let key = (transcript.to_path_buf(), include_subagents, options);
     let mut map = review_cache().lock().ok()?;
-    let entry = map.get_mut(transcript)?;
-    if entry.len == meta.len()
-        && entry.mtime == mtime
-        && entry.include_subagents == include_subagents
-        && entry.subagent_fp == subagent_fp
-        && entry.options == options
-    {
+    let entry = map.get_mut(&key)?;
+    if entry.len == meta.len() && entry.mtime == mtime && entry.subagent_fp == subagent_fp {
         entry.last_used = next_use_tick();
         Some(entry.review.clone())
     } else {
@@ -1921,11 +1984,12 @@ fn put_cached_review(
         return;
     };
     let subagent_fp = subagent_fingerprint_for_transcript(transcript);
+    let key = (transcript.to_path_buf(), include_subagents, options);
     let Ok(mut map) = review_cache().lock() else {
         return;
     };
     if map.len() >= MAX_CACHED_REVIEWS
-        && !map.contains_key(transcript)
+        && !map.contains_key(&key)
         && let Some(k) = map
             .iter()
             .min_by_key(|(_, v)| v.last_used)
@@ -1934,27 +1998,25 @@ fn put_cached_review(
         map.remove(&k);
     }
     map.insert(
-        transcript.to_path_buf(),
+        key,
         CachedReview {
             len: meta.len(),
             mtime,
-            include_subagents,
             subagent_fp,
-            options,
             last_used: next_use_tick(),
             review: review.clone(),
         },
     );
 }
 
-/// Evict any cached review for `transcript`, regardless of the
-/// `include_subagents` it was cached under. Must be called after any revert
-/// mutates the working tree — a revert changes files on disk, not the
-/// transcript itself, so the `(len, mtime)` cache key would otherwise keep
-/// serving the stale pre-revert review indefinitely.
+/// Evict every cached review for `transcript`, regardless of the
+/// `include_subagents`/`options` variant it was cached under. Must be called
+/// after any revert mutates the working tree — a revert changes files on
+/// disk, not the transcript itself, so the `(len, mtime)` cache key would
+/// otherwise keep serving the stale pre-revert review indefinitely.
 pub(crate) fn invalidate_cached_review(transcript: &Path) {
     if let Ok(mut map) = review_cache().lock() {
-        map.remove(transcript);
+        map.retain(|(path, _, _), _| path != transcript);
     }
 }
 
@@ -2451,6 +2513,50 @@ pub(crate) mod test_fixtures {
             }
             self.subagent_meta
                 .insert(agent.to_string(), serde_json::Value::Object(meta));
+            self
+        }
+
+        /// Issues a background-shaped Agent/Task call: writes the assistant
+        /// record's own `tool_use` block under the CURRENT prompt id, and a
+        /// sibling `agent-<agent>.meta.json` naming its `tool_use_id` — but
+        /// does NOT push the tool_result yet. Pair with
+        /// `.report_background_result(agent)` once the test has advanced
+        /// past further `.prompt(...)` calls, to reproduce a background
+        /// call's result landing several turns after it was actually
+        /// spawned (unlike `spawn_subagent`, whose result is always pushed
+        /// immediately under the same prompt id as the call).
+        pub(crate) fn spawn_background_subagent(mut self, agent: &str) -> Self {
+            let tool_use_id = format!("toolu_{}", uuid::Uuid::new_v4().simple());
+            let timestamp = self.next_ts();
+            let record = serde_json::json!({
+                "type": "assistant",
+                "timestamp": timestamp,
+                "promptId": self.current_prompt_id,
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": tool_use_id, "name": "Task", "input": {}}
+                ]},
+            });
+            self.lines.push(record.to_string());
+            let mut meta = serde_json::Map::new();
+            meta.insert("toolUseId".into(), tool_use_id.into());
+            meta.insert("requestShape".into(), "background".into());
+            self.subagent_meta
+                .insert(agent.to_string(), serde_json::Value::Object(meta));
+            self
+        }
+
+        /// Pushes the tool_result for `agent`'s background call under
+        /// whatever prompt id is current RIGHT NOW — see
+        /// `spawn_background_subagent`.
+        pub(crate) fn report_background_result(mut self, agent: &str) -> Self {
+            let tool_use_id = self
+                .subagent_meta
+                .get(agent)
+                .and_then(|m| m.get("toolUseId"))
+                .and_then(|t| t.as_str())
+                .expect("spawn_background_subagent must run first")
+                .to_string();
+            self.push_tool_result(&tool_use_id, serde_json::json!({"content": []}));
             self
         }
 
@@ -4064,6 +4170,75 @@ mod tests {
     }
 
     #[test]
+    fn distinct_include_subagents_and_options_for_the_same_transcript_coexist_in_the_cache() {
+        // Before ReviewCacheKey existed, the map was keyed only by transcript
+        // path, so a single path could hold at most one cached variant —
+        // toggling "include subagents" (or a whitespace-diff option) back
+        // and forth thrashed that one slot, recomputing on every switch
+        // instead of caching each variant.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, "dummy").unwrap();
+        let dummy_review = |id: &str| SessionReview {
+            session_id: id.to_string(),
+            transcript_path: String::new(),
+            repo_path: String::new(),
+            started_at: None,
+            ended_at: None,
+            title: None,
+            steps: Vec::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+            included_subagents: false,
+            tuic_session_id: None,
+            turns: Vec::new(),
+        };
+        let ignore_case_options = DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+
+        put_cached_review(
+            &path,
+            false,
+            DiffOptions::default(),
+            &dummy_review("no-subagents"),
+        );
+        put_cached_review(
+            &path,
+            true,
+            DiffOptions::default(),
+            &dummy_review("with-subagents"),
+        );
+        put_cached_review(
+            &path,
+            false,
+            ignore_case_options,
+            &dummy_review("ignore-case"),
+        );
+
+        assert_eq!(
+            get_cached_review(&path, false, DiffOptions::default())
+                .unwrap()
+                .session_id,
+            "no-subagents",
+            "all three combos must be independently cached, not overwriting one shared slot"
+        );
+        assert_eq!(
+            get_cached_review(&path, true, DiffOptions::default())
+                .unwrap()
+                .session_id,
+            "with-subagents"
+        );
+        assert_eq!(
+            get_cached_review(&path, false, ignore_case_options)
+                .unwrap()
+                .session_id,
+            "ignore-case"
+        );
+    }
+
+    #[test]
     fn interleaved_main_and_subagent_steps_order_by_timestamp() {
         // Guard/confirmation test: main-thread and subagent edits are
         // scanned from separate files and then merged by a stable sort on
@@ -4162,6 +4337,54 @@ mod tests {
             Some("Now fix the third file")
         );
         assert_eq!(review.turns[1].step_indices, vec![2]);
+    }
+
+    #[test]
+    fn background_subagent_inherits_the_spawning_turn_not_the_later_reporting_turn() {
+        // A background-shaped Agent/Task call's tool_result can land several
+        // turns after it was actually issued. Before tool_call_prompt_ids
+        // existed, the subagent's edits inherited whatever turn the RESULT
+        // happened to report under (p3 here) instead of the turn it was
+        // actually spawned in (p1) — this reproduces that exact shape.
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Kick off a background review")
+            .spawn_background_subagent("bg1")
+            .subagent_edit("bg1", &abs_sub, "y\n", "Y\n") // happens while p1 is current
+            .prompt("p2", "Meanwhile, fix a.txt")
+            .edit(&abs1, "x\n", "X\n", false)
+            .prompt("p3", "Check on the background review")
+            .report_background_result("bg1"); // result lands under p3, not p1
+
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 2);
+        let sub_step = review
+            .steps
+            .iter()
+            .find(|s| s.abs_path == abs_sub)
+            .expect("subagent step present");
+        assert_eq!(
+            sub_step.turn_index, 0,
+            "background subagent must inherit the SPAWNING turn (p1, index 0), \
+             not the turn its result happened to land in (p3, index 2)"
+        );
     }
 
     #[test]
