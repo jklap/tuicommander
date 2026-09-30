@@ -316,7 +316,10 @@ fn read_subagent_meta(transcript: &Path) -> SubagentMetaInfo {
         .or_else(|| v.get("description").and_then(|s| s.as_str()))
         .or_else(|| v.get("agentType").and_then(|s| s.as_str()))
         .map(String::from);
-    let tool_use_id = v.get("toolUseId").and_then(|s| s.as_str()).map(String::from);
+    let tool_use_id = v
+        .get("toolUseId")
+        .and_then(|s| s.as_str())
+        .map(String::from);
     SubagentMetaInfo {
         display_name,
         tool_use_id,
@@ -789,7 +792,13 @@ fn capture_turn_info(v: &serde_json::Value, out: &mut TranscriptScan) {
 /// First line of `s`, trimmed and truncated to `max_chars` (char-boundary
 /// safe — unlike a byte slice, this never panics on multi-byte UTF-8).
 fn first_line_truncated(s: &str, max_chars: usize) -> String {
-    s.lines().next().unwrap_or("").trim().chars().take(max_chars).collect()
+    s.lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 // ─────────────────────────── Replay / diffing ───────────────────────────────
@@ -1296,14 +1305,7 @@ fn build_session_review_full(
             let (patch, additions, deletions) = match (&sf.before, &sf.after) {
                 (Some(b), Some(a)) => {
                     let old_exists = !matches!(e.kind, StepKind::Create);
-                    unified_patch(
-                        b,
-                        a,
-                        old_exists,
-                        true,
-                        &display_path,
-                        options,
-                    )
+                    unified_patch(b, a, old_exists, true, &display_path, options)
                 }
                 _ => match e.kind {
                     StepKind::Edit => match e.structured_patch.as_ref() {
@@ -1311,26 +1313,12 @@ fn build_session_review_full(
                         None => {
                             let old = e.old_string.as_deref().unwrap_or("");
                             let new = e.new_string.as_deref().unwrap_or("");
-                            unified_patch(
-                                old,
-                                new,
-                                true,
-                                true,
-                                &display_path,
-                                options,
-                            )
+                            unified_patch(old, new, true, true, &display_path, options)
                         }
                     },
                     StepKind::Create | StepKind::Overwrite => {
                         let content = e.content.as_deref().unwrap_or("");
-                        unified_patch(
-                            "",
-                            content,
-                            false,
-                            true,
-                            &display_path,
-                            options,
-                        )
+                        unified_patch("", content, false, true, &display_path, options)
                     }
                 },
             };
@@ -1376,14 +1364,7 @@ fn build_session_review_full(
         let (cumulative_patch, additions, deletions) = match (&fold.base, &final_content) {
             (Some(b), Some(f)) => {
                 let old_exists = fold.base_source != BaseSource::CreatedInSession;
-                unified_patch(
-                    b,
-                    f,
-                    old_exists,
-                    disk_exists,
-                    &display_path,
-                    options,
-                )
+                unified_patch(b, f, old_exists, disk_exists, &display_path, options)
             }
             _ => (String::new(), 0, 0),
         };
@@ -1466,7 +1447,10 @@ fn build_turn_summaries(steps: &[EditStep]) -> Vec<TurnSummary> {
     let mut turns: Vec<TurnSummary> = Vec::new();
     let mut turn_pos: HashMap<u32, usize> = HashMap::new();
     for step in steps {
-        let file_entry = step.rel_path.clone().unwrap_or_else(|| step.abs_path.clone());
+        let file_entry = step
+            .rel_path
+            .clone()
+            .unwrap_or_else(|| step.abs_path.clone());
         let pos = *turn_pos.entry(step.turn_index).or_insert_with(|| {
             turns.push(TurnSummary {
                 turn_index: step.turn_index,
@@ -1709,7 +1693,8 @@ pub(crate) async fn list_review_sessions(
     claude_config_dir: Option<String>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<Vec<SessionSummary>, String> {
-    let mut sessions = list_review_sessions_impl(repo_path, limit, include_counts, claude_config_dir).await?;
+    let mut sessions =
+        list_review_sessions_impl(repo_path, limit, include_counts, claude_config_dir).await?;
     for s in &mut sessions {
         s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
     }
@@ -1988,8 +1973,14 @@ pub(crate) async fn get_session_review(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<SessionReview, String> {
     let claude_session_id = session_id.clone();
-    let mut review =
-        get_session_review_impl(repo_path, session_id, include_subagents, claude_config_dir, options).await?;
+    let mut review = get_session_review_impl(
+        repo_path,
+        session_id,
+        include_subagents,
+        claude_config_dir,
+        options,
+    )
+    .await?;
     review.tuic_session_id = state.tuic_session_for_claude_session(&claude_session_id);
     Ok(review)
 }
@@ -3676,9 +3667,10 @@ mod tests {
         .unwrap();
         assert_eq!(with_subs.steps.len(), 1);
 
-        let without_subs = get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
-            .await
-            .unwrap();
+        let without_subs =
+            get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
+                .await
+                .unwrap();
         assert_eq!(
             without_subs.steps.len(),
             0,
@@ -4038,12 +4030,22 @@ mod tests {
         };
 
         for (i, p) in paths.iter().take(4).enumerate() {
-            put_cached_review(p, false, DiffOptions::default(), &dummy_review(&format!("s{i}")));
+            put_cached_review(
+                p,
+                false,
+                DiffOptions::default(),
+                &dummy_review(&format!("s{i}")),
+            );
         }
         // Touch entry 0, making it the most-recently-used.
         assert!(get_cached_review(&paths[0], false, DiffOptions::default()).is_some());
         // Insert a 5th entry, forcing an eviction.
-        put_cached_review(&paths[4], false, DiffOptions::default(), &dummy_review("s4"));
+        put_cached_review(
+            &paths[4],
+            false,
+            DiffOptions::default(),
+            &dummy_review("s4"),
+        );
 
         assert!(
             get_cached_review(&paths[0], false, DiffOptions::default()).is_some(),
@@ -4143,13 +4145,22 @@ mod tests {
         // the subagent was spawned under p1, so its edit inherits that turn
         // even though it has no promptId of its own.
         assert_eq!(review.steps[0].turn_index, 0);
-        assert_eq!(review.steps[1].turn_index, 0, "subagent edit must inherit the parent's turn");
+        assert_eq!(
+            review.steps[1].turn_index, 0,
+            "subagent edit must inherit the parent's turn"
+        );
         assert_eq!(review.steps[2].turn_index, 1);
 
         assert_eq!(review.turns.len(), 2);
-        assert_eq!(review.turns[0].prompt_preview.as_deref(), Some("Fix the first two files"));
+        assert_eq!(
+            review.turns[0].prompt_preview.as_deref(),
+            Some("Fix the first two files")
+        );
         assert_eq!(review.turns[0].step_indices, vec![0, 1]);
-        assert_eq!(review.turns[1].prompt_preview.as_deref(), Some("Now fix the third file"));
+        assert_eq!(
+            review.turns[1].prompt_preview.as_deref(),
+            Some("Now fix the third file")
+        );
         assert_eq!(review.turns[1].step_indices, vec![2]);
     }
 
@@ -4179,7 +4190,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(review.steps.iter().map(|s| s.turn_index).collect::<Vec<_>>(), vec![0, 0]);
+        assert_eq!(
+            review
+                .steps
+                .iter()
+                .map(|s| s.turn_index)
+                .collect::<Vec<_>>(),
+            vec![0, 0]
+        );
         assert_eq!(review.turns.len(), 1);
         assert_eq!(review.turns[0].prompt_preview, None);
     }
@@ -4227,7 +4245,12 @@ mod tests {
         }
 
         let tb = TranscriptBuilder::new(&repo.to_string_lossy())
-            .spawn_subagent("named", Some("real-name"), Some("a description"), Some("Explore"))
+            .spawn_subagent(
+                "named",
+                Some("real-name"),
+                Some("a description"),
+                Some("Explore"),
+            )
             .subagent_edit("named", &abs_named, "x\n", "X\n")
             .spawn_subagent("desconly", None, Some("a description"), Some("Explore"))
             .subagent_edit("desconly", &abs_desc, "x\n", "X\n")
@@ -4251,12 +4274,20 @@ mod tests {
         let names: HashMap<&str, &str> = review
             .steps
             .iter()
-            .map(|s| (s.agent_id.as_deref().unwrap(), s.agent_display_name.as_deref().unwrap()))
+            .map(|s| {
+                (
+                    s.agent_id.as_deref().unwrap(),
+                    s.agent_display_name.as_deref().unwrap(),
+                )
+            })
             .collect();
         assert_eq!(names["named"], "real-name");
         assert_eq!(names["desconly"], "a description");
         assert_eq!(names["typeonly"], "Explore");
-        assert_eq!(names["noneofit"], "noneofit", "falls back to the raw hex id");
+        assert_eq!(
+            names["noneofit"], "noneofit",
+            "falls back to the raw hex id"
+        );
     }
 
     #[test]
@@ -4278,7 +4309,10 @@ mod tests {
             Some(&cfg.path().to_string_lossy()),
         )
         .unwrap();
-        assert_eq!(review.steps[0].agent_display_name.as_deref(), Some("Fix the thing"));
+        assert_eq!(
+            review.steps[0].agent_display_name.as_deref(),
+            Some("Fix the thing")
+        );
 
         // No title at all -> literal "main".
         let abs2 = repo.join("b.txt").to_string_lossy().to_string();
@@ -4306,9 +4340,26 @@ mod tests {
         let (cfg, transcript) = tb.build();
         let session_id = transcript.file_stem().unwrap().to_str().unwrap();
 
-        let r1 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
-        let r2 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
-        assert_eq!(r1.files[0].revision, r2.files[0].revision, "unchanged content must produce the same revision");
+        let r1 = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+        let r2 = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(
+            r1.files[0].revision, r2.files[0].revision,
+            "unchanged content must produce the same revision"
+        );
         assert!(!r1.files[0].revision.is_empty());
 
         // A further edit to the same file must change the revision.
@@ -4318,7 +4369,14 @@ mod tests {
             .edit(&abs, "X\n", "XX\n", false);
         let (cfg3, transcript3) = tb3.build();
         let session_id3 = transcript3.file_stem().unwrap().to_str().unwrap();
-        let r3 = build_session_review(&repo, &transcript3, &[], session_id3, Some(&cfg3.path().to_string_lossy())).unwrap();
+        let r3 = build_session_review(
+            &repo,
+            &transcript3,
+            &[],
+            session_id3,
+            Some(&cfg3.path().to_string_lossy()),
+        )
+        .unwrap();
         assert_ne!(r1.files[0].revision, r3.files[0].revision);
     }
 
@@ -4327,12 +4385,22 @@ mod tests {
         let (_dir, repo) = fixture_repo();
         let abs = repo.join("a.txt").to_string_lossy().to_string();
         std::fs::write(&abs, "  hello\n").unwrap();
-        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(
+            &abs,
+            "  hello\n",
+            "hello\n",
+            false,
+        );
         let (cfg, transcript) = tb.build();
         let session_id = transcript.file_stem().unwrap().to_str().unwrap();
 
         let default_review = build_session_review_with_options(
-            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), DiffOptions::default(),
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+            DiffOptions::default(),
         )
         .unwrap();
         assert!(default_review.files[0].additions > 0 || default_review.files[0].deletions > 0);
@@ -4342,7 +4410,12 @@ mod tests {
             ..DiffOptions::default()
         };
         let options_review = build_session_review_with_options(
-            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), ignoring,
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+            ignoring,
         )
         .unwrap();
         assert_eq!(options_review.files[0].additions, 0);
@@ -4359,9 +4432,19 @@ mod tests {
         let (_dir, repo) = fixture_repo();
         let abs = repo.join("a.txt").to_string_lossy().to_string();
         std::fs::write(&abs, "  hello\n").unwrap();
-        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(
+            &abs,
+            "  hello\n",
+            "hello\n",
+            false,
+        );
         let (cfg, transcript) = tb.build();
-        let session_id = transcript.file_stem().unwrap().to_str().unwrap().to_string();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
