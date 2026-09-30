@@ -1271,6 +1271,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!invokeRef) return;
 		const start = chunk * ROW_CACHE_CHUNK;
 		const cacheGeneration = scroll.cacheGeneration;
+		const liveEpoch = scroll.liveEpoch;
+		// First all-time row that was still a live screen row when the fetch began.
+		const liveFromAbs = currentFrame ? currentFrame.historyBase + currentFrame.historySize : 0;
 		try {
 			const res = await invokeRef("terminal_styled_rows", {
 				sessionId: props.sessionId,
@@ -1293,7 +1296,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 				return;
 			}
-			scroll.cacheRows(decoded.rows);
+			if (!scroll.cacheFetchedRows(decoded.rows, liveEpoch, liveFromAbs)) requestedChunks.delete(chunk);
 			if (scroll.position != null) scheduleSmoothRender();
 		} catch (e) {
 			if (!scroll.isCacheGenerationCurrent(cacheGeneration)) return;
@@ -1570,6 +1573,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// eviction-stable all-time space. Geometry and screen changes start a new era.
 		const historyGrowth =
 			screenChanged || geomChanged ? 0 : frame.historyBase + frame.historySize - (lastHistoryBase + lastHistorySize);
+		// The rows that just left the live screen carry their final content only now.
+		if (historyGrowth > 0) {
+			const liveTop = lastHistoryBase + lastHistorySize;
+			scroll.commitLiveRows(liveTop, liveTop + historyGrowth);
+		}
 		// These describe the merge origin for the next frame even when history and
 		// display offset advanced together and left the visible all-time top stable.
 		lastDisplayOffset = frame.displayOffset;

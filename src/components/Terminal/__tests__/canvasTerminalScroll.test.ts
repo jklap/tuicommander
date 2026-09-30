@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createCanvasScrollController, ROW_CACHE_CHUNK, ROW_CACHE_MAX } from "../canvasTerminalScroll";
 
 describe("canvas terminal scroll controller", () => {
+	const row = (n: number) => ({ index: n }) as never;
+
 	it("tracks fractional gestures and clamps their pending backend offset", () => {
 		const scroll = createCanvasScrollController();
 		expect(scroll.applyDelta(-2.5, 0, 10)).toBe(2.5);
@@ -115,8 +117,6 @@ describe("canvas terminal scroll controller", () => {
 	// that is never resized, wheel-scrolled or alt-screened grows the map for the
 	// life of the session, ~2.6 KB per row.
 	describe("cacheRows", () => {
-		const row = (n: number) => ({ index: n }) as never;
-
 		it("preserves sparse multi-codepoint cell content", () => {
 			const scroll = createCanvasScrollController();
 			const cached = { index: 4, cellExtras: new Map([[2, "\u0301"]]) } as never;
@@ -199,6 +199,65 @@ describe("canvas terminal scroll controller", () => {
 			}
 			expect(scroll.cacheGeneration).toBe(generation);
 			expect(scroll.isCacheGenerationCurrent(generation)).toBe(true);
+		});
+	});
+
+	// #1264-89c8. Oracle: a line that left the live screen has its final content
+	// only after it left; everything read before is stale.
+	describe("commitLiveRows", () => {
+		it("catches: a cached live row surviving the redraw that committed it", () => {
+			const scroll = createCanvasScrollController();
+			scroll.cacheRows([100, 101, 102, 103].map((abs) => ({ abs, row: row(abs) })));
+			scroll.requestedChunks.add(1);
+			scroll.commitLiveRows(100, 102);
+			expect(scroll.rowCache.has(100)).toBe(false);
+			expect(scroll.rowCache.has(101)).toBe(false);
+			expect(scroll.rowCache.has(102)).toBe(true);
+			expect(scroll.requestedChunks.has(1)).toBe(false);
+		});
+
+		it("catches: releasing only the first chunk when the committed rows straddle two", () => {
+			const scroll = createCanvasScrollController();
+			scroll.requestedChunks.add(0);
+			scroll.requestedChunks.add(1);
+			scroll.requestedChunks.add(2);
+			scroll.commitLiveRows(ROW_CACHE_CHUNK - 2, ROW_CACHE_CHUNK + 2);
+			expect([0, 1, 2].map((c) => scroll.requestedChunks.has(c))).toEqual([false, false, true]);
+		});
+
+		it("catches: an empty commit invalidating a chunk that is still correct", () => {
+			const scroll = createCanvasScrollController();
+			scroll.requestedChunks.add(1);
+			scroll.commitLiveRows(100, 100);
+			expect(scroll.requestedChunks.has(1)).toBe(true);
+			expect(scroll.liveEpoch).toBe(0);
+		});
+	});
+
+	describe("cacheFetchedRows", () => {
+		it("catches: a fetch in flight while lines were committed re-caching their stale rows", () => {
+			const scroll = createCanvasScrollController();
+			const epoch = scroll.liveEpoch;
+			scroll.commitLiveRows(100, 105);
+			const rows = [98, 99, 100, 101].map((abs) => ({ abs, row: row(abs) }));
+			expect(scroll.cacheFetchedRows(rows, epoch, 100)).toBe(false);
+			expect([98, 99, 100, 101].map((abs) => scroll.rowCache.has(abs))).toEqual([true, true, false, false]);
+		});
+
+		it("catches: refetching a chunk that holds only history after a commit above it", () => {
+			const scroll = createCanvasScrollController();
+			const epoch = scroll.liveEpoch;
+			scroll.commitLiveRows(100, 105);
+			const rows = [10, 11].map((abs) => ({ abs, row: row(abs) }));
+			expect(scroll.cacheFetchedRows(rows, epoch, 100)).toBe(true);
+			expect(scroll.rowCache.size).toBe(2);
+		});
+
+		it("catches: dropping a fetch that saw no commit", () => {
+			const scroll = createCanvasScrollController();
+			const rows = [100, 101].map((abs) => ({ abs, row: row(abs) }));
+			expect(scroll.cacheFetchedRows(rows, scroll.liveEpoch, 100)).toBe(true);
+			expect(scroll.rowCache.size).toBe(2);
 		});
 	});
 });
