@@ -171,6 +171,14 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		return next;
 	};
 
+	const isCheckoutGone = async (worktreePath: string): Promise<boolean> => {
+		try {
+			return !(await deps.repo.getInfo(worktreePath)).is_git_repo;
+		} catch {
+			return false;
+		}
+	};
+
 	const refreshRepoOnce = async (repoPath: string) => {
 		const repo = repositoriesStore.get(repoPath);
 		if (!repo) return;
@@ -290,6 +298,17 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					});
 					continue;
 				}
+				const replacement = replacementByPath.get(currentRepo.workspaces[branchName]?.worktreePath ?? "");
+				if (replacement) {
+					appLogger.info(
+						"terminal",
+						`refreshAllBranchStats: workspace "${branchName}" replaced by "${replacement}" at the same path`,
+					);
+					replacements.set(branchName, replacement);
+					toRemove.push(branchName);
+					markProcessed(repoPath, branchName);
+					continue;
+				}
 				// The snapshot was requested after the workspace entered the store, but
 				// it may still be a cached/coalesced answer older than the checkout.
 				if (requestedAt - (firstSeen.get(branchName) ?? requestedAt) < CREATION_GRACE_WINDOW_MS) {
@@ -302,17 +321,6 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					);
 					continue;
 				}
-				const replacement = replacementByPath.get(currentRepo.workspaces[branchName]?.worktreePath ?? "");
-				if (replacement) {
-					appLogger.info(
-						"terminal",
-						`refreshAllBranchStats: workspace "${branchName}" replaced by "${replacement}" at the same path`,
-					);
-					replacements.set(branchName, replacement);
-					toRemove.push(branchName);
-					markProcessed(repoPath, branchName);
-					continue;
-				}
 				// Branch has live terminals — only keep it if the worktree path
 				// is the main repo checkout (HEAD switched away). If the worktree
 				// directory was deleted externally, close the orphaned terminals
@@ -322,6 +330,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				if (hasLiveTerminals) {
 					const isLinkedWorktree = branchState.worktreePath && branchState.worktreePath !== repoPath;
 					if (isLinkedWorktree) {
+						// A snapshot that omits the worktree is not proof it is gone: the backend
+						// serves coalesced/cached worktree_paths and concurrent runs can judge it
+						// with different snapshots. Closing a session is irreversible, so ask the
+						// directory itself; an error or a live checkout keeps the terminals. (#1317)
+						if (!(await isCheckoutGone(branchState.worktreePath))) {
+							appLogger.info(
+								"terminal",
+								`refreshAllBranchStats: keeping "${branchName}" — snapshot omits it but its checkout is still on disk`,
+								{ worktreePath: branchState.worktreePath },
+							);
+							continue;
+						}
 						// Linked worktree was removed externally — close its terminals
 						appLogger.info(
 							"terminal",
