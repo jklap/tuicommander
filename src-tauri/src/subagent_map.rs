@@ -103,6 +103,14 @@ pub(crate) struct Handback {
 /// The tool Claude Code gives a subagent to hand its report back through.
 const HANDBACK_TOOL: &str = "SubagentHandback";
 
+fn block_type(b: &serde_json::Value) -> Option<&str> {
+    b.get("type").and_then(|t| t.as_str())
+}
+
+fn name_of(b: &serde_json::Value) -> &str {
+    b.get("name").and_then(|n| n.as_str()).unwrap_or("tool")
+}
+
 /// Parse one JSONL row.
 ///
 /// `None` for a row that carries nothing — a malformed line, a timestamp that
@@ -118,8 +126,6 @@ pub(crate) fn parse_row(line: &str) -> Option<Row> {
         serde_json::Value::String(_) => &[],
         _ => return None,
     };
-    let block_type = |b: &serde_json::Value| b.get("type").and_then(|t| t.as_str());
-    let name_of = |b: &serde_json::Value| b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
     // The handback is the report, not work: it is neither counted as a tool
     // call nor does it make the row a tool-calling one.
     let handback = blocks.iter().find_map(|b| {
