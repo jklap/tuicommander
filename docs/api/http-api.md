@@ -188,9 +188,19 @@ created by a human rather than an agent — it drives `is_remote: !user_initiate
 on the registered session. Omitting it (the default) registers `is_remote: true`,
 so a raw `curl` caller with no reason to know this field exists, and every MCP/
 tmux-shim spawn, stay `is_remote: true` with no changes on their side. Also
-honoured on `POST /sessions/worktree` (nested in `config`); has no effect on
-`POST /sessions/agent` (always agent-created) or the desktop IPC twin of this
-route (always human-initiated, accepted for body-shape parity but not consulted).
+honoured on `POST /sessions/worktree` (nested in `config`); the desktop IPC
+twin of these two routes accepts the field for body-shape parity but never
+consults it, since `is_remote` is hardcoded `false` there already.
+
+`POST /sessions/agent` has no `user_initiated` field at all and always
+registers `is_remote: true` — a pre-existing, unrelated asymmetry with its own
+documented IPC/HTTP parity twin, desktop `agent::spawn_agent`, which is
+hardcoded `is_remote: false` (see `src-tauri/AGENTS.md`'s IPC/HTTP Parity
+section for why these two are a parity pair). Neither hardcoded value changed
+here; there is currently no frontend caller of `POST /sessions/agent`, so this
+is latent — flagging it here rather than reconciling it, since fixing it is a
+separate, deliberate decision about what a future "launch agent from the
+browser" UI should mean, not a mechanical follow-on of this change.
 
 ### Create Session with Worktree
 
