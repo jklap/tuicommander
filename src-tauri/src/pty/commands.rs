@@ -129,7 +129,11 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let mut vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    // At the geometry the PTY was actually opened with above, not a
+    // hardcoded 24x220 — see `mcp_http::session::vt_screen_size_for`'s doc
+    // comment for the class of bug that reproduces.
+    let (vt_rows, vt_cols) = crate::mcp_http::session::vt_screen_size_for(rows, cols);
+    let mut vt_log = state.new_vt_log_buffer(vt_rows, vt_cols, VT_LOG_BUFFER_CAPACITY);
     // Seed restored scrollback through the same VtLogBuffer::process entry
     // point live PTY output uses, so canvas rendering, search, selection, and
     // ai_terminal_read_screen all see it with no separate code path. Must run
@@ -352,7 +356,11 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    // At the geometry the PTY was actually opened with above, not a
+    // hardcoded 24x220 — see `mcp_http::session::vt_screen_size_for`'s doc
+    // comment for the class of bug that reproduces.
+    let (vt_rows, vt_cols) = crate::mcp_http::session::vt_screen_size_for(rows, cols);
+    let vt_log = state.new_vt_log_buffer(vt_rows, vt_cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers

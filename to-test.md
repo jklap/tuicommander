@@ -8,6 +8,66 @@
 
 # To Test
 
+## Three desktop PTY-creation commands sized their VT screen at a hardcoded 24x220 instead of the real pane (2026-09-30) — **Rust, needs a `make dev` restart**
+
+Found while investigating a user report ("pane size and not showing the bottom of the
+screen" — previously fixed in HTTP client mode, starting to recur in the desktop app).
+`fc478803f` ("size the VT to the PTY") had already fixed this exact bug class for the MCP
+`agent spawn` and `POST /agents` paths via a shared `register_pty_session` helper, but that
+commit explicitly named `agent::spawn_agent` (desktop "New Agent" launch) as a site "left
+alone" (different registration shape) — and a fourth, more commonly-hit pair of sites,
+`pty::commands::create_pty`/`create_pty_with_worktree` (the desktop commands behind **every**
+plain new terminal tab, worktree tab included), turned out to have the identical bug too and
+were never mentioned in that commit at all. All three open the real PTY at the caller's
+actual `rows`/`cols` but built the `VtLogBuffer` — the screen model agent-state detection,
+choice-prompt parsing, and the chrome cutoff all read — at a hardcoded `24x220` regardless.
+Any pane spawned via any of the three with more than 24 rows had its bottom rows (input box,
+dialog footer, Enter-to-select line) invisible to detection — and since `create_pty`/
+`create_pty_with_worktree` are the default path for essentially every new tab (not just
+agent-launch flows), this is almost certainly the actual mechanism behind the recurrence.
+
+Fixed by centralizing the geometry decision into one pure, unit-tested function,
+`mcp_http::session::vt_screen_size_for(rows, cols) -> (rows, cols.max(NEW_SESSION_MIN_VT_COLS))`,
+and switching `register_pty_session`, `agent::spawn_agent`, `create_pty`, and
+`create_pty_with_worktree` to call it instead of each open-coding (or, for
+`register_pty_session`, inlining) the floor independently — the same "one choke point makes
+the mismatch unrepresentable" argument `fc478803f` already made for its own three paths,
+extended to cover these two. Deliberately NOT baked into `AppState::new_vt_log_buffer` itself
+— `pty.rs`'s scrollback-restore path and `state.rs`'s own scrollback-reflow tests both rely on
+being able to construct a genuinely narrow buffer with no floor.
+
+Test coverage added: `vt_screen_size_for_uses_the_real_pty_geometry_not_a_hardcoded_24x220`
+and `vt_screen_size_for_still_floors_narrow_widths_at_the_shared_minimum` (direct, red/green
+verified — reverting the fix to a hardcoded `(24, 220)` makes the first one fail with the
+exact wrong-geometry assertion) unit-test the shared decision itself; two new
+`register_pty_session_*` tests in `mcp_http/session.rs` cover the wiring at that choke point
+with a real spawned PTY (closing a pre-existing gap — only the MCP `agent spawn` path had a
+direct regression test before this pass, even though `register_pty_session`'s fix predates
+this session). No direct test added for `spawn_agent`/`create_pty`/`create_pty_with_worktree`
+themselves — all three are `#[tauri::command]`s and this codebase has never stood up
+`tauri::test` scaffolding for one (see `src-tauri/AGENTS.md`'s MCP Handshake Readiness Race
+section, which hit the identical constraint fixing a different bug in `spawn_agent`); their
+correctness rests on the shared, tested `vt_screen_size_for` function plus the manual checks
+below. Full `cargo check -p tuicommander --lib --tests` and the relevant test names pass.
+
+- [ ] [HUMAN] After restarting `make dev`, open a **plain new terminal tab** (not an agent
+  launch) in a tall pane (more than 24 rows — e.g. a maximized window), run something that
+  fills the bottom rows (e.g. `htop`, or any TUI with a footer), and confirm the full screen —
+  including the bottom rows — is captured correctly via `ai_terminal_read_screen`/`debug
+  explain_state` or an HTTP screen read for that session. This is the most commonly-hit of the
+  three fixed sites and had no coverage before this fix.
+- [ ] [HUMAN] Repeat the same check for a **worktree tab** created via "Create Worktree" (exercises
+  `create_pty_with_worktree` specifically).
+- [ ] [HUMAN] Spawn a new agent from the desktop app in a tall pane with a task that triggers a
+  choice prompt (`AskUserQuestion`) or a plan-approval dialog. Confirm the awaiting/badge
+  detection fires correctly and the dialog's footer/options are recognized — before this fix, a
+  pane taller than 24 rows would have its bottom rows invisible to detection for a session
+  spawned this way (`agent::spawn_agent`).
+- [ ] [HUMAN] Resize a pane spawned via any of the three fixed commands to be very wide (more
+  than 220 cols) and confirm no truncation/misdetection at the right edge either — the
+  `cols.max(220)` floor only ever widens, so this should already be safe, but hasn't been
+  live-verified.
+
 ## `agent action=spawn` defers a Claude prompt until MCP identity binds (2026-09-29) — **Rust, needs a `make dev` restart**
 
 **REGRESSION FOUND live-testing this against the orchestrator instance (v1.7.7-nightly.20260930.b32b2990f) on 2026-09-30 — the prompt is never delivered at all, not just raced.** 4/4 deferred-path spawns (`agent_type: "claude"`, no `print_mode`) reproduced the same hang: `spawn` returned immediately with `prompt_delivery: "queued — withheld..."` as documented, and `wait_for_mcp_identity_bound` bound in ~400-1200ms (well inside the 5s fail-open window, confirmed via `debug logs` `mcp_initialize` entries matching the session's `tuic_session`) — but the composer stayed permanently empty (just the rotating placeholder hint) for 3-6+ minutes, `session status` showed `shell_state: "busy"`/`agent_state: "working"` the whole time with `busy_duration_ms` climbing unbounded, and `debug explain_state` showed `queued_commands: 1` that never drained, with the busy evidence pinned at `rank: "protocol", source: "hook-busy"` from the instant of spawn and never cleared. A 5th spawn using explicit `args: ["--verbose", "{prompt}"]` (the bypass path, item 16 below) worked perfectly — delivered via argv, replied and completed in ~5s — confirming the bypass path is fine and the bug is isolated to the deferred-delivery mechanism itself.
