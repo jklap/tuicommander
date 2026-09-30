@@ -219,6 +219,14 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
     )
 }
 
+pub(crate) fn branch_integration(repo: &Path, branch: &str) -> Result<BranchIntegration, String> {
+    tuic_git::worktree::branch_integration_with_pr(repo, branch, merged_github_pr_proves_tip)
+}
+
+pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>, String> {
+    tuic_git::worktree::branch_integrations_with_pr(repo, merged_github_pr_proves_tip)
+}
+
 pub(crate) fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,

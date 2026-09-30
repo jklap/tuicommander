@@ -1145,7 +1145,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
+const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1286,9 +1286,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
+                "action": { "type": "string", "description": "One of: list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
@@ -3581,6 +3581,36 @@ async fn handle_worktree(
         Err(e) => return e,
     };
     match action {
+        "branch_integrations" | "branch_integration" => {
+            let path = match require_path(args, action) {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let single = action == "branch_integration";
+            let branch = args["branch"].as_str().map(str::to_owned);
+            if single && branch.is_none() {
+                return serde_json::json!({"error":"Action 'branch_integration' requires 'branch' parameter"});
+            }
+            match tokio::task::spawn_blocking(move || {
+                let repo = std::path::Path::new(&path);
+                if let Some(branch) = branch.filter(|_| single) {
+                    crate::worktree::branch_integration(repo, &branch).map(to_json_or_error)
+                } else {
+                    crate::worktree::branch_integrations(repo).map(to_json_or_error)
+                }
+            })
+            .await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => serde_json::json!({"error":error}),
+                Err(error) => {
+                    serde_json::json!({"error":format!("branch integration task failed: {error}")})
+                }
+            }
+        }
         "worktree_list" => {
             let path = match require_path(args, "worktree_list") {
                 Ok(p) => p,
@@ -7360,7 +7390,9 @@ async fn handle_repo(
     match action {
         "list" | "active" => handle_repo_listing(state, args),
         "status" => handle_github(state, args).await,
-        "worktree_list"
+        "branch_integrations"
+        | "branch_integration"
+        | "worktree_list"
         | "worktree_lifecycle"
         | "worktree_create"
         | "worktree_remove"
@@ -8784,6 +8816,57 @@ mod tests {
             .args(["commit", "-m", file])
             .run()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn mcp_branch_integration_queries_include_branches_without_worktrees_1295() {
+        let (_temp, repo, _) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "query-1295"]);
+        branch_delete_commit(&repo, "one.txt", "one\n");
+        branch_delete_commit(&repo, "two.txt", "two\n");
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "query-1295"]);
+        git(&["commit", "-m", "release\n\none.txt\ntwo.txt"]);
+        let state = test_state();
+        let query = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_integration", "path":repo, "branch":"query-1295"
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(query["integrated"], true, "{query}");
+        assert_eq!(query["proof"], "squash_message", "{query}");
+        assert_eq!(query["archive_required"], false, "{query}");
+        let list = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_integrations", "path":repo
+            }),
+            false,
+        )
+        .await;
+        assert!(
+            list.as_array().unwrap().iter().any(|entry| entry == &query),
+            "{list}"
+        );
+        let deleted = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_delete", "path":repo, "branch":"query-1295"
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(deleted["proof"], query["proof"], "{deleted}");
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["rev-parse", "--verify", "refs/heads/query-1295"])
+                .run_silent()
+                .is_none()
+        );
     }
 
     #[tokio::test]

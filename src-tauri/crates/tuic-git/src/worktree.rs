@@ -862,19 +862,6 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
     .collect()
 }
 
-/// Human-readable form of `integration_bases`, for messages.
-fn describe_bases(bases: &[String]) -> String {
-    bases
-        .iter()
-        .map(|base| {
-            base.strip_prefix("refs/heads/")
-                .or_else(|| base.strip_prefix("refs/remotes/"))
-                .unwrap_or(base)
-        })
-        .collect::<Vec<_>>()
-        .join(" and ")
-}
-
 fn is_ancestor_of_any(repo: &Path, tip: &str, bases: &[String]) -> Result<bool, String> {
     for base in bases {
         if is_ancestor(repo, tip, base)? {
@@ -957,6 +944,13 @@ fn classify_branch_merge(
         Ok((WorkspaceCommitStatus::Merged, Some("ancestry")))
     } else if is_ancestor(repo, tip, &rev_at(repo, "HEAD")?)? {
         Ok((WorkspaceCommitStatus::Merged, Some("integration_ancestry")))
+    } else if let Some(proof) = integrated_in_defaults(repo, &bases, tip)? {
+        let proof = if proof == "content_superset" && pr_proves_tip(repo, branch, tip) {
+            "github_pr"
+        } else {
+            proof
+        };
+        Ok((WorkspaceCommitStatus::Merged, Some(proof)))
     } else if pr_proves_tip(repo, branch, tip) {
         Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
     } else if pushed_to_own_remote(repo, branch, tip)? {
@@ -966,13 +960,246 @@ fn classify_branch_merge(
     }
 }
 
-fn patches_integrated(repo: &Path, bases: &[String], tip: &str) -> Result<bool, String> {
+/// Subjects alone never prove integration. Squash messages corroborate a
+/// structural no-op; context-free twins and content require a recovery ref.
+fn integrated_in_defaults(
+    repo: &Path,
+    bases: &[String],
+    tip: &str,
+) -> Result<Option<&'static str>, String> {
     for base in bases {
-        if patches_integrated_in(repo, base, tip)? {
-            return Ok(true);
+        let target = rev_at(repo, base)?;
+        if patches_integrated_in(repo, &target, tip)? {
+            return Ok(Some("patch_equivalence"));
+        }
+        let merged = git_cmd(repo)
+            .args(["merge-tree", "--write-tree", &target, tip])
+            .run();
+        let target_tree = rev_at(repo, &format!("{target}^{{tree}}"))?;
+        if merged.is_ok_and(|output| output.stdout.trim() == target_tree) {
+            let subjects = git_cmd(repo)
+                .args(["log", "--format=%s", &format!("{target}..{tip}")])
+                .run()
+                .map_err(|error| format!("could not inspect branch subjects: {error}"))?
+                .stdout;
+            let messages = git_cmd(repo)
+                .args(["log", "--format=%B%x00", &format!("{tip}..{target}")])
+                .run()
+                .map_err(|error| format!("could not inspect squash messages: {error}"))?
+                .stdout;
+            let squash = !subjects.trim().is_empty()
+                && messages.split('\0').any(|message| {
+                    subjects.lines().all(|subject| {
+                        message.lines().any(|line| {
+                            line.trim().strip_prefix("* ").unwrap_or(line.trim()) == subject
+                        })
+                    })
+                });
+            return Ok(Some(if squash {
+                "squash_message"
+            } else {
+                "noop_merge"
+            }));
         }
     }
-    Ok(false)
+    for base in bases {
+        let target = rev_at(repo, base)?;
+        if same_subject_twins(repo, &target, tip)? || content_superset(repo, &target, tip)? {
+            return Ok(Some("content_superset"));
+        }
+    }
+    Ok(None)
+}
+
+/// The audit's "twin 0" rule: every unique non-merge commit must have a
+/// same-subject twin with exactly the same path, mode, added and removed lines.
+/// Only hunk coordinates and unchanged context are ignored. This is still a
+/// content heuristic, and must never authorize deletion without an archive.
+fn same_subject_twins(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+    let merges = git_cmd(repo)
+        .args(["rev-list", "--merges", &format!("{target}..{tip}")])
+        .run()
+        .map_err(|error| format!("could not inspect merge commits: {error}"))?;
+    if !merges.stdout.trim().is_empty() {
+        return Ok(false);
+    }
+    let cherry = git_cmd(repo)
+        .args(["cherry", target, tip])
+        .run()
+        .map_err(|error| format!("could not compare patches: {error}"))?;
+    let twins = git_cmd(repo)
+        .args([
+            "log",
+            "--no-merges",
+            "--format=%H%x09%s",
+            &format!("{tip}..{target}"),
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect twin subjects: {error}"))?
+        .stdout;
+    let mut found = false;
+    for line in cherry.stdout.lines().filter(|line| line.starts_with("+ ")) {
+        let sha = &line[2..];
+        let subject = git_cmd(repo)
+            .args(["show", "--no-patch", "--format=%s", sha])
+            .run()
+            .map_err(|error| format!("could not inspect commit subject: {error}"))?
+            .stdout;
+        let Some(patch) = context_free_patch(repo, sha)? else {
+            return Ok(false);
+        };
+        let mut matched = false;
+        for (twin, twin_subject) in twins.lines().filter_map(|line| line.split_once('\t')) {
+            if twin_subject == subject.trim()
+                && context_free_patch(repo, twin)?.as_ref() == Some(&patch)
+            {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return Ok(false);
+        }
+        found = true;
+    }
+    Ok(found)
+}
+
+fn context_free_patch(repo: &Path, sha: &str) -> Result<Option<Vec<String>>, String> {
+    let output = git_cmd(repo)
+        .args([
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--unified=0",
+            sha,
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect twin patch: {error}"))?;
+    let mut patch = Vec::new();
+    let mut in_hunk = false;
+    for line in output.stdout.lines() {
+        if line.starts_with("Binary files ") {
+            return Ok(None);
+        }
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+            patch.push(line.to_owned());
+        } else if line.starts_with("@@ ") {
+            in_hunk = true;
+        } else if (in_hunk && (line.starts_with(['+', '-', '\\'])))
+            || line.starts_with("old mode ")
+            || line.starts_with("new mode ")
+            || line.starts_with("new file mode ")
+            || line.starts_with("deleted file mode ")
+        {
+            patch.push(line.to_owned());
+        }
+    }
+    Ok(Some(patch))
+}
+
+/// A conservative heuristic for revised twins from the branch audit. Require
+/// 100% of added lines, with multiplicity, in the same regular file on target.
+/// Deletions, mode changes, binary files and unrelated histories are not guessed.
+fn content_superset(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
+    let Ok(base) = git_cmd(repo).args(["merge-base", target, tip]).run() else {
+        return Ok(false);
+    };
+    let base = base.stdout.trim();
+    let changes = git_cmd(repo)
+        .args([
+            "diff",
+            "--name-status",
+            "--no-renames",
+            "-z",
+            base,
+            tip,
+            "--",
+        ])
+        .run()
+        .map_err(|error| format!("could not inspect changed paths: {error}"))?
+        .stdout;
+    let mut fields = changes.split('\0').filter(|field| !field.is_empty());
+    let mut found = false;
+    while let Some(status) = fields.next() {
+        let Some(path) = fields.next() else {
+            return Ok(false);
+        };
+        if !matches!(status, "A" | "M") {
+            return Ok(false);
+        }
+        let mode = |revision: &str| -> Option<String> {
+            let output = git_cmd(repo)
+                .args(["--literal-pathspecs", "ls-tree", revision, "--", path])
+                .run()
+                .ok()?;
+            output.stdout.split_whitespace().next().map(str::to_owned)
+        };
+        let tip_mode = mode(tip);
+        if !matches!(tip_mode.as_deref(), Some("100644" | "100755"))
+            || mode(target) != tip_mode
+            || (status == "M" && mode(base) != tip_mode)
+        {
+            return Ok(false);
+        }
+        let diff = git_cmd(repo)
+            .args([
+                "--literal-pathspecs",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--unified=0",
+                base,
+                tip,
+                "--",
+                path,
+            ])
+            .run()
+            .map_err(|error| format!("could not compare file changes: {error}"))?
+            .stdout;
+        let mut in_hunk = false;
+        let mut additions = Vec::new();
+        for line in diff.lines() {
+            if line.starts_with("Binary files ") || line.starts_with("\\ No newline") {
+                return Ok(false);
+            }
+            if line.starts_with("@@ ") {
+                in_hunk = true;
+                continue;
+            }
+            if !in_hunk {
+                continue;
+            }
+            if line.starts_with('-') {
+                return Ok(false);
+            }
+            if let Some(added) = line.strip_prefix('+') {
+                additions.push(added);
+            }
+        }
+        let content = git_cmd(repo)
+            .args(["show", &format!("{target}:{path}")])
+            .run()
+            .map_err(|error| format!("could not read integrated content: {error}"))?
+            .stdout;
+        let mut remaining = HashMap::<&str, usize>::new();
+        for line in content.lines() {
+            *remaining.entry(line).or_default() += 1;
+        }
+        for added in additions {
+            let count = remaining.entry(added).or_default();
+            if *count == 0 {
+                return Ok(false);
+            }
+            *count -= 1;
+            found |= !added.trim().is_empty();
+        }
+    }
+    Ok(found)
 }
 
 fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, String> {
@@ -2104,21 +2331,9 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     if delete_branch {
         let branch_proof = (|| -> Result<&'static str, String> {
             match lifecycle.commit_status {
-                WorkspaceCommitStatus::Unmerged => {
-                    let default_branch = get_remote_default_branch(repo_path)?;
-                    let bases = integration_bases(&base_repo, &default_branch);
-                    if !patches_integrated(&base_repo, &bases, &expected_branch_oid).map_err(
-                        |error| {
-                            format!("Cannot check patch equivalence for {branch_name}: {error}")
-                        },
-                    )? {
-                        return Err(format!(
-                            "Cannot remove {branch_name}: branch has unmerged commits (compared against {}). Merge it first, or remove the worktree while keeping the branch.",
-                            describe_bases(&bases)
-                        ));
-                    }
-                    Ok("patch_equivalence")
-                }
+                WorkspaceCommitStatus::Unmerged => Err(format!(
+                    "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                )),
                 WorkspaceCommitStatus::PushedUnmerged => Ok("remote_tracking"),
                 WorkspaceCommitStatus::Unknown => {
                     Err(lifecycle.error.clone().unwrap_or_else(|| {
@@ -2126,9 +2341,18 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                     }))
                 }
                 WorkspaceCommitStatus::InSync => Ok("in_sync"),
-                WorkspaceCommitStatus::Merged => lifecycle
-                    .merge_proof
-                    .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}")),
+                WorkspaceCommitStatus::Merged => {
+                    let proof = lifecycle
+                        .merge_proof
+                        .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}"))?;
+                    require_integration_archive(
+                        &base_repo,
+                        &branch_name,
+                        &expected_branch_oid,
+                        proof,
+                    )?;
+                    Ok(proof)
+                }
             }
         })();
         match branch_proof {
@@ -2174,7 +2398,13 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     // Compare-and-delete prevents an archive hook or another process from
     // advancing the branch after the safety proof.
     if delete_branch && branch_delete_warning.is_none() {
-        let deleted = {
+        let deleted = require_integration_archive(
+            &worktree.base_repo,
+            branch_name,
+            &expected_branch_oid,
+            removal_rule,
+        )
+        .and_then(|()| {
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
@@ -2183,7 +2413,8 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                     &expected_branch_oid,
                 ])
                 .run()
-        };
+                .map_err(|error| error.to_string())
+        });
         match deleted {
             Ok(_) => tracing::info!(
                 source = "worktree",
@@ -2346,6 +2577,99 @@ fn archived_at_tip(repo: &Path, branch_name: &str, tip: &str) -> bool {
     rev_at(repo, &archive_ref_name(branch_name)).is_ok_and(|archived| archived == tip)
 }
 
+fn require_integration_archive(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    proof: &str,
+) -> Result<(), String> {
+    if proof == "content_superset" && !archived_at_tip(repo, branch, tip) {
+        return Err(format!(
+            "Cannot delete '{branch}': content_superset requires {} at the current tip",
+            archive_ref_name(branch)
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct BranchIntegration {
+    pub branch: String,
+    pub tip: String,
+    pub default_branch: String,
+    pub commit_status: WorkspaceCommitStatus,
+    pub integrated: bool,
+    pub proof: Option<&'static str>,
+    pub archive_required: bool,
+    pub archived: bool,
+    pub archive_ref: String,
+    pub worktree_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The query and lifecycle/delete consumers share classify_branch_merge.
+pub fn branch_integration_with_pr(
+    repo: &Path,
+    branch: &str,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<BranchIntegration, String> {
+    if branch.is_empty()
+        || git_cmd(repo)
+            .args(["check-ref-format", "--branch", branch])
+            .run_silent()
+            .is_none()
+    {
+        return Err(format!("Invalid local branch name '{branch}'"));
+    }
+    let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
+    let default_branch = get_remote_default_branch(&repo.to_string_lossy())?;
+    let (commit_status, proof, error) =
+        match classify_branch_merge(repo, branch, &tip, &default_branch, pr_proves_tip) {
+            Ok((status, proof)) => (status, proof, None),
+            Err(error) => (WorkspaceCommitStatus::Unknown, None, Some(error)),
+        };
+    let listed = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot list branch checkouts: {error}"))?;
+    Ok(BranchIntegration {
+        branch: branch.into(),
+        archived: archived_at_tip(repo, branch, &tip),
+        archive_ref: archive_ref_name(branch),
+        tip,
+        default_branch,
+        integrated: matches!(
+            commit_status,
+            WorkspaceCommitStatus::Merged | WorkspaceCommitStatus::InSync
+        ),
+        commit_status,
+        proof: proof.or((commit_status == WorkspaceCommitStatus::InSync).then_some("in_sync")),
+        archive_required: proof == Some("content_superset"),
+        worktree_paths: parse_worktree_entries(&listed.stdout)
+            .into_iter()
+            .filter(|entry| entry.branch.as_deref() == Some(branch))
+            .map(|entry| entry.path)
+            .collect(),
+        error,
+    })
+}
+
+pub fn branch_integrations_with_pr(
+    repo: &Path,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<Vec<BranchIntegration>, String> {
+    let branches = git_cmd(repo)
+        .args(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"])
+        .run()
+        .map_err(|error| format!("Cannot list branches: {error}"))?;
+    branches
+        .stdout
+        .lines()
+        .map(|branch| branch_integration_with_pr(repo, branch, &pr_proves_tip))
+        .collect()
+}
+
 /// A linked checkout is never detached or removed by this operation.
 pub fn delete_integrated_local_branch(
     repo_path: &str,
@@ -2406,15 +2730,11 @@ pub fn delete_integrated_local_branch_with_pr(
         WorkspaceCommitStatus::Merged => merge_proof
             .ok_or_else(|| format!("Cannot verify merged commits for '{branch_name}'"))?,
         WorkspaceCommitStatus::Unmerged => {
-            let bases = integration_bases(repo, &default_branch);
-            if patches_integrated(repo, &bases, &tip)? {
-                "patch_equivalence"
-            } else if archived_at_tip(repo, branch_name, &tip) {
+            if archived_at_tip(repo, branch_name, &tip) {
                 "archived"
             } else {
                 return Err(format!(
-                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch (compared against {})",
-                    describe_bases(&bases)
+                    "Cannot delete '{branch_name}': unmerged commits are not in the default branch"
                 ));
             }
         }
@@ -2430,6 +2750,7 @@ pub fn delete_integrated_local_branch_with_pr(
             return Err(format!("Cannot verify merged commits for '{branch_name}'"));
         }
     };
+    require_integration_archive(repo, branch_name, &tip, proof)?;
     git_cmd(repo)
         .args(["update-ref", "-d", &branch_ref, &tip])
         .run()
@@ -7773,6 +8094,338 @@ branch refs/heads/feat
         let status =
             inspect_workspace_lifecycle_with_pr_fixture(&repo, "pr-fetch", &api(&stale_api_head));
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+    }
+
+    // Audit cases: wiz POC-00168/170 landed together in squash 4a190ec8;
+    // tuic backup/worktree-v4 has revised twins; parked WIP has unique files.
+    fn integration_1295_fixture(message: bool, unique: bool) -> (TempDir, PathBuf, PathBuf) {
+        let (temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "audit-1295");
+        commit_file(&wt, "first.txt", "first landed change\n");
+        commit_file(&wt, "second.txt", "second landed change\n");
+        fs::write(repo.join("first.txt"), "first landed change\n").unwrap();
+        fs::write(repo.join("second.txt"), "second landed change\n").unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args([
+                "commit",
+                "-m",
+                if message {
+                    "release squash\n\nfirst.txt\nsecond.txt"
+                } else {
+                    "revised implementation"
+                },
+            ])
+            .run()
+            .unwrap();
+        if unique {
+            commit_file(&wt, "unique.txt", "unlanded work\n");
+        }
+        (temp, repo, wt)
+    }
+
+    #[test]
+    fn content_heuristic_rejects_partial_binary_and_deleted_changes_1295() {
+        let mut failures = Vec::new();
+        for (name, branch, target) in [
+            ("partial", "rule A\nrule B\nunique\n", "rule B\nrule A\n"),
+            ("duplicate", "rule A\nrule A\nrule B\n", "rule B\nrule A\n"),
+            ("binary", "rule A\0rule B\n", "rule B\0rule A\n"),
+            ("no-newline", "rule A\nrule B", "rule B\nrule A\n"),
+        ] {
+            let (_temp, repo, _) = workspace_fixture();
+            git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+            let wt = add_worktree(&repo, name);
+            commit_file(&wt, "rules.txt", branch);
+            commit_file(&repo, "rules.txt", target);
+            if branch_integration_with_pr(&repo, name, |_, _, _| false)
+                .unwrap()
+                .integrated
+            {
+                failures.push(name);
+            }
+        }
+        // Audit WIP: removing a base file is unique work even when added lines exist.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "deleted-1295");
+        fs::remove_file(wt.join("README.md")).unwrap();
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\n");
+        if branch_integration_with_pr(&repo, "deleted-1295", |_, _, _| false)
+            .unwrap()
+            .integrated
+        {
+            failures.push("deleted");
+        }
+        assert!(
+            failures.is_empty(),
+            "false integration proofs: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn literal_path_content_proof_preserves_tip_after_worktree_removal_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "literal-1295");
+        // Brackets are legal across platforms. Do not interpret them as a glob.
+        let name = "[literal].txt";
+        commit_file(&wt, name, "rule A\n++literal\nrule B\n");
+        commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
+        let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
+        assert_eq!(query.proof, Some("content_superset"));
+        assert_eq!(query.worktree_paths, vec![wt.to_string_lossy().to_string()]);
+        git_cmd(&repo)
+            .args(["update-ref", &query.archive_ref, &query.tip])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "literal-1295",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.removal_rule, "content_superset");
+        assert!(!wt.exists());
+        assert!(rev_at(&repo, "refs/heads/literal-1295").is_err());
+        assert_eq!(rev_at(&repo, &query.archive_ref).unwrap(), query.tip);
+    }
+
+    #[test]
+    fn branch_panel_and_safe_ui_delete_use_squash_proof_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, false);
+        let merged = crate::git::get_merged_branches_impl(&repo).unwrap();
+        assert!(merged.contains(&"audit-1295".into()), "{merged:?}");
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(
+            crate::git::delete_branch_impl(&repo.to_string_lossy(), "audit-1295", false)
+                .unwrap()
+                .deleted
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn diff_header_like_unique_lines_are_not_ignored_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "header-lines-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n++unique unlanded line\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let query =
+            branch_integration_with_pr(&repo, "header-lines-1295", |_, _, _| false).unwrap();
+        assert!(!query.integrated, "{query:?}");
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "header-lines-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn archive_hook_cannot_remove_content_proof_recovery_ref_1295() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "hook-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let tip = rev_at(&repo, "refs/heads/hook-1295").unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/hook-1295", &tip])
+            .run()
+            .unwrap();
+        let outcome = remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "hook-1295",
+            true,
+            Some("git update-ref -d refs/archive/hook-1295"),
+            false,
+        )
+        .unwrap();
+        assert!(outcome.branch_delete_warning.is_some(), "{outcome:?}");
+        assert_eq!(rev_at(&repo, "refs/heads/hook-1295").unwrap(), tip);
+    }
+
+    #[test]
+    fn audited_same_subject_twin_survives_later_refactoring_1295() {
+        // Reduced c6585c43e -> main twin from backup/worktree-v4-466eb71a.
+        // The audit compares added/deleted lines of same-subject commits,
+        // not just whether those lines still exist after main refactors.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        commit_file(&repo, "warm.rs", "old context\nold warmth\nlast context\n");
+        let wt = add_worktree(&repo, "twin-1295");
+        let subject = "fix(worktree): report pending warmth and serialize setup (closes #920-9947)";
+        commit_file(
+            &wt,
+            "warm.rs",
+            "old context\nuse std::sync::LazyLock;\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nlast context\n",
+        );
+        git_cmd(&wt)
+            .args(["commit", "--amend", "-m", subject])
+            .run()
+            .unwrap();
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nold warmth\nchanged context\n",
+        );
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nuse std::sync::LazyLock;\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nchanged context\n",
+        );
+        git_cmd(&repo)
+            .args(["commit", "--amend", "-m", subject])
+            .run()
+            .unwrap();
+        commit_file(
+            &repo,
+            "warm.rs",
+            "new context\nstatic NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);\nuse std::sync::LazyLock;\nchanged context\n",
+        );
+        let query = branch_integration_with_pr(&repo, "twin-1295", |_, _, _| false).unwrap();
+        assert_eq!(query.proof, Some("content_superset"), "{query:?}");
+        assert!(query.archive_required);
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "twin-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn content_superset_requires_current_archive_before_deletion_1295() {
+        // Audit: revised worktree twins have the same additions in new context.
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "content-1295");
+        commit_file(&wt, "rules.txt", "rule A\nrule B\n");
+        commit_file(&repo, "rules.txt", "rule B\nrule A\nextra rule\n");
+        let tip = rev_at(&repo, "refs/heads/content-1295").unwrap();
+        let status = inspect_workspace_lifecycle(&repo, "content-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof, Some("content_superset"));
+        assert!(
+            remove_worktree_by_workspace_id(
+                &repo.to_string_lossy(),
+                "content-1295",
+                true,
+                None,
+                false
+            )
+            .is_err()
+        );
+        assert!(wt.exists());
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/content-1295").unwrap(), tip);
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/content-1295", "main"])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/content-1295").unwrap(), tip);
+        git_cmd(&repo)
+            .args(["update-ref", "refs/archive/content-1295", &tip])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").unwrap(),
+            "content_superset"
+        );
+        assert_eq!(rev_at(&repo, "refs/archive/content-1295").unwrap(), tip);
+    }
+
+    #[test]
+    fn github_squash_message_bullets_report_the_real_audit_proof_1295() {
+        // Verbatim excerpt of wiz 4a190ec8, PR #189 from the audit.
+        let (_temp, repo, wt) = integration_1295_fixture(false, false);
+        git_cmd(&wt)
+            .args([
+                "commit",
+                "--amend",
+                "-m",
+                "fix(hud): add Opus 4.7 to pricing table (#343-d76a)",
+            ])
+            .run()
+            .unwrap();
+        // A one-subject release still corroborates the structural no-op proof.
+        git_cmd(&repo).args(["commit", "--amend", "-m", "Poc 00170/wiz 5.0 pre (#189)\n\n* first.txt\n\n* fix(hud): add Opus 4.7 to pricing table (#343-d76a)"]).run().unwrap();
+        let query = branch_integration_with_pr(&repo, "audit-1295", |_, _, _| false).unwrap();
+        assert_eq!(query.proof, Some("squash_message"));
+    }
+
+    #[test]
+    fn squash_merged_branch_is_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, false);
+        let status = inspect_workspace_lifecycle(&repo, "audit-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof, Some("squash_message"));
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").unwrap(),
+            "squash_message"
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn noop_merge_branch_is_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(false, false);
+        let status = inspect_workspace_lifecycle(&repo, "audit-1295");
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.merge_proof, Some("noop_merge"));
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").unwrap(),
+            "noop_merge"
+        );
+        assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
+    }
+
+    #[test]
+    fn branch_with_unique_lines_is_not_integrated_1295() {
+        let (_temp, repo, wt) = integration_1295_fixture(true, true);
+        let tip = rev_at(&repo, "refs/heads/audit-1295").unwrap();
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "audit-1295").commit_status,
+            WorkspaceCommitStatus::Unmerged
+        );
+        git_cmd(&repo)
+            .args(["worktree", "remove", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        assert!(delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").is_err());
+        assert_eq!(rev_at(&repo, "refs/heads/audit-1295").unwrap(), tip);
     }
 
     #[test]
