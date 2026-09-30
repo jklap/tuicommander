@@ -427,11 +427,9 @@ export const BranchItem: Component<{
 		if (hasBranch && props.githubBaseUrl) {
 			const ghBase = props.githubBaseUrl;
 			const branchUrl = `${ghBase}/tree/${encodeURIComponent(props.branch.branchName)}`;
-			quick.push({ label: "Open in GitHub", action: () => handleOpenUrl(branchUrl) });
-			const prStatus = githubStore.getPrStatus(props.repoPath, props.branch.branchName);
-			if (prStatus?.url) {
-				quick.push({ label: "Open PR", action: () => handleOpenUrl(prStatus.url) });
-			}
+			// A branch with a PR opens the PR; otherwise the branch tree.
+			const prUrl = githubStore.getPrStatus(props.repoPath, props.branch.branchName)?.url;
+			quick.push({ label: "Open in GitHub", action: () => handleOpenUrl(prUrl || branchUrl) });
 		}
 		quick.push({ label: "Add Terminal", action: props.onAddTerminal });
 		if (!isShell) {
