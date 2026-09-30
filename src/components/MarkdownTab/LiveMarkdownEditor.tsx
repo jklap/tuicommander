@@ -1,4 +1,5 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { syntaxHighlighting } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
@@ -7,9 +8,15 @@ import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { generateTweakCommentId, OverlappingCommentError } from "../../utils/tweakComments";
-import { codeEditorTheme } from "../CodeEditorPanel/theme";
+import { codeHighlightStyle, editorTheme } from "../CodeEditorPanel/theme";
 import s from "./LiveMarkdownEditor.module.css";
-import { addTweakCommentAtSelection, liveLineSeparator, liveMarkdown, loadMarkdownLanguage } from "./liveMarkdown";
+import {
+	addTweakCommentAtSelection,
+	liveLineSeparator,
+	liveMarkdown,
+	loadMarkdownLanguage,
+	setLiveFocus,
+} from "./liveMarkdown";
 
 export interface LiveMarkdownEditorProps {
 	/** Document as stored on disk. The editor saves exactly what is typed, nothing normalised. */
@@ -69,9 +76,13 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 		if (!view || disk === null) return;
 		baseline = disk;
 		view.setState(createState(disk));
+		syncFocus();
 		setConflict(null);
 		markDirty(false);
 	};
+
+	/** A fresh state assumes focus; an unfocused editor must hide every mark, the first line included. */
+	const syncFocus = () => view?.dispatch({ effects: setLiveFocus.of(view.hasFocus) });
 
 	const createState = (doc: string) =>
 		EditorState.create({
@@ -80,7 +91,8 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 				loadMarkdownLanguage(),
 				liveLineSeparator(doc),
 				liveMarkdown(),
-				codeEditorTheme,
+				editorTheme,
+				syntaxHighlighting(codeHighlightStyle),
 				history(),
 				drawSelection(),
 				search({ top: true }),
@@ -107,6 +119,7 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 	onMount(() => {
 		if (!host) return;
 		view = new EditorView({ state: createState(props.content), parent: host });
+		syncFocus();
 		onCleanup(() => view?.destroy());
 	});
 
@@ -118,6 +131,7 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 				if (!view || incoming === baseline || view.state.sliceDoc() !== baseline) return;
 				baseline = incoming;
 				view.setState(createState(incoming));
+				syncFocus();
 			},
 			{ defer: true },
 		),
