@@ -610,6 +610,15 @@ fn initialized_main_submodule(base_repo: &Path, destination: &Path) -> bool {
     module_root == destination && superproject_root == base_repo && module_gitdir != base_gitdir
 }
 
+/// One path component of a preserved ref. A SHA-256 digest keeps it at 64 bytes
+/// however long the checkout path, submodule path or ref name is (a git ref
+/// component is capped at 255 bytes by the filesystem). Nothing decodes these
+/// components, so refs written under the old hex-of-input scheme stay reachable
+/// through the `refs/tuic/preserved` prefix unchanged.
+fn preserved_ref_component(input: &[u8]) -> String {
+    hex::encode(Sha256::digest(input))
+}
+
 fn preserve_submodule_refs(
     base_repo: &Path,
     worktree: &Path,
@@ -645,8 +654,8 @@ fn preserve_submodule_refs(
     }
     let namespace = format!(
         "refs/tuic/preserved/{}/{}/{}/",
-        hex::encode(worktree.to_string_lossy().as_bytes()),
-        hex::encode(submodule_path.as_bytes()),
+        preserved_ref_component(worktree.to_string_lossy().as_bytes()),
+        preserved_ref_component(submodule_path.as_bytes()),
         uuid::Uuid::new_v4().simple()
     );
     let mut args = vec![
@@ -660,7 +669,7 @@ fn preserve_submodule_refs(
         args.push(format!(
             "{oid}:{}{}",
             namespace,
-            hex::encode(name.as_bytes())
+            preserved_ref_component(name.as_bytes())
         ));
     }
     git_cmd(&destination)
@@ -1707,8 +1716,8 @@ fn preserve_missing_worktree_modules(
                 .map_err(|e| format!("Cannot bundle missing submodule {relative}: {e}"))?;
             let namespace = format!(
                 "refs/tuic/preserved/{}/{}/{}/",
-                hex::encode(worktree.to_string_lossy().as_bytes()),
-                hex::encode(relative.as_bytes()),
+                preserved_ref_component(worktree.to_string_lossy().as_bytes()),
+                preserved_ref_component(relative.as_bytes()),
                 uuid::Uuid::new_v4().simple()
             );
             let mut args = vec![
@@ -1721,7 +1730,7 @@ fn preserve_missing_worktree_modules(
                     "{}:{}{}",
                     head.stdout.trim(),
                     namespace,
-                    hex::encode(b"HEAD")
+                    preserved_ref_component(b"HEAD")
                 ),
             ];
             for line in refs.stdout.lines() {
@@ -1731,14 +1740,14 @@ fn preserve_missing_worktree_modules(
                 args.push(format!(
                     "{oid}:{}{}",
                     namespace,
-                    hex::encode(name.as_bytes())
+                    preserved_ref_component(name.as_bytes())
                 ));
             }
             for oid in reflog.stdout.lines() {
                 args.push(format!(
                     "{oid}:{}{}",
                     namespace,
-                    hex::encode(format!("reflog/{oid}").as_bytes())
+                    preserved_ref_component(format!("reflog/{oid}").as_bytes())
                 ));
             }
             git_cmd(&destination)
@@ -6855,6 +6864,43 @@ branch refs/heads/feat
         )
         .unwrap();
         assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn preservation_succeeds_when_the_worktree_path_is_long() {
+        // Catches a ref component that grows with the checkout path: the old
+        // hex-of-path scheme doubled a 130-byte dir name past the 255-byte limit.
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, &"w".repeat(130));
+        git_cmd(&worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let head = rev_at(&worktree.join("modules/local"), "HEAD").unwrap();
+        preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &head,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(!refs.stdout.trim().is_empty());
+        assert!(
+            refs.stdout
+                .lines()
+                .all(|r| r.split('/').all(|c| c.len() <= 255))
+        );
     }
 
     #[test]
