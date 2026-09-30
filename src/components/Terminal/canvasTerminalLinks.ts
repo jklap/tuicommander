@@ -3,6 +3,20 @@ export interface LinkSpan {
 	colEnd: number;
 }
 
+export function isOverSpan(spans: readonly LinkSpan[] | undefined, col: number): boolean {
+	return spans?.some((sp) => col >= sp.colStart && col < sp.colEnd) ?? false;
+}
+
+/**
+ * Whether a press under mouse reporting belongs to the underlined link beneath
+ * the pointer instead of the app. The underline promises that a click opens the
+ * link, so the left and right buttons must not be forwarded there; the middle
+ * button stays the app's.
+ */
+export function linkClaimsPress(button: number, overLink: boolean): boolean {
+	return overLink && (button === 0 || button === 2);
+}
+
 export interface ResolvedRowLink {
 	text: string;
 	path: string;

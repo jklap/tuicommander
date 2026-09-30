@@ -18,7 +18,7 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
-import { createCanvasLinkController } from "./canvasTerminalLinks";
+import { createCanvasLinkController, isOverSpan, linkClaimsPress } from "./canvasTerminalLinks";
 import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import {
 	commitSelectionCopy,
@@ -2781,12 +2781,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			keyInputRef.focus({ preventScroll: true });
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
-				// Right-click on a detected link → let the contextmenu handler fire (Open /
-				// Copy link), even while an app has mouse reporting on. In WKWebView,
-				// preventDefault on a right-button mousedown suppresses the contextmenu event,
-				// so over a link we neither forward nor preventDefault: the app loses this one
-				// right-click, but the link menu works — UI-first (see #57).
-				if (e.button === 2 && detectedLinks.get(pos.row)?.some((sp) => pos.col >= sp.colStart && pos.col < sp.colEnd)) {
+				// A press on a detected link → let the link handlers fire (click opens,
+				// contextmenu shows Open / Copy link), even while an app has mouse
+				// reporting on. The underline promises the click opens, and Claude
+				// Code's fullscreen mode reports the mouse, so forwarding the press left
+				// every underlined path dead. In WKWebView, preventDefault on a
+				// right-button mousedown suppresses the contextmenu event, so over a link
+				// we neither forward nor preventDefault: the app loses this one press,
+				// but the link works — UI-first (see #57). Shift bypasses reporting.
+				if (linkClaimsPress(e.button, isOverSpan(detectedLinks.get(pos.row), pos.col))) {
 					return;
 				}
 				if (currentFrame.sgrMouse) {
@@ -2924,6 +2927,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 		};
 
+		const scheduleLinkProbe = (e: MouseEvent) => {
+			clearTimeout(linkThrottle);
+			linkThrottle = setTimeout(() => {
+				const pos = canvasToGrid(e);
+				checkLinksAtRow(pos.row, pos.col);
+			}, 100);
+		};
+
 		const onMouseMove = (e: MouseEvent) => {
 			// The listener is on document, so this fires for every terminal on every
 			// move. A hidden one has a 1x1 canvas and canvasToGrid clamps, so without
@@ -2932,6 +2943,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const rect = canvasRef.getBoundingClientRect();
 				if (!isPointerInsideRect(e, rect)) return;
+				// Keep probing links: the press over one is claimed from the app
+				// (mousedown), and the click only opens what this probe found.
+				if (!selection.selecting) scheduleLinkProbe(e);
 				if (currentFrame.mouseMode >= 3) {
 					const pos = canvasToGrid(e, rect);
 					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
@@ -2956,11 +2970,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// on every move — up to 3 IPC round trips each — for panes the pointer
 			// never touched.
 			if (!selection.selecting && isPointerInsideRect(e, canvasRef.getBoundingClientRect())) {
-				clearTimeout(linkThrottle);
-				linkThrottle = setTimeout(() => {
-					const pos = canvasToGrid(e);
-					checkLinksAtRow(pos.row, pos.col);
-				}, 100);
+				scheduleLinkProbe(e);
 			}
 		};
 
@@ -3017,8 +3027,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Only when the click lands on a link span; elsewhere the default is left alone.
 		bindings.listen(canvasRef, "contextmenu", async (e: MouseEvent) => {
 			const pos = canvasToGrid(e);
-			const onLink = detectedLinks.get(pos.row)?.some((sp) => pos.col >= sp.colStart && pos.col < sp.colEnd);
-			if (!onLink) return;
+			if (!isOverSpan(detectedLinks.get(pos.row), pos.col)) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our Open/Copy-link menu.
