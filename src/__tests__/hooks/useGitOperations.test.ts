@@ -3530,7 +3530,7 @@ describe("useGitOperations", () => {
 			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [{ path: "/wt/detached-1", safe: true }], 10);
 			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1", true);
 			expect(mockRepo.beginOrphanCleanup).toHaveBeenCalledWith("/repo", ["/wt/detached-1"]);
-			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo");
+			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo", false);
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
 		});
 
@@ -3560,7 +3560,28 @@ describe("useGitOperations", () => {
 			await refresh;
 			expect(answerOrphanCleanup).toHaveBeenCalledWith("/repo", false);
 			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
-			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo");
+			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo", true);
+		});
+
+		// Catches: a UI Keep that never reaches the backend, so another client's countdown for the
+		// same worktree keeps running and removes it (story 1289-27f8).
+		it("records a Keep click on the backend so other clients stop their countdown", async () => {
+			const askGitOps = useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup: vi.fn().mockResolvedValue(false) },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+
+			await askGitOps.refreshAllBranchStats();
+
+			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo", true);
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
 		});
 
 		it("honors an agent Keep answer that arrives at the end of the countdown", async () => {

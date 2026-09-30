@@ -91,6 +91,68 @@ fn binary_named_set_password_writes_only_named_config() {
     assert!(!env.default_config().exists());
 }
 
+/// Story 1284-393e: the env var the desktop binary honours must not be a
+/// silent no-op here, or a dev/test daemon lands on the production config dir.
+#[test]
+fn tuic_remote_env_instance_selects_isolated_config_dir() {
+    let env = IsolatedEnv::new();
+    let output = run_cli_with_vars(
+        &env,
+        &["--set-password"],
+        Some("test-user\n".to_owned() + PASSWORD + "\n"),
+        &[("TUIC_APP_INSTANCE", NAMED_ID)],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(env.named_config(NAMED_ID).is_file());
+    assert!(!env.default_config().exists());
+}
+
+#[test]
+fn tuic_remote_instance_flag_overrides_env_instance() {
+    let env = IsolatedEnv::new();
+    let output = run_cli_with_vars(
+        &env,
+        &["--instance", NAMED_ID, "--set-password"],
+        Some("test-user\n".to_owned() + PASSWORD + "\n"),
+        &[("TUIC_APP_INSTANCE", "from-env")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(env.named_config(NAMED_ID).is_file());
+    assert!(!env.named_config("from-env").exists());
+    assert!(!env.default_config().exists());
+}
+
+#[test]
+fn tuic_remote_invalid_env_instance_refuses_to_start() {
+    let env = IsolatedEnv::new();
+    let output = run_cli_with_vars(&env, &[], None, &[("TUIC_APP_INSTANCE", "../escape")]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Invalid application instance"),
+        "{output:?}"
+    );
+    assert!(!env.default_config().exists());
+}
+
+/// A blank `TUIC_APP_INSTANCE` is treated as unset (`select_app_instance_from_env`
+/// ignores blank values), so the default instance is used and nothing is refused.
+#[test]
+fn tuic_remote_blank_env_instance_behaves_as_unset() {
+    let env = IsolatedEnv::new();
+    let output = run_cli_with_vars(
+        &env,
+        &["--set-password"],
+        Some("test-user\n".to_owned() + PASSWORD + "\n"),
+        &[("TUIC_APP_INSTANCE", "  ")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(env.default_config().is_file());
+    assert!(
+        !env.named_config_dir("").exists(),
+        "no instances/ dir may be created"
+    );
+}
+
 #[test]
 fn named_config_ignores_seeded_legacy_directories() {
     let env = IsolatedEnv::new();
@@ -320,6 +382,15 @@ fn assert_cli_failure(env: &IsolatedEnv, args: &[&str], expected_stderr_fragment
 }
 
 fn run_cli(env: &IsolatedEnv, args: &[&str], stdin: Option<String>) -> std::process::Output {
+    run_cli_with_vars(env, args, stdin, &[])
+}
+
+fn run_cli_with_vars(
+    env: &IsolatedEnv,
+    args: &[&str],
+    stdin: Option<String>,
+    vars: &[(&str, &str)],
+) -> std::process::Output {
     let port = isolated_port();
     let mut command = Command::new(env!("CARGO_BIN_EXE_tuic-remote"));
     command
@@ -329,6 +400,7 @@ fn run_cli(env: &IsolatedEnv, args: &[&str], stdin: Option<String>) -> std::proc
         .env("APPDATA", &env.appdata)
         .env("USERPROFILE", &env.userprofile)
         .env("TUIC_PORT", port.to_string())
+        .envs(vars.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
