@@ -18,7 +18,14 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
-import { createCanvasLinkController, isOverSpan, linkClaimsPress } from "./canvasTerminalLinks";
+import {
+	createCanvasLinkController,
+	createLinkPressTracker,
+	isOverSpan,
+	linkClaimsPress,
+	linkCovers,
+	spanAt,
+} from "./canvasTerminalLinks";
 import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import {
 	commitSelectionCopy,
@@ -257,6 +264,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			props.onOpenFilePath?.(path, link.line, link.col);
 		}
 	};
+
+	// The press claimed a span; what it opens is resolved now, at the pointer, not
+	// taken from whatever the hover probe last left in `hoveredLink`.
+	const linkPress = createLinkPressTracker();
+	const currentHover = () => hoveredLink;
+	async function openLinkAt(row: number, col: number) {
+		await checkLinksAtRow(row, col);
+		const link = currentHover();
+		if (link && linkCovers(link, row, col)) openLink(link);
+	}
 
 	const copyLink = (link: LinkTarget) => {
 		const text = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
@@ -2779,6 +2796,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
 			keyInputRef.focus({ preventScroll: true });
+			{
+				const at = canvasToGrid(e);
+				linkPress.begin(e.button, at.row, spanAt(detectedLinks.get(at.row), at.col));
+			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
 				// A press on a detected link → let the link handlers fire (click opens,
@@ -2949,7 +2970,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (currentFrame.mouseMode >= 3) {
 					const pos = canvasToGrid(e, rect);
 					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
-				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
+				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0 && !linkPress.isClaimed()) {
 					const pos = canvasToGrid(e, rect);
 					const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
 					writePtyNoScroll(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
@@ -2979,7 +3000,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// hiding the terminal or dragging off it mid-gesture would otherwise
 			// leave the button logically held with nothing left to retract it.
 			const rect = canvasRef.getBoundingClientRect();
-			const reportUp = shouldReportMouseUp(reportedDown, e.button, isPointerInsideRect(e, rect));
+			// A claimed link press was never reported down, so its release is not owed either.
+			const reportUp =
+				!linkPress.isClaimed() && shouldReportMouseUp(reportedDown, e.button, isPointerInsideRect(e, rect));
 			const owed = reportedDown.delete(e.button);
 			if (hidden && !owed) return;
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
@@ -3017,10 +3040,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		bindings.listen(document, "mouseup", onMouseUp);
 
 		// Link click — plain click opens, skip if user was selecting text
-		bindings.listen(canvasRef, "click", () => {
-			if (!hoveredLink) return;
-			if (selection.hasRange()) return;
-			openLink(hoveredLink);
+		bindings.listen(canvasRef, "click", (e: MouseEvent) => {
+			const at = canvasToGrid(e);
+			const claimed = linkPress.release(at.row, at.col);
+			if (!claimed || selection.hasRange()) return;
+			void openLinkAt(at.row, at.col);
 		});
 
 		// Right-click on a detected link → context menu (Open / Copy link).
