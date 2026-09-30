@@ -253,6 +253,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// The store removal may not have settled yet (batch scheduled), so
 				// we'd otherwise re-enqueue the same close+remove.
 				if (alreadyProcessed(repoPath, branchName)) continue;
+				// The structure snapshot was requested before this workspace entered the
+				// store, so its absence says nothing about the checkout: a worktree created
+				// while the fetch was in flight (MCP worktree_create has no creation grace)
+				// would otherwise be read as deleted and its terminals killed. The next
+				// refresh sees it with a snapshot that postdates it.
+				if (!priorBranchKeys.has(branchName)) {
+					appLogger.info(
+						"git",
+						`refreshAllBranchStats: SNAPSHOT PREDATES "${branchName}" — not judging it deleted`,
+						{ repoPath },
+					);
+					continue;
+				}
 				// Skip branches just created — git may not have fully registered the
 				// worktree by the time the first repo-changed refresh fires.
 				if (isRecentlyCreated(repoPath, branchName)) {
