@@ -6,10 +6,29 @@
   min-height: 0;
 }
 
-.host {
+.content {
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  padding: 24px;
+  cursor: text;
+}
+
+/* The open block: source, in a frame, where the rendered block stood. */
+.block {
+  margin-bottom: 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.block :global(.cm-scroller) {
+  overflow: visible;
+}
+
+.block :global(.cm-content) {
+  padding: 8px 12px;
 }
 
 .toolbar {
