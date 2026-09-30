@@ -1055,7 +1055,7 @@ the server is back to the filter the connection was opened with.
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
-| `session-closed` | `{session_id}` | Session ended |
+| `session-closed` | `{session_id, reason, agent_type}` | Session ended. `reason` is informational (`"closed"`, `"killed"`, `"process_exit"`, `"explicit_close"`); `agent_type` is the session's agent type at close time (or `null`), read before the session-state accumulator removes the entry — used to pick the short vs. long auto-close timer |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
 | `repo-changed` | `{repo_path, kind}` | Repository changed. `kind` is `"git-state"` (`.git/` was written — a commit, ref or index change) or `"working-tree"` (files changed and `.git` did not). A git-state emit cancels the pending working-tree one, so `"git-state"` does **not** mean "only `.git` changed" — a client that needs working-tree news must react to both kinds. |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |
@@ -1074,6 +1074,10 @@ the server is back to the filter the connection was opened with.
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `session-standby` | `{session_id, standby}` | A session was parked in (or woken from) SIGSTOP standby. Visibility-driven — see `is_session_visible`/`sessions_not_visible` in `AGENTS.md`'s per-viewer visibility notes |
+| `pty-capture-changed` | `{enabled, session_filter}` — `session_filter` omitted (not `null`) when absent | The raw PTY diagnostics-capture tap started/stopped or its filter changed, via `POST /diagnostics/capture`, the `set_pty_capture` Tauri command, or a raw curl POST from outside the app. Global, not per-session — `session_filter: null`/omitted means every session is being recorded, so a client evaluates "is this session captured" itself from `enabled` + `session_filter` |
+| `themes-changed` | `{}` | The themes directory changed on disk (hot-reload); clients should re-fetch `GET /config/themes` |
+| `pty-clipboard-store` | `{session_id, text}` | OSC 52 clipboard-store sequence seen in the PTY stream. Never relayed off the host (see `relay_client.rs`'s `is_relayable` exclusion) |
 
 ### MCP Streamable HTTP
 
@@ -3375,9 +3379,12 @@ serialization regressions cover these shared contracts.
 
 ### Terminal title notifications
 
-Raw, text and log `/sessions/{id}/stream` WebSockets carry OSC titles as
-`{"type":"title","title":"Claude Code"}` and title resets with `"title":""`.
-`GET /events` also carries `event: pty-title` with `{session_id,title}`. These are
+The backend applies OSC 0/2 titles to the tab name itself (`osc_title.rs`), so
+raw, text and log `/sessions/{id}/stream` WebSockets carry the resulting name as
+`{"type":"renamed","session_id":"…","name":"Claude Code","is_custom":false}`; a
+title reset, and the process exit, restore the captured base name the same way
+(the exit restore precedes the `exit` frame). `GET /events` carries the same
+change as `event: session-renamed` with `{session_id,name,is_custom}`. These are
 presentation events, independent of `activity` pulses and semantic lifecycle.
 Grid clients continue to receive binary rendering frames; terminal metadata
 consumers use the separate session event subscription.

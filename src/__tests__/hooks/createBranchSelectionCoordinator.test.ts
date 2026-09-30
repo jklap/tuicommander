@@ -10,6 +10,7 @@ describe("createBranchSelectionCoordinator", () => {
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
 	let paneLayoutStore: typeof import("../../stores/paneLayout").paneLayoutStore;
 	let settingsStore: typeof import("../../stores/settings").settingsStore;
+	let savedTerminalsFor: typeof import("../../stores/workspaceIdentity").savedTerminalsFor;
 
 	beforeEach(async () => {
 		vi.resetModules();
@@ -21,6 +22,7 @@ describe("createBranchSelectionCoordinator", () => {
 		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
 		paneLayoutStore = (await import("../../stores/paneLayout")).paneLayoutStore;
 		settingsStore = (await import("../../stores/settings")).settingsStore;
+		savedTerminalsFor = (await import("../../stores/workspaceIdentity")).savedTerminalsFor;
 		repositoriesStore._testSetHydrated(true);
 	});
 
@@ -135,18 +137,23 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
-				savedTerminals: [
-					{
-						name: "claude",
-						cwd: "/Gits/alpha",
-						fontSize: 14,
-						agentType: "claude",
-						agentSessionId: null,
-						tuicSession: "tab-uuid",
-						agentLaunchCommand: null,
-						alias: "al-3",
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "claude",
+								cwd: "/Gits/alpha",
+								fontSize: 14,
+								agentType: "claude",
+								agentSessionId: null,
+								tuicSession: "tab-uuid",
+								agentLaunchCommand: null,
+								alias: "al-3",
+							},
+						],
 					},
-				],
+				},
 			});
 
 			await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "main");
@@ -167,20 +174,25 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
-				savedTerminals: [
-					{
-						name: "claude",
-						cwd: "/Gits/alpha",
-						fontSize: 14,
-						agentType: "claude",
-						agentSessionId: null,
-						tuicSession: "tab-uuid",
-						agentLaunchCommand: null,
-						alias: null,
-						agentIntent: "finishing the resume banner",
-						lastPrompt: "show the intent on the recovery banner",
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "claude",
+								cwd: "/Gits/alpha",
+								fontSize: 14,
+								agentType: "claude",
+								agentSessionId: null,
+								tuicSession: "tab-uuid",
+								agentLaunchCommand: null,
+								alias: null,
+								agentIntent: "finishing the resume banner",
+								lastPrompt: "show the intent on the recovery banner",
+							},
+						],
 					},
-				],
+				},
 			});
 
 			await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "main");
@@ -281,8 +293,13 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
 				hadTerminals: true,
-				// biome-ignore lint/suspicious/noExplicitAny: test fixture, shape matches SavedTerminal
-				savedTerminals: savedTerminals as any,
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						// biome-ignore lint/suspicious/noExplicitAny: test fixture, shape matches SavedTerminal
+						terminals: savedTerminals as any,
+					},
+				},
 			});
 		}
 
@@ -300,7 +317,7 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(term?.agentType).toBe("claude");
 				expect(term?.agentSessionId).toBe("sess-1");
 				expect(term?.tuicSession).toBe("tuic-1");
-				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
+				expect(savedTerminalsFor(repositoriesStore.get("/Gits/alpha")!.workspaces.main)).toEqual([]);
 			});
 		});
 
@@ -317,7 +334,7 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(term?.cwd).toBe("/Gits/alpha");
 				expect(term?.name).toBe("shell");
 				expect(term?.agentType == null).toBe(true);
-				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
+				expect(savedTerminalsFor(repositoriesStore.get("/Gits/alpha")!.workspaces.main)).toEqual([]);
 			});
 		});
 
@@ -351,7 +368,7 @@ describe("createBranchSelectionCoordinator", () => {
 				// it gets a fresh sessionId=null tab with no agentType, not the saved name.
 				expect(term?.agentType == null).toBe(true);
 				expect(term?.name).not.toBe("shell");
-				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
+				expect(savedTerminalsFor(repositoriesStore.get("/Gits/alpha")!.workspaces.main)).toEqual([]);
 			});
 		});
 
@@ -383,15 +400,16 @@ describe("createBranchSelectionCoordinator", () => {
 					worktreePath: "/Gits/alpha",
 					hadTerminals: true,
 					terminals: [id],
-					// biome-ignore lint/suspicious/noExplicitAny: test fixture
-					savedTerminals: [agentSaved] as any,
+					savedTerminalsByClient: {
+						"test-client": { savedAt: Date.now(), terminals: [agentSaved] },
+					},
 				});
 
 				await makeCoordinator().handleBranchSelect("/Gits/alpha", "main");
 				await flushRaf();
 
 				expect(terminalsStore.getIds()).toEqual([id]);
-				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([agentSaved]);
+				expect(savedTerminalsFor(repositoriesStore.get("/Gits/alpha")!.workspaces.main)).toEqual([agentSaved]);
 			});
 		});
 

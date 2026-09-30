@@ -349,7 +349,7 @@ async fn startup_ego_login_binds_authority_and_reads_credentials_after_exit() {
             .iter()
             .all(|call| !call["args"].to_string().contains("--profile="))
     );
-    crate::pty::cleanup_session(session, &fixture.state);
+    crate::pty::cleanup_session(session, &fixture.state, "closed");
     let configured = fixture.state.config.read().ego_executable.clone();
     fixture.state.config.write().ego_executable = fixture
         .dir

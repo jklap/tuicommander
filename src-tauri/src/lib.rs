@@ -79,6 +79,7 @@ pub(crate) mod ego_cli;
 #[path = "dictation/ownership.rs"]
 mod input_ownership;
 pub(crate) use tuic_core::error_classification;
+pub(crate) mod event_wire;
 pub(crate) mod frontend_liveness;
 #[cfg(feature = "desktop")]
 mod finder_service;
@@ -146,6 +147,7 @@ mod native_keys;
 mod native_notification;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
+pub(crate) mod osc_title;
 pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
@@ -3576,6 +3578,8 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     automations::runtime::AutomationRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
     idle_close::spawn(state.clone());
+    #[cfg(feature = "desktop")]
+    AppState::spawn_desktop_event_bridge(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
     drop(
         state

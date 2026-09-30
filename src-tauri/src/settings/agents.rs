@@ -103,7 +103,11 @@ impl Store for AgentsSettingsStore {
         &self,
         prepare: &mut dyn FnMut(&Value) -> Result<Prepared, Failure>,
     ) -> Result<CommitReply, Failure> {
-        self.file.commit(prepare, single_default)
+        let reply = self.file.commit(prepare, single_default)?;
+        // `load_agents_config` caches by (mtime, len); clear it so this write is never
+        // masked by a same-tick, same-length stat (see `AGENTS_CONFIG_CACHE`).
+        crate::config::invalidate_agents_config_cache();
+        Ok(reply)
     }
 
     async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {

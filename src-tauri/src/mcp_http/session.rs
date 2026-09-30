@@ -97,31 +97,6 @@ pub(crate) fn live_tuic_sessions_by_pty(
     by_pty
 }
 
-/// Publish PTY creation to the native frontend at the same boundary for
-/// generic HTTP sessions and HTTP/MCP agent spawns.
-#[cfg(feature = "desktop")]
-pub(super) fn emit_native_agent_session_created(
-    emit: impl FnOnce(&str, serde_json::Value),
-    state: &AppState,
-    session_id: &str,
-    cwd: Option<&str>,
-    agent_type: Option<&str>,
-    display_name: Option<&str>,
-    parent_session: Option<&str>,
-) {
-    emit(
-        "session-created",
-        serde_json::json!({
-            "session_id": session_id,
-            "tuic_session": live_tuic_sessions_by_pty(state).remove(session_id),
-            "cwd": cwd,
-            "agent_type": agent_type,
-            "display_name": display_name,
-            "parent_session": parent_session,
-        }),
-    );
-}
-
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
@@ -185,6 +160,13 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .pty_accent_colors
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                #[cfg(unix)]
+                standby: state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(&session_id),
+                #[cfg(not(unix))]
+                standby: false,
                 state: None,
                 connection_id: None,
                 session_id,
@@ -500,18 +482,21 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     }
 }
 
+/// Storage, the unchanged-value no-op guard, and the dual emit all live in
+/// `AppState::set_session_display_name` — this handler (and its Tauri-command
+/// twin, `pty/commands.rs`'s `set_session_name`) is only the existence check
+/// plus argument extraction. The two used to independently hand-duplicate all
+/// of that (~55 lines each), which is the same shape `set_pty_accent_color`
+/// already fixed for accent color.
 pub(super) async fn set_session_name(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Json(body): Json<SetNameRequest>,
 ) -> impl IntoResponse {
-    let entry = match state.session_maps.sessions.get(&session_id) {
-        Some(e) => e,
-        None => return session_not_found(),
-    };
-    entry
-        .lock()
-        .set_display_name(body.name, body.is_custom.unwrap_or(true));
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return session_not_found();
+    }
+    state.set_session_display_name(&session_id, body.name, body.is_custom.unwrap_or(true));
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -768,6 +753,7 @@ pub(super) fn register_pty_session(
     agent_type: Option<String>,
     requested_alias: Option<&str>,
     parent_session: Option<String>,
+    announce_on_desktop: bool,
 ) {
     let cwd = session.cwd.clone();
     let display_name = session.display_name.clone();
@@ -801,20 +787,39 @@ pub(super) fn register_pty_session(
         .watch
         .insert(session_id.to_string(), crate::grid_watch::new_grid_watch());
 
-    // Broadcast to SSE/WebSocket consumers before the reader thread starts.
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.to_string(),
-        tuic_session: live_tuic_sessions_by_pty(state).remove(session_id),
-        cwd,
-        agent_type,
-        display_name,
-        parent_session,
-    });
-    // After `SessionCreated`: on the bus a consumer learns that a session exists
-    // before an event about it. That ordering holds on the bus only — the desktop
-    // `term-alias-assigned` window emit fires here, before either caller's desktop
-    // `session-created`, and the UI relies on `terminalsStore.applyAlias`
-    // retaining an alias for a session it has not bound yet.
+    // Announce before the reader thread starts, and before any other
+    // session-scoped announcement (the alias below): `SessionCreated` must be
+    // the first event a subscriber sees for a new id, on both transports.
+    //
+    // The desktop half is conditional on `announce_on_desktop`: MCP `agent
+    // action=spawn` (the one caller that passes `false` for a print-mode
+    // spawn) deliberately never shows a non-interactive, one-shot spawn as a
+    // desktop tab — that suppression predates this shared helper and must
+    // survive it. The other callers (`spawn_pty_session`, the HTTP
+    // agent-spawn route) always pass `true`: previously each hand-wrote its
+    // own desktop emit, and each one drifted (dropped `cwd` or `agent_type`)
+    // in a different way.
+    if announce_on_desktop {
+        crate::pty::emit_session_created(
+            state,
+            session_id,
+            cwd,
+            agent_type,
+            display_name,
+            parent_session,
+        );
+    } else {
+        state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            tuic_session: live_tuic_sessions_by_pty(state).remove(session_id),
+            cwd,
+            agent_type,
+            display_name,
+            parent_session,
+        });
+    }
+    // After `SessionCreated`, on both transports now that the desktop half of
+    // both rides `emit_dual`.
     state.assign_term_alias(session_id, requested_alias);
 }
 
@@ -833,6 +838,11 @@ pub(crate) struct RequestedIdentity {
     pub alias: Option<String>,
     pub startup_command: Option<String>,
     pub agent_type: Option<String>,
+    /// The creator's chosen initial tab name, propagated once at creation —
+    /// see `PtyConfig::display_name`'s doc comment (the desktop-transport
+    /// twin of this field).
+    pub display_name: Option<String>,
+    pub display_name_is_custom: bool,
 }
 
 struct PtyLaunch {
@@ -904,25 +914,6 @@ pub(crate) fn spawn_pty_command(
 fn spawn_pty_launch(
     state: Arc<AppState>,
     launch: PtyLaunch,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    #[cfg(feature = "desktop")]
-    let app_handle = state.app_handle.read().clone();
-    spawn_pty_launch_with_emitter(
-        state,
-        launch,
-        #[cfg(feature = "desktop")]
-        |event, payload| {
-            if let Some(app) = app_handle {
-                let _ = app.emit(event, payload);
-            }
-        },
-    )
-}
-
-fn spawn_pty_launch_with_emitter(
-    state: Arc<AppState>,
-    launch: PtyLaunch,
-    #[cfg(feature = "desktop")] emit: impl FnOnce(&str, serde_json::Value),
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     let PtyLaunch {
         shell,
@@ -1065,8 +1056,8 @@ fn spawn_pty_launch_with_emitter(
             worktree,
             initial_cwd: cwd.clone(),
             cwd: cwd.clone(),
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: requested.display_name,
+            display_name_is_custom: requested.display_name_is_custom,
             display_name_from_spawn: false,
             is_remote: true,
             shell: shell.clone(),
@@ -1076,22 +1067,14 @@ fn spawn_pty_launch_with_emitter(
         None,
         requested.alias.as_deref(),
         None,
+        true,
     );
 
-    #[cfg(feature = "desktop")]
-    let state_ref = state.clone();
+    // `register_pty_session` above already announced on both transports —
+    // no separate desktop-half emit needed here (previously this block fired
+    // its own, AFTER the reader thread had already started, unlike every
+    // other creation path).
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
-
-    #[cfg(feature = "desktop")]
-    emit_native_agent_session_created(
-        emit,
-        &state_ref,
-        &session_id,
-        cwd.as_deref(),
-        None,
-        None,
-        None,
-    );
 
     Ok(session_id)
 }
@@ -1128,6 +1111,8 @@ pub(super) async fn create_session(
             RequestedIdentity {
                 session_id: body.session_id,
                 alias: body.alias,
+                display_name: body.display_name,
+                display_name_is_custom: body.display_name_is_custom,
                 ..Default::default()
             },
         )
@@ -1334,7 +1319,18 @@ pub(super) async fn set_session_visible(
     Path(session_id): Path<String>,
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
-    crate::background_mode::hidden::set_visible(&state, &session_id, body.visible, false);
+    // Remote visibility is per viewer (decision 8 port of B.8): one remote
+    // client blurring a tab must not clear another remote client's claim.
+    let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
+    crate::background_mode::hidden::set_visible_for_viewer(
+        &state,
+        &session_id,
+        body.visible,
+        false,
+        viewer_id
+            .as_deref()
+            .unwrap_or(crate::background_mode::hidden::LEGACY_VIEWER_ID),
+    );
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1530,6 +1526,8 @@ pub(super) async fn create_session_with_worktree(
             RequestedIdentity {
                 session_id: body.config.session_id,
                 alias: body.config.alias,
+                display_name: body.config.display_name,
+                display_name_is_custom: body.config.display_name_is_custom,
                 ..Default::default()
             },
         )
@@ -1790,9 +1788,6 @@ async fn handle_ws_session(
                                     serde_json::json!({"type": "parsed", "event": parsed})
                                 }
                                 crate::state::AppEvent::PtyBell { .. } => serde_json::json!({"type": "bell"}),
-                                crate::state::AppEvent::PtyTitle { title, .. } => {
-                                    serde_json::json!({"type": "title", "title": title})
-                                }
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
                                 }
@@ -1810,12 +1805,18 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
                                     serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
                                 }
-                                crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
-                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+                                crate::state::AppEvent::SessionClosed { session_id: sid, reason, agent_type } => {
+                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason, "agent_type": agent_type})
                                 }
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
+                                // A backend-applied tab name (OSC title via
+                                // `osc_title::apply_osc_title`, its exit-time
+                                // restore, tmux/MCP renames). On this per-session
+                                // socket a remote tab hears it in order with the
+                                // `exit` frame (the restore is emitted before
+                                // `PtyExit`).
                                 crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom } => {
                                     serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
                                 }
@@ -1970,8 +1971,8 @@ async fn handle_ws_log_session(
                             }
                             LoopAction::Skip
                         }
-                        Ok(crate::state::AppEvent::PtyTitle { title, .. }) => {
-                            if ws_sender.text(&serde_json::json!({"type": "title", "title": title}).to_string()).await.is_err() {
+                        Ok(crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom }) => {
+                            if ws_sender.text(&serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom}).to_string()).await.is_err() {
                                 break;
                             }
                             LoopAction::Skip
@@ -2129,8 +2130,9 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
         crate::state::AppEvent::SessionClosed {
             session_id: sid,
             reason,
+            agent_type,
         } => {
-            serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+            serde_json::json!({"type": "closed", "session_id": sid, "reason": reason, "agent_type": agent_type})
         }
         crate::state::AppEvent::PtyDescriptionChanged {
             session_id: sid,
@@ -2919,13 +2921,14 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     // Catches: POST /sessions binds the PTY key but publishes null to native
-    // tabs, so later worktree declarations cannot find the caller.
-    #[cfg(feature = "desktop")]
+    // tabs, so later worktree declarations cannot find the caller. The desktop
+    // window payload and the bus payload are one `emit_dual` event, so the
+    // wire payload below is exactly what the native tab receives.
     #[tokio::test]
     async fn generic_post_sessions_created_event_retains_bound_identity() {
         let state = super::super::tests::test_state();
-        let mut emitted = None;
-        let result = super::spawn_pty_launch_with_emitter(
+        let mut rx = state.event_bus.subscribe();
+        let result = super::spawn_pty_launch(
             state.clone(),
             super::PtyLaunch {
                 shell: crate::test_support::host_shell().0.into(),
@@ -2937,17 +2940,21 @@ mod tests {
                 requested: super::RequestedIdentity::default(),
                 direct: None,
             },
-            |event, payload| {
-                assert_eq!(event, "session-created");
-                emitted = Some(payload);
-            },
         );
         let session_id = result.expect("generic POST /sessions PTY must spawn");
         let bound = super::live_tuic_sessions_by_pty(&state)
             .remove(&session_id)
             .expect("generic session must bind its identity");
+        let mut payload = None;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(&event, crate::state::AppEvent::SessionCreated { session_id: sid, .. } if *sid == session_id)
+            {
+                payload = Some(crate::event_wire::event_payload(&event));
+                break;
+            }
+        }
         crate::pty::close_pty_core(&state, &session_id, false);
-        let payload = emitted.expect("generic native creation must publish");
+        let payload = payload.expect("generic creation must publish session-created");
         assert_eq!(bound, session_id);
         assert_eq!(payload["session_id"], session_id);
         assert_eq!(payload["tuic_session"], bound);
@@ -2955,7 +2962,6 @@ mod tests {
 
     // Catches: native MCP/HTTP creation omits the live identity, so a new tab
     // cannot match its caller's worktree declaration until reconnect.
-    #[cfg(feature = "desktop")]
     #[test]
     fn native_agent_created_event_retains_bound_identity() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -2970,20 +2976,21 @@ mod tests {
                 None => state.session_maps.live_pty_by_tuic_session.clear(),
                 _ => {}
             }
-            let mut emitted = None;
-            super::emit_native_agent_session_created(
-                |event, payload| {
-                    assert_eq!(event, "session-created");
-                    emitted = Some(payload);
-                },
+            let mut rx = state.event_bus.subscribe();
+            crate::pty::emit_session_created(
                 &state,
                 "pty-child",
-                Some("/repo"),
-                Some("ego"),
-                Some("child"),
-                Some("parent"),
+                Some("/repo".into()),
+                Some("ego".into()),
+                Some("child".into()),
+                Some("parent".into()),
             );
-            let payload = emitted.expect("native event must be emitted");
+            let event = rx.try_recv().expect("session-created must be emitted");
+            assert_eq!(
+                crate::event_wire::window_event_name(&event),
+                Some("session-created")
+            );
+            let payload = crate::event_wire::event_payload(&event);
             assert!(payload.get("tuic_session").is_some());
             assert_eq!(payload["tuic_session"], serde_json::json!(expected));
             assert_eq!(payload["session_id"], "pty-child");
@@ -3786,6 +3793,124 @@ mod tests {
         );
     }
 
+    /// Direct invariant test for the ordering fix documented in the root
+    /// `AGENTS.md` ("SessionCreated must be the first event..."): three
+    /// `mcp_transport.rs` tests caught this bug incidentally (each asserting
+    /// something else about their own call path), but none of them named the
+    /// invariant itself, so a future refactor of THOSE tests could silently
+    /// stop guarding it. This one exercises `register_pty_session` directly
+    /// and asserts nothing but ordering.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn register_pty_session_emits_session_created_before_term_alias_assigned() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let state = super::super::tests::test_state();
+        let session_id = "ordering-invariant-session";
+        let mut rx = state.event_bus.subscribe();
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let writer = pair.master.take_writer().expect("writer");
+        let session = crate::state::PtySession {
+            launch_receipt: None,
+            writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worktree: None,
+            initial_cwd: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            display_name_from_spawn: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        };
+
+        register_pty_session(&state, session_id, session, 24, 80, None, None, None, true);
+
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            seen.push(crate::event_wire::event_type_name(&event).to_string());
+            if seen.len() >= 2 {
+                break;
+            }
+        }
+        assert_eq!(
+            seen,
+            vec!["session-created", "term-alias-assigned"],
+            "SessionCreated must precede TermAliasAssigned for a brand-new session"
+        );
+    }
+
+    /// The VT screen is as TALL as the PTY, not just as wide: a hardcoded
+    /// 24-row screen hides the bottom rows of any taller pane (the composer
+    /// box, a dialog footer, the Enter-to-select line) from every screen
+    /// scrape. `headless_registration_and_same_size_resize_preserve_requested_width`
+    /// covers the width half of the same contract.
+    #[tokio::test]
+    async fn registration_sizes_the_vt_screen_to_the_real_pty_height() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            40,
+            300,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("create isolated geometry PTY");
+        let (rows, cols) = {
+            let vt = state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .expect("registration registers a VT screen");
+            let buffer = vt.lock();
+            (buffer.screen_rows().len(), buffer.grid_columns())
+        };
+        assert_eq!(
+            rows, 40,
+            "the VT screen must be as tall as the PTY, not 24 rows"
+        );
+        assert_eq!(
+            cols, 300,
+            "the VT screen must be as wide as the PTY, not 220 columns"
+        );
+    }
+
+    /// The desktop commands (`create_pty`, `create_pty_with_worktree`,
+    /// `agent::spawn_agent`) build their own VT screen instead of going
+    /// through `register_pty_session`, so they can drift from its
+    /// real-geometry contract on their own — they did, all three were left at a
+    /// hardcoded 24x220. Not callable without a Tauri `AppHandle`, so the
+    /// contract is pinned on their source.
+    #[test]
+    fn desktop_spawn_commands_size_the_vt_screen_to_the_real_pty() {
+        for (file, source) in [
+            ("pty/commands.rs", include_str!("../pty/commands.rs")),
+            ("agent.rs", include_str!("../agent.rs")),
+        ] {
+            let compact: String = source.split_whitespace().collect();
+            assert!(
+                !compact.contains("new_vt_log_buffer(24,220"),
+                "{file} builds a VT screen at a hardcoded 24x220 instead of the PTY's size"
+            );
+        }
+    }
+
     /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
     /// `update()` echoes every `name` change here), so it must never emit
     /// `session-renamed`: the frontend's listener feeds that event straight back
@@ -3879,6 +4004,29 @@ mod tests {
                 panic!("expected SessionAccentColorChanged on a genuine change, got {other:?}")
             }
         }
+    }
+
+    /// `a_browser_scroll_moves_the_grid_with_no_desktop_subscriber` and
+    /// `an_http_scroll_moves_the_grid_with_nothing_attached` below already
+    /// cover this route's happy path thoroughly (through the real frame
+    /// ticker, via `await_display_offset`). The one case neither covers: a
+    /// session with no `pending_scroll`/`frame_dirty` entry at all — nothing
+    /// has ever subscribed to it — must no-op, not panic, matching
+    /// `pty/commands.rs`'s desktop `#[tauri::command]` mirror's identical
+    /// `if let Some(...)` shape (untested there too, but that file has no
+    /// test module at all yet — out of scope to bootstrap here).
+    #[tokio::test]
+    async fn terminal_scroll_to_offset_is_a_noop_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+
+        terminal_scroll_to_offset(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(TerminalScrollToOffsetRequest { offset: 5 }),
+        )
+        .await;
+
+        assert!(!state.grid.pending_scroll.contains_key("does-not-exist"));
     }
 
     #[tokio::test]
@@ -5320,6 +5468,12 @@ mod tests {
     }
 
     /// Catches: a title bus event never reaches raw/log/text WS consumers.
+    ///
+    /// Retargeted from main's `PtyTitle`/`{"type":"title"}` frame: the backend
+    /// now applies OSC titles itself (`osc_title.rs`) and a remote tab hears the
+    /// result as `{"type":"renamed"}`. What it pins is unchanged: the frame is
+    /// streamed without another output chunk, and an animated title does not
+    /// keep restarting the log batching deadline.
     #[cfg(unix)]
     #[tokio::test]
     async fn remote_title_crosses_live_ws_without_starving_log_output() {
@@ -5362,17 +5516,18 @@ mod tests {
             })
             .await
             .expect("WS subscriber setup");
-            for title in ["Claude Code", ""] {
-                state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+            for title in ["Claude Code", "shell"] {
+                state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                     session_id: sid.into(),
-                    title: title.into(),
+                    name: title.into(),
+                    is_custom: false,
                 });
                 let received = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     loop {
                         let message = socket.next().await.unwrap().unwrap();
                         if let Ok(frame) =
                             serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
-                            && frame["type"] == "title"
+                            && frame["type"] == "renamed"
                         {
                             break frame;
                         }
@@ -5382,7 +5537,7 @@ mod tests {
                 .expect("title event must be streamed without another PTY output chunk");
                 assert_eq!(
                     received,
-                    serde_json::json!({"type": "title", "title": title})
+                    serde_json::json!({"type": "renamed", "session_id": sid, "name": title, "is_custom": false})
                 );
             }
 
@@ -5399,9 +5554,10 @@ mod tests {
                     let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
                     loop {
                         tick.tick().await;
-                        animated_state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                        animated_state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                             session_id: sid.into(),
-                            title: "animated title".into(),
+                            name: "animated title".into(),
+                            is_custom: false,
                         });
                     }
                 });
@@ -5870,6 +6026,8 @@ mod tests {
                     cwd: None,
                     session_id: None,
                     alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "warm-test-branch".to_string(),
@@ -5975,6 +6133,8 @@ mod tests {
                     cwd: None,
                     session_id: None,
                     alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "sync-test-branch".to_string(),

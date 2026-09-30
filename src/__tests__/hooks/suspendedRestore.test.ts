@@ -58,7 +58,7 @@ describe("restoring suspended tabs", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
-				savedTerminals: [saved({ suspended: true })],
+				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [saved({ suspended: true })] } },
 			});
 
 			await coordinator().handleBranchSelectInner("/Gits/alpha", "main");
@@ -77,7 +77,12 @@ describe("restoring suspended tabs", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
-				savedTerminals: [saved({ agentType: "claude", agentSessionId: "agent-uuid", suspended: true })],
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [saved({ agentType: "claude", agentSessionId: "agent-uuid", suspended: true })],
+					},
+				},
 			});
 
 			await coordinator().handleBranchSelectInner("/Gits/alpha", "main");
@@ -96,7 +101,12 @@ describe("restoring suspended tabs", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
-				savedTerminals: [saved({ agentType: "claude", agentSessionId: "agent-uuid" })],
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [saved({ agentType: "claude", agentSessionId: "agent-uuid" })],
+					},
+				},
 			});
 
 			await coordinator().handleBranchSelectInner("/Gits/alpha", "main");

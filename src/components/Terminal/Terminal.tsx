@@ -11,10 +11,10 @@ import {
 	untrack,
 } from "solid-js";
 import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
-import { browserCreatedSessions } from "../../hooks/useAppInit";
+import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
-import { invoke } from "../../invoke";
+import { invoke, listen } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
@@ -43,7 +43,7 @@ import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { submitCompose } from "./composeSubmit";
 import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
-import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
+import { handleIntentEvent } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import { handleOsc52ClipboardStore } from "./osc52Clipboard";
 import { trackQuestionReminder } from "./questionReminder";
@@ -130,53 +130,6 @@ function stripPrompt(line: string): string {
 	return line.replace(/^.*[$%#❯→>]\s/, "").trimEnd();
 }
 
-/** Shell control flow pattern — titles containing these are cryptic scripts, not useful names */
-const SHELL_SCRIPT_RE =
-	/;|&&|\|\||\$\(|\bif\b|\bthen\b|\belse\b|\belif\b|\bfi\b|\bfor\b|\bwhile\b|\bdo\b|\bdone\b|\bcase\b|\besac\b/;
-
-/** Clean an OSC 0/2 title: strip user@host prefix, env var assignments, and command args.
- *  Returns empty string if the title is only a user@host pattern (no useful info),
- *  or if it looks like a shell script (compound commands, control flow). */
-export function cleanOscTitle(title: string): string {
-	// Reject titles that look like shell scripts before any processing
-	if (SHELL_SCRIPT_RE.test(title)) return "";
-
-	// Strip leading spinner/symbol noise: *, middle dots, bullets, braille patterns,
-	// dingbats, geometric shapes, and other non-alphanumeric decorators agents prepend.
-	// The dingbat range starts at U+2713 (\u2713\u2714\u2715\u2716\u2717\u2718) rather than U+2720 so completion and
-	// error indicators are stripped too \u2014 pi ends a turn with "\u2713 | \u03C0 | repo" and a failure
-	// with "\u2717 | \u03C0 | repo", which would otherwise leak a status glyph into the tab name.
-	let cleaned = title.replace(
-		/^[\s*\u00B7\u2022\u2219\u22C5\u2027\u25A0-\u25FF\u2800-\u28FF\u2713-\u273F\u2580-\u259F]+/,
-		"",
-	);
-	// Then drop the separator the indicator was attached to, so a status-prefixed title
-	// (pi emits "\u2826 | \u03C0 | repo", "\u25CB | \u03C0 | repo", "\u2713 | \u03C0 | repo") does not leave a dangling
-	// "| " once the animated glyph is gone.
-	cleaned = cleaned.replace(/^[|\u2502\u00B7\-\u2013\u2014:]+\s*/, "");
-	// Strip "user@host:" or bare "user@host" prefix
-	cleaned = cleaned.replace(/^[^@\s]+@[^:\s]+(:\s*)?/, "");
-	// Strip leading env var assignments (KEY=value pairs, including empty values)
-	cleaned = cleaned.replace(/^(\s*\w+=\S*\s+)+/, "");
-	cleaned = cleaned.trim();
-	// Paths: shell is just reporting CWD (idle prompt) — not useful as a tab title
-	// since the status bar already shows the full path. Return empty to keep original name.
-	if (/^(\/|~|[A-Za-z]:[\\/]|\\\\)/.test(cleaned)) {
-		return "";
-	}
-	// Strip flags and their values, keep command + subcommands (bare words before first flag)
-	if (cleaned) {
-		const words = cleaned.split(/\s+/);
-		const kept: string[] = [];
-		for (const w of words) {
-			if (w.startsWith("-")) break;
-			kept.push(w);
-		}
-		cleaned = kept.join(" ");
-	}
-	return cleaned;
-}
-
 /** The box the canvas grid fills: CanvasTerminal's own container once it is
  *  mounted, otherwise the content box of the pane, because its padding holds no
  *  cells. Measuring the padded pane gave the PTY one more row and column than the
@@ -193,7 +146,6 @@ function gridBox(container: HTMLElement): { width: number; height: number } {
 		height: rect.height - px(style.paddingTop) - px(style.paddingBottom),
 	};
 }
-
 /** Get initial terminal dimensions from container size + font metrics.
  *
  *  Mirrors CanvasTerminal's remeasure EXACTLY — the same box (`gridBox`), the
@@ -273,10 +225,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// such so every teardown goes through `safeUnlisten` instead of a
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
-	let unlistenKitty: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
-
-	let kittyFlags = 0;
 
 	/** Stop listening to the current session; the three teardowns (reconnect failure,
 	 *  suspend, unmount) share it. */
@@ -285,8 +234,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unsubscribePty = undefined;
 		safeUnlisten(unlistenParsed);
 		unlistenParsed = undefined;
-		safeUnlisten(unlistenKitty);
-		unlistenKitty = undefined;
 		safeUnlisten(unlistenClipboardStore);
 		unlistenClipboardStore = undefined;
 	};
@@ -366,9 +313,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 	trackQuestionReminder(props.id);
 
-	// Original tab name before any OSC title overwrote it
-	let originalName: string | null = null;
-
 	const pty = usePty();
 
 	// Launch readiness can arrive before or after command preparation. State
@@ -410,30 +354,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}
 	};
 
-	const handlePtyTitle = (title: string) => {
+	/** A backend-applied name from this session's remote/browser WebSocket
+	 *  (`renamed` frame). OSC title policy lives in the backend (`osc_title.rs`);
+	 *  the backend already holds this name, so it must not be echoed back. */
+	const handleBackendRename = (name: string, isCustom: boolean) => {
 		if (disposed) return;
-		const term = terminalsStore.get(props.id);
-		if (
-			!term ||
-			!shouldApplyOscTitle({
-				nameIsCustom: term.nameIsCustom,
-				nameFromSpawn: term.nameFromSpawn,
-				agentIntent: term.agentIntent,
-				intentTabTitle: settingsStore.state.intentTabTitle,
-			})
-		)
-			return;
-		if (!title) {
-			if (originalName) terminalsStore.update(props.id, { name: originalName });
-		} else {
-			const cleaned = cleanOscTitle(title);
-			if (cleaned) {
-				if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
-				terminalsStore.update(props.id, { name: cleaned });
-			} else if (originalName) {
-				terminalsStore.update(props.id, { name: originalName });
-			}
-		}
+		if (!terminalsStore.get(props.id)) return;
+		terminalsStore.update(props.id, { name, nameIsCustom: isCustom }, { echo: false });
 	};
 
 	/** Set up event listeners for a known session ID */
@@ -764,10 +691,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				const hadAgent = stillExists?.agentType != null;
 				const notifyOnExit = handleAgentExitCompletion(props.id);
 				if (stillExists) {
-					// Restore original tab name if it was overwritten by OSC title
-					if (originalName && !stillExists.nameIsCustom) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
+					// Restoring an OSC-title-overwritten name on exit is now the
+					// backend's job (osc_title::restore_base_on_exit, called from
+					// the reader thread right before it announces session-closed)
+					// so it works on every transport, not just desktop — see
+					// AGENTS.md's IPC/HTTP Parity notes on this move.
 					if (hadAgent) {
 						// Agent finished: keep the tab with a grey "exited" dot so the user
 						// can read the final output and re-launch. Without this a dead session
@@ -821,7 +749,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 			{
 				onActivity: handlePtyActivity,
-				onTitle: handlePtyTitle,
+				onRenamed: handleBackendRename,
 				onReconnecting: (attempt, max) => setReconnecting({ attempt, max }),
 				onReconnected: () => setReconnecting(null),
 				// Browser mode: receive parsed events via WebSocket JSON frames
@@ -837,6 +765,25 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 		);
 
+		// Listen for OSC 52 clipboard store from the backend. Was a desktop-only,
+		// per-session-suffixed Tauri event (D.7) — converted to the unsuffixed
+		// `pty-clipboard-store` AppEvent so a browser/PWA client sees it too, via
+		// the transport-agnostic `listen()` (works over SSE as well as Tauri IPC).
+		// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
+		// can overwrite the clipboard. Surface a non-blocking notice on every write and
+		// let the user disable OSC 52 entirely via settings.
+		unlistenClipboardStore = await listen<{ session_id: string; text: string }>("pty-clipboard-store", (event) => {
+			if (event.payload.session_id !== targetSessionId) return;
+			if (!settingsStore.state.osc52Clipboard) return;
+			const name = terminalsStore.get(props.id)?.name || "terminal";
+			handleOsc52ClipboardStore(event.payload.text, name);
+		});
+		if (disposed) {
+			safeUnlisten(unlistenClipboardStore);
+			unlistenClipboardStore = undefined;
+			return;
+		}
+
 		// Tauri-only listeners (kitty keyboard, shell state sync)
 		if (isTauri() && !getSessionConnection(targetSessionId)) {
 			const { listen } = await import("@tauri-apps/api/event");
@@ -846,16 +793,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (disposed) {
 				safeUnlisten(unlistenParsed);
 				unlistenParsed = undefined;
-				return;
-			}
-
-			// Listen for kitty keyboard protocol flag changes from Rust
-			unlistenKitty = await listen<number>(`kitty-keyboard-${targetSessionId}`, (event) => {
-				kittyFlags = event.payload;
-			});
-			if (disposed) {
-				safeUnlisten(unlistenKitty);
-				unlistenKitty = undefined;
 				return;
 			}
 
@@ -870,29 +807,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// still feeds the same sink, but that is a different source for agents
 			// with no shell integration, not a copy.
 
-			// Listen for OSC 52 clipboard store from Rust (native renderer).
-			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
-			// can overwrite the clipboard. Surface a non-blocking notice on every write and
-			// let the user disable OSC 52 entirely via settings. (Gated here, off the
-			// per-byte parse hot path — this fires once per actual OSC 52 sequence.)
-			unlistenClipboardStore = await listen<string>(`pty-clipboard-store-${targetSessionId}`, (event) => {
-				if (!settingsStore.state.osc52Clipboard) return;
-				const name = terminalsStore.get(props.id)?.name || "terminal";
-				handleOsc52ClipboardStore(event.payload, name);
-			});
-			if (disposed) {
-				safeUnlisten(unlistenClipboardStore);
-				unlistenClipboardStore = undefined;
-				return;
-			}
-
-			// Sync initial kitty flags — the push event may have fired before listener attached.
-			// Only apply if the listener hasn't already updated kittyFlags (race guard).
-			const preListenFlags = kittyFlags;
-			const flags = await pty.getKittyFlags(targetSessionId);
-			if (flags > 0 && kittyFlags === preListenFlags) {
-				kittyFlags = flags;
-			}
+			// OSC 0/2 title handling moved to the backend (osc_title.rs) so it
+			// applies on every transport, not just desktop — see AGENTS.md's
+			// IPC/HTTP Parity notes. The backend writes through
+			// AppState::set_session_display_name, so this session's
+			// session-renamed listener (useAppInit.ts, transport-agnostic)
+			// picks it up the same way any other rename does; no
+			// desktop-only pty-title-* listener needed here anymore.
 
 			// Sync shell state from Rust — covers events missed while unsubscribed
 			// (e.g. tab switch, branch switch, component remount).
@@ -1006,6 +927,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// pass unconditionally rather than threading a "this is a
 					// restore" flag through the whole terminal-creation path.
 					restore_scrollback: settingsStore.state.restoreScrollback,
+					// Propagate the name this client already chose (one of several
+					// local default-naming schemes, or an explicit rename already
+					// applied to the store) so every other client displays the exact
+					// same string instead of independently inventing its own default.
+					display_name: termData?.name ?? null,
+					display_name_is_custom: termData?.nameIsCustom ?? false,
 				});
 				// The component can unmount during the await above (tab churn while
 				// an agent like grok rapidly toggles visibility). setCurrentSessionId
@@ -1025,9 +952,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				terminalsStore.setSessionId(props.id, sessionId);
 				setCurrentSessionId(sessionId);
 				if (sessionId) {
-					if (!isTauri()) {
-						browserCreatedSessions.add(sessionId);
-					}
+					// Desktop generalizes the same self-echo-drop mechanism the
+					// browser transport already used — `usePty.createSession`
+					// now pre-registers this id on both transports (see
+					// `preRegisterLocalSessionId`'s doc comment), so this must
+					// no longer be browser-only either.
+					locallyCreatedSessions.add(sessionId);
 					await attachSessionListeners(sessionId);
 					if (disposed) {
 						terminalsStore.setSessionId(props.id, sessionId);
@@ -1124,7 +1054,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				if (suspended) {
 					if (sessionId) pluginRegistry.removeSession(sessionId);
 					detachSessionListeners();
-					kittyFlags = 0;
 					sessionId = null;
 					setCurrentSessionId(null);
 					sessionInitialized = false;
@@ -1176,7 +1105,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		clearTimeout(agentDetectTimer);
 		clearTimeout(questionDebounceTimer);
 		detachSessionListeners();
-		kittyFlags = 0;
 
 		if (sessionId) pluginRegistry.removeSession(sessionId);
 	});

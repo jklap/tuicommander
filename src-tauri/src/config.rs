@@ -1400,6 +1400,62 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates inline blame enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) inline_blame_enabled: bool,
+    /// User-defined environment variables injected into every spawned PTY, across
+    /// all six production spawn sites (shell and agent-binary alike) — see
+    /// `pty.rs::apply_custom_pty_env`, the single choke point that applies this list.
+    /// Global only, deliberately: no `RepoLocalConfig`/`RepoSettingsEntry`/
+    /// `RepoDefaultsConfig` field exists for this setting, the same structural
+    /// opt-out `copy_paths` and the script settings use, because a committed
+    /// `.tuic.json` must never be able to inject shell environment for anyone who
+    /// opens that repo. Ships empty — no default entries.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Replaces the environment variables injected into every new terminal.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-atomic-list" = true))]
+    pub(crate) custom_pty_env: Vec<CustomEnvVarEntry>,
+}
+
+/// One user-authored `KEY=value` pair for `AppConfig::custom_pty_env`. A `Vec`,
+/// not a `HashMap`, so the Settings UI can preserve the user's authored order —
+/// matches `copy_paths`'s shape rather than `AgentRunConfig::env`'s.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, schemars::JsonSchema)]
+pub(crate) struct CustomEnvVarEntry {
+    pub(crate) key: String,
+    pub(crate) value: String,
+}
+
+/// Structural validation only — no name denylist (no blocked `PATH`/`LD_PRELOAD`/etc).
+/// `AppConfig`/`config.json` has no `.tuic.json`/repo tier at all (unlike
+/// `copy_paths`/`additional_readable_dirs`, which specifically avoid a repo-file
+/// tier a committed branch could abuse), so "any env var the user wants" is
+/// honored literally. This setting is reachable the same way every other
+/// `AppConfig` field already is — a local caller, or an authenticated remote one
+/// through the same `require_local_or_auth` gate `save_config`'s route uses — and
+/// `AgentRunConfig::env`/`AgentSettings::env_flags` already grant an equal or
+/// broader capability (zero validation at all) through that identical gate, so
+/// this doesn't cross any new trust boundary. Rejects what the OS itself cannot
+/// represent as an env var name, not what a policy might want to discourage — do
+/// not add a denylist here without a concrete new exploitation path.
+pub(crate) fn valid_custom_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// An env value can be any string except one containing a NUL byte, which no
+/// platform's `execve`-family call can represent.
+pub(crate) fn valid_custom_env_value(value: &str) -> bool {
+    !value.contains('\0')
+}
+
+/// The current global custom-PTY-env list, loaded fresh from disk. Called once per
+/// PTY spawn (`pty.rs::apply_custom_pty_env`) — this re-reads `config.json` the same
+/// way `resolve_effective_warm_setting`/`resolve_effective_copy_settings` already do
+/// once per worktree creation: a small file, not a hot path, an accepted tradeoff
+/// documented in `src-tauri/AGENTS.md`'s Worktree Warming section.
+pub(crate) fn resolve_custom_pty_env() -> Vec<CustomEnvVarEntry> {
+    load_app_config().custom_pty_env
 }
 
 /// Ships `~/.claude/plans` so clicking a plan-file link an agent printed
@@ -1716,6 +1772,7 @@ impl Default for AppConfig {
             custom_launchers: Vec::new(),
             additional_readable_dirs: default_additional_readable_dirs(),
             inline_blame_enabled: true,
+            custom_pty_env: Vec::new(),
         }
     }
 }
@@ -5270,8 +5327,85 @@ pub(crate) fn save_keybindings(
 }
 
 // Agents config
+
+/// `(path, mtime, len)`-keyed cache for `load_agents_config` — same staleness-key
+/// shape as `session_review.rs`'s transcript cache. `load_agents_config` is called
+/// synchronously from the OSC-title hot path (`osc_title::should_skip`), which fires
+/// on every terminal title repaint — some agents repaint at ~8Hz while their tab has
+/// an active intent — so an uncached call did a blocking locked read + JSON parse of
+/// `agents.json` (plus the codex-bypass migration's stamp-file check) at that same
+/// rate, for every such session. A stat-only cache hit
+/// (this struct) turns that into a single `fs::metadata` call, and picks up a write
+/// from another instance sharing the same config dir the moment the mtime/len changes.
+///
+/// `save_agents_config` ALSO explicitly clears this cache on every successful write
+/// (see there) — mtime/len alone is not quite enough for THIS process's own writes:
+/// two saves landing within the same filesystem mtime tick (a coarse-mtime mount, or
+/// simply two writes fast enough to share one tick) can produce an identical
+/// `(mtime, len)` if the two JSON payloads happen to be the same length, which would
+/// let a stale cache entry survive a real write. Clearing on save removes any stale
+/// entry unconditionally, independent of whether the new stat happens to collide.
+struct AgentsConfigCache {
+    path: PathBuf,
+    mtime: std::time::SystemTime,
+    len: u64,
+    config: AgentsConfig,
+}
+
+static AGENTS_CONFIG_CACHE: std::sync::Mutex<Option<AgentsConfigCache>> =
+    std::sync::Mutex::new(None);
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_agents_config() -> AgentsConfig {
+    let path = config_dir().join(AGENTS_CONFIG_FILE);
+    let stat = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok().map(|mtime| (mtime, meta.len())))
+    };
+    let before = stat(&path);
+    if let Some((mtime, len)) = before {
+        let cache = AGENTS_CONFIG_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cache.as_ref()
+            && entry.path == path
+            && entry.mtime == mtime
+            && entry.len == len
+        {
+            return entry.config.clone();
+        }
+    }
+
+    let Some(config) = load_agents_config_uncached() else {
+        // The migration failed and we fell back to a plain read: don't cache,
+        // so the next call retries the migration exactly as before the cache.
+        return load_json_config(AGENTS_CONFIG_FILE);
+    };
+    // Only cache when the file did not change while we loaded it: the codex
+    // migration below may itself rewrite agents.json (the next call then
+    // caches the rewritten file), and another instance may write between
+    // the stat and the read — caching under the PRE-load stat would then pin
+    // a stale value until the next write.
+    if let Some((mtime, len)) = before
+        && stat(&path) == before
+    {
+        *AGENTS_CONFIG_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(AgentsConfigCache {
+            path,
+            mtime,
+            len,
+            config: config.clone(),
+        });
+    }
+    config
+}
+
+/// The uncached load (with the one-shot codex-bypass migration under the
+/// config lock). `None` when the migration failed — the caller falls back to
+/// a plain read.
+fn load_agents_config_uncached() -> Option<AgentsConfig> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     match file.update_with_strict(|config| {
         let launch_changed = crate::launch_instructions::migrate_additions(config);
@@ -5288,10 +5422,10 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
         persist_atomic(&stamp, b"1")?;
         Ok((config.clone(), changed))
     }) {
-        Ok(config) => config,
+        Ok(config) => Some(config),
         Err(error) => {
             tracing::error!(source = "config", "Codex args migration failed: {error}");
-            load_json_config(AGENTS_CONFIG_FILE)
+            None
         }
     }
 }
@@ -5341,8 +5475,20 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     file.save_delta(&base, &config)?;
+    invalidate_agents_config_cache();
     refresh_launch_instructions();
     Ok(())
+}
+
+/// Unconditional clear, not a repopulate: see `AGENTS_CONFIG_CACHE`'s doc
+/// comment for why an (mtime, len) match alone can't be trusted to catch
+/// this process's own just-written change. Every in-process writer of
+/// `agents.json` calls this (`save_agents_config`, the settings-transaction
+/// `AgentsSettingsStore`).
+pub(crate) fn invalidate_agents_config_cache() {
+    *AGENTS_CONFIG_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// The instruction files are what launches read; refresh them with the edit.
@@ -6267,6 +6413,10 @@ mod tests {
             custom_launchers: Vec::new(),
             additional_readable_dirs: vec!["/tmp/plans".to_string()],
             inline_blame_enabled: true,
+            custom_pty_env: vec![CustomEnvVarEntry {
+                key: "FOO".to_string(),
+                value: "bar".to_string(),
+            }],
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
         assert_eq!(loaded.shell.as_deref(), Some("/bin/zsh"));
@@ -6371,6 +6521,13 @@ mod tests {
         assert_eq!(
             loaded.additional_readable_dirs,
             vec!["/tmp/plans".to_string()]
+        );
+        assert_eq!(
+            loaded.custom_pty_env,
+            vec![CustomEnvVarEntry {
+                key: "FOO".to_string(),
+                value: "bar".to_string(),
+            }]
         );
     }
 
@@ -6615,6 +6772,10 @@ mod tests {
             vec!["~/.claude/plans".to_string()],
             "a config.json predating this field must still ship the default readable dir"
         );
+        assert!(
+            loaded.custom_pty_env.is_empty(),
+            "a config.json predating this field must land on an empty Vec, not error"
+        );
     }
 
     #[test]
@@ -6622,6 +6783,74 @@ mod tests {
         assert_eq!(
             AppConfig::default().additional_readable_dirs,
             vec!["~/.claude/plans".to_string()]
+        );
+    }
+
+    #[test]
+    fn default_custom_pty_env_ships_empty() {
+        assert!(
+            AppConfig::default().custom_pty_env.is_empty(),
+            "custom_pty_env must ship with no default entries — the user opts in explicitly"
+        );
+    }
+
+    #[test]
+    fn valid_custom_env_key_accepts_standard_env_var_names() {
+        assert!(valid_custom_env_key("FOO"));
+        assert!(valid_custom_env_key("_FOO"));
+        assert!(valid_custom_env_key("FOO_BAR_2"));
+        assert!(valid_custom_env_key(
+            "POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD"
+        ));
+    }
+
+    #[test]
+    fn valid_custom_env_key_rejects_malformed_names() {
+        assert!(!valid_custom_env_key(""), "empty key must be rejected");
+        assert!(
+            !valid_custom_env_key("1FOO"),
+            "a key must not start with a digit"
+        );
+        assert!(
+            !valid_custom_env_key("FOO BAR"),
+            "a key must not contain a space"
+        );
+        assert!(!valid_custom_env_key("FOO="), "a key must not contain '='");
+        assert!(
+            !valid_custom_env_key("FOO-BAR"),
+            "a key must not contain a hyphen"
+        );
+    }
+
+    #[test]
+    fn valid_custom_env_value_rejects_only_nul_bytes() {
+        assert!(valid_custom_env_value(""));
+        assert!(valid_custom_env_value("anything at all, even = and spaces"));
+        assert!(!valid_custom_env_value("has\0a nul byte"));
+    }
+
+    #[test]
+    fn resolve_custom_pty_env_reads_back_what_was_configured() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(tmp.path().to_path_buf());
+        let cfg = AppConfig {
+            custom_pty_env: vec![CustomEnvVarEntry {
+                key: "FOO".to_string(),
+                value: "bar".to_string(),
+            }],
+            ..AppConfig::default()
+        };
+        std::fs::write(
+            tmp.path().join(APP_CONFIG_FILE),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_custom_pty_env(),
+            vec![CustomEnvVarEntry {
+                key: "FOO".to_string(),
+                value: "bar".to_string(),
+            }]
         );
     }
 
@@ -8153,6 +8382,78 @@ mod tests {
     fn agents_config_missing_file_returns_default() {
         let cfg: AgentsConfig = load_json_config("nonexistent-agents-12345.json");
         assert!(cfg.agents.is_empty());
+    }
+
+    /// `load_agents_config`'s `(path, mtime, len)`-keyed cache exists purely to
+    /// avoid re-reading/re-parsing `agents.json` on every call from the OSC-title
+    /// hot path — it must never let a caller observe a value staler than the
+    /// most recent `save_agents_config` write. `#[serial_test::serial]`: shares
+    /// the global config-dir override with every other such test.
+    #[test]
+    #[serial_test::serial]
+    fn load_agents_config_picks_up_a_second_write_not_a_stale_cache() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut first = AgentsConfig::default();
+        first.headless_agent = Some("claude".to_string());
+        save_agents_config(AgentsConfig::default(), first.clone())
+            .expect("save first agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("claude".to_string())
+        );
+
+        // A second write must be observed on the very next read — the cache
+        // must not serve the first write's now-stale value.
+        let mut second = AgentsConfig::default();
+        second.headless_agent = Some("codex".to_string());
+        save_agents_config(first, second).expect("save second agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("codex".to_string())
+        );
+
+        // Repeated reads with no intervening write stay consistent (a cache hit
+        // must return the same value as a cache miss would have).
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("codex".to_string())
+        );
+    }
+
+    /// A code-review finding (2026-09-24) on the cache above: two writes whose
+    /// resulting JSON happens to be the same LENGTH (as these two agent names
+    /// are, both 6 bytes) can — on a coarse-mtime filesystem, or simply two
+    /// writes fast enough to land in the same mtime tick — produce an
+    /// `(mtime, len)` collision with the first write's now-stale cache entry.
+    /// `save_agents_config`'s unconditional clear (not a repopulate) closes
+    /// this for this process's own writes regardless of whether the new stat
+    /// happens to collide, since there's no entry left to falsely match
+    /// against — this test can't force an actual mtime collision portably,
+    /// but it does exercise the same-length case the finding was about.
+    #[test]
+    #[serial_test::serial]
+    fn load_agents_config_picks_up_a_second_write_of_equal_length_content() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut first = AgentsConfig::default();
+        first.headless_agent = Some("claude".to_string());
+        save_agents_config(AgentsConfig::default(), first.clone())
+            .expect("save first agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("claude".to_string())
+        );
+
+        let mut second = AgentsConfig::default();
+        second.headless_agent = Some("gemini".to_string()); // same length as "claude"
+        save_agents_config(first, second).expect("save second agents config");
+        assert_eq!(
+            load_agents_config().headless_agent,
+            Some("gemini".to_string())
+        );
     }
 
     // -- Worktree config tests --

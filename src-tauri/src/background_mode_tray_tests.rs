@@ -112,6 +112,7 @@ fn tray_status_counts_working_and_awaiting_from_session_state() {
         &AppEvent::SessionClosed {
             session_id: "working".into(),
             reason: "test".into(),
+            agent_type: None,
         },
     );
     hidden::enter_background(&state, &windows).unwrap();

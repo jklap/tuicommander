@@ -66,6 +66,10 @@ pub(crate) struct SessionInfo {
     /// (Claude Code's per-teammate `--agent-color`) — see `tmux_routes.rs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    /// SIGSTOP'd (D.3's follow-on) — a client connecting mid-standby still
+    /// sees the badge without waiting for the next `session-standby` event.
+    #[serde(default)]
+    pub standby: bool,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,
@@ -91,6 +95,14 @@ pub(super) struct CreateSessionRequest {
     /// name and meaning as `PtyConfig::alias` on the Tauri IPC side — a restored
     /// tab keeps the address other agents already know.
     pub alias: Option<String>,
+    /// The creator's chosen initial tab name, propagated once at creation so
+    /// every other client displays the exact same string. Same field name and
+    /// meaning as `PtyConfig::display_name` on the Tauri IPC side.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Same field name and meaning as `PtyConfig::display_name_is_custom`.
+    #[serde(default)]
+    pub display_name_is_custom: bool,
 }
 
 #[derive(Deserialize)]
@@ -1067,6 +1079,12 @@ pub(super) struct TerminalSelectionQuery {
 #[derive(Deserialize)]
 pub(super) struct SessionVisibleRequest {
     pub visible: bool,
+    /// This client's stable id (`CLIENT_INSTANCE_ID`, suffixed per-window) —
+    /// see `AppState::set_session_visible`'s doc comment (B.8). Absent for an
+    /// older client, which degrades to the shared pre-B.8 behavior via
+    /// `LEGACY_VIEWER_ID`.
+    #[serde(default)]
+    pub viewer_id: Option<String>,
 }
 
 #[derive(Deserialize)]

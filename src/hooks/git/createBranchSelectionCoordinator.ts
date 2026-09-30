@@ -8,6 +8,7 @@ import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
@@ -78,6 +79,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// backend's `is_valid_uuid` prompt-injection guard.
 			tuicSession: randomId(""),
 		});
+		// This only sets the LOCAL flag — it never echoes to the backend on its
+		// own (the store's echo guard requires a `name` key alongside it). That
+		// used to leave a branch-label rename unprotected against a later
+		// client's OSC/tmux rename, since the backend never learned it was
+		// custom. Fixed via Terminal.tsx's `createSession` call, which now
+		// reads this same `nameIsCustom` (and `name`) off the store and sends
+		// both as `display_name`/`display_name_is_custom` at creation time —
+		// so this flag is already correct by the time the session is actually
+		// spawned, with no second round trip needed here.
 		if (label) terminalsStore.update(id, { nameIsCustom: true });
 
 		batch(() => {
@@ -317,7 +327,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			);
 			appLogger.debug(
 				"terminal",
-				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`,
+				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch ? savedTerminalsFor(branch).length : 0}`,
 			);
 			if (validTerminals.length === 0 && (branch?.terminals?.length ?? 0) > 0) {
 				appLogger.warn(
@@ -367,7 +377,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						terminalsStore.setActive(validTerminals[0]);
 					}
 				}
-			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
+			} else if (branch && savedTerminalsFor(branch).length > 0) {
+				const saved = savedTerminalsFor(branch);
 				// Agent tabs restore with a resume banner (verified below). Shell
 				// tabs restore as a fresh live shell in their saved cwd when the
 				// setting is on; otherwise they're dropped — they have no session
@@ -375,10 +386,16 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				// fallback spawn below. A suspended tab is always kept: the user
 				// kept it on purpose.
 				const restorableTerminals = settingsStore.state.restoreShellTerminals
-					? branch.savedTerminals
-					: branch.savedTerminals.filter((t) => t.agentType != null || t.suspended);
-				// Clear savedTerminals (consume-once) regardless of filter result
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+					? saved
+					: saved.filter((t) => t.agentType != null || t.suspended);
+				// Clear savedTerminals (consume-once) regardless of filter result.
+				// `saved` above is the UNION of every client's key
+				// (savedTerminalsFor) — this restore just consumed all of it, so
+				// every contributing key must be cleared, not just this client's
+				// own. Clearing only CLIENT_INSTANCE_ID's key would leave another
+				// client's still-populated key to be "restored" a second time
+				// (duplicate PTY spawn) the next time this workspace is selected.
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminalsByClient: {} });
 
 				if (restorableTerminals.length > 0) {
 					// Capture old terminal IDs from the pane layout (branch.terminals is cleared on hydration)
@@ -460,11 +477,12 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				if (!isEagerResumeArmed()) return;
 				for (const repoPath of repositoriesStore.getPaths()) {
 					for (const [workspaceId, workspace] of Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {})) {
-						const saved = workspace.savedTerminals ?? [];
+						// Every client's saved set (B.5), as in a branch select.
+						const saved = savedTerminalsFor(workspace);
 						if (workspace.terminals.length > 0) continue;
 						if (!saved.some((tab) => tab.agentType != null && !tab.suspended && tab.agentSessionId)) continue;
-						// Consume-once, as in a branch select.
-						repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+						// Consume-once, as in a branch select: every contributing key.
+						repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminalsByClient: {} });
 						const restored = await restoreSavedTabs(
 							repoPath,
 							workspaceId,

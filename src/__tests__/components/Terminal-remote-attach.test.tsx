@@ -74,27 +74,32 @@ describe("remote terminal attachment", () => {
 		await waitFor(() => expect(attachedOwners).toEqual(["mac-mint"]));
 	});
 
-	// Catches: remote title frames arrive but Terminal still waits for local IPC titles.
-	it("applies remote title and reset notifications while protecting a custom name", async () => {
+	// Catches: remote rename frames arrive but Terminal still waits for local IPC titles.
+	// Retargeted from main's `onTitle` (frontend cleanOscTitle): OSC title policy,
+	// including the custom-name guard and the reset/exit restore, now runs on the
+	// daemon (osc_title.rs); the tab applies the resulting name without echoing it.
+	it("applies remote backend renames without echoing them back", async () => {
 		const transport = await import("../../transport");
-		let onTitle: ((title: string) => void) | undefined;
+		let onRenamed: ((name: string, isCustom: boolean) => void) | undefined;
 		const subscribe = vi.spyOn(transport, "subscribePty").mockImplementation(async (_id, _data, _exit, options) => {
-			if (options && typeof options !== "function") onTitle = options.onTitle;
+			if (options && typeof options !== "function") onRenamed = options.onRenamed;
 			return Object.assign(() => {}, { pause: () => {}, resume: () => {} });
 		});
+		const rpcSpy = vi.spyOn(transport, "rpc");
 		let unmount: (() => void) | undefined;
 		try {
 			const view = await open("/remote/title-repo", "title-host");
 			unmount = view.unmount;
-			await waitFor(() => expect(onTitle).toBeTypeOf("function"));
-			onTitle!("Claude Code");
+			await waitFor(() => expect(onRenamed).toBeTypeOf("function"));
+			rpcSpy.mockClear();
+			onRenamed!("Claude Code", false);
 			expect(terminalsStore.get(view.id)?.name).toBe("Claude Code");
-			onTitle!("");
+			expect(terminalsStore.get(view.id)?.nameIsCustom).toBe(false);
+			onRenamed!("shell", false);
 			expect(terminalsStore.get(view.id)?.name).toBe("shell");
-			terminalsStore.update(view.id, { name: "My tab", nameIsCustom: true });
-			onTitle!("Claude Code");
-			expect(terminalsStore.get(view.id)?.name).toBe("My tab");
+			expect(rpcSpy.mock.calls.filter(([cmd]) => cmd === "set_session_name")).toEqual([]);
 		} finally {
+			rpcSpy.mockRestore();
 			unmount?.();
 			subscribe.mockRestore();
 		}

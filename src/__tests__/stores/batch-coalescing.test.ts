@@ -124,21 +124,27 @@ describe("repositoriesStore.removeTerminalFromWorkspace() — batch() coalescing
 
 	it("coalesces terminals filter + savedTerminals clear into one notification", async () => {
 		let notificationCount = 0;
+		const { CLIENT_INSTANCE_ID } = await import("../../stores/clientInstance");
 
 		createRoot((d) => {
 			dispose = d;
 			store.add({ path: "/repo", displayName: "test" });
 			store.setWorkspace("/repo", "main", {
-				savedTerminals: [{ name: "T1", cwd: "/repo", fontSize: 14, agentType: null }],
+				savedTerminalsByClient: {
+					[CLIENT_INSTANCE_ID]: {
+						savedAt: Date.now(),
+						terminals: [{ name: "T1", cwd: "/repo", fontSize: 14, agentType: null }],
+					},
+				},
 			});
 			store.addTerminalToWorkspace("/repo", "main", "term-1");
 
 			createEffect(() => {
 				// Track both fields changed by removeTerminalFromWorkspace when last terminal removed:
 				// 1. terminals array (filtered)
-				// 2. savedTerminals array (cleared)
+				// 2. savedTerminalsByClient[this client] array (cleared)
 				void store.get("/repo")?.workspaces["main"]?.terminals?.length;
-				void store.get("/repo")?.workspaces["main"]?.savedTerminals?.length;
+				void store.get("/repo")?.workspaces["main"]?.savedTerminalsByClient?.[CLIENT_INSTANCE_ID]?.terminals.length;
 				notificationCount++;
 			});
 		});

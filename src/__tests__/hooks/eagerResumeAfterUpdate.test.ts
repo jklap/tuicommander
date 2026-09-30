@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { savedTerminalsFor, type WorkspaceState } from "../../stores/workspaceIdentity";
 import { testInScope } from "../helpers/store";
+
+const savedOf = (workspace: WorkspaceState | undefined) => (workspace ? savedTerminalsFor(workspace) : []);
 
 const UPDATE_MARKER = "tuic.updateRestartAt";
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
@@ -79,12 +82,12 @@ describe("resuming agent tabs after an update restart", () => {
 		repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 		repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 			worktreePath: "/Gits/alpha",
-			savedTerminals: mainTabs as never,
+			savedTerminalsByClient: { test: { savedAt: Date.now(), terminals: mainTabs as never } },
 		});
 		repositoriesStore.setWorkspace("/Gits/alpha", "feat", {
 			worktreePath: "/Gits/alpha-feat",
 			branchName: "feat",
-			savedTerminals: featTabs as never,
+			savedTerminalsByClient: { test: { savedAt: Date.now(), terminals: featTabs as never } },
 		});
 	}
 
@@ -105,7 +108,7 @@ describe("resuming agent tabs after an update restart", () => {
 			expect(tabsOf("main").map((t) => t?.pendingInitCommand)).toEqual(["claude --resume ok-main"]);
 			expect(tabsOf("feat").map((t) => t?.pendingInitCommand)).toEqual(["claude --resume ok-feat"]);
 			expect(tabsOf("feat")[0]?.pendingResumeCommand).toBeNull();
-			expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feat.savedTerminals).toEqual([]);
+			expect(savedOf(repositoriesStore.get("/Gits/alpha")?.workspaces.feat)).toEqual([]);
 		});
 	});
 
@@ -119,7 +122,7 @@ describe("resuming agent tabs after an update restart", () => {
 			await coordinator().resumeAgentTabsAfterUpdate();
 
 			expect(terminalsStore.getIds()).toEqual([]);
-			expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feat.savedTerminals).toHaveLength(1);
+			expect(savedOf(repositoriesStore.get("/Gits/alpha")?.workspaces.feat)).toHaveLength(1);
 		});
 	});
 
