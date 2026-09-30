@@ -60,24 +60,36 @@ used by cron/PR-review) never actually had this race in the first place (see
 
 ## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
 
-- [ ] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of
+- [x] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of
   output/events in one of them (e.g. `yes | head -c 5000000` or spawn several nested test agents
   the way the original incident did). Watch `GET /logs?source=diagnostics` (or the app log) for a
   `SESSION OVERLOAD` warning naming the hot session specifically, even if total process CPU never
   crosses 80% — this is the new independent trigger and can't be exercised by a unit test since it
-  needs a real busy session under real load.
-- [ ] [HUMAN] While that burst is running, `curl http://localhost:9876/diagnostics/sessions` and
+  needs a real busy session under real load. _(verified 2026-09-30 against a standalone instance:
+  `yes hello | head -c 10000000` into a plain shell session produced
+  `SESSION OVERLOAD: <session_id> crossed output_bytes_per_tick = 5834608 in one tick` in the
+  diagnostics log, naming the session specifically.)_
+- [x] [HUMAN] While that burst is running, `curl http://localhost:9876/diagnostics/sessions` and
   confirm the hot session shows a nonzero `events_since_last_tick`/`output_bytes_since_last_tick`,
   and that a second immediate call shows the SAME numbers (the read must not reset what the
-  watchdog's own next tick needs).
+  watchdog's own next tick needs). _(verified 2026-09-30: two immediate back-to-back calls both
+  returned `output_bytes_since_last_tick: 3500930` for the hot session; a later poll after the
+  watchdog's own tick correctly showed it reset to 0 — peek vs. drain both behave as designed.)_
 - [ ] [HUMAN] Open a session's grid WebSocket in a browser tab (`?format=grid`), then artificially
   starve it (e.g. background the browser tab or pause its JS) while generating a large burst of
   output on that same session — confirm the tab's connection actually drops/reconnects rather than
   the grid silently going stale forever. This is the real-world shape the `0b421c3a` incident had;
   the automated tests prove the mechanism in isolation but not against a real browser client.
+  **Genuinely needs a real browser** (2026-09-30: confirmed the underlying mechanism itself is
+  solid — `mcp_http::session::tests::a_grid_ws_that_lags_past_the_cumulative_bound_disconnects`,
+  `::a_session_ws_that_lags_past_the_cumulative_bound_disconnects`, and
+  `mcp_http::sse_routes::tests::a_stream_that_lags_past_the_cumulative_bound_closes_instead_of_looping_forever`
+  all pass against a real network socket — but faithfully reproducing an OS-level backgrounded/
+  throttled tab, rather than a scripted approximation, is exactly the timing-sensitive case the
+  escalation ladder reserves for a real human check.)
 - [ ] Delete this section once verified — the underlying mechanism has full unit + real-network
-  test coverage (`cpu_watchdog.rs`, `mcp_http/session.rs`, `mcp_http/sse_routes.rs`); these three
-  items are for live confirmation only.
+  test coverage (`cpu_watchdog.rs`, `mcp_http/session.rs`, `mcp_http/sse_routes.rs`); only the
+  real-browser-backgrounding bullet above still needs a human.
 
 ## Consent prompt for wrapping your own claude/codex/goose function (2026-09-25) — **Rust + frontend, needs a `make dev` restart**
 
