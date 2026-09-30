@@ -1,0 +1,200 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	audioSocketUrl,
+	type BrowserVoiceDeps,
+	connectBrowserVoice,
+	decodeReply,
+	encodeCapture,
+} from "../../utils/browserVoice";
+
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+}));
+
+/** A socket that records what was sent and can be handed messages. */
+class FakeSocket {
+	readyState = 1;
+	binaryType = "";
+	sent: (string | ArrayBuffer)[] = [];
+	onmessage: ((event: { data: unknown }) => void) | null = null;
+	onerror: (() => void) | null = null;
+	closed = false;
+
+	send(frame: string | ArrayBuffer) {
+		this.sent.push(frame);
+	}
+	close() {
+		this.closed = true;
+		this.readyState = 3;
+	}
+}
+
+/** The three `AudioContext` nodes this module builds, recorded. */
+function fakeContext() {
+	const destination = { id: "destination" };
+	const capture = {
+		onaudioprocess: null as ((event: unknown) => void) | null,
+		connect: vi.fn(),
+		disconnect: vi.fn(),
+	};
+	const played: { rate: number; samples: Float32Array; started: boolean }[] = [];
+	const sources: { stop: ReturnType<typeof vi.fn> }[] = [];
+	return {
+		capture,
+		played,
+		sources,
+		context: {
+			destination,
+			createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
+			createScriptProcessor: () => capture,
+			createBuffer: (_channels: number, length: number, rate: number) => {
+				const samples = new Float32Array(length);
+				return {
+					getChannelData: () => samples,
+					__rate: rate,
+					__samples: samples,
+				};
+			},
+			createBufferSource: () => {
+				const node = {
+					buffer: null as { __rate: number; __samples: Float32Array } | null,
+					connect: vi.fn(),
+					onended: null as (() => void) | null,
+					start: () => {
+						played.push({
+							rate: node.buffer?.__rate ?? 0,
+							samples: node.buffer?.__samples ?? new Float32Array(),
+							started: true,
+						});
+					},
+					stop: vi.fn(),
+				};
+				sources.push(node);
+				return node;
+			},
+			close: vi.fn(),
+		} as unknown as AudioContext,
+	};
+}
+
+describe("the browser audio wire format", () => {
+	it("round-trips samples through the uplink frame", () => {
+		const samples = new Float32Array([0.25, -0.5, 1]);
+		expect(Array.from(new Float32Array(encodeCapture(samples)))).toEqual([0.25, -0.5, 1]);
+	});
+
+	/**
+	 * The rate travels with the audio because it is not the capture rate: the
+	 * engine renders at 24 kHz into a 16 kHz socket, and a reply decoded at the
+	 * wrong one plays at the wrong pitch — audible to a person, invisible to an
+	 * assertion about lengths.
+	 */
+	it("reads the reply's own sample rate off the frame", () => {
+		const frame = new ArrayBuffer(4 + 8);
+		new DataView(frame).setUint32(0, 24_000, true);
+		new Float32Array(frame, 4).set([0.5, -0.5]);
+
+		const decoded = decodeReply(frame);
+
+		expect(decoded.sampleRate).toBe(24_000);
+		expect(Array.from(decoded.samples)).toEqual([0.5, -0.5]);
+	});
+
+	it("names the owner on the socket URL and follows the page's scheme", () => {
+		expect(audioSocketUrl("browser a/b", { protocol: "https:", host: "x:9877" } as Location)).toBe(
+			"wss://x:9877/dictation/hands-free/audio?owner=browser%20a%2Fb",
+		);
+		expect(audioSocketUrl("b1", { protocol: "http:", host: "localhost:9877" } as Location)).toBe(
+			"ws://localhost:9877/dictation/hands-free/audio?owner=b1",
+		);
+	});
+});
+
+describe("a browser voice session", () => {
+	let socket: FakeSocket;
+	let nodes: ReturnType<typeof fakeContext>;
+	let deps: BrowserVoiceDeps;
+	let tracks: { stop: ReturnType<typeof vi.fn> }[];
+
+	beforeEach(() => {
+		socket = new FakeSocket();
+		nodes = fakeContext();
+		tracks = [{ stop: vi.fn() }];
+		deps = {
+			openSocket: () => socket as unknown as WebSocket,
+			getUserMedia: async () => ({ getTracks: () => tracks }) as unknown as MediaStream,
+			createContext: () => nodes.context,
+		};
+	});
+
+	it("ships captured audio up the socket without deciding anything about it", async () => {
+		await connectBrowserVoice("b1", deps);
+
+		nodes.capture.onaudioprocess?.({
+			inputBuffer: { getChannelData: () => new Float32Array([0.25, 0.5]) },
+		});
+
+		expect(socket.sent).toHaveLength(1);
+		expect(Array.from(new Float32Array(socket.sent[0] as ArrayBuffer))).toEqual([0.25, 0.5]);
+	});
+
+	/**
+	 * Silence is audio. Whether an utterance has ended is the segmenter's
+	 * decision in Rust, and a frontend that dropped quiet frames would be a
+	 * second segmenter that only exists in browsers.
+	 */
+	it("sends silence too, rather than deciding the user stopped talking", async () => {
+		await connectBrowserVoice("b1", deps);
+
+		nodes.capture.onaudioprocess?.({
+			inputBuffer: { getChannelData: () => new Float32Array([0, 0, 0, 0]) },
+		});
+
+		expect(socket.sent).toHaveLength(1);
+	});
+
+	it("plays a reply at the rate it was rendered at and reports the end", async () => {
+		await connectBrowserVoice("b1", deps);
+		const frame = new ArrayBuffer(4 + 8);
+		new DataView(frame).setUint32(0, 24_000, true);
+		new Float32Array(frame, 4).set([0.5, -0.5]);
+
+		socket.onmessage?.({ data: frame });
+
+		expect(nodes.played).toHaveLength(1);
+		expect(nodes.played[0].rate).toBe(24_000);
+		expect(Array.from(nodes.played[0].samples)).toEqual([0.5, -0.5]);
+	});
+
+	/**
+	 * Barge-in reaches the browser as a control frame, and the reply has to
+	 * stop where the user is — the server can only stop sending.
+	 */
+	it("stops playback when the server says the turn is over", async () => {
+		await connectBrowserVoice("b1", deps);
+		const frame = new ArrayBuffer(4 + 4);
+		new DataView(frame).setUint32(0, 24_000, true);
+		socket.onmessage?.({ data: frame });
+
+		socket.onmessage?.({ data: JSON.stringify({ type: "stop" }) });
+
+		expect(nodes.sources[0].stop).toHaveBeenCalled();
+		// The socket stays open: the turn ended, not the conversation.
+		expect(socket.closed).toBe(false);
+	});
+
+	/**
+	 * The microphone must close with the conversation. A tab that kept its
+	 * device light on after disarming is the failure a user notices and cannot
+	 * explain.
+	 */
+	it("releases the microphone and the socket when it stops", async () => {
+		const session = await connectBrowserVoice("b1", deps);
+
+		session.stop();
+
+		expect(tracks[0].stop).toHaveBeenCalled();
+		expect(nodes.capture.disconnect).toHaveBeenCalled();
+		expect(socket.closed).toBe(true);
+	});
+});

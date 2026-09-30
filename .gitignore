@@ -1,0 +1,125 @@
+# MCP server config (local paths)
+.mcp.json
+
+# Profiling results
+scripts/perf/results/
+
+# Generated plugin data (rebuild with extract script)
+plugins/tuic-vscode-icons/icon-data.js
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+dist-release
+coverage
+lcov.info
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.junie/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# mdkb:index
+plans
+# mdkb:index
+stories
+!src-tauri/src/stories/
+!src-tauri/src/stories/**
+# mdkb:index
+reviews
+ideas
+.claude
+.aider*
+benchmarks
+CLAUDE.md
+.mdkb
+scripts/*
+!scripts/build-docs.sh
+!scripts/dev-install.sh
+!scripts/dev-server.mjs
+!scripts/generate-release-notes.sh
+!scripts/report-frontend-bundles.mjs
+!scripts/check-frontend-cycles.mjs
+!scripts/check-make-instance-scope.sh
+!scripts/mutants.sh
+!scripts/ts-mutants.mjs
+!scripts/with-test-tmp.sh
+!scripts/install-launch-shells.sh
+!scripts/test-shell-entrypoint.sh
+!scripts/test-append-only-merge.sh
+!scripts/test-with-test-tmp-prune.sh
+!scripts/test-with-test-tmp-worktree-target.sh
+!scripts/hooks/
+!scripts/speech-assets/
+!scripts/perf/
+scripts/perf/results/
+competitor-analysis
+marketing
+issues-to-monitor.md
+
+# Rust build artifacts
+src-tauri/target/
+# clippy and test build with different flags, so sharing one directory makes
+# them invalidate each other's work on every alternation
+src-tauri/target-clippy/
+
+# Sidecar binaries (built during cargo tauri build)
+src-tauri/binaries/tuic-bridge-*
+docs/research/
+docs/solutions/
+docs/book
+
+# Local embedding cache (mdkb/fastembed model files)
+.fastembed_cache/
+.vscode/
+
+# Ralph task runner state
+.ralph/
+ralph-tasks.json
+
+# Reference screenshots
+terminal_reference.png
+
+# Font source files (keep in public/fonts/ but not attribution)
+public/fonts/LICENSE
+public/fonts/README.md
+test-data.csv
+test-width.txt
+
+# Scratch planning / triage docs (local only)
+PR.md
+
+# Scratch worktree consolidation / temp working dir (local only)
+.tmp/
+.screenshots/
+
+# Python bytecode from the terminal-stress harness
+__pycache__/
+*.pyc
+.wiz/
+.codex/**
+.mdkb/**
+ORCHESTRATOR.md
+
+# Vitest run cache
+.vitest/
+
+# Mutation test artifacts
+/reports/mutation/
+/.stryker-tmp/
