@@ -293,6 +293,12 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 				activeTerminal.ref.openComposeWithText(content);
 			} else {
 				await pty.sendCommand(activeTerminal.sessionId, content, activeTerminal.agentType, submit);
+				// Every other injection surface (sendToActiveTerminal, CommandPalette) moves
+				// DOM focus into the terminal after writing — this path didn't, so focus stayed
+				// wherever it was before the drawer opened (often nowhere reachable once the
+				// drawer unmounts), and a manual Enter went nowhere until the user clicked the
+				// terminal themselves to give it real focus.
+				requestAnimationFrame(() => activeTerminal.ref?.focus());
 			}
 			promptLibraryStore.markAsUsed(prompt.id);
 			promptLibraryStore.closeDrawer();
