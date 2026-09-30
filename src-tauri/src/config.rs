@@ -85,7 +85,7 @@ mod dictation_config {
         /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
         #[serde(default = "default_speech_levelling")]
         pub speech_levelling: f32,
-        /// Minutes without any transcription before the Whisper model is
+        /// Minutes without any transcription (default 20, Boss 2026-09-30) before the Whisper model is
         /// released from memory (it holds ~1.5 GiB for large-v3-turbo). The next
         /// dictation reloads it lazily (~0.5 s). 0 keeps it loaded for the life
         /// of the process. No UI control.
@@ -99,7 +99,7 @@ mod dictation_config {
 
     /// See [`DictationConfig::model_idle_unload_minutes`].
     pub(crate) fn default_model_idle_unload_minutes() -> u32 {
-        5
+        20
     }
 
     pub(crate) fn default_model() -> String {

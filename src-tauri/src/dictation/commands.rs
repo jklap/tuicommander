@@ -3591,12 +3591,12 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_config_frees_the_model_after_five_idle_minutes() {
-        assert_eq!(DictationConfig::default().model_idle_unload_minutes, 5);
+    fn a_fresh_config_frees_the_model_after_twenty_idle_minutes() {
+        assert_eq!(DictationConfig::default().model_idle_unload_minutes, 20);
         let stored = serde_json::json!({"enabled": true, "hotkey": "F5"});
         assert_eq!(
             dictation_config_from_value(stored).model_idle_unload_minutes,
-            5,
+            20,
             "a config written before the knob existed takes the default"
         );
     }
