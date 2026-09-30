@@ -428,7 +428,15 @@ pub fn delete_branch_impl(
         ));
     }
 
-    let flag = if force { "-D" } else { "-d" };
+    if !force {
+        crate::worktree::delete_integrated_local_branch(path, name)?;
+        return Ok(DeleteBranchResult {
+            deleted: true,
+            branch: name.to_owned(),
+            was_force: false,
+        });
+    }
+    let flag = "-D";
     match git_cmd(&repo_path).args(["branch", flag, "--", name]).run() {
         Ok(_) => Ok(DeleteBranchResult {
             deleted: true,
@@ -855,55 +863,35 @@ fn detect_default_branch(git_dir: &Path) -> Option<String> {
     None
 }
 
-/// Get local branches that are fully merged into the repo's main branch.
-/// Returns branch names whose tips are reachable from the main branch HEAD,
-/// excluding branches whose tip is identical to main (never diverged).
-/// Returns an empty vec (not an error) when the repo has no detectable default branch.
+/// Local branches integrated in the default branch, using the same proof
+/// classifier as MCP and lifecycle inspection. Same-tip branches stay hidden.
 pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String> {
-    let git_dir = match resolve_git_dir(repo_path) {
-        Some(d) => d,
-        None => return Ok(vec![]), // Not a git repo — graceful no-op
+    let Some(git_dir) = resolve_git_dir(repo_path) else {
+        return Ok(vec![]);
     };
-
-    let main_branch = match detect_default_branch(&git_dir) {
-        Some(b) => b,
-        None => return Ok(vec![]), // No default branch — graceful no-op
+    let Some(default_branch) = detect_default_branch(&git_dir) else {
+        return Ok(vec![]);
     };
-
-    // Single command: get branch name + SHA together, plus main SHA for filtering
-    let out = git_cmd(repo_path)
+    let main_tip = git_cmd(repo_path)
         .args([
-            "branch",
-            "--merged",
-            &main_branch,
-            "--format=%(objectname) %(refname:short)",
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{default_branch}^{{commit}}"),
         ])
         .run()
-        .map_err(|e| format!("git branch --merged failed: {e}"))?;
-
-    let main_sha = git_cmd(repo_path)
-        .args(["rev-parse", &main_branch])
-        .run()
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default();
-
-    // Filter out branches whose tip SHA matches main — they never diverged
-    Ok(out
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let (sha, name) = line.split_once(' ')?;
-            if name.is_empty() {
-                return None;
-            }
-            // Exclude branches at the exact same SHA as main
-            if !main_sha.is_empty() && sha == main_sha {
-                return None;
-            }
-            Some(name.to_string())
-        })
-        .collect())
+        .map_err(|error| format!("Cannot inspect default branch: {error}"))?
+        .stdout;
+    Ok(
+        crate::worktree::branch_integrations_with_pr(repo_path, |_, _, _| false)?
+            .into_iter()
+            .filter(|entry| {
+                entry.branch != default_branch
+                    && entry.tip != main_tip.trim()
+                    && entry.commit_status == crate::worktree::WorkspaceCommitStatus::Merged
+            })
+            .map(|entry| entry.branch)
+            .collect(),
+    )
 }
 
 /// Check whether a ref exists in .git/packed-refs (for repos that have been gc'd).
@@ -1092,7 +1080,7 @@ pub fn get_branches_detail_impl(path: &Path) -> Result<Vec<BranchDetail>, String
     Ok(branches)
 }
 
-/// Set of branch names merged into the main branch (CLI), used for `is_merged`.
+/// Set of branch names integrated into main, used for `is_merged`.
 /// Empty (with a warning) if the merge check fails. Shared by both adapters.
 pub fn merged_branch_set(path: &Path) -> std::collections::HashSet<String> {
     match get_merged_branches_impl(path) {
