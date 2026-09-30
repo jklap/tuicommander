@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canDecodeDeflate, decodeTaggedFrame, FRAME_TAG } from "../wsFrameCodec";
+import { decodeTaggedFrame, FRAME_TAG } from "../wsFrameCodec";
 
 /** Deflate the way `flate2::Compress::new(level, false)` does: a raw block, no zlib wrapper. */
 async function deflate(payload: Uint8Array): Promise<Uint8Array> {
