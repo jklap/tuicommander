@@ -100,6 +100,14 @@ pub(super) struct CreateSessionRequest {
     /// Same field name and meaning as `PtyConfig::display_name_is_custom`.
     #[serde(default)]
     pub display_name_is_custom: bool,
+    /// Set by our own HTTP client (the browser UI, `usePty.ts`) to mark a
+    /// session as created by a human, not an agent. Absent (the default) means
+    /// agent-created — covers a raw `curl` caller with no reason to know this
+    /// field exists, and every MCP/tmux-shim spawn, which never sets it either.
+    /// Same field name and meaning as `PtyConfig::user_initiated`. Drives
+    /// `is_remote`: `is_remote = !user_initiated`.
+    #[serde(default)]
+    pub user_initiated: bool,
 }
 
 #[derive(Deserialize)]
@@ -335,6 +343,11 @@ pub(super) struct SpawnAgentRequest {
     pub args: Option<Vec<String>>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    /// Same field name and meaning as `CreateSessionRequest::user_initiated`:
+    /// set by our own client (mobile `NewSessionSheet`) when a human launched the
+    /// agent; absent (an agent or a raw `curl` caller) keeps `is_remote: true`.
+    #[serde(default)]
+    pub user_initiated: bool,
 }
 
 #[derive(Deserialize)]

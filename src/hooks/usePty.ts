@@ -126,7 +126,11 @@ export function usePty() {
 	async function createSession(config: PtyConfig): Promise<string> {
 		const requestedId = preRegisterLocalSessionId();
 		const sessionId = await rpc<string>("create_pty", {
-			config: { ...config, session_id: requestedId },
+			// user_initiated: true — this hook is only ever called from UI code
+			// (the "+" button, mobile NewSessionSheet, branch/workspace flows),
+			// never by an agent. Sent on IPC too for body-shape parity; harmless
+			// there since desktop is_remote is hardcoded false regardless.
+			config: { ...config, session_id: requestedId, user_initiated: true },
 		});
 		locallyCreatedSessions.add(sessionId);
 		return sessionId;
@@ -139,7 +143,7 @@ export function usePty() {
 	): Promise<WorktreeResult> {
 		const requestedId = preRegisterLocalSessionId();
 		const result = await rpc<WorktreeResult>("create_pty_with_worktree", {
-			pty_config: { ...ptyConfig, session_id: requestedId },
+			pty_config: { ...ptyConfig, session_id: requestedId, user_initiated: true },
 			worktree_config: worktreeConfig,
 		});
 		locallyCreatedSessions.add(result.session_id);

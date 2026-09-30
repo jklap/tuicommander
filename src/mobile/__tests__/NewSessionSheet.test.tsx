@@ -31,7 +31,7 @@ describe("NewSessionSheet", () => {
 		expect(view.queryByRole("button", { name: /project-a/ })).toBeNull();
 		await fireEvent.click(view.getByRole("button", { name: /project-b/ }));
 		expect(rpc).toHaveBeenCalledWith("spawn_agent", {
-			pty_config: { cwd: "/home/user/project-b", rows: 24, cols: 80 },
+			pty_config: { cwd: "/home/user/project-b", rows: 24, cols: 80, user_initiated: true },
 			agent_config: { cwd: "/home/user/project-b", agent_type: "codex", prompt: "", print_mode: false, args: [] },
 		});
 		expect(onCreated).toHaveBeenCalledWith("new-session-id");
@@ -87,7 +87,7 @@ describe("NewSessionSheet", () => {
 		const view = render(() => <NewSessionSheet repos={REPOS} onDismiss={onDismiss} />);
 		await fireEvent.click(view.getByRole("button", { name: /project-a/ }));
 		expect(rpc).toHaveBeenCalledWith("spawn_agent", {
-			pty_config: { cwd: "/home/user/project-a", rows: 24, cols: 80 },
+			pty_config: { cwd: "/home/user/project-a", rows: 24, cols: 80, user_initiated: true },
 			agent_config: { cwd: "/home/user/project-a", agent_type: "claude", prompt: "", print_mode: false, args: [] },
 		});
 		expect(onDismiss).toHaveBeenCalled();

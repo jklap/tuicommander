@@ -466,7 +466,9 @@ pub(super) async fn spawn_agent_session(
             display_name: None,
             display_name_is_custom: false,
             display_name_from_spawn: false,
-            is_remote: true,
+            // Agent-created unless our own client says a human launched it —
+            // the same `is_remote = !user_initiated` rule as `POST /sessions`.
+            is_remote: !body.user_initiated,
             shell: binary_path.clone(),
         },
         rows,
@@ -528,6 +530,7 @@ mod tests {
             ),
             args: Some(vec!["--help".into()]),
             env: Default::default(),
+            user_initiated: false,
         }
     }
 
@@ -596,6 +599,18 @@ mod tests {
         assert_eq!(parsed.cols, Some(100));
         assert_eq!(parsed.cwd.as_deref(), Some("/agent"));
         assert_eq!(parsed.env.get("PROFILE").map(String::as_str), Some("work"));
+        assert!(
+            !parsed.user_initiated,
+            "absent user_initiated means agent-created"
+        );
+    }
+
+    #[test]
+    fn spawn_request_accepts_user_initiated() {
+        let parsed: SpawnAgentRequest =
+            serde_json::from_value(serde_json::json!({"prompt": "", "user_initiated": true}))
+                .expect("user_initiated is a known field");
+        assert!(parsed.user_initiated);
     }
 
     #[tokio::test]

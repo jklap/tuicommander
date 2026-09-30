@@ -820,6 +820,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 					agent_type: agentConfig.agent_type,
 					binary_path: agentConfig.binary_path,
 					args: agentConfig.args,
+					user_initiated: ptyConfig.user_initiated,
 				},
 				transform: (data) => {
 					if (isRecord(data) && typeof data.session_id === "string") return data.session_id;
