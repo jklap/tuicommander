@@ -3073,7 +3073,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Scrollbar drag
 		let scrollDragging = false;
 		let scrollDragStartY = 0;
-		let scrollDragStartOffset = 0;
+		// Thumb travel already applied to the gesture, in lines. The drag feeds the
+		// smooth-scroll gesture only the change since the last move, so output landing
+		// mid-drag moves the gesture through followHistory instead of being dropped by
+		// an offset anchored to the frame the drag started on (#1265-8b16).
+		let scrollDragAppliedDelta = 0;
 
 		// Scrollbar track click: jump to position
 		bindings.listen(scrollbarRef, "mousedown", (e: MouseEvent) => {
@@ -3102,7 +3106,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			resetSmoothScroll();
 			scrollDragging = true;
 			scrollDragStartY = e.clientY;
-			scrollDragStartOffset = currentFrame?.displayOffset ?? 0;
+			scrollDragAppliedDelta = 0;
 		});
 
 		const onScrollDragMove = (e: MouseEvent) => {
@@ -3114,15 +3118,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 			const dy = e.clientY - scrollDragStartY;
 			const offsetDelta = Math.round((dy / scrollRange) * historySize);
-			// Absolute target anchored to the drag start — NOT a delta vs the (async, often
-			// stale) currentFrame.displayOffset, which would overshoot on fast drags. Routed
-			// through the coalesced latest-wins flush so rapid mousemoves collapse to one IPC.
-			scroll.pendingOffset = Math.max(0, Math.min(historySize, scrollDragStartOffset - offsetDelta));
-			scheduleScrollFlush();
+			// Same gesture path as the wheel: position is distance from the history
+			// bottom, rebased by followHistory when output lands, and clamped there.
+			applySmoothScroll(offsetDelta - scrollDragAppliedDelta);
+			scrollDragAppliedDelta = offsetDelta;
 		};
 
 		const onScrollDragUp = () => {
+			if (!scrollDragging) return;
 			scrollDragging = false;
+			resetScrollGesture();
 		};
 
 		bindings.listen(document, "mousemove", onScrollDragMove);
