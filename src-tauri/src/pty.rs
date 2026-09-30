@@ -9464,6 +9464,71 @@ pub(crate) fn flush_pending_injections(
     }
 }
 
+/// Codex can swallow the Enter of a queued command (paste-burst suppression)
+/// and keep the text in its composer. True when the tail of `text` is still on
+/// the tracked screen. Only Codex is probed: an Enter on its empty composer is
+/// a no-op, so a stale echo of already-submitted text costs nothing.
+fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
+    let is_codex = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.agent_type.as_deref() == Some("codex"));
+    if !is_codex {
+        return false;
+    }
+    let squash = |value: &str| {
+        value
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let squashed = squash(text);
+    let chars: Vec<char> = squashed.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(COMPOSER_TAIL_CHARS)..]
+        .iter()
+        .collect();
+    !tail.is_empty()
+        && state
+            .grid
+            .vt_log_buffers
+            .get(session_id)
+            .is_some_and(|vt| squash(&vt.lock().screen_rows().join("\n")).contains(&tail))
+}
+
+/// Number of trailing characters of a queued command searched for on screen.
+const COMPOSER_TAIL_CHARS: usize = 32;
+
+/// One bare Enter for a composer that still holds the queued text after an
+/// unconfirmed submission. Never repeated: the caller reports uncertainty when
+/// this returns false.
+fn retry_enter_for_retained_composer(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    initial_screen: &'static str,
+) -> bool {
+    if !composer_retains_text(state, session_id, text) {
+        return false;
+    }
+    let Some(writer) = state.pty_writer(session_id) else {
+        return false;
+    };
+    let offset = state
+        .session_maps
+        .output_buffers
+        .get(session_id)
+        .map(|buffer| buffer.lock().total_written)
+        .unwrap_or(0);
+    {
+        let mut writer = writer.lock();
+        if write_all_with_progress(writer.as_mut(), b"\r", 0).is_err() || writer.flush().is_err() {
+            return false;
+        }
+    }
+    wait_for_queued_submission(state, session_id, offset, initial_screen)
+}
+
 /// A PTY write only proves that Enter reached the master. Wait for output from
 /// the child and a working-screen or agent-hook signal before settling a queued
 /// command. A silent or unrecognised composer remains uncertain, so its text
@@ -9624,13 +9689,22 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         });
     let (write_outcome, acknowledgement_offset) =
         write_agent_command_with_boundary(state, session_id, injection.text());
+    let mut enter_retry = "none";
     let outcome = if write_outcome == InjectionOutcome::Submitted
         && !legacy_write
         && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
     {
-        InjectionOutcome::Uncertain(
-            "Enter was written, but agent submission was not confirmed".into(),
-        )
+        if retry_enter_for_retained_composer(state, session_id, injection.text(), initial_screen) {
+            enter_retry = "confirmed";
+            InjectionOutcome::Submitted
+        } else {
+            if composer_retains_text(state, session_id, injection.text()) {
+                enter_retry = "unconfirmed";
+            }
+            InjectionOutcome::Uncertain(
+                "Enter was written, but agent submission was not confirmed".into(),
+            )
+        }
     } else {
         write_outcome
     };
@@ -9686,6 +9760,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         typed,
         submitted,
         enter_separate,
+        enter_retry,
         "queue delivery attempt"
     );
 }
