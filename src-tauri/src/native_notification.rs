@@ -114,3 +114,17 @@ pub(crate) async fn show_native_notification(
         Err("Click-aware native notifications are available only on macOS".into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::NativeNoticeTarget;
+
+    /// The frontend emits and matches kind "aichat"; a rename here would silently drop the click route.
+    #[test]
+    fn ai_chat_target_uses_the_aichat_kind_on_the_wire() {
+        let json = serde_json::to_string(&NativeNoticeTarget::AiChat { id: "c1:p1".into() }).unwrap();
+        assert_eq!(json, r#"{"kind":"aichat","id":"c1:p1"}"#);
+        let back: NativeNoticeTarget = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, NativeNoticeTarget::AiChat { id } if id == "c1:p1"));
+    }
+}
