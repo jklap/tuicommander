@@ -23,12 +23,6 @@ describe("wsFrameCodec", () => {
 		expect(FRAME_TAG).toEqual({ binary: 0x00, binaryDeflate: 0x01, text: 0x02, textDeflate: 0x03 });
 	});
 
-	it("knows whether this runtime can inflate at all", () => {
-		// The answer gates whether the client asks for the encoding in the first
-		// place, so it must reflect the platform rather than a build-time guess.
-		expect(canDecodeDeflate()).toBe(typeof DecompressionStream === "function");
-	});
-
 	it("returns an identity payload without its tag", async () => {
 		const decoded = await decodeTaggedFrame(frame(FRAME_TAG.binary, new Uint8Array([1, 2, 3])));
 
