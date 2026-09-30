@@ -2212,6 +2212,7 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"close_panel_window",
 	"focus_panel_window",
 	"focus_main_window",
+	"show_native_notification",
 	// Native drag-and-drop (WKWebView/OS drag) — no browser equivalent.
 	"start_native_drag",
 	// Native file pickers (NSOpenPanel/NSSavePanel and their peers) — the host's

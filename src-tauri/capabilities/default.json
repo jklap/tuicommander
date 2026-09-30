@@ -13,6 +13,8 @@
       "allow": [{ "path": "**" }]
     },
     "dialog:default",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
     "core:window:allow-start-dragging",
     "core:window:allow-destroy",
     "core:window:allow-close",
