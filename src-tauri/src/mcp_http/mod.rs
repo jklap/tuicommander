@@ -3731,6 +3731,7 @@ mod tests {
             "/terminal/theme-colors",
             "/system/local-ip",
             "/system/home-directory",
+            "/acp/workspace",
             "/acp/connections",
             "/acp/connections/x",
             "/acp/connections/x/reconnect",

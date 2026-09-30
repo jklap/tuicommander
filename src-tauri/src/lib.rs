@@ -2275,6 +2275,7 @@ pub fn run() {
             design_mode::tauri_commands::start_design_mode,
             design_mode::tauri_commands::stop_design_mode,
             design_mode::tauri_commands::get_design_mode_status,
+            acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
