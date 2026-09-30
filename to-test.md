@@ -7449,12 +7449,24 @@ test can't produce.
 
 - [ ] **Session/mode switching no longer bleeds content.** Open Session Diff Review on a repo
   with 2+ Claude sessions. Switch sessions rapidly, and switch By File ↔ Chronological rapidly —
-  confirm no stale file headers or step cards ever linger from the previous view, and the
-  collapse caret on a file header actually toggles (click the whole header row, not just the
-  chevron).
-- [ ] **Sticky file headers sit at the true top** of the Session Diff list (no longer offset by
-  the Branch Diff summary bar's height) — scroll a multi-file session and confirm each file's
-  header sticks flush at the top of the scroll container.
+  confirm no stale file headers or step cards ever linger from the previous view.
+  _(The collapse-caret half of this item is its own item below.)_
+- [ ] **Collapse caret toggles on a click anywhere in the file header row, not just the chevron**
+  _(verified on the pre-rebase `wip` branch only, at `651f46b558`: live browser testing against
+  Branch Diff Scroll's real DOM — happy-dom has no real flex layout, so no unit test could catch
+  this — found the header was STILL partially broken: `.filePath`'s `flex: 1` stretched its
+  invisible DOM box across nearly the whole row, so a click anywhere except the chevron/stats
+  badge hit the path span's own "open file" handler instead of toggling collapse. Fixed in the
+  shared `diffFileList.module.css` `.filePath` class, which `SessionFileHeader.tsx` also imports
+  (replayed byte-identical as `6eca144ec`). Re-verify on the rebased tree — the diff views were
+  merged with main's own collapse code during the replay — in Branch Diff Scroll AND Session Diff
+  Review, which was never live-clicked for lack of a real transcript)_.
+- [ ] **Sticky file headers sit at the true top** of the list (no longer offset by a summary-bar
+  height meant for a different consumer) _(verified on the pre-rebase `wip` branch only: Branch
+  Diff Scroll's "All Changes" summary header confirmed flush at the top with a real scroll,
+  screenshot in `.screenshots/session-diff-overhaul/`. Session Diff Review's own list uses the
+  same shared CSS default — `--diff-header-height: 0px` when no `headerHeight` prop is passed —
+  but wasn't independently screenshotted. Re-check both on the rebased tree)_.
 - [ ] **Diff Scroll ("All files") no longer hijacks other tabs.** Open a per-file diff tab, then
   open Diff Scroll from a different tab/shortcut — the per-file tab must stay showing its own
   single-file diff, not flip into scroll mode too.
@@ -7472,9 +7484,14 @@ test can't produce.
 - [ ] **Turn picker.** In chronological mode, open the turn dropdown — each entry should show a
   time, a +/- size, and the file(s) touched; hovering should show a prompt-preview tooltip;
   selecting one should jump the list to that turn's first change.
+- [ ] **`^`/`v` same-file jump buttons** on a step's header in chronological mode — jump to the
+  previous/next change touching that same file, disabled at the first/last occurrence.
 - [ ] **`<`/`>` navigation** in both Session Diff modes and in Branch Diff Scroll — step
   change-to-change (chronological) or file-to-file (By File / Branch Diff Scroll), disabled at
-  each end.
+  each end. _(Branch Diff Scroll's file-to-file stepping was verified live on the pre-rebase
+  `wip` branch only — disabled correctly at the first file, `>` scrolled to the next file,
+  screenshots in `.screenshots/session-diff-overhaul/`; re-check on the rebased tree. Session
+  Diff's own chronological/By File `<`/`>` has never been live-verified.)_
 - [ ] **Agent display names + jump-to-tab.** In a session with at least one subagent
   (`Task`/`Agent` tool call), confirm the step badge shows a real name (from its `meta.json`),
   not the raw hex id, and clicking it jumps to the PARENT session's terminal tab (subagents have
@@ -7494,7 +7511,12 @@ test can't produce.
   with a whitespace-only or case-only change and confirm it disappears/reappears as expected in
   BOTH Session Diff and Branch Diff Scroll. Confirm the shared options popover in each view's own
   toolbar reads/writes the same settings (flip one in Session Diff's toolbar, reopen Branch Diff
-  Scroll, confirm it's already applied there too).
+  Scroll, confirm it's already applied there too). _(Partly verified on the pre-rebase `wip`
+  branch only: the `DiffOptionsMenu` popover opened from the per-file `DiffTab` toolbar with all
+  5 controls, and "Ignore trailing whitespace" turned a whitespace-only diff into "No changes".
+  Still needs: the other 3 whitespace/case options individually, the shared-settings check
+  across Session Diff's and Branch Diff Scroll's own toolbar instances, soft-wrap and
+  truncate-lines — and the verified part again on the rebased tree.)_
 - [ ] **Truncation.** Set "Truncate long changes" to something small (e.g. 20) and open a
   large real diff — confirm it's cut at a hunk boundary with a "Show all N more lines" button
   that reveals the rest on click.
@@ -7504,8 +7526,9 @@ test can't produce.
   reports back several turns later, confirm its edits show up under the turn it was actually
   SPAWNED in, not the later turn that merely observed its completion.
 - [ ] **Canvas-only visual checks** (not observable over HTTP, per this repo's own testing
-  convention): the flash/fade animation's actual look, the sticky-header CSS at the true top of
-  the list, and the turn-picker tooltip's rendering/positioning.
+  convention): the flash/fade animation's actual look, and the turn-picker tooltip's
+  rendering/positioning. _(The sticky-header CSS check that used to be listed here is its own
+  item, above.)_
 - [ ] **Watcher bounds** (replay addition): with Session Diff tabs open on the same session in
   two windows, closing one keeps the other live-updating; a watch the backend refuses (64
   distinct sessions / 32 subscribers per session) refreshes only via the slow fallback (10 s after a working-tree change),
