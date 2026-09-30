@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { getModifierSymbol } from "../../platform";
 
 // Mock IdeLauncher to avoid Tauri invoke calls from that component
@@ -47,6 +48,7 @@ import { Toolbar } from "../../components/Toolbar/Toolbar";
 import { activityStore } from "../../stores/activityStore";
 import { commandPaletteStore } from "../../stores/commandPalette";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { githubStore } from "../../stores/github";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -711,6 +713,75 @@ describe("Toolbar", () => {
 			uiStore.setSidebarWidth(200);
 			const { container } = render(() => <Toolbar />);
 			expect(container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
+		});
+	});
+	describe("ahead/behind count", () => {
+		/** Answers `get_github_status` per checkout path, like the Rust command does. */
+		function mockCheckoutStatus(byPath: Record<string, { ahead: number; behind: number }>) {
+			vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+				if (cmd !== "get_github_status") return undefined;
+				const path = (args as { path: string }).path;
+				const counts = byPath[path] ?? { ahead: 0, behind: 0 };
+				return { has_remote: true, current_branch: "b", ...counts };
+			});
+		}
+
+		function selectBranch(repoPath: string, branch: string, worktreePath: string | null) {
+			repositoriesStore.add({ path: repoPath, displayName: "Repo" });
+			repositoriesStore.setActive(repoPath);
+			repositoriesStore.setWorkspace(repoPath, branch, { branchName: branch, worktreePath });
+			repositoriesStore.setActiveWorkspace(repoPath, branch);
+		}
+
+		afterEach(() => {
+			vi.mocked(invoke).mockReset();
+			vi.mocked(invoke).mockResolvedValue(undefined);
+		});
+
+		it("does not show the repo root count next to a worktree branch without upstream", async () => {
+			const root = "/ab1/repo";
+			// Main checkout is 1004 ahead of origin/main; the worktree branch has no upstream (0/0).
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 1004, behind: 0 });
+			mockCheckoutStatus({ "/ab1/repo-wt/feat": { ahead: 0, behind: 0 } });
+			selectBranch(root, "feat", "/ab1/repo-wt/feat");
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			await waitFor(() =>
+				expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_github_status", { path: "/ab1/repo-wt/feat" }),
+			);
+			expect(container.querySelector(".aheadBehind")).toBeNull();
+		});
+
+		it("shows the worktree's own count when its branch is ahead of its upstream", async () => {
+			const root = "/ab2/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 1004, behind: 0 });
+			mockCheckoutStatus({ "/ab2/repo-wt/feat": { ahead: 3, behind: 2 } });
+			selectBranch(root, "feat", "/ab2/repo-wt/feat");
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			await waitFor(() => expect(container.querySelector(".aheadBehind")?.textContent).toBe(" ↑3 ↓2"));
+		});
+
+		it("shows the repo root count for the main checkout", () => {
+			const root = "/ab3/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 5, behind: 0 });
+			selectBranch(root, "main", null);
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			expect(container.querySelector(".aheadBehind")?.textContent).toBe(" ↑5");
+		});
+
+		it("shows no count for the main checkout when it is level with its upstream", () => {
+			const root = "/ab4/repo";
+			githubStore.setRemoteStatus(root, { has_remote: true, current_branch: "main", ahead: 0, behind: 0 });
+			selectBranch(root, "main", null);
+
+			const { container } = render(() => <Toolbar repoPath={root} />);
+
+			expect(container.querySelector(".aheadBehind")).toBeNull();
 		});
 	});
 });
