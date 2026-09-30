@@ -1070,7 +1070,8 @@ evidence.
 **Payload shape** (`SessionStateExplain`, snake_case): `agent` (agent_type, the foreground-
 ownership fields agent_type_from_run_config, agent_foreground_observed, spawn_root_role
 (`shell`/`direct_program`/`unknown`) and foreground_input_blocked, hook_instrumented,
-hook_state_seen, has_ready_screen_adapter), `visible` (shell_state,
+hook_state_seen, has_ready_screen_adapter, agent_session_id — the agent's own hook-reported
+session id, for joining a snapshot to `hook-debug.log`), `visible` (shell_state,
 agent_state, agent_state_rung, awaiting_input, background_work, declared_background_work, …),
 `evidence` (busy/idle/awaiting snapshots, activity_seen, idle_confirmed, decide_now), `screen`
 (cached_activity, skipped_by_protocol_authority, no_adapter_for_agent), `silence` (last_output,
