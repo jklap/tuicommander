@@ -1551,6 +1551,20 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_session_for_pid_returns_session_id_on_valid_registry_entry() {
+        let uuid = "12345678-1234-1234-1234-123456789abc";
+        let pid = 5555;
+        let cwd = "/test/project";
+
+        // Create a valid config dir with transcript and registry entry
+        let dir = claude_config_dir(cwd, &[uuid], Some((pid, uuid, cwd)));
+
+        // Happy path: all checks pass (pid matches, cwd matches, transcript exists)
+        let result = claude_session_for_pid(pid, cwd, Some(dir.path().to_str().unwrap()));
+        assert_eq!(result, Some(uuid.to_string()));
+    }
+
+    #[test]
     fn test_verify_claude_session_with_config_dir() {
         let dir = TempDir::new().unwrap();
         let projects_dir = dir.path().join("projects");

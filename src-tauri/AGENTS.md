@@ -923,6 +923,28 @@ Discovery has two tiers, and the difference is not cosmetic:
 
 **The heuristic is not a binding, and no amount of tuning makes it one.** N agent tabs in one folder all scan the same directory, so whichever tab polls first takes the newest file regardless of whose it is; the rest take another tab's session or nothing. `claimed_ids` only stops two tabs holding the *same* id — it cannot tell whose is whose. That is issue #119: measured on a live instance, 3 of 6 Claude tabs held no id and one held a different tab's, so every tab resumed with `claude --continue` into the same conversation.
 
+**Further hardened 2026-09-29 for hook-instrumented Claude specifically.** The pid-registry
+"Exact" tier above (commit `9473819c4`) closes the common case, but it's still a file read plus
+a pid match — a step behind at the instant a new session starts, and it still falls back to the
+mtime heuristic for a Claude build with no registry file. `tuic-hook`'s `ccsession` verb
+(see "Exit-time resume banner" below) gives a THIRD source that's stronger than either
+discovery tier: it's tied directly to this exact pty's own OSC 7770 stream, so it can never read
+another tab's entry — there's no file to scan, no pid to match, nothing to race. `SessionState
+.agent_session_id` now carries this on the wire (previously internal-only, added purely for the
+exit-banner snapshot), and the frontend prefers it unconditionally: `useAgentPolling.ts`'s
+`applySessionState` writes it straight into `terminalsStore.agentSessionId` and sets
+`agentSessionIdIsAuthoritative`, and `detectAgentForTerminal`'s own disk-discovery block is
+skipped entirely while that flag is set — both at entry AND with a second freshness check
+immediately before the disk-discovery write, since a hook-reported push can land during either
+of that function's two awaits (`get_session_leaf_pid`, then `discover_agent_session` itself) and
+must never be clobbered by a now-stale heuristic result resolving after it. The flag resets
+alongside `agentSessionId` at the same two places that already clear it (an agent-type
+transition in `detectAgentForTerminal`, and the whole-PTY-exit handler in `Terminal.tsx`), so a
+NEW agent in the same pane — hook-instrumented or not — starts clean and can either get its own
+authoritative id or fall back to discovery correctly. This is additive, not a replacement: a
+non-Claude agent, or a Claude session with no hook installed, still resolves through discovery
+exactly as before.
+
 **Finding the id is only half of a resume — the other half is which store holds it.** A shell alias is expanded before `exec`, so a run config that reads `c2` with an empty `env` is not what runs: the process is `claude --dangerously-skip-permissions` under `CLAUDE_CONFIG_DIR=~/.claude-private`, and TUIC never sees the assignment. While the agent lives, discovery reads argv and env off the process and rebuilds the real command into `agentLaunchCommand`; at restore time the pid is gone and that string is the only record left. Do not re-derive the config dir from the run config: `c` and `c2` differ *only* in an env var neither one declares, so the default config verifies an id in `~/.claude` and then sends `--resume` to a binary that reads `~/.claude-private` — Claude answers `No conversation found with session ID`, and the transcript is sitting untouched in the other directory.
 
 So when you add a discovery-based agent, look for a pid registry *first*. Codex 0.153 has none — `session_index.jsonl` carries only id/name/updated_at, the rollout `session_meta` has no pid, and there is no `--session-id` flag — so it stays heuristic on purpose, cwd-scoped by the rollout's recorded `cwd`. Gemini is worse and knowingly so: its scan visits every project's `chats/` dir, so it is not even cwd-scoped (see the `DEFERRED` note on `discover_gemini_session`). Do not close either gap by guessing a path-hashing scheme — verify against a real install.
@@ -936,6 +958,34 @@ When adding a new agent: choose discovery-based if the agent writes session file
 All of the above describes the **PTY** transport. The AI Chat `ego` uses ACP and is not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring either transport: a session has exactly one transport, with no fallback.
 
 `ego` has three distinct faces: standalone CLI outside TUIC; AI Chat over ACP as an orchestration peer with a host-issued, durable `TUIC_SESSION` but **no** tab, PTY or terminal parser; and a separately launched terminal CLI over PTY, which may have an `AgentType`. The ACP peer reaches terminals and repositories through TUIC's MCP bridge. Its peer identity permits mail and child-parent routing, but does not turn the AI Chat conversation into a terminal or place it in tab routing, split panes or PTY agent-state detection.
+
+**Exit-time resume banner (Claude, hook-instrumented only).** A third, narrower
+mechanism, layered on top of discovery rather than replacing it: while a
+hook-instrumented Claude session is live, `tuic-hook`'s `ccsession`/`cctitle`/`cwd`
+verbs write the session's live id/title/cwd directly into
+`SessionState.agent_session_id`/`agent_session_title`/`agent_session_cwd`
+(`pty.rs`'s OSC 7770 verb arms) — synchronously, in the PTY reader thread, not
+through the async event-bus accumulator, so ordering against the exit signal below
+is guaranteed. The hook-reported id/title is authoritative for this feature; when no
+`cctitle` was ever sent, the title falls back to the last cleaned OSC 0 title
+(`SessionState.agent_osc_title`, written by `osc_title.rs`'s `apply_osc_title`
+independently of whether a custom tab name would otherwise block that write).
+
+The snapshot itself is taken in exactly one place: `snapshot_resumable_session_on_agent_exit`
+(`pty.rs`), called from `apply_foreground_agent_observation` at the moment the
+foreground observation (`refresh_session_agent` — per PTY chunk, the headless
+foreground timer, and HTTP/IPC foreground queries) sees the shell reclaim the
+foreground and clears the agent identity; an armed run-config preset that never ran
+is not an exit and takes no snapshot. It builds `SessionState.resumable_session` (a
+`ResumableSession` — agent_type/session_id/title/cwd/end_reason) before clearing the
+live trackers; the frontend reads it from the normal `SessionState` payload
+(`session-state-changed` push and the lifecycle catch-up poll) — no new transport
+surface. `end_reason` (from `tuic-hook`'s `ccend` verb,
+SessionEnd's raw `reason` string) is diagnostics-only and never gates whether a
+`resumable_session` is produced. A later `ccsession` for a different id (a fresh
+agent launch in the same pane) clears a stale `resumable_session`, and
+`SessionCreated` resets every field this feature added.
+
 
 ## Diagnostics
 
