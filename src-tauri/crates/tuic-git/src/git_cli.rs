@@ -1425,11 +1425,13 @@ DU src/deleted.rs
     #[test]
     fn test_env_is_passed() {
         let (_dir, path) = setup_test_repo();
-        // GIT_AUTHOR_NAME env var should be visible in the subprocess
+        // `git status` ignores the variable, so the old is_ok() check passed even when
+        // env() dropped it. `git var` echoes the author identity built from it.
         let out = git_cmd(&path)
             .env("GIT_AUTHOR_NAME", "TestBot")
-            .args(["status", "--porcelain"])
-            .run();
-        assert!(out.is_ok());
+            .args(["var", "GIT_AUTHOR_IDENT"])
+            .run()
+            .expect("git var");
+        assert!(out.stdout.starts_with("TestBot <"), "{:?}", out.stdout);
     }
 }
