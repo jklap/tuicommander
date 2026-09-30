@@ -693,6 +693,108 @@ describe("TabBar", () => {
 		expect(names).not.toContain("Repo Term");
 	});
 
+	it("shows the repo-name hover overlay while the manual Global Workspace is active", () => {
+		const repoPath = "/test/repo-for-overlay";
+		repositoriesStore.add({ path: repoPath, displayName: "Overlay Repo" });
+		repositoriesStore.setWorkspace(repoPath, "main", { branchName: "main" });
+		const term = addTerminal({ name: "Manual" });
+		repositoriesStore.addTerminalToWorkspace(repoPath, "main", term);
+		globalWorkspaceStore.promote(term);
+		globalWorkspaceStore.activate();
+
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+
+		expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+		const tab = container.querySelector(`[data-tab-id="${term}"]`)!;
+		fireEvent.mouseEnter(tab);
+		expect(tab.querySelector(".repoOverlay")).not.toBeNull();
+	});
+
+	it("hides the repo-name hover overlay when a repo's own auto-consolidated scope is active instead of the manual one", () => {
+		const repoPath = "/test/consolidated-repo";
+		const term = addTerminal({ name: "Worktree Term" });
+		globalWorkspaceStore.syncScopeMembers(repoPath, [term]);
+		globalWorkspaceStore.setScope(repoPath);
+		globalWorkspaceStore.activate();
+
+		try {
+			const { container } = render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+			expect(globalWorkspaceStore.isActive()).toBe(true);
+			expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(false);
+			const tab = container.querySelector(`[data-tab-id="${term}"]`)!;
+			fireEvent.mouseEnter(tab);
+			expect(tab.querySelector(".repoOverlay")).toBeNull();
+		} finally {
+			// syncScopeMembers writes into a repo-scope the shared beforeEach
+			// cleanup doesn't know to sweep (only MANUAL_SCOPE) — clear it and
+			// the ambient scope pointer ourselves so later tests in this file
+			// aren't affected.
+			globalWorkspaceStore.deactivate();
+			globalWorkspaceStore.syncScopeMembers(repoPath, []);
+			globalWorkspaceStore.setScope("__manual__");
+		}
+	});
+
+	it("promotes/unpromotes a tab via its own context menu (untested before this)", () => {
+		const id = addTerminal({ name: "Context Term" });
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const tab = container.querySelector(`[data-tab-id="${id}"]`)!;
+		vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
+			left: 0,
+			bottom: 0,
+			top: 0,
+			right: 0,
+			width: 0,
+			height: 0,
+			x: 0,
+			y: 0,
+			toJSON: () => {},
+		} as DOMRect);
+
+		fireEvent.contextMenu(tab);
+		let menus = container.querySelectorAll(".menu");
+		const promoteItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+			(l) => l.textContent === "Add to Global Workspace",
+		);
+		expect(promoteItem).toBeDefined();
+		fireEvent.click(promoteItem!);
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(true);
+
+		fireEvent.contextMenu(tab);
+		menus = container.querySelectorAll(".menu");
+		const removeItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+			(l) => l.textContent === "Remove from Global Workspace",
+		);
+		expect(removeItem).toBeDefined();
+		fireEvent.click(removeItem!);
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
+	});
+
 	it("with activeRepoPath but no activeBranch, falls back to all terminals", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });

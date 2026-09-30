@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 
-const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStore } = vi.hoisted(() => {
+const {
+	mockRepositoriesStore,
+	mockPaneLayoutStore,
+	mockFocus,
+	mockTerminalsStore,
+	mockGlobalWorkspaceStore,
+	mockSyncScopeForActiveRepo,
+} = vi.hoisted(() => {
 	const mockRepositoriesStore = {
 		getRepoPathForTerminal: vi.fn<(id: string) => string | null>(),
 		state: {
@@ -28,12 +35,28 @@ const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStor
 		get: vi.fn<(id: string) => { ref?: { focus: () => void } } | undefined>(),
 	};
 
-	return { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStore };
+	const mockGlobalWorkspaceStore = {
+		isManualWorkspaceActive: vi.fn(() => false),
+		deactivate: vi.fn(),
+	};
+
+	const mockSyncScopeForActiveRepo = vi.fn();
+
+	return {
+		mockRepositoriesStore,
+		mockPaneLayoutStore,
+		mockFocus,
+		mockTerminalsStore,
+		mockGlobalWorkspaceStore,
+		mockSyncScopeForActiveRepo,
+	};
 });
 
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockRepositoriesStore }));
 vi.mock("../../stores/paneLayout", () => ({ paneLayoutStore: mockPaneLayoutStore }));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminalsStore }));
+vi.mock("../../stores/globalWorkspace", () => ({ globalWorkspaceStore: mockGlobalWorkspaceStore }));
+vi.mock("../../hooks/useWorktreeConsolidation", () => ({ syncScopeForActiveRepo: mockSyncScopeForActiveRepo }));
 
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 
@@ -46,6 +69,7 @@ describe("navigateToTerminal", () => {
 		mockPaneLayoutStore.isSplit.mockReturnValue(false);
 		mockPaneLayoutStore.getGroupForTab.mockReturnValue(null);
 		mockTerminalsStore.get.mockReturnValue({ ref: { focus: mockFocus } });
+		mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(false);
 		vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
 			cb(0);
 			return 0;
@@ -128,5 +152,54 @@ describe("navigateToTerminal", () => {
 	it("does not throw when the terminal has no ref", () => {
 		mockTerminalsStore.get.mockReturnValue(undefined);
 		expect(() => navigateToTerminal("missing")).not.toThrow();
+	});
+
+	describe("manual Global Workspace exit", () => {
+		it("deactivates the manual Global Workspace before doing anything else when it's active", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).toHaveBeenCalledOnce();
+			expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
+		});
+
+		it("does not deactivate anything when the manual Global Workspace isn't active", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(false);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).not.toHaveBeenCalled();
+		});
+
+		it("re-syncs the active repo's scope even when the repo doesn't change (same-repo click while manual workspace is active)", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/a");
+			mockRepositoriesStore.state.activeRepoPath = "/repo/a";
+			mockRepositoriesStore.state.repositories = {
+				"/repo/a": { activeWorkspaceId: "main", workspaces: { main: { terminals: ["t1"] } } },
+			};
+
+			navigateToTerminal("t1");
+
+			// setActive/setActiveWorkspace are skipped because nothing changed —
+			// exactly the case syncScopeForActiveRepo's own doc comment exists for.
+			expect(mockRepositoriesStore.setActive).not.toHaveBeenCalled();
+			expect(mockSyncScopeForActiveRepo).toHaveBeenCalledOnce();
+		});
+
+		it("re-syncs the active repo's scope after switching repos too", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/b");
+			mockRepositoriesStore.state.activeRepoPath = "/repo/a";
+			mockRepositoriesStore.state.repositories = {
+				"/repo/b": { activeWorkspaceId: "main", workspaces: { main: { terminals: ["t1"] } } },
+			};
+
+			navigateToTerminal("t1");
+
+			expect(mockRepositoriesStore.setActive).toHaveBeenCalledWith("/repo/b");
+			expect(mockSyncScopeForActiveRepo).toHaveBeenCalledOnce();
+		});
 	});
 });

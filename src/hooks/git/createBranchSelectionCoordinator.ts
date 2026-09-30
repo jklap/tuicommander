@@ -13,6 +13,7 @@ import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
 import { randomId } from "../../utils/randomId";
 import { filterValidTerminals } from "../../utils/terminalFilter";
+import { syncScopeForActiveRepo } from "../useWorktreeConsolidation";
 
 interface BranchSelectionCoordinatorDeps {
 	repo: {
@@ -197,8 +198,13 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// trigger. Breadcrumb so a main-thread block during the switch cascade
 		// attributes here (the freeze detector reports the freshest crumb).
 		markPerf("branch.select", { repoPath, workspaceId });
-		// Auto-deactivate global workspace before branch switch
-		if (globalWorkspaceStore.isActive()) {
+		// A branch-row click is the same kind of "ordinary sidebar row" click as
+		// a terminal-row click (see navigateToTerminal.ts) — it's the only place
+		// that can exit the manual Global Workspace view, so auto-deactivate it
+		// before the branch switch. isManualWorkspaceActive() (not bare
+		// isActive()) so this doesn't wrongly tear down a repo's own
+		// auto-consolidated worktree view when switching branches within it.
+		if (globalWorkspaceStore.isManualWorkspaceActive()) {
 			const prevRepoPath = repositoriesStore.state.activeRepoPath;
 			const prevBranch = prevRepoPath ? repositoriesStore.state.repositories[prevRepoPath]?.activeWorkspaceId : null;
 			const key = prevRepoPath && prevBranch ? paneLayoutKey(prevRepoPath, prevBranch) : undefined;
@@ -239,6 +245,13 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				// checked out — resolved from the record, never the id.
 				deps.setCurrentBranch(repositoriesStore.branchNameFor(repoPath, workspaceId));
 			});
+
+			// Re-assert whatever's correct for the now-active repo (its own
+			// consolidated view, or nothing) even if repoPath itself didn't
+			// change (switching branches within the same consolidated repo) —
+			// see syncScopeForActiveRepo's own doc comment for why the reactive
+			// effect alone can't be relied on here.
+			syncScopeForActiveRepo();
 
 			// Fire-and-forget: diff stats are cosmetic, don't block branch switch
 			const selectedBranch = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
