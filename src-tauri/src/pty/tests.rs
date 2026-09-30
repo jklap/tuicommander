@@ -11829,6 +11829,134 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
     );
 }
 
+/// Drive one queued Codex delivery whose first Enter draws `screen_after_enter`
+/// (Ctrl-U, text and Enter are consumed first) and report every write the PTY
+/// saw plus whether the delivery ended uncertain. `after_retry` runs once a
+/// second Enter arrives, to draw the agent's reaction.
+#[cfg(unix)]
+fn run_codex_queued_delivery(
+    sid: &str,
+    screen_after_enter: &str,
+    after_retry: Option<&str>,
+) -> (Vec<Vec<u8>>, bool) {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[22;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut seen = Vec::new();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            let write = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(write, expected);
+            seen.push(write);
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(screen_after_enter, &silence, sid, &state);
+        if let Some(reaction) = after_retry
+            && let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10))
+        {
+            seen.push(retry);
+            reader.process_chunk(reaction, &silence, sid, &state);
+        }
+    });
+
+    let uncertain = silence.lock().injection_delivery_uncertain;
+    seen.extend(std::iter::from_fn(|| received.try_recv().ok()));
+    (seen, uncertain)
+}
+
+/// Codex can swallow the Enter (paste-burst window) and keep the text in its
+/// composer. The retained composer gets exactly one more Enter, which submits.
+#[cfg(unix)]
+#[test]
+fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-ignored-enter-retained",
+        "\x1b[22;1H\x1b[2K\u{203a} wake the agent",
+        Some(
+            "\x1b[21;1H\u{2022} Working (1s \u{2022} esc to interrupt)\x1b[22;1H\x1b[2K\u{203a} Ask Codex to do anything",
+        ),
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        2,
+        "one Enter for the delivery, exactly one retry"
+    );
+    assert!(!uncertain, "the retry's Working screen confirms the turn");
+}
+
+/// A retained composer that ignores the retry too stays uncertain; there is no
+/// second retry.
+#[cfg(unix)]
+#[test]
+fn codex_enter_retry_is_never_repeated() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-ignored-enter-twice",
+        "\x1b[22;1H\x1b[2K\u{203a} wake the agent",
+        Some("\x1b[22;1H\x1b[2K\u{203a} wake the agent"),
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        2
+    );
+    assert!(uncertain);
+}
+
+/// An empty composer after the first Enter means nothing is left to submit.
+#[cfg(unix)]
+#[test]
+fn codex_enter_is_not_retried_when_composer_is_empty() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-empty-composer",
+        "\x1b[22;1H\x1b[2K\u{203a} Ask Codex to do anything",
+        None,
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        1,
+        "an empty composer must not receive a second Enter"
+    );
+    assert!(uncertain, "no acknowledgement still reports uncertainty");
+}
+
 #[cfg(unix)]
 #[test]
 fn queued_agent_without_child_response_remains_uncertain() {
