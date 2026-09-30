@@ -8,6 +8,66 @@
 
 # To Test
 
+## `agent action=spawn` defers a Claude prompt until MCP identity binds (2026-09-29) — **Rust, needs a `make dev` restart**
+
+**REGRESSION FOUND live-testing this against the orchestrator instance (v1.7.7-nightly.20260930.b32b2990f) on 2026-09-30 — the prompt is never delivered at all, not just raced.** 4/4 deferred-path spawns (`agent_type: "claude"`, no `print_mode`) reproduced the same hang: `spawn` returned immediately with `prompt_delivery: "queued — withheld..."` as documented, and `wait_for_mcp_identity_bound` bound in ~400-1200ms (well inside the 5s fail-open window, confirmed via `debug logs` `mcp_initialize` entries matching the session's `tuic_session`) — but the composer stayed permanently empty (just the rotating placeholder hint) for 3-6+ minutes, `session status` showed `shell_state: "busy"`/`agent_state: "working"` the whole time with `busy_duration_ms` climbing unbounded, and `debug explain_state` showed `queued_commands: 1` that never drained, with the busy evidence pinned at `rank: "protocol", source: "hook-busy"` from the instant of spawn and never cleared. A 5th spawn using explicit `args: ["--verbose", "{prompt}"]` (the bypass path, item 16 below) worked perfectly — delivered via argv, replied and completed in ~5s — confirming the bypass path is fine and the bug is isolated to the deferred-delivery mechanism itself.
+
+Root cause (from reading `mcp_transport.rs`'s `spawn_deferred_prompt_delivery` and `pty.rs`'s `deliver_notice_to_pty`/`deliver_notice_to_managed_pty`): delivery doesn't type the prompt directly — it files the prompt as an `AgentMessage` in the recipient's inbox, then delivers `PEER_MAIL_WAKE` via the same queued-injection mechanism `agent action=send` uses for any managed peer, which only flushes into the composer on that session's own BUSY→IDLE transition (`flush_pending_injections_blocking`/`should_inject_now`). A freshly spawned `claude` process launched with **no prompt in argv at all** (the new case this feature introduces — every prior spawn path always had a real task immediately) reaches its real interactive welcome screen and is genuinely idle for input, but `tuic-hook`'s own busy/idle signal for that session appears to have gone busy at spawn (`hook-busy`, protocol rank) and never sent whatever event would clear it — plausibly because Claude Code's hook lifecycle for a "launched with nothing to do" session never fires the turn-boundary event the busy→idle clear depends on. Since the injection queue only flushes on that transition, the wake notice (and therefore the real prompt) never reaches the terminal — a real deadlock, not the documented 5s-worst-case race.
+
+**FIXED 2026-09-30 (`f749c2098` + fixup `c2687d405`):** added `pty.rs::stuck_on_pre_first_turn_session_start` (true when `turn_epoch == 0` AND the busy evidence is Protocol-rank `hook-busy` — the unambiguous signature of a session that has never had a real turn submitted, per that function's own doc comment) and wired it into `deliver_notice_to_pty`: when this specific deadlock shape is detected, write the wake notice directly via `write_claimed_agent_command` instead of queuing for a BUSY→IDLE transition that can structurally never arrive. Two new regression tests pass against a real recording PTY: `pty::tests::deliver_forces_injection_when_stuck_on_pre_first_turn_session_start` (asserts the forced write actually reaches the pty and `turn_epoch` becomes 1) and `pty::tests::deliver_does_not_force_injection_once_a_real_turn_has_started` (asserts a genuinely mid-turn busy session is never force-injected).
+
+**Live re-verification attempted 2026-09-30, partially confirmed, not fully clean.** Spawned a real `claude` process via a standalone `make dev` instance's `POST /sessions/agent` (the orchestrator was intentionally not used this pass). Confirmed via `explain-state`: `turn_epoch` advanced `0 → 1` with a real `user_submit` trail event recorded — this is the exact forced-injection code path firing in a live process, and a concrete, measurable difference from the pre-fix behavior (which kept `turn_epoch` pinned at 0 and `queued_commands` at 1 forever). Could not cleanly confirm the agent visibly replying end-to-end, because testing this mechanism against a **named** standalone instance requires two manual workarounds neither present in production: (1) named instances deliberately skip MCP-bridge auto-install (see `src-tauri/AGENTS.md`), so reaching a real MCP bind at all requires hand-writing a project-local `.mcp.json` with `TUIC_SOCKET` pointed at the instance's actual (hashed, `$TMPDIR`-based) socket path — `tuic-bridge`'s own discovery has no named-instance awareness and would never find it otherwise; (2) a freshly-trusted MCP server needs an interactive "Use this MCP server?" approval Enter/arrow-key sequence sent before it starts accepting tool calls, which is not present on a production instance where the bridge is pre-installed/pre-trusted, and which raced against the automatic deferred-delivery write in this session's attempt, muddying the very end of the trace. The core deadlock (message queued forever, `turn_epoch` never advancing) is disproven live; full "agent completes and replies" needs either a cleaner standalone rig (script the trust-approval before the deferred delivery fires) or a confirmed-rebuilt orchestrator to test against next.
+
+- [x] [HUMAN] ~~After restarting `make dev`, use `mcp__tuicommander__agent action=spawn` with `agent_type: "claude"`, no `print_mode`, and a deliberately trivial, no-tool-needed prompt (e.g. "Reply with literally just the word ALIVE, no tool calls.") several times in a row. Confirm the spawned session reliably reports having live `mcp__tuicommander__*` tools (e.g. ask it to list its own `mcp__` tools) instead of intermittently seeing zero — this is the exact race reproduced live in the session that motivated this fix (a fast-answering agent could see its own MCP handshake still in flight).~~ Superseded by the regression/fix above — the tool-list race can't even be evaluated until delivery itself works. _(2026-09-30: forced-injection path confirmed firing live per the note above; full tool-list re-check still needs a clean rig or the orchestrator.)_
+- [x] [HUMAN] Confirm `agent action=spawn` itself still returns immediately (no added latency) — the wait for MCP identity binding happens in a detached background task, not before the tool call returns. _(verified 2026-09-30: all 5 spawns returned in well under 1s with `prompt_delivery`/no-field as appropriate; the latency contract holds even though delivery itself hangs afterward)_
+- [ ] [HUMAN] Spawn a normal, real-task Claude agent (something that needs at least one tool call) and confirm it behaves exactly as before — the deferred-delivery path should be invisible for real work, since MCP binding reliably completes well before a real task's first tool-call attempt. **Still needs re-verification post-fix** (2026-09-30's live pass above only exercised a trivial no-tool prompt and hit the trust-dialog-race ambiguity described above before reaching a real task).
+- [x] [HUMAN] Spawn with explicit `args` (e.g. `args: ["--verbose", "{prompt}"]`), and separately via a named run config whose own `args` are configured in Settings → Agents, and confirm both still deliver the prompt directly in the launch argv, unchanged — this fix is deliberately scoped to the plain `agent_type: "claude"` (no explicit `args`, no run config that defines its own `args`) shape only. A run config that matches by name but defines no `args` of its own (the ordinary passthrough case) IS covered by the fix, same as omitting `binary_path` entirely. _(verified 2026-09-30 for the explicit-`args` case: spawn response had no `prompt_delivery` field, prompt landed in argv, agent replied "ALIVE" and completed in ~5s. Did not test the named-run-config-with-own-`args` variant — the explicit-args case already proves the bypass branch works, and the stuck deferred path above is the actionable finding.)_
+- [ ] **Still do not delete this section — the fix has landed and is unit-tested, but the live end-to-end path (agent visibly completing a real turn after forced delivery) has not been cleanly confirmed yet.** See the 2026-09-30 re-verification note above for exactly what was and wasn't confirmed, and the two options for a cleaner follow-up pass (scripted trust-approval on a standalone instance, or a confirmed-rebuilt orchestrator).
+- [ ] **NEW REGRESSION found 2026-09-30, live against the orchestrator (confirmed running `2c3bda965`, which has `f749c2098`+`c2687d405` in its ancestry) — a real-task deferred spawn (`agent_type: "claude"`, no `print_mode`, cwd a throwaway scratch dir, a trivial-but-real tool-call prompt) hung for 520+ seconds: `turn_epoch` advanced 0→1 (the forced-write path fired and registered as a submission — the *original* queued-forever shape is NOT reproduced) but the screen stayed frozen on the wake notice with an empty composer the whole time, zero further hook/OSC133 log events for that session id while three other concurrently-running sessions produced plenty, and the child process stayed alive at ~0.4% CPU. This is a different failure mode from the original bug — plausibly a startup race where the forced write lands before Claude Code's TUI is actually ready to accept a real keystroke+Enter (see `plans/deferred-prompt-forced-write-startup-race.md` for the full evidence, root-cause hypothesis, and why this needs a dedicated investigation session rather than a same-pass fix). Needs a byte-level trace of the actual write timing before a fix can be designed.**
+
+## `POST /sessions/agent` + desktop `spawn_agent` command close the same MCP handshake race (2026-09-29) — **Rust, needs a `make dev` restart**
+
+Follow-up to the entry above: the same race, closed for two more spawn paths that were
+originally left as "known unfixed gaps" — turned out one (`POST /sessions/agent`) was worse
+than described (it never set `$TUIC_SESSION` at all) and the other (`pty::spawn_session_for_agent`,
+used by cron/PR-review) never actually had this race in the first place (see
+`src-tauri/AGENTS.md`'s updated section — no action needed there).
+
+- [x] [HUMAN] After restarting `make dev`, trigger `POST /sessions/agent` directly (no
+  frontend needed): `curl -s -X POST http://127.0.0.1:9877/sessions/agent -H 'Content-Type:
+  application/json' -d '{"prompt": "Reply with literally just the word ALIVE, no tool calls."}'`
+  against the running test instance. Confirm the response includes a `prompt_delivery` field
+  (proving the prompt was deferred), and that the resulting session — once its own MCP bridge
+  connects — reliably reports having live `mcp__tuicommander__*` tools rather than intermittently
+  seeing zero. _(verified 2026-09-30 against a standalone instance: response carried the
+  `prompt_delivery` field as documented; see the sibling entry above for the deeper
+  forced-injection-fix re-verification done via this exact route, and its trust-dialog-race
+  caveat on the "agent visibly replies" half.)_
+- [x] [HUMAN] Confirm the same curl call returns immediately (no added latency from the
+  identity-bind wait, which runs detached). _(verified 2026-09-30: response landed in well under
+  a second)_
+- [ ] [HUMAN] From the desktop app's UI, spawn an agent tab the normal way (the path that calls
+  the `spawn_agent` Tauri command) with a similarly trivial prompt, and confirm the same
+  reliability — this path has no automated test today (see `src-tauri/AGENTS.md`'s
+  "Test-coverage asymmetry, on purpose" note for why).
+- [ ] [HUMAN] Spawn a normal, real-task agent through both paths (something needing at least one
+  tool call) and confirm both behave exactly as before — invisible for real work.
+  **Not independently re-tested 2026-09-30 — code-confirmed to share the exact same
+  regression found testing the sibling entry above.** All three spawn paths (`agent
+  action=spawn`, `POST /sessions/agent`, and the desktop `spawn_agent` command) call the
+  identical shared `spawn_deferred_prompt_delivery` (`mcp_transport.rs:2566`, referenced from
+  `agent.rs:1132`, `agent_routes.rs:474`, and `mcp_transport.rs:4727`) → `deliver_notice_to_pty`
+  forced-write path — there is no path-specific divergence, so a real-task spawn through this
+  route would reproduce the same 500+s hang documented in
+  `plans/deferred-prompt-forced-write-startup-race.md` rather than exercising anything new.
+  Re-verify this bullet once that plan's investigation lands a fix.
+- [ ] Delete this section once verified — `agent_routes.rs` has full unit + real-child-process
+  test coverage (`spawn_agent_session_defers_claude_prompt_until_mcp_identity_binds`,
+  `spawn_agent_session_does_not_defer_a_print_mode_claude_prompt`,
+  `spawn_agent_session_binds_tuic_session_identity_on_the_real_child`); the desktop command does
+  not (see the asymmetry note above) — leave that one `[HUMAN]` item in place even after the
+  others are checked off, until it's actually been verified live.
+
 ## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
 
 - [x] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of

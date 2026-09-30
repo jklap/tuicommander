@@ -8937,16 +8937,23 @@ fn custom_pty_env_skips_invalid_keys_but_applies_valid_ones() {
     );
 }
 
-/// `spawn_session_for_agent` is the shared spawn function behind the
-/// `ai_terminal_drive_agent` MCP tool's `spawn_session` action, scheduled cron
-/// jobs (`ai_agent/scheduler.rs`), and PR-review watcher sessions
-/// (`ai_agent/watcher.rs`) — all three hand the returned session id straight to
-/// something that can write into it immediately, the identical
-/// p10k-wizard-hijack race shape `tmux_routes::materialize`'s gate closes for
-/// the tmux shim. No test anywhere previously called this function against a
-/// real PTY at all, so nothing would have caught a regression here. Proves the
-/// gate is actually wired in, not just that `wait_for_shell_idle` works in
-/// isolation (already covered by `mcp_transport.rs`'s own tests).
+/// `spawn_session_for_agent` is the shared spawn function behind the built-in
+/// agent loop's `spawn_session` tool (`ai_agent::tools` — not reachable by
+/// external MCP clients), scheduled cron jobs (`ai_agent/scheduler.rs`), and
+/// PR-review watcher sessions (`ai_agent/watcher.rs`) — all three hand the
+/// returned session id straight to something that can write into it
+/// immediately, the identical p10k-wizard-hijack race shape
+/// `tmux_routes::materialize`'s gate closes for the tmux shim. No test
+/// anywhere previously called this function against a real PTY at all, so
+/// nothing would have caught a regression here. Proves the gate is actually
+/// wired in, not just that `wait_for_shell_idle` works in isolation (already
+/// covered by `mcp_transport.rs`'s own tests).
+///
+/// Note this function never launches an agent CLI or embeds a prompt — its
+/// callers hand the shell to TUIC's own in-process conversation engine, which
+/// gets its tools from a Rust-native table, never MCP. It cannot hit the
+/// separate MCP handshake readiness race that `mcp_transport.rs`'s
+/// `should_defer_prompt_for_mcp_bind` closes for other spawn paths.
 #[tokio::test]
 async fn spawn_session_for_agent_reaches_idle_before_returning() {
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
@@ -11551,6 +11558,94 @@ fn deliver_queues_pending_for_busy_agent() {
     assert_eq!(
         q.front().map(crate::state::PendingInjection::text),
         Some("[TUIC message from lead] go")
+    );
+}
+
+/// `agent action=spawn`'s MCP-identity-bind deferral (`should_defer_prompt_for_mcp_bind`)
+/// launches Claude with no prompt in argv. Claude Code's own `SessionStart` hook fires
+/// `state=busy` immediately, and since no real turn ever starts, nothing ever fires the
+/// matching `state=idle` — `should_inject_now`'s plain `shell_state == SHELL_IDLE` check
+/// can never pass, so the queued wake notice used to sit in `pending_injections` forever
+/// (reproduced live 2026-09-30: `queued_commands: 1` that never drained, `busy` evidence
+/// pinned at `hook-busy` from the instant of spawn). `deliver_notice_to_pty` must recognize
+/// this specific deadlock (via `stuck_on_pre_first_turn_session_start`) and write directly.
+#[cfg(unix)]
+#[test]
+fn deliver_forces_injection_when_stuck_on_pre_first_turn_session_start() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "fresh", SHELL_BUSY);
+    // Simulate the real SessionStart-hook fire this bug depends on — plain
+    // `agent_session(..., SHELL_BUSY)` only sets the shell atom, not the
+    // Protocol-rank "hook-busy" evidence `stuck_on_pre_first_turn_session_start`
+    // keys on.
+    state
+        .session_maps
+        .silence_states
+        .get("fresh")
+        .expect("silence state")
+        .lock()
+        .note_explicit_state(SHELL_BUSY, true);
+    let bytes = insert_recording_session(&state, "fresh");
+
+    let outcome = deliver_notice_to_pty(&state, "fresh", PEER_MAIL_WAKE);
+
+    assert_eq!(
+        outcome,
+        PtyDelivery::Typed,
+        "a session stuck on its own pre-first-turn SessionStart latch must not queue forever"
+    );
+    assert!(
+        state
+            .pending_injections
+            .get("fresh")
+            .is_none_or(|q| q.is_empty()),
+        "nothing should be left queued once the forced write succeeds"
+    );
+    let written = bytes.lock().unwrap().clone();
+    assert!(
+        String::from_utf8_lossy(&written).contains(PEER_MAIL_WAKE),
+        "the wake notice must actually reach the pty, not just be marked delivered: {written:?}"
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get("fresh")
+            .map(|s| s.turn_epoch),
+        Some(1),
+        "the forced write counts as the session's first real turn"
+    );
+}
+
+/// The forced path must stay off once a real turn has actually started — a
+/// non-zero `turn_epoch` means whatever is holding the shell busy now is real
+/// work, not the unstartable pre-first-turn latch, so this must fall through
+/// to the ordinary queue-and-wait-for-idle behavior instead of splicing text
+/// into a live turn.
+#[test]
+fn deliver_does_not_force_injection_once_a_real_turn_has_started() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "midturn", SHELL_BUSY);
+    state
+        .session_maps
+        .silence_states
+        .get("midturn")
+        .expect("silence state")
+        .lock()
+        .note_explicit_state(SHELL_BUSY, true);
+    state
+        .session_maps
+        .session_states
+        .get_mut("midturn")
+        .expect("session state")
+        .turn_epoch = 1;
+
+    let outcome = deliver_notice_to_pty(&state, "midturn", PEER_MAIL_WAKE);
+
+    assert_eq!(
+        outcome,
+        PtyDelivery::Queued,
+        "a real in-progress turn must still queue, never be force-injected"
     );
 }
 

@@ -282,6 +282,19 @@ pub(super) async fn spawn_agent_session(
         }
     };
 
+    // Mirrors the binary-resolution branches above: an explicit `agent_type`
+    // wins; otherwise, when we defaulted the binary to claude too (no
+    // `binary_path`), the effective type is "claude"; a caller-supplied
+    // `binary_path` with no `agent_type` stays unresolved, same as before.
+    // Used below for `hook_instrumented_for`/`session_state.agent_type` (which
+    // used to only fire when the caller passed `agent_type` explicitly, never
+    // for the common default-to-claude case) and for
+    // `should_defer_prompt_for_mcp_bind`.
+    let effective_agent_type: Option<String> = body
+        .agent_type
+        .clone()
+        .or_else(|| body.binary_path.is_none().then(|| "claude".to_string()));
+
     // Only Claude's CLI accepts a bare positional prompt. For other agents the
     // no-args default below would produce an argument-parse error and an immediate
     // exit (clap exit code 2), so reject up front with an actionable message rather
@@ -313,6 +326,15 @@ pub(super) async fn spawn_agent_session(
     }
     let session_id = Uuid::new_v4().to_string();
 
+    // See `mcp_transport.rs`'s `should_defer_prompt_for_mcp_bind` doc comment for why this
+    // is scoped to claude, non-print-mode spawns only, and threaded through
+    // `spawn_deferred_prompt_delivery` after the session is registered below.
+    let defer_prompt_for_mcp_bind =
+        crate::mcp_http::mcp_transport::should_defer_prompt_for_mcp_bind(
+            effective_agent_type.as_deref(),
+            body.print_mode.unwrap_or(false),
+        );
+
     let spawn_binary_path = binary_path.clone();
     let spawn_args = body.args.clone();
     let spawn_prompt = body.prompt.clone();
@@ -320,6 +342,8 @@ pub(super) async fn spawn_agent_session(
     let spawn_output_format = body.output_format.clone();
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
+    let state_for_env = state.clone();
+    let session_id_for_env = session_id.clone();
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -330,6 +354,7 @@ pub(super) async fn spawn_agent_session(
         move || {
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
+            crate::pty::bind_pty_identity(&state_for_env, &mut cmd, &session_id_for_env, None);
 
             if let Some(ref args) = spawn_args {
                 for arg in args {
@@ -347,7 +372,9 @@ pub(super) async fn spawn_agent_session(
                     cmd.arg("--model");
                     cmd.arg(model);
                 }
-                cmd.arg(&spawn_prompt);
+                if !defer_prompt_for_mcp_bind {
+                    cmd.arg(&spawn_prompt);
+                }
             }
 
             if let Some(ref cwd) = spawn_cwd {
@@ -396,7 +423,7 @@ pub(super) async fn spawn_agent_session(
     // line of output. Seeded before registration because that is what publishes
     // `session-created`.
     let mut session_state = crate::state::SessionState::default();
-    if let Some(ref agent_type) = body.agent_type {
+    if let Some(ref agent_type) = effective_agent_type {
         session_state.hook_instrumented = crate::pty::hook_instrumented_for(
             &crate::config::load_agents_config(),
             Some(agent_type.as_str()),
@@ -428,7 +455,7 @@ pub(super) async fn spawn_agent_session(
         },
         rows,
         cols,
-        body.agent_type.clone(),
+        effective_agent_type.clone(),
         None,
         true,
     );
@@ -437,13 +464,29 @@ pub(super) async fn spawn_agent_session(
     // carrying the real `agent_type` — previously this route's separate
     // desktop-half emit dropped it (always sent `null`), even though the
     // bus half had it.
-    spawn_reader_thread(reader, paused, session_id.clone(), state, None);
+    spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({"session_id": session_id})),
-    )
-        .into_response()
+    // Withheld from argv above by `defer_prompt_for_mcp_bind` — deliver it once this
+    // session's own MCP identity binds (bounded, fail-open). See
+    // `spawn_deferred_prompt_delivery`'s doc comment. `from_tuic_session: None` — this is
+    // an HTTP-originated spawn with no caller-agent identity to attribute the message to.
+    if defer_prompt_for_mcp_bind {
+        crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery(
+            state,
+            session_id.clone(),
+            None,
+            body.prompt.clone(),
+        );
+    }
+
+    let mut response = serde_json::json!({"session_id": session_id});
+    if defer_prompt_for_mcp_bind {
+        response["prompt_delivery"] = serde_json::json!(
+            "queued — the child must reach its ready prompt first; delivered via mailbox once its MCP identity binds"
+        );
+    }
+
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
 #[cfg(test)]
@@ -639,6 +682,237 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(response_json(response).await["error"].is_string());
         assert!(state.session_maps.sessions.is_empty());
+    }
+
+    // --- MCP handshake readiness race coverage ---------------------------
+    //
+    // No test above ever reaches PTY creation (every one asserts a 400/403
+    // that fires first). These are the first end-to-end spawns in this file.
+    // Mirrors the equivalent coverage already proven for
+    // `mcp__tuicommander__agent action=spawn` in `mcp_transport.rs`'s own
+    // test module (`agent_spawn_defers_claude_prompt_until_mcp_identity_binds`,
+    // `agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_shape`,
+    // `agent_spawn_does_not_defer_a_print_mode_claude_prompt`).
+
+    #[cfg(unix)]
+    const LONG_LIVED_TEST_BINARY: &str = "/bin/cat";
+
+    /// Answers `--version`/`-v` instantly (unlike a bare `/bin/cat` symlink,
+    /// which would hang forever reading stdin for those flags — BSD `cat -v`
+    /// with no file operand never returns), then `exec`s into
+    /// `LONG_LIVED_TEST_BINARY` for the real invocation. Needed because
+    /// `detect_agent_binary`'s `get_binary_version` probes every resolved
+    /// binary with `--version`, and the spawned process must stay alive long
+    /// enough for the deferred-delivery task (and, in the `$TUIC_SESSION`
+    /// test, for the env-observing shell command) to actually run. Unlike
+    /// `mcp_transport.rs`'s equivalent tests, this route never calls
+    /// `agent_hook_launch::augment_args`, so there is no `--settings` flag to
+    /// choke on and no `native_status_signals`/config-dir-override dance
+    /// needed here.
+    #[cfg(unix)]
+    fn write_fake_claude_script(dir: &std::path::Path) -> std::path::PathBuf {
+        let fake_claude = dir.join("claude");
+        std::fs::write(
+            &fake_claude,
+            format!("#!/bin/sh\ncase \"$1\" in\n  --version|-v) exit 0 ;;\nesac\nexec {LONG_LIVED_TEST_BINARY}\n"),
+        )
+        .expect("write fake claude script");
+        let mut perms = std::fs::metadata(&fake_claude)
+            .expect("stat fake claude")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&fake_claude, perms).expect("chmod fake claude");
+        fake_claude
+    }
+
+    #[cfg(unix)]
+    struct PathGuard(Option<String>);
+    #[cfg(unix)]
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(p) => unsafe { std::env::set_var("PATH", p) },
+                None => unsafe { std::env::remove_var("PATH") },
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn prepend_fake_claude_to_path(dir: &std::path::Path) -> PathGuard {
+        let prior = std::env::var("PATH").ok();
+        let guard = PathGuard(prior.clone());
+        let new_path = match &prior {
+            Some(p) => format!("{}:{p}", dir.display()),
+            None => dir.display().to_string(),
+        };
+        unsafe { std::env::set_var("PATH", new_path) };
+        guard
+    }
+
+    /// The ordinary call shape (no `binary_path`, no `agent_type`) resolves
+    /// `effective_agent_type` to `"claude"` via `detect_agent_binary`'s real
+    /// PATH lookup — the exact shape a code review caught as the one that
+    /// mattered for the sibling MCP-tool fix (a first version there only
+    /// deferred when a caller explicitly passed `binary_path`, which masked
+    /// the gap because both its own tests happened to pass one). Asserts the
+    /// prompt is withheld until this session's MCP identity binds, then
+    /// delivered via the mailbox.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_agent_session_defers_claude_prompt_until_mcp_identity_binds() {
+        let bin_dir = tempfile::TempDir::new().expect("bin tempdir");
+        write_fake_claude_script(bin_dir.path());
+        let _path_guard = prepend_fake_claude_to_path(bin_dir.path());
+
+        let state = crate::mcp_http::tests::test_state();
+        let mut request = spawn_request();
+        request.binary_path = None;
+        request.agent_type = None;
+        request.args = None;
+        request.prompt = "the real deferred task".to_string();
+
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            body["prompt_delivery"].as_str(),
+            Some(
+                "queued — the child must reach its ready prompt first; delivered via mailbox once its MCP identity binds"
+            ),
+            "response must surface the deferral, matching the MCP tool's spawn_response field"
+        );
+
+        assert!(
+            state
+                .agent_inbox
+                .get(&session_id)
+                .is_none_or(|inbox| inbox.is_empty()),
+            "the prompt must not be delivered before the MCP identity binds"
+        );
+
+        assert!(
+            crate::mcp_http::mcp_transport::apply_initialize_identity(
+                &state,
+                "mcp-http-defer-child",
+                Some(&session_id),
+            ),
+            "apply_initialize_identity must accept this session's own (valid UUID) id"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if state
+                .agent_inbox
+                .get(&session_id)
+                .is_some_and(|inbox| !inbox.is_empty())
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "prompt was never delivered after the MCP identity bound"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let inbox = state.agent_inbox.get(&session_id).unwrap();
+        assert_eq!(inbox.back().unwrap().content, "the real deferred task");
+    }
+
+    /// Print-mode is one-shot with no later delivery opportunity — the prompt
+    /// must stay in launch argv unchanged, never deferred.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_agent_session_does_not_defer_a_print_mode_claude_prompt() {
+        let bin_dir = tempfile::TempDir::new().expect("bin tempdir");
+        write_fake_claude_script(bin_dir.path());
+        let _path_guard = prepend_fake_claude_to_path(bin_dir.path());
+
+        let state = crate::mcp_http::tests::test_state();
+        let mut request = spawn_request();
+        request.binary_path = None;
+        request.agent_type = None;
+        request.args = None;
+        request.print_mode = Some(true);
+
+        let response =
+            spawn_agent_session(State(state), ConnectInfo(loopback()), None, Json(request)).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        assert!(
+            body.get("prompt_delivery").is_none(),
+            "print-mode spawns must never defer, so this field must be absent: {body}"
+        );
+    }
+
+    /// `spawn_agent_session` used to be the one session-creating path in this
+    /// codebase that never called `bind_pty_identity` at all — its children
+    /// got no `$TUIC_SESSION`, so any eventual MCP bind would have landed
+    /// under a fresh, unrelated UUID, never this PTY's own `session_id`.
+    /// Proves the real child process now receives it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_agent_session_binds_tuic_session_identity_on_the_real_child() {
+        let bin_dir = tempfile::TempDir::new().expect("bin tempdir");
+        let out_dir = tempfile::TempDir::new().expect("out tempdir");
+        let out_file = out_dir.path().join("tuic_session.txt");
+        let fake_claude = bin_dir.path().join("probe");
+        std::fs::write(
+            &fake_claude,
+            format!(
+                "#!/bin/sh\necho \"$TUIC_SESSION\" > '{}'\nexec {LONG_LIVED_TEST_BINARY}\n",
+                out_file.display()
+            ),
+        )
+        .expect("write probe script");
+        let mut perms = std::fs::metadata(&fake_claude)
+            .expect("stat probe script")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&fake_claude, perms).expect("chmod probe script");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut request = spawn_request();
+        request.binary_path = Some(fake_claude.to_string_lossy().into_owned());
+        request.args = Some(vec![]);
+
+        let response =
+            spawn_agent_session(State(state), ConnectInfo(loopback()), None, Json(request)).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+
+        // 60s, not 5s — the same real-subprocess-under-full-workspace-load margin
+        // problem `mcp_transport.rs`'s own `agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_shape`
+        // test documents (confirmed here too: failed once at 5s with a 7.2s actual
+        // duration under a full `cargo nextest run --no-fail-fast`, never in a
+        // smaller/isolated run). A real fork+exec+shell-script-write is not bounded
+        // by anything this test controls once dozens of other tests are spawning
+        // real processes concurrently.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&out_file)
+                && !contents.trim().is_empty()
+            {
+                assert_eq!(
+                    contents.trim(),
+                    session_id,
+                    "the child's $TUIC_SESSION must equal this PTY's own session_id"
+                );
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never wrote its $TUIC_SESSION to the probe file"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 }
 

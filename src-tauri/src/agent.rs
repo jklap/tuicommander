@@ -927,6 +927,22 @@ pub(crate) async fn spawn_agent(
         _ => Uuid::new_v4().to_string(),
     };
 
+    // See `mcp_transport.rs`'s `should_defer_prompt_for_mcp_bind` doc comment for why this
+    // is scoped to claude, non-print-mode spawns only, and threaded through
+    // `spawn_deferred_prompt_delivery` after the session is registered below. This is the
+    // desktop IPC counterpart of `agent_routes::spawn_agent_session`'s identical HTTP-route
+    // fix — same effective-agent-type resolution shape (explicit `agent_type`, else
+    // default to "claude"), just via `AgentConfig` instead of `SpawnAgentRequest`.
+    let effective_agent_type = agent_config
+        .agent_type
+        .clone()
+        .unwrap_or_else(|| "claude".to_string());
+    let defer_prompt_for_mcp_bind =
+        crate::mcp_http::mcp_transport::should_defer_prompt_for_mcp_bind(
+            Some(effective_agent_type.as_str()),
+            agent_config.print_mode,
+        );
+
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
@@ -964,8 +980,10 @@ pub(crate) async fn spawn_agent(
                     launch_args.push(model.clone());
                 }
 
-                // Add prompt
-                launch_args.push(spawn_agent_config.prompt.clone());
+                // Add prompt, unless withheld for deferred mailbox delivery below.
+                if !defer_prompt_for_mcp_bind {
+                    launch_args.push(spawn_agent_config.prompt.clone());
+                }
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
             for arg in crate::agent_hook_launch::augment_args(
@@ -982,6 +1000,17 @@ pub(crate) async fn spawn_agent(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
+            // Inject env flags (feature flags configured in Settings → Agents) BEFORE
+            // the TUIC-owned identity/worktree env below, so a caller-supplied flag can
+            // never shadow `$TUIC_SESSION`/`$TUIC_CONFIG_DIR`/worktree context — a
+            // security review found the reverse ordering let `pty_config.env` override
+            // `bind_pty_identity`'s own `TUIC_SESSION`, letting a caller rebind another
+            // live session's identity out from under it. `cmd.env()` on `CommandBuilder`
+            // takes the last write for a given key, so whichever call runs last wins.
+            for (key, value) in &spawn_pty_config.env {
+                cmd.env(key, value);
+            }
+
             crate::pty::bind_pty_identity(
                 &state_for_env,
                 &mut cmd,
@@ -995,10 +1024,6 @@ pub(crate) async fn spawn_agent(
                     .as_deref()
                     .or(spawn_pty_config.cwd.as_deref()),
             );
-            // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &spawn_pty_config.env {
-                cmd.env(key, value);
-            }
             cmd
         },
     )
@@ -1018,7 +1043,7 @@ pub(crate) async fn spawn_agent(
     // the `PtySession` struct below — `emit_session_created` at the end of
     // this function needs the same values.
     let created_cwd = agent_config.cwd.clone().or_else(|| pty_config.cwd.clone());
-    let created_agent_type = agent_config.agent_type.clone();
+    let created_agent_type = Some(effective_agent_type.clone());
     let created_display_name = pty_config.display_name.clone();
 
     // Store session (master handle kept for resize support)
@@ -1043,6 +1068,25 @@ pub(crate) async fn spawn_agent(
         .metrics
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
+
+    // Pre-set the session's agent type so the PTY reader's agent_active gate turns on
+    // immediately and intent/suggest protocol tokens are parsed from the first line of
+    // output — this command previously never inserted a `SessionState` for its own
+    // sessions at all (unlike `agent_routes::spawn_agent_session`/`register_pty_session`),
+    // which independent of this fix also means `deliver_notice_to_managed_pty`'s
+    // `session_states[id].agent_type.is_some()` requirement (needed for the deferred
+    // prompt delivery below) was unmet for every desktop-spawned agent.
+    state.session_maps.session_states.insert(
+        session_id.clone(),
+        crate::state::SessionState {
+            hook_instrumented: crate::pty::hook_instrumented_for(
+                &crate::config::load_agents_config(),
+                Some(effective_agent_type.as_str()),
+            ),
+            agent_type: Some(effective_agent_type.clone()),
+            ..Default::default()
+        },
+    );
 
     // Create ring buffer and VT log buffer for this session
     state.session_maps.output_buffers.insert(
@@ -1077,6 +1121,21 @@ pub(crate) async fn spawn_agent(
         state.inner().clone(),
         None,
     );
+
+    // Withheld from argv above by `defer_prompt_for_mcp_bind` — deliver it once this
+    // session's own MCP identity binds (bounded, fail-open). See
+    // `spawn_deferred_prompt_delivery`'s doc comment. `from_tuic_session: None` — this
+    // desktop command has no separate caller-agent identity to attribute the message to;
+    // `pty_config.tuic_session` is this NEW session's own persisted identity (for
+    // resume-after-restart), not a caller's.
+    if defer_prompt_for_mcp_bind {
+        crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery(
+            state.inner().clone(),
+            session_id.clone(),
+            None,
+            agent_config.prompt.clone(),
+        );
+    }
 
     Ok(session_id)
 }
