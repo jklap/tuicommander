@@ -11991,7 +11991,6 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         }
         let mut reader = ChunkProcessor::new(None, None);
         replay(&mut reader, inputs[1]..second_enter);
-        eprintln!("DBG ack={} rows={:?}", agent_submission_ack_kind(&state, sid), state.grid.vt_log_buffers.get(sid).unwrap().lock().screen_rows().iter().enumerate().skip(20).filter(|(_, r)| !r.trim().is_empty()).collect::<Vec<_>>());
         if let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10)) {
             seen.push(retry);
             replay(&mut reader, second_enter..records.len());
