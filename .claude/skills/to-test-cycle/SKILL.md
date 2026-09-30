@@ -480,17 +480,19 @@ summary: which items were verified/fixed/deferred, links to any plan docs writte
 `git log` of commits made this session (so the user can review before squashing).
 
 **Before treating a gate failure as caused by this session's work, check whether it's the known
-audio-device-enumeration hang** (`src-tauri/AGENTS.md`'s Tests section, added 2026-09-30):
-`notification_sound::tests::*` (device listing/playback) and the HTTP routes that touch the same
-path can block for the full 120s nextest timeout — not fail, hang — behind an un-granted macOS
-audio-device permission prompt that nothing in a headless run can click through. Five tests, same
-shape, all timing out at exactly 120s each is the signature; `git log` on the affected files
-(confirm they weren't touched this session) rules out a real regression in under a minute. If it's
-this: don't attempt a code fix (it needs either the permission granted interactively, or a
-deliberate scope decision from the user about whether to fix the missing timeout in
-`notification_sound::list_output_devices` itself) — ask the user whether to grant the permission
-now and re-run, or accept the gate as failing-for-a-known-reason this session and say so plainly
-in the final summary rather than either hiding it or blocking on it unasked.
+audio-device-enumeration stall** (`src-tauri/AGENTS.md`, the note after the ChangelogModal flake in
+"Fresh Worktree Setup", added 2026-09-30): behind an un-granted macOS permission prompt, the three
+`notification_sound::tests` that enumerate devices directly block until nextest's 120 s hard kill,
+`list_audio_output_devices_http_returns_a_device_array` fails after the 30 s
+`audio_enumeration::ENUMERATION_TIMEOUT` bound, and the route sweep that probes
+`GET /dictation/devices` just runs ~30 s slow. Those exact names with that timing are the
+signature; `git log` on the affected files (confirm they weren't touched this session) rules out a
+real regression in under a minute. If it's this: don't attempt a code fix (it needs either the
+permission granted interactively, or a deliberate scope decision from the user about whether to
+bound the direct `notification_sound::list_output_devices` calls in those unit tests) — ask the
+user whether to grant the permission now and re-run, or accept the gate as
+failing-for-a-known-reason this session and say so plainly in the final summary rather than
+either hiding it or blocking on it unasked.
 
 ## 12. Keep this skill current
 
