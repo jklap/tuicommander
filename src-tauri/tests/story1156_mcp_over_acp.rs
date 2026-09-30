@@ -204,24 +204,33 @@ async fn ego_reaches_the_tuicommander_server_over_the_acp_connection() {
     );
 }
 
-/// The snapshot says which transport this client carries: ACP, and not stdio.
+/// The snapshot says which MCP transport the agent accepts: ACP only when it
+/// advertises `mcpCapabilities.acp`, and never stdio.
 ///
-/// Neither is something ego advertises for this client to read — they are
-/// what *this client* puts in a session — so the snapshot is where a host
-/// reads them, and a snapshot still claiming stdio would describe a bridge
-/// that is no longer sent.
+/// An ego that predates MCP-over-ACP still answers `session/new` with a
+/// session id and silently drops the `acp` server, so the chat would open with
+/// no tuicommander tools and no error. Reading the advertisement is the only
+/// way to refuse that loudly (#1270-6d4c).
 #[test]
-fn the_snapshot_reports_the_acp_transport_this_client_carries() {
-    let response = agent_client_protocol::schema::v1::InitializeResponse::new(
-        agent_client_protocol::schema::ProtocolVersion::V1,
+fn the_snapshot_reads_mcp_acp_from_the_agent() {
+    use agent_client_protocol::schema::v1::InitializeResponse;
+    use agent_client_protocol::schema::ProtocolVersion;
+    use tuicommander_lib::acp::{AcpOperation, AcpUnavailableReason};
+
+    let mut response = InitializeResponse::new(ProtocolVersion::V1);
+    let old_ego = tuicommander_lib::acp::capability_snapshot(&response).expect("a v1 snapshot");
+    assert!(!old_ego.mcp_acp, "an agent that did not advertise acp");
+    assert_eq!(
+        old_ego.availability(AcpOperation::McpAcp).reason,
+        Some(AcpUnavailableReason::NotAdvertised)
     );
-    let snapshot = tuicommander_lib::acp::capability_snapshot(&response).expect("a v1 snapshot");
+
+    response.agent_capabilities.mcp_capabilities.acp = true;
+    let new_ego = tuicommander_lib::acp::capability_snapshot(&response).expect("a v1 snapshot");
+    assert!(new_ego.mcp_acp);
+    assert!(new_ego.availability(AcpOperation::McpAcp).available);
     assert!(
-        snapshot.mcp_acp,
-        "every attended session carries the ACP server"
-    );
-    assert!(
-        !snapshot.mcp_stdio,
+        !new_ego.mcp_stdio,
         "no session carries a stdio bridge any more"
     );
 }
