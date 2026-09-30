@@ -2026,6 +2026,29 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["worktree-agent-abc"]).toBeUndefined();
 		});
 
+		it("does not close the terminals of a worktree that entered the store while the structure fetch was in flight (#1317)", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			let resolveStructure: (value: unknown) => void = () => {};
+			mockRepo.getRepoStructure.mockImplementation(() => new Promise((resolve) => (resolveStructure = resolve)));
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+
+			const refresh = gitOps.refreshAllBranchStats("/repo");
+			for (let i = 0; i < 20 && mockRepo.getRepoStructure.mock.calls.length === 0; i++) await Promise.resolve();
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1);
+
+			// A worktree created elsewhere (MCP worktree_create: no creation grace) gets a tab
+			// after the snapshot was requested, but the snapshot predates the checkout.
+			repositoriesStore.setWorkspace("/repo", "fresh", { worktreePath: "/repo/.worktrees/fresh" });
+			const tid = terminalsStore.add(makeTerminal({ name: "Fresh", cwd: "/repo/.worktrees/fresh" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "fresh", tid);
+			resolveStructure({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			await refresh;
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces.fresh).toBeDefined();
+		});
+
 		it("closes only live terminals from a deleted linked worktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
