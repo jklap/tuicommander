@@ -8911,6 +8911,29 @@ async fn spawn_session_for_agent_reaches_idle_before_returning() {
     );
 }
 
+/// `spawn_session_for_agent` registers `is_remote: true` — it's an orchestrated
+/// agent spawn (built-in agent loop, scheduled cron jobs, PR-review watcher),
+/// never a human clicking a button.
+#[tokio::test]
+async fn spawn_session_for_agent_registers_is_remote_true() {
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let session_id = super::spawn_session_for_agent(&state, None, None)
+        .await
+        .expect("spawn_session_for_agent must succeed");
+
+    let is_remote = state
+        .session_maps
+        .sessions
+        .get(&session_id)
+        .expect("session registered")
+        .lock()
+        .is_remote;
+    assert!(
+        is_remote,
+        "spawn_session_for_agent must register is_remote: true"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
