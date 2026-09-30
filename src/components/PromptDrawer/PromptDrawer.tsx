@@ -266,6 +266,21 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 		const activeTerminal = terminalsStore.getActive();
 		if (!activeTerminal?.sessionId) return;
 
+		// Every other Smart Prompt trigger surface (SmartButtonStrip, SmartPromptsDropdown,
+		// ChangesTab) gates on canExecute before injecting — this path didn't, so a
+		// "Send immediately" prompt could fire straight into a busy or not-yet-detected
+		// agent's PTY. That races the Ctrl-U/text/Enter split write against Ink's own
+		// rendering (see sendCommand.ts's AGENT_ENTER_GAP_MS comment): the Enter lands in
+		// the same read as the text and gets swallowed as a newline instead of submitting,
+		// so it looks like nothing sent and the cursor ends up mid-composer instead of
+		// where the user expects.
+		const check = smartPrompts.canExecute(prompt);
+		if (!check.ok) {
+			appLogger.warn("prompts", `Cannot execute "${prompt.name}": ${check.reason}`);
+			toastsStore.add(`"${prompt.name}" failed`, check.reason ?? "Cannot execute prompt", "error");
+			return;
+		}
+
 		const content = await promptLibraryStore.processContent(prompt, variables);
 
 		try {
@@ -276,6 +291,12 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 				activeTerminal.ref.openComposeWithText(content);
 			} else {
 				await pty.sendCommand(activeTerminal.sessionId, content, activeTerminal.agentType, submit);
+				// Every other injection surface (sendToActiveTerminal, CommandPalette) moves
+				// DOM focus into the terminal after writing — this path didn't, so focus stayed
+				// wherever it was before the drawer opened (often nowhere reachable once the
+				// drawer unmounts), and a manual Enter went nowhere until the user clicked the
+				// terminal themselves to give it real focus.
+				requestAnimationFrame(() => activeTerminal.ref?.focus());
 			}
 			promptLibraryStore.markAsUsed(prompt.id);
 			promptLibraryStore.closeDrawer();
