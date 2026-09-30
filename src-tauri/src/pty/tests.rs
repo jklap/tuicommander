@@ -11968,7 +11968,6 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         .session_maps
         .output_buffers
         .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1 << 20)));
-    eprintln!("DBG {:?}", state.grid.vt_log_buffers.get(sid).unwrap().lock().screen_rows().iter().enumerate().skip(26).collect::<Vec<_>>());
     assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);

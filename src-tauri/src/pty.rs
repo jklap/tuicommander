@@ -3662,7 +3662,8 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// The rendered viewport includes transcript history, so a whole-screen search
 /// can mistake an old submitted prompt or markdown quote for the live composer.
 /// Prefer the structurally detected input box (including tall custom HUDs); if
-/// no box can be identified, accept only the final three non-padding rows.
+/// no box can be identified, accept only the final four non-padding rows: Codex 0.159
+/// draws the composer, a blank row and a two-line footer below it.
 fn find_live_prompt_row<F>(rows: &[String], is_prompt: F) -> Option<usize>
 where
     F: Fn(&str) -> bool,
@@ -3680,7 +3681,7 @@ where
     {
         return Some(prompt);
     }
-    (content_end.saturating_sub(3)..content_end)
+    (content_end.saturating_sub(4)..content_end)
         .rev()
         .find(|&index| is_prompt(&rows[index]))
 }
