@@ -84,6 +84,8 @@ mod native_drag;
 #[cfg(feature = "desktop")]
 mod native_keys;
 #[cfg(feature = "desktop")]
+mod native_notification;
+#[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
@@ -1602,6 +1604,7 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
                 .on_navigation(|webview, url| {
@@ -1870,6 +1873,7 @@ pub fn run() {
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
+            native_notification::show_native_notification,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
             panel_window::close_panel_window,

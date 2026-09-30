@@ -365,7 +365,12 @@ mod tests {
             .await
             .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            while !marker.exists() {
+            // `echo $$ > marker` truncates the file before writing the PID, so
+            // polling on existence alone can read the file mid-truncate.
+            while std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .is_empty()
+            {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         })
