@@ -172,3 +172,49 @@ describe("GeneralTab ego profile", () => {
 		expect(settingsStore.state.egoProfile).toBe("coordinator");
 	});
 });
+
+function aiChatWorkspaceInput(container: HTMLElement): HTMLInputElement {
+	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === "AI Chat workspace");
+	const input = label?.parentElement?.querySelector("input");
+	if (!input) throw new Error("AI Chat workspace input not found");
+	return input;
+}
+
+describe("GeneralTab AI Chat workspace", () => {
+	beforeEach(() => {
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "get_home_directory") return Promise.resolve("/home/somebody");
+			return Promise.resolve(cmd === "load_config" ? {} : undefined);
+		});
+	});
+
+	afterEach(() => {
+		settingsStore._testCancelPendingSave();
+		cleanup();
+	});
+
+	it("shows the saved value and saves an edit", () => {
+		settingsStore.setAiChatWorkspace("/srv/chat");
+		const { container } = render(() => <GeneralTab />);
+		const input = aiChatWorkspaceInput(container);
+		expect(input.value).toBe("/srv/chat");
+		fireEvent.input(input, { target: { value: "/srv/other" } });
+		expect(settingsStore.state.aiChatWorkspace).toBe("/srv/other");
+	});
+
+	it("shows the host home directory as the effective default", async () => {
+		settingsStore.setAiChatWorkspace("");
+		const { container } = render(() => <GeneralTab />);
+		await waitFor(() => expect(aiChatWorkspaceInput(container).placeholder).toBe("/home/somebody"));
+	});
+
+	it("refuses a relative path, keeps the saved one, and says why", () => {
+		settingsStore.setAiChatWorkspace("/srv/chat");
+		const { container } = render(() => <GeneralTab />);
+		const input = aiChatWorkspaceInput(container);
+		fireEvent.input(input, { target: { value: "relative/dir" } });
+		expect(input.value).toBe("/srv/chat");
+		expect(settingsStore.state.aiChatWorkspace).toBe("/srv/chat");
+		expect(container.textContent).toContain("must be an absolute path");
+	});
+});

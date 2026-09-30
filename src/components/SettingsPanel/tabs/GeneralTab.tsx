@@ -53,7 +53,13 @@ export const GeneralTab: Component = () => {
 		}
 	};
 
+	const [homeDirectory, setHomeDirectory] = createSignal("");
+	const [workspaceRefused, setWorkspaceRefused] = createSignal(false);
+
 	onMount(() => {
+		invoke<string>("get_home_directory")
+			.then(setHomeDirectory)
+			.catch((err) => appLogger.error("app", "Failed to get home directory", err));
 		refreshCliStatus();
 		refreshMdkbStatus();
 	});
@@ -473,6 +479,24 @@ export const GeneralTab: Component = () => {
 					"general.hint.egoProfile",
 					"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
 				)}
+			/>
+			<SettingInput
+				label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
+				value={settingsStore.state.aiChatWorkspace}
+				onInput={(path) => {
+					const accepted = settingsStore.setAiChatWorkspace(path);
+					setWorkspaceRefused(!accepted);
+					return accepted;
+				}}
+				placeholder={homeDirectory()}
+				hint={
+					workspaceRefused()
+						? t("general.hint.aiChatWorkspaceRefused", "The AI Chat workspace must be an absolute path.")
+						: t(
+								"general.hint.aiChatWorkspace",
+								"Folder AI Chat runs in. Leave empty for the home directory of the machine running ego. A missing folder is created.",
+							)
+				}
 			/>
 
 			<h3>{t("developerTools.heading.ide", "IDE")}</h3>
