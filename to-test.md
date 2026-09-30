@@ -1907,11 +1907,11 @@ blame, and the disk poll no longer re-reads the whole file 5 s after opening.
 one "added" marker per line. Measured in Chrome only; WKWebView is the one
 that blocked for over a minute.
 
-- [ ] Desktop app: open `~/Gits/personal/ego/mutants.out/mutants.json` (23 MB,
+- [ ] Desktop app: open `~/Gits/personal/ego/mutants.out/mutants.json` (23 MB, _(NOT VERIFIED 2026-09-29: partial — Real ~/Gits/personal/ego/mutants.out/mutants.json is now 5092 bytes (not 23 MB), so used a synthetic 24.5MB untracked JSON in a registered local repo: opened in web UI within the first 2.5s poll, plain (1 span/line, no highlight), changeGutter empty. setPerfDebug(true): one log 'UI freeze: 227ms' breadcrumb label editor.load file=big.json (an edito)_
   gitignored). It must open in a few seconds at most, unhighlighted, with no
   gutter markers. With `window.__TUIC__.setPerfDebug(true)` first, any
   remaining `UI freeze` line on `/logs` names an `editor.*` breadcrumb.
-- [ ] After the `make dev` restart: a small **untracked** file opens with an
+- [x] After the `make dev` restart: a small **untracked** file opens with an _(verified 2026-09-29: Web UI local repo (fx/agb2/lr): untracked small.txt opens with no git markers (changeGutter only active-line element); tracked f.txt edited vs HEAD shows 2 cm-gitMarker elements; Git panel diff of untracked small.txt shows '+a +b +c' (all added). Instance is the running debug build (not restarted after this change, current build).)_
   empty gutter; a tracked file with an unsaved-vs-HEAD edit still shows its
   markers; the diff viewer still shows the untracked file as all added.
 - [ ] Desktop app (WKWebView), after the fix that installs the document with _(NOT VERIFIED 2026-09-29: Needs WKWebView desktop app smoothness with a 23 MB file; perf is engine-specific.)_
@@ -2046,7 +2046,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
 - [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
   is 58 GiB and a Trim forces a full rebuild of the running dev app, so no agent may
   run it. Trim against other repos' `target/` is covered.
-- [ ] Rust change, needs a `make dev` restart (stories #5525 / #8c80). Switch to a repo
+- [x] Rust change, needs a `make dev` restart (stories #5525 / #8c80). Switch to a repo _(verified 2026-09-29: Isolated instance (web UI + /logs): default active_and_switch: adding/switching to never-indexed repo lr logs info 'content index warm on repo switch' then 'content index built'. Set active_only in Settings>General (config index_strategy=active_only), added+switched to lr2: only debug 'content index warm skipped by strategy', no warm/built pair. Cr)_
   that has never been indexed this session with `index_strategy` at its default
   `active_and_switch`, then check `GET :9876/logs` for `content index warm on repo
   switch` followed by `content index built` for that repo — until now nothing warmed a
@@ -2171,7 +2171,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   detaches and comes home — is listed under *The embedded AI engine is gone
   (#784-0aec)* at the end of this file. The streaming half returns with 785-58ca and
   will be written against ego rather than restored from here.
-- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Session state is
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Session state is _(NOT VERIFIED 2026-09-29: partial — /events SSE (unix socket) emits 'session-state-changed' {session_id,state{awaiting_input,shell_state,last_activity_ms}} only on real transitions (11 events for 2 shell commands: busy/idle). Browser resource entries: no /sessions or list_active_sessions polling in 15s (hidden tab); diagnostics HEALTH lines show no extra IPC field. Awaiting badge wit)_
   pushed, not polled (story `687-be9d`). The desktop no longer calls
   `list_active_sessions` on a 1 Hz timer; the backend emits `session-state-changed`
   once per real transition, on the Tauri window and on `/events` SSE. (1) **Badges
@@ -2192,7 +2192,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   rows in `Settings > Providers`. #784-0aec deleted `detect_ollama` with the rest of
   the provider registry and removed the tab itself — no row, no icon, no reason line.
   Provider configuration moves into ego as 786-4a6d, which brings its own checks.
-- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Block-display
+- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Block-display _(NOT VERIFIED 2026-09-29: partial — Toggles Show block timestamps/Block folding/scrollbar marks exist (Expert on for last two), off writes config.json show_block_timestamps/block_folding_enabled=false, survive page reload+GET /config. Restart, Ctrl+Cmd label, Cmd+Shift+. fold not drivable. Default-hidden without Expert.)_
   settings now persist (story `702-327a`). `show_block_timestamps`,
   `show_scrollbar_marks` and `block_folding_enabled` were absent from the Rust
   `AppConfig`, so serde silently dropped them from every `save_config` payload —
@@ -2213,7 +2213,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   unrelated setting (e.g. Copy on select), restart, confirm it also survived —
   the new fields must not have disturbed the config merge.
 
-- [ ] **Show scrollbar marks toggle** (719-36af) — frontend only, so Vite HMR
+- [ ] **Show scrollbar marks toggle** (719-36af) — frontend only, so Vite HMR _(NOT VERIFIED 2026-09-29: partial — Toggle 'Show scrollbar marks' present after Block folding (Expert on), searchable ('scrollbar' -> Terminal>Terminal), persists in config.json false/true and after page reload. Canvas tick gating/Cmd+F ticks not observable; restart not done. Item says General>Terminal; it's Terminal tab.)_
   picks it up; no `make dev` restart needed. I could not screenshot it: the
   orchestrator instance on :9876 does not run this build, and no worktree dev
   instance was up. (1) **It appears:** `Settings > General > Terminal` now shows
@@ -2239,7 +2239,7 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   file left to measure and no tool card to reload. ego keeps its own transcript, so
   bounding it is ego's problem, not TUICommander's.
 
-- [ ] **Scrollback reflow honours its Settings toggle** (660-d087) — **Rust
+- [ ] **Scrollback reflow honours its Settings toggle** (660-d087) — **Rust _(NOT VERIFIED 2026-09-29: partial — Web UI Terminal (Expert on) 'Reflow scrollback on resize' ON by default (config true). OFF: 100->30 col resize truncated lines (22 rows, no extra). Flipped ON after session existed: resize 30->80 rejoined wrapped lines, config persisted. Visual re-wrap/htop and restart not checked.)_
   change, needs a `make dev` restart.** Until now the grid reflowed scrollback
   unconditionally and `scrollback_reflow` had no consumer at either end, so
   this change adds the missing Settings control AND the backend wiring.
@@ -2676,7 +2676,7 @@ test that drives an unanswered confirm through the real `build_router` stack
 but the actual dialog-dismissal behavior across every connected client can only
 be observed against a rebuilt binary:
 
-- [ ] Trigger `ui action=confirm` from an MCP client and let it sit unanswered
+- [x] Trigger `ui action=confirm` from an MCP client and let it sit unanswered _(verified 2026-09-29: MCP ui action=confirm left unanswered: call returned after 300s (03:09:47 -> ~03:14:47) with {confirmed:false, reason:"no answer within 300s"} (not HTTP 408). Dialog text was in the :9880 browser DOM at +5s and gone after. Desktop WebView and mobile PWA surfaces not observed.)_
   past 300 seconds without touching any client. Confirm the requesting call
   receives `{confirmed:false, reason:"no answer within 300s"}` — not a bare
   HTTP 408 — and that the confirm dialog disappears on its own from every
@@ -2913,7 +2913,7 @@ Still owed, and only these — all of them are about what is drawn:
       project scope shows that project's workstreams and its blocked one.
 - [x] Report into a **paused** project while the panel is open: the receipt is _(obsolete, verified 2026-09-29: Progress pause/correction removed: rg -i 'pause' src-tauri/src/progress -> no matches; no correction control in src/components/ProgressDialog; transport.test.ts:395 lists progress_pause gone)_
       already proven to say `paused`, but confirm no toast appears either.
-- [ ] Correct one event through the panel's correction control (edit a summary)
+- [ ] Correct one event through the panel's correction control (edit a summary) _(NOT VERIFIED 2026-09-29: partial — Obsolete: no correction/edit-summary control exists in the Progress dialog (List and Flow views expose only List/Flow/Close/Delete entry buttons; rg 'correct' in ProgressDialog and progress/*.rs = nothing; to-test.md already marks neighbouring pause/correction items obsolete). Cannot exercise.)_
       and confirm the panel and a fresh export both show the corrected text.
       This leg was never exercised: the live run covered the workstream rename,
       not an event correction.
@@ -3013,7 +3013,7 @@ these check the live surface.
       password, while `GET /health` answers 200 unauthenticated, which is the one route
       documented as open. The headless build has no loopback bypass, so this also holds
       from the daemon's own localhost.)_
-- [ ] On the desktop instance, the Progress **dialog** must behave exactly as
+- [x] On the desktop instance, the Progress **dialog** must behave exactly as _(verified 2026-09-29: Web UI :9880: Progress dialog opens from bell popover, lists entries, updates live when POST /progress/report adds one (entry id 58 appeared while open), list/report/viewed calls succeed; no 404 (dialog renders entries, logs show no progress errors).)_
       before: the routes are merged into `build_router` through `shared_routes()`
       now, so a regression here shows up as the dialog 404ing on every call.
       _(NOTE 2026-09-18: "panel" — `ProgressPanel` was replaced by `ProgressDialog`
@@ -3068,15 +3068,15 @@ build has the old behaviour until restart.
 - [x] After restart, `progress.sqlite3` must exist in the config directory, and _(verified 2026-09-29: progress.sqlite3 exists in instances/validate; ls -a fx/repo shows no .tuic dir after progress writes)_
       no *new* `.tuic/` directory may appear in any repository. The 42 existing
       ones are stale leftovers of the old design — see the cleanup item below.
-- [ ] Ask an agent to report: the entry must appear in the dialog with its agent
+- [ ] Ask an agent to report: the entry must appear in the dialog with its agent _(NOT VERIFIED 2026-09-29: partial — Dialog shows MCP-reported 'done' entries with agent name (e.g. 're-46' + Terminal aa379b21) and 33 'intent' entries as muted italic (rgb(115,115,115), label 'SET OUT TO') vs done normal rgb(212,212,212). Entries were seeded by earlier agents; I did not run a fresh agent report/intent marker myself.)_
       name, and an `intent:` marker from any agent tab must appear as a muted
       `intent` entry in the same list.
 - [x] An agent calling `progress` with `type=intent` must be refused, naming _(verified 2026-09-29: by code/test inspection, tests not executed here: Test: progress/model.rs:309 parse_reportable('intent') is an error; MCP path test mcp_transport.rs:16890 sends type=intent.)_
       `done` or `blocked`.
-- [ ] Open the dialog on a project with history, note the divider, let a new
+- [x] Open the dialog on a project with history, note the divider, let a new _(verified 2026-09-29: Web UI Progress dialog (All repo): seeded via POST /progress/report. Open with new A: 'Seen before' divider below A. B reported while open: rows B,A,divider - divider stayed below A. Close+reopen: no divider (nothing new; code draws none for index 0). Report C closed, reopen: divider between C and B (B,A now read).)_
       entry arrive: the divider must NOT move while the dialog is open. Close
       and reopen: it must now sit above the entries just read.
-- [ ] Settings → Agents → **Collect project progress** off: the `progress` tool
+- [ ] Settings → Agents → **Collect project progress** off: the `progress` tool _(NOT VERIFIED 2026-09-29: partial — Settings>Agents (Expert on) 'Collect project progress' off: fresh MCP tools/list (new peer) lost 'progress' (10 -> 9 tools); on again restored it (progress_tracking true in GET /config). Per-agent 'Collect progress' control exists (AgentsTab.tsx:1008, disabled when master off) but progress_tracking_disabled reply and intent-marker stop not exercise)_
       must disappear from a newly-connected agent's tool list, and `intent:`
       markers must stop being recorded. Per-agent **Collect progress** off must
       instead answer `progress_tracking_disabled` on a report.
@@ -3161,16 +3161,16 @@ headless build of this tree.
 - [ ] Settings → Services → Remote Machines → add a Direct connection to _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       `http://mac-mint:9877` with the username and password. Connect: the status
       goes **Connected**, not "Not authenticated".
-- [ ] Same connection with a wrong password: the status reads **Not
+- [ ] Same connection with a wrong password: the status reads **Not _(NOT VERIFIED 2026-09-29: partial — Web UI Settings>Remote Machines, Direct conn to local tuic-remote (:9892, user rem) with wrong password: badge 'Not authenticated' amber rgb(229,229,16), detail 'Authentication rejected by the remote daemon' (red hint) - wording differs from item's 'rejected these credentials' (that string is in remote_runtime.rs:622/RepoSection tooltip). GET statu)_
       authenticated** with "rejected these credentials", stays amber rather than
       red, and no terminal or repo call goes through.
-- [ ] Edit an existing connection: the password field shows the "stored — leave
+- [x] Edit an existing connection: the password field shows the "stored — leave _(verified 2026-09-29: Web UI edit of Direct conn: password input placeholder 'Password (stored — leave blank to keep it)'. Saved with blank password (status drops to [] until Connect), pressed Connect -> status connected, no error: vault password kept.)_
       blank to keep it" placeholder, and saving with it blank keeps the
       connection working.
 - [ ] Restart `tuic-remote` on mac-mint under a live connection. The daemon mints _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       a new token; within one poll (5s) the connection re-authenticates by itself
       and stays Connected.
-- [ ] **[VISUAL]** The password field and the vault hint render inside the
+- [ ] **[VISUAL]** The password field and the vault hint render inside the _(NOT VERIFIED 2026-09-29: partial — Edit/add form Direct: password input (type=password, 554x32) sits inside the pane (no element right of pane edge, 0 overflowing). No screenshot; judged by geometry only (pane scrollW 746 vs clientW 618 noted); vault hint text present in add form.)_
       add/edit form without breaking the Settings layout.
 
 ## Remote repos run on the remote machine (#782-3d05) — needs a `make dev` restart
@@ -3193,7 +3193,7 @@ same restart as the item above and the same daemon (`mac-mint:9877`).
       Confirm with `GET http://localhost:9876/logs?source=network`.
 - [ ] Stop `tuic-remote` on mac-mint with the repo still open. Repo operations _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       report "Remote connection … not connected" rather than showing local data.
-- [ ] Open a file from the remote repo in the editor and use Go to definition.
+- [x] Open a file from the remote repo in the editor and use Go to definition. _(verified 2026-09-29: Local tuic-remote as Direct machine; remote repo added via picker (fx/agb2/rr), opened a.rs from File Browser in editor: /logs?source=network has warn '"mdkb_outline" has no remote route and ran on the local machine' (once). Go to definition itself not invoked (keys do not reach page); the log line is triggered by opening the file.)_
       mdkb has no remote route, so it runs locally against a path this machine
       does not have and logs `has no remote route and ran on the local machine`
       once — check `GET http://localhost:9876/logs?source=network`. The log line
@@ -3208,7 +3208,7 @@ point of the story — plus the two things only the backend can do.
 
 - [ ] Connect a remote machine from Settings → Remote Machines. The status goes _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       Connecting → Connected and the panel shows the protocol version.
-- [ ] Connect the same machine from a second client (browser at
+- [ ] Connect the same machine from a second client (browser at _(NOT VERIFIED 2026-09-29: partial — Connect via Settings>Remote Machines in browser UI; GET /config/remote-connections/status shows connected and /events SSE (unix socket) carries 'remote-connection-status' events (Disconnect->Connect) so every client gets pushes. Only one browser client + no desktop window observed side by side; wrong password gives status unauthenticated.)_
       `http://localhost:9876/`) while the desktop app is open. **Both** panels
       show Connected: the status is pushed to every client, not owned by the one
       that clicked.
@@ -3273,7 +3273,7 @@ dir removed).
 
 ## Ideas panel: queue instead of typing, and a shorter Compose panel
 
-- [ ] Open an agent tab and the Ideas panel. Each idea shows a queue button
+- [ ] Open an agent tab and the Ideas panel. Each idea shows a queue button _(NOT VERIFIED 2026-09-29: partial — Web UI Ideas panel on a plain shell tab: each idea shows only pencil (Edit idea), ▶ (Send to terminal), ✕; no queue button. Agent-type tab (queue button present) not testable: no real agent CLI tab.)_
       (stacked lines) left of the ▶ send button. On a plain shell tab the queue
       button is absent and only ▶ remains.
 - [ ] Click queue while the agent is mid-turn: nothing is typed into the prompt, _(NOT VERIFIED 2026-09-29: Needs a real agent mid-turn to observe queue-on-busy and idle delivery)_
@@ -3283,7 +3283,7 @@ dir removed).
       there; clicking it with a plain shell active raises the "not running an
       agent" toast in the main window instead of queueing, and does NOT steal
       focus back to the main window (unlike ▶, which does).
-- [ ] The Compose panel is visibly shorter (160px, was 200px) and still fits the
+- [ ] The Compose panel is visibly shorter (160px, was 200px) and still fits the _(NOT VERIFIED 2026-09-29: partial — Compose panel not openable in web UI on a shell tab (palette 'Toggle compose panel' rendered nothing; needs agent session). Code disagrees with item: ComposePanel.module.css .panel height 142px (item says 160px) and .queueList max-height 78px (item says 96px) - item text may be stale; no runtime measurement, queue with several commands not producib)_
       editor, the status bar and the buttons. Open the queue list with several
       queued commands: the list caps at 96px and the editor keeps usable rows.
 
@@ -3295,7 +3295,7 @@ dir removed).
       hint and NOT the red "Update failed" dialog nor the red hint.
 - [ ] The same build on a release install with no symlink in the path still _(NOT VERIFIED 2026-09-29: Needs a release install (symlink-free path) updater check)_
       reports "You are on the latest version" or the available version.
-- [ ] After the Notes→Ideas rename: existing ideas still load. The store reads
+- [ ] After the Notes→Ideas rename: existing ideas still load. The store reads _(NOT VERIFIED 2026-09-29: partial — Web UI Ideas panel: added 2 ideas -> instance notes.json 'notes' array written (same file/store); edit (blur commit) and delete work and persist to notes.json ([] after delete). Instance had no pre-existing notes.json so 'existing ideas load/count' not checked; reassign, image paste (note-images), detach/re-dock not done.)_
       the same `notes.json` through the same `load_notes`/`save_notes` commands,
       so nothing should have moved — but this is the one failure that would be
       silent and lossy, so open the panel and count the ideas before trusting it.
@@ -3334,7 +3334,7 @@ rebuilt.
 - [ ] With an upstream whose TLS fails (or any dependency logging through the _(NOTE 2026-09-29: partial evidence only — Bridged log records classified at app_logger.rs:97 bridged_log_classification (diagnostic); confirm via that function's tests rather than a live TLS failure.)_
       `log` facade at error level), the error log panel's default **User** tab
       stays clean and the unseen-error badge does not move.
-- [ ] The same entries are present under the **Diagnostic** tab, with `source`
+- [ ] The same entries are present under the **Diagnostic** tab, with `source` _(NOT VERIFIED 2026-09-29: partial — Web UI Error Log panel (via palette 'Error log') has User / Diagnostics (29) tabs; Diagnostics rows show real module sources (tuicommander_lib::mcp_http::session, ::pty, ::content_index), none 'log'. No rustls_platform_verifier entry exists in /logs (needs a TLS verification event; none produced), so that specific example not confirmed.)_
       showing the real module (e.g. `rustls_platform_verifier::verification::apple`)
       instead of `log`.
 - [ ] `GET /logs?source=rustls_platform_verifier::verification::apple` returns _(NOT VERIFIED 2026-09-29: partial — GET /logs?source=log returns [] (verified). GET /logs?source=rustls_platform_verifier::verification::apple also [] because no TLS verifier error occurred in this instance; positive half needs a TLS-intercepting/self-signed failure (unit test exists in app_logger.rs).)_
@@ -3387,10 +3387,10 @@ feature: each item confirms that removing the engine did not take a *surviving*
 feature with it. All of it needs the rebuilt backend, so run it after the
 restart, not before.
 
-- [ ] The app starts with the existing `config.json` and no config backup
+- [ ] The app starts with the existing `config.json` and no config backup _(NOT VERIFIED 2026-09-29: partial — Instance config dir has no config.json backup file beside config.json (ls), and config has no ai_* keys. Startup with legacy keys not re-run (no restart allowed); Settings General shows master toggle alone.)_
       appears beside it (`ai_chat_enabled`, `ai_triage_enabled` and
       `ai_watchers_enabled` are still in Boss's file and must be ignored).
-- [ ] Settings → General → Experimental Features shows the master toggle alone;
+- [x] Settings → General → Experimental Features shows the master toggle alone; _(verified 2026-09-29: Web UI Settings>General>Experimental Features: only 'Enable experimental features' toggle (Expert off and on, experimental on and off); no AI Triage/AI Watchers/AI Chat sub-toggles. Nav gains 'AI Chat' tab when enabled.)_
       the AI Chat, AI Triage and AI Watchers sub-toggles are gone.
 - [ ] With the master toggle ON, the AI Chat panel opens and shows the _(NOTE 2026-09-29: rg -i 'moving to' src finds no 'moving to ego' shell string; AI Chat panel is real now; re-write the expectation)_
       "moving to ego" shell with the focused terminal's name in its header; with
@@ -3398,10 +3398,10 @@ restart, not before.
 - [ ] SSH Tunnels still opens — it shares that master toggle. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
 - [ ] Settings has no Providers tab and no AI Chat tab, and its search returns _(NOTE 2026-09-29: description stale — an AI Chat settings tab exists (SettingsPanel.tsx:78, settingsSearchIndex.ts:625); re-write the expectation before testing)_
       nothing for "provider", "triage" or "watcher".
-- [ ] The toolbar has no watcher eye next to the notification bell.
+- [x] The toolbar has no watcher eye next to the notification bell. _(verified 2026-09-29: Web UI toolbar: buttons next to the notification bell are 'Smart Prompts Library', a session-finished chip and the bell; only 'watcher'-named element is the Command palette button (class watcherBtn, title 'Command palette (⌘P)'). No watcher eye.)_
 - [ ] A PR detail popover opens and shows checks, files and comments with no AI _(NOT VERIFIED 2026-09-29: Needs a real GitHub PR (gh account) for PR detail popover.)_
       review section and no error in its place.
-- [ ] The GitHub Ops dashboard renders three columns — auto-fix sessions,
+- [ ] The GitHub Ops dashboard renders three columns — auto-fix sessions, _(NOT VERIFIED 2026-09-29: partial — GithubOpsDashboard.tsx:77 now documents FIVE live columns (reviews/proposals came back, #795-320b) so the item's 'three columns' is stale; not rendered: only entry is the GitHub panel's 'Ops Dashboard' button (GitHubPanel.tsx:412) which needs a GitHub-remote repo (none in fixtures), and the palette has no matching command in browser mode.)_
       conflict assists, CI/merge readiness — and conflict assist still populates
       its column when a conflicting PR is opened.
 - [ ] Smart Prompts still run in shell, inject and headless modes. _(NOT VERIFIED 2026-09-29: Headless mode runs a real agent CLI; shell/inject only partial.)_
@@ -3412,7 +3412,7 @@ restart, not before.
       opener was the chat panel's knowledge footer, so the overlay and its two
       backend commands went with it — `<config_dir>/ai-sessions/*.json` keeps
       filling up with no reader.
-- [ ] The AI Chat panel still detaches into its own window and the main window
+- [ ] The AI Chat panel still detaches into its own window and the main window _(NOT VERIFIED 2026-09-29: blocked — Detached AI Chat window and 'Bring back' placeholder are desktop-only (PanelWindowControls detach); not rendered in web mode.)_
       shows the *Bring back* placeholder; closing the detached window restores
       the docked shell.
 - [ ] **Needs a `make dev` restart (Rust).** Load an ego conversation whose _(NOT VERIFIED 2026-09-29: Needs a real ego conversation whose first answer starts with the ack line.)_
@@ -3444,7 +3444,7 @@ repository from a connected machine. No Rust changed, so HMR is enough — but
 nothing here is reachable until a remote connection reads **Connected**, which
 needs the `make dev` restart that #781-9652 is waiting on.
 
-- [ ] With **no** machine connected, the sidebar `+` must behave exactly as before:
+- [ ] With **no** machine connected, the sidebar `+` must behave exactly as before: _(NOT VERIFIED 2026-09-29: partial — Web UI, machine disconnected (status []): sidebar 'Add Repository' opens a single popover with a path text input (Cancel/Add), no menu/picker. Browser mode cannot show the native dialog, so 'local native dialog' equivalence not checkable; picker absent as required.)_
       straight to the local native dialog, no menu. The picker must not appear.
 - [ ] With mac-mint connected, `+` opens the menu; picking it opens the browser _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       showing `/` on **mac-mint**, not this Mac. Compare against
@@ -3452,12 +3452,12 @@ needs the `make dev` restart that #781-9652 is waiting on.
 - [ ] Walk to `/home/stefano/Gits`, press **Add This Folder** on a real repo. It _(NOT VERIFIED 2026-09-29: Needs remote machine with /home/stefano/Gits (second machine).)_
       lands in the sidebar with the remote badge, and its git status is the remote
       machine's.
-- [ ] Only folders are listed — no files.
+- [x] Only folders are listed — no files. _(verified 2026-09-29: Web UI: connected local tuic-remote (:9892) as Direct machine, sidebar Add Repository menu (Local Repository | agb2wrong) -> 'Browsing agb2wrong' picker at remote home: 82 rows, all directories (checked vs os.path.isdir), 0 of 149 home files listed; '..' entry and 'Add This Folder'/Cancel present.)_
 - [ ] Type a path that does not exist on mac-mint into the field and press Enter: _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       the daemon's own message must show, not an empty folder.
 - [ ] Close the picker and reopen it for the same machine: it must resume where it _(NOT VERIFIED 2026-09-29: Remote repo picker needs a real remote machine)_
       was left, not at `/`.
-- [ ] **[VISUAL]** The list scrolls inside the dialog without breaking its layout
+- [ ] **[VISUAL]** The list scrolls inside the dialog without breaking its layout _(NOT VERIFIED 2026-09-29: partial — Remote picker at /usr/lib (17 folders) and home (82): dialog top 193 bottom 707 in 900px viewport; entries list is a scroll container (client 318 / scroll 413, overflow auto) so the dialog does not grow; footer buttons stay. No screenshot (times out), judged by geometry.)_
       on a directory with many entries (`/usr/lib` is a good one).
 
 ## Orchestrator RESULT wake with background work (#797-8549) — needs a `make dev` restart
@@ -3491,7 +3491,7 @@ needs the `make dev` restart that #781-9652 is waiting on.
       list, row page, index inspector, and query console render without a stale
       dirty badge. _(verified in an isolated `sqlite-viewer-920` instance;
       screenshot: `.screenshots/sqlite-viewer-plugin.png`)_
-- [ ] Exercise the per-column filter and visual query-plan buttons through the UI,
+- [ ] Exercise the per-column filter and visual query-plan buttons through the UI, _(NOT VERIFIED 2026-09-29: blocked — SQLite Viewer is a registry plugin (plugins/sqlite-viewer, not built in); not installed in instance and install writes plugin dir/needs registry download; file open path is a native file picker/desktop flow. Not exercised in web UI within time box.)_
       then enable editing on a primary-key table, change a scalar cell, save,
       reopen the file, and confirm the persisted value. _(The exact SQL filter,
       explain, edit, export, and reopen path is runtime-tested; UI automation was
@@ -3509,7 +3509,7 @@ has it: no `make dev` restart needed.
 - [ ] With a remote machine in `error`/`disconnected` and at least one repo _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       registered on it, the status bar shows `Offline: <machine>` in red, and the
       tooltip points at Settings -> Remote Machines.
-- [ ] The sidebar badge on that repo reads `offline` in red instead of `remote`,
+- [x] The sidebar badge on that repo reads `offline` in red instead of `remote`, _(verified 2026-09-29: Web UI: remote repo 'RR' badge 'remote' (grey, tooltip 'On agb2wrong.'); after killing the local tuic-remote daemon: badge 'offline', color rgb(241,76,76) red, tooltip 'agb2wrong is not answering. Reconnect in Settings → Remote Machines.')_
       and its tooltip names the machine and its state.
 - [ ] Reconnect the machine: the status-bar pill disappears and the badge goes _(NOT VERIFIED 2026-09-29: Needs a remote machine to disconnect/reconnect)_
       back to a muted `remote` without a reload.
@@ -3525,7 +3525,7 @@ deduped because the guard keyed on `isTauri()` instead of "is this call routed
 to a remote connection". Covered by two new tests in `usePty.test.ts`.
 
 - [ ] Add a repo from a connected remote machine. Exactly one shell tab appears. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
-- [ ] Adding a LOCAL repo still opens one tab and the backend still mints the id.
+- [ ] Adding a LOCAL repo still opens one tab and the backend still mints the id. _(NOT VERIFIED 2026-09-29: partial — Web UI: Add Repository > Local Repository > path 'fx/agb2/lr' > Add: LR appears in sidebar, tab bar shows exactly one tab 'main 1' (no duplicate), repositories.json entry for lr has no connectionId (rr has). Backend-minted id not inspected.)_
 
 ### Root cause found while testing the above
 
@@ -3567,7 +3567,7 @@ Same restart caveat — Rust.
 
 - [ ] Connect a machine, then stop `tuic-remote` on it. The badge goes to _(NOT VERIFIED 2026-09-29: Needs a real tuic-remote daemon to stop and start)_
       `error` and its mirrored sessions retire from the list.
-- [ ] Start the daemon again and WAIT — do not press Connect. Within one poll
+- [ ] Start the daemon again and WAIT — do not press Connect. Within one poll _(NOT VERIFIED 2026-09-29: partial — Daemon killed (badge 'offline', status error Unreachable), restarted daemon with no Connect press: status 'connected' within 8s (polled every 8s), sidebar badge back to grey 'remote'. Reappearing sessions not checked (daemon had none).)_
       interval the badge must return to `connected` by itself and the machine's
       sessions must reappear.
 - [ ] Wrong password: the badge reads `unauthenticated`, and for an SSH-transport _(NOT VERIFIED 2026-09-29: Needs SSH-transport remote machine with wrong password (second machine))_
@@ -3591,7 +3591,7 @@ call fits inside the router's bound.
 - [ ] `GET /acp/connections` must not list a connection for the abandoned turn. _(NOT VERIFIED 2026-09-29: Needs ego ACP turn abandoned by dropped request.)_
 - [ ] A normal Smart Prompt still answers, and a long one that runs out of time _(NOT VERIFIED 2026-09-29: Needs real ego and a 240 s timeout turn (oneshot.rs:333).)_
       reports "ego did not finish the turn within 240s" rather than a bare 408.
-- [ ] Point `ego_executable` at something that starts and never speaks (e.g. a
+- [ ] Point `ego_executable` at something that starts and never speaks (e.g. a _(FAILED 2026-09-29: browser mode aborts the ego connect at +30 s with 'signal is aborted without reason' (transport.ts:2590 fixed 30 s AbortController) instead of the backend's 60 s initialize message; no orphan child left. Story 1288-a5bc)_
       `sleep 600` wrapper) and press Connect in AI Chat: it must fail within a
       minute with "the agent did not answer initialize within 60s" instead of
       spinning forever, and leave no child behind.
@@ -3612,7 +3612,7 @@ reads `ws.protocol` in `onopen` before the first frame.
 - [ ] Open a terminal on a remote machine over a **direct** (non-tunnel) link. _(NOT VERIFIED 2026-09-29: needs a second machine (mac-mint / SSH daemon) — not reproducible in the isolated headless/browser instance)_
       It renders normally, and DevTools shows the stream socket with
       `Sec-WebSocket-Protocol: tuic.deflate` on the 101.
-- [ ] Open a terminal on the same machine (local session). The socket asks for
+- [ ] Open a terminal on the same machine (local session). The socket asks for _(NOT VERIFIED 2026-09-29: blocked — Browser WebSocket URL/subprotocol not observable: no resource-timing entry for WS and no fresh PTY tab can be created to patch WebSocket before connect (agent-browser eval only, page reload drops patch). Code: canvasTerminalTransport.ts:221 (per agentb0 1048).)_
       nothing: no `compress=deflate` in the URL and no subprotocol on the 101.
 - [ ] Point a current build at an **older** `tuic-remote` (one without this _(NOT VERIFIED 2026-09-29: Needs an older tuic-remote binary from an earlier commit)_
       commit). The terminal must render correctly — untagged framing — and the
@@ -3683,9 +3683,9 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
       per attempt, spaced by a growing gap.
 - [ ] With the app running and the machine offline, turn the machine ON. It must _(NOT VERIFIED 2026-09-29: Needs a remote machine to switch on/off)_
       go `connected` by itself within one backoff window. No click.
-- [ ] Press Connect on a machine that is off. The button must report the failure
+- [x] Press Connect on a machine that is off. The button must report the failure _(verified 2026-09-29: Daemon stopped, machine 'Error'. Pressed Connect in Settings>Remote Machines: row shows 'Error / Unreachable: error sending request for url (http://127.0.0.1:9892/health)'; /logs show repeating 'Connecting' / 'Remote connection failed' afterwards, i.e. retry continues. (Cannot tell attempt-own vs shared error text.))_
       (that attempt's own error), AND the retry must continue afterwards.
-- [ ] Press Disconnect on a connected machine. It must stay disconnected —
+- [x] Press Disconnect on a connected machine. It must stay disconnected — _(verified 2026-09-29: Direct conn to local tuic-remote (:9892) connected; pressed Disconnect in Settings>Remote Machines; watched 95s (daemon reachable throughout): status [] via GET /config/remote-connections/status, no new 'Connecting'/'Connected' remote log lines, UI shows no Connected.)_
       watch it for longer than 60s. A retry that resurrects it is the bug the
       generation counter exists to stop.
 - [x] Disconnect, then Connect again immediately. The machine must come up, and _(verified 2026-09-29: DELETE /connect then POST /connect immediately: status connected (same token). Then killed daemon: status error Unreachable, restarted daemon: back to connected in 3s with new token, so the new supervisor still retries after the retired one was taken down.)_
@@ -3699,7 +3699,7 @@ sat in `error` until somebody pressed Connect — measured on mac-mint, answerin
 
 ## The website names warm copy-on-write worktrees
 
-- [ ] `website/index.html`, "Git worktrees, fully managed": the second bullet
+- [ ] `website/index.html`, "Git worktrees, fully managed": the second bullet _(NOT VERIFIED 2026-09-29: partial — Rendered website/index.html in a same-origin srcdoc iframe (no screenshot). 1200px: 'Warm worktrees' bullet names copy-on-write, li 544x69, no overflow. 390px: bullet wraps (92px tall, code chips intact) but its column right edge is 402 > 390 viewport and document scrollWidth is 508 (several .feature-content blocks are 361-484px wide, all sections )_
       now names the copy-on-write warming that `docs/user-guide/worktrees.md`
       documents. Checked at 1200px; check it on a phone width too.
 
@@ -3811,7 +3811,7 @@ the config surface. A Dictation control belongs to story 818.
 - [ ] With `hands_free_activation_phrase` empty, arm and speak: every recognised _(NOT VERIFIED 2026-09-29: Needs real spoken utterances through recognizer into Compose queue.)_
       utterance must reach the Compose queue exactly as it did before this
       story. An empty phrase must change nothing.
-- [ ] Set the phrase to `attività tuic`, then save something unrelated from the
+- [x] Set the phrase to `attività tuic`, then save something unrelated from the _(verified 2026-09-29: Web UI Settings>Voice: set Activation phrase 'attività tuic' and Hold-back 2250ms (Expert), then changed Language auto->Italian from the UI; GET /dictation/config after each: phrase 'attività tuic', hands_free_hold_back_ms 2250 and language 'it' all persisted (no reset to defaults). Hotkey/device saves not separately exercised.)_
       Dictation settings UI — a hotkey, the language, the device. Re-read
       `GET /dictation/config`: the phrase and `hands_free_hold_back_ms` must
       **still be there**. This is the defect the store fix closes; before it,
@@ -4003,7 +4003,7 @@ changes** (on by default).
 - [ ] Hold the push-to-talk hotkey and dictate a sentence. No notice of either _(NOT VERIFIED 2026-09-29: Needs real push-to-talk hotkey and dictation audio.)_
       kind may appear, the hands-free badge must stay off, and `voice
       action=status` must still report `available: false`.
-- [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other
+- [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other _(NOT VERIFIED 2026-09-29: partial — Voice tab (Expert on): toggle 'Tell the agent when a hands-free conversation starts...' at x=521 same as other toggles (Earcons, Automatically press Enter), text reads whole sentence. Screenshot/hint contrast not judged visually; no separate hint <p> element (text is the label).)_
       dictation toggles and its hint must read clearly at the panel's width.
 
 ## Voice conversation controls in the Dictation panel (story `818-2a29`, 2026-09-22) — **Rust, needs a `make dev` restart**
@@ -4018,10 +4018,10 @@ Everything mechanical is covered by tests; these items need real audio, a real
 download, or Boss's eye. Run them against the worktree build, never Boss's live
 sessions.
 
-- [ ] Download **ONNX Runtime** and **Italian** from Spoken replies. The percent
+- [ ] Download **ONNX Runtime** and **Italian** from Spoken replies. The percent _(NOT VERIFIED 2026-09-29: partial — ONNX Runtime and Italian were already Downloaded (not redone). Started English+German together: English 0->81% then Downloaded; German stayed 0% meanwhile (independent, no shared progress) but later showed 7/29/65% then fell to 0% and logged 'Speech asset download failed: german AbortError' (client fetch abort ~60s); backend stayed 'downloading', s)_
       must climb on each row independently — starting both at once must not show
       one row the other's progress — and each row must end at Downloaded.
-- [ ] Cancel a download halfway. The row must go back to Not Downloaded with no
+- [ ] Cancel a download halfway. The row must go back to Not Downloaded with no _(NOT VERIFIED 2026-09-29: partial — POST /dictation/speech/assets/cancel {asset:german} -> 'Cancelled German' but 30s later GET assets still german=downloading, UI row 0%+x, .staging/german dir remains (stalled at 98MB, no growth). Not confirmed as bug vs stalled socket; mid-way cancel via UI x not cleanly exercised.)_
       progress bar left behind, and no partially installed files may remain.
 - [ ] With Italian ready, the **Voice** control must appear and list `giovanni`. _(NOT VERIFIED 2026-09-29: Requires hearing reply in chosen voice; Italian voice assets)_
       Pick it, then arm a conversation and hear a reply in that voice.
@@ -4041,7 +4041,7 @@ sessions.
 - [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must _(NOT VERIFIED 2026-09-29: blocked — [VISUAL] Settings > Dictation at panel width needs a desktop screenshot via maccontrol; not permitted here and not observable over HTTP.)_
       line up with the Whisper model rows above them, and the phase line must
       stay readable while it changes.
-- [ ] Open the app in a browser tab (`http://localhost:9877/`) and open
+- [ ] Open the app in a browser tab (`http://localhost:9877/`) and open _(NOTE 2026-09-29: stale — browser mode now has a Voice tab (renamed Dictation) with the full Dictation/Hands-free content)_
       Settings. The **Dictation** tab must be absent entirely, and searching
       settings for "Hands-free" must report no match rather than opening an
       empty panel. The browser microphone and speaker are story `832-e730`.
@@ -4114,7 +4114,7 @@ built. Do not mark that item from a mock — record it as blocked.
 The three pushes are dual-emitted: the desktop window gets an `emit`, the SSE
 stream gets the identical body. Only a restart loads them.
 
-- [ ] Open the web UI (`http://localhost:9877/`, browser mode) and start a
+- [x] Open the web UI (`http://localhost:9877/`, browser mode) and start a _(verified 2026-09-29: Web UI :9880 browser mode, Voice>Spoken replies: clicked Download on English; row went 0% -> 12% -> 25% -> 81% in the browser tab (polled DOM every 3s), then Downloaded. (Also found: whisper-model Download in browser sends {} -> 422 'missing field model': transport.ts:136 reads args.model_name but store passes modelName.))_
       speech-asset download from the Dictation panel. The progress bar must move
       in the **browser** tab, not only on the desktop — before 833 a browser
       client saw the download start and finish with nothing in between.
@@ -4139,7 +4139,7 @@ repository toast did not. `agent-browser` navigation and DOM inspection worked,
 but `Page.captureScreenshot` timed out repeatedly, and CUA could not bind the
 headed test browser window.
 
-- [ ] **[VISUAL]** Capture the two toast states together after the screenshot
+- [ ] **[VISUAL]** Capture the two toast states together after the screenshot _(NOT VERIFIED 2026-09-29: partial — Toast VISUAL: screenshots time out in this browser so no contrast/wrapping judgement possible; toast trigger states not reproduced in web UI. Not verified.)_
       backend is available. Confirm the secondary button spacing, contrast and
       wrapping at the normal window width and at a narrow width.
 
@@ -4204,7 +4204,7 @@ or credential is touched.
       yet) and confirm `settings_expert_mode` round-trips through
       `~/Library/Application Support/tuicommander/config.json` (or platform
       equivalent) and survives a full `make dev` restart.
-- [ ] After the restart, `GET /config/defaults` also returns `repo_defaults`
+- [ ] After the restart, `GET /config/defaults` also returns `repo_defaults` _(NOT VERIFIED 2026-09-29: partial — GET /config/defaults has repo_defaults (16 keys) and agents ({agents:{}}). Git&GitHub Expert off hides ~8 rows (copy ignored/untracked, storage, auto-archive, orphan x2, auto-fetch, auto-delete), Expert on shows them. Smart Prompts 'Headless Agent' is SHOWN with Expert off while unset: smartPromptsTabExpert.test.tsx:60 says deliberately basic - ite)_
       and `agents` (story `864-a5c9`). In Settings with Expert off, Git &
       GitHub hides the eight repository-default rows while they hold their
       defaults, and Smart Prompts hides "Headless Agent" while it is not
@@ -4219,7 +4219,7 @@ or credential is touched.
 - [x] With progress collection off for an agent, the `progress` MCP tool _(verified 2026-09-29: by code/test inspection, tests not executed here: progress/service.rs:38 'progress_tracking_disabled: ... (Settings → Agents)'; mcp_transport.rs:1523 comment. Message names Agents page.)_
       answers `progress_tracking_disabled … (Settings → Agents)`. The toggle
       lives on the Agents page; "Settings → Progress" never existed.
-- [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego**
+- [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego** _(NOT VERIFIED 2026-09-29: partial — Web UI: General has 'ego?' section (tooltip ?) with ego executable + profile TEXT inputs; not directly after Code Intelligence (absent in browser); NO 'Configured at'/'Not configured' line or Select/Clear buttons in browser mode (desktop-only?). AI Chat tab (experimental on) has Default Model+Providers but ego-empty shows raw HttpRpcError 409 (cf. )_
       section sits directly after Code Intelligence, with a `?` tooltip, the
       "Configured at …" / "Not configured" line, **Select…** and **Clear**.
       Settings → AI Chat (Experimental Features on) shows only Default Model
@@ -4321,7 +4321,7 @@ or credential is touched.
 
 ## Worktree removal preview — Rust restart and visual review (#1138-ed2e)
 
-- [ ] After restarting an isolated `make dev` build, open removal confirmation for a branch with no own commits and a live agent in its worktree. Confirm the dialog names the agent and uncommitted/untracked counts, then take a screenshot of both the removal and post-merge cleanup dialogs. The current backend cannot hot reload the Rust preview, and this branch has not been rendered in a worktree build.
+- [ ] After restarting an isolated `make dev` build, open removal confirmation for a branch with no own commits and a live agent in its worktree. Confirm the dialog names the agent and uncommitted/untracked counts, then take a screenshot of both the removal and post-merge cleanup dialogs. The current backend cannot hot reload the Rust preview, and this branch has not been rendered in a worktree build. _(NOT VERIFIED 2026-09-29: blocked — Needs a live agent CLI in a worktree (none available) and screenshots (time out); not exercised.)_
 # Mobile session search (story 1200-4dd4)
 
 - [ ] [HUMAN] After `make dev`, check the magnifier position at the top right of the session list on a phone. Tap it, enter a filter, and confirm the field and matching cards fit without clipping. The component test covers matching and clearing; phone layout remains to be checked. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_
@@ -4374,7 +4374,7 @@ or credential is touched.
 ## Mobile Progress, Activity, and Settings (1226-eb95)
 
 - [ ] On a 360 px phone, confirm a long Progress message shows about four lines, More reveals it all, and Less collapses it again. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
-- [ ] Confirm Activity shows local 24-hour times, a completed 2343-second run as 39 min, and a single block as `1 block`.
+- [ ] Confirm Activity shows local 24-hour times, a completed 2343-second run as 39 min, and a single block as `1 block`. _(NOT VERIFIED 2026-09-29: partial — Code only: mobile/components/ActivityItem.tsx formatTime uses toLocaleTimeString hour12:false; readableSubtitle maps 'ran for Ns' >=60 to floor(N/60) min (2343s -> 39 min) and '1 blocks' -> '1 block'. /config/activity has 'ran for 329s' items (would show 5 min). Mobile /mobile in a 390px same-origin iframe loaded Sessions but Activity tab rendered )_
 - [ ] After restarting `make dev` to load the Rust `mobile_theme` preference, choose Light in mobile Settings, reload the PWA, and confirm the theme stays light. Confirm the desktop theme remains unchanged and app/server versions are visible. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_
 
 ## AI Chat copy, links and parallel tabs (story 1142-f09c)
@@ -4391,4 +4391,4 @@ or credential is touched.
 
 ## Git panel Log tab layout (story 1263-7d7d)
 
-- [ ] [VISUAL] After `make dev`, open the Git panel Log tab on tuicommander main and compare with `~/Gits/.tmp/boss/log-tab/`: rows next to a narrow graph section have no wide empty gap before the subject; expanding a commit shows the full message without a hover tooltip, ref badges clip with an ellipsis instead of covering the subject, and rows below the expanded one move down at once with their graph dots.
+- [ ] [VISUAL] After `make dev`, open the Git panel Log tab on tuicommander main and compare with `~/Gits/.tmp/boss/log-tab/`: rows next to a narrow graph section have no wide empty gap before the subject; expanding a commit shows the full message without a hover tooltip, ref badges clip with an ellipsis instead of covering the subject, and rows below the expanded one move down at once with their graph dots. _(NOT VERIFIED 2026-09-29: partial — Web UI Git panel Log tab on fx/repo (not tuicommander main; no boss screenshots compared): subject starts 20px from row left (no wide gap); expanding 'ignore more' grows row 48->107px, rows below shift down 201->260 and 249->308 in one step, full message shown in commitBody, row has no title tooltip; refBadge computed text-overflow: ellipsis. Graph)_
