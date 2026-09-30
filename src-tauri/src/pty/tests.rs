@@ -11960,7 +11960,10 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         .unwrap()
         .agent_type = Some("codex".into());
     let mut vt = VtLogBuffer::new(rows, cols, 2000);
-    for record in records[..inputs[1]].iter().filter(|r| r.direction == Output) {
+    for record in records[..inputs[1]]
+        .iter()
+        .filter(|r| r.direction == Output)
+    {
         vt.process(&record.data);
     }
     state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
@@ -11975,7 +11978,12 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
     let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
         for record in records[range].iter().filter(|r| r.direction == Output) {
-            reader.process_chunk(&String::from_utf8_lossy(&record.data), &silence, sid, &state);
+            reader.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
         }
     };
     let mut seen = Vec::new();
@@ -12017,12 +12025,11 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
         "the retry's Working screen confirms the turn"
     );
     assert!(
-        std::iter::from_fn(|| alerts.try_recv().ok())
-            .all(|event| !matches!(
-                event,
-                crate::state::AppEvent::McpToast { ref title, .. }
-                    if title == "Agent input was not confirmed"
-            )),
+        std::iter::from_fn(|| alerts.try_recv().ok()).all(|event| !matches!(
+            event,
+            crate::state::AppEvent::McpToast { ref title, .. }
+                if title == "Agent input was not confirmed"
+        )),
         "no false failure toast"
     );
 }
