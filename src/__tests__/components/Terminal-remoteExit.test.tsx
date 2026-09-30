@@ -1,5 +1,5 @@
-import { listen as tauriListen } from "@tauri-apps/api/event";
 import { render } from "@solidjs/testing-library";
+import { listen as tauriListen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Terminal from "../../components/Terminal/Terminal";
 import { __resetModalStackForTest } from "../../stores/modalStack";
@@ -84,12 +84,12 @@ vi.mock("../../components/Sidebar/ComposePanel", () => ({
 }));
 
 /**
- * Characterization tests, written before the origin-tracking change lands, for
- * the remote-tab exit race described in the plan: Terminal.tsx's own
- * `subscribePty` exit callback and `useAppInit.ts`'s `session-closed` listener
- * both act on a remote tab today. These tests exercise ONLY Terminal.tsx's own
- * half in isolation (no `session-closed` event is fired), since that's the
- * side under change here.
+ * Regression tests for the remote-tab exit race fix: Terminal.tsx's own
+ * `subscribePty` exit callback must defer entirely to `useAppInit.ts`'s
+ * `session-closed` listener for a remote tab, doing only its own local
+ * component teardown. These tests exercise ONLY Terminal.tsx's own half in
+ * isolation (no `session-closed` event is fired), since that's the side
+ * under change here.
  */
 describe("Terminal remote-tab exit (subscribePty callback)", () => {
 	function captureExitHandler(sessionId: string) {
@@ -97,7 +97,7 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		vi.mocked(tauriListen).mockImplementation((async (event: string, cb: () => void) => {
 			if (event === `pty-exit-${sessionId}`) handler = cb;
 			return vi.fn();
-		}) as typeof tauriListen);
+		}) as unknown as typeof tauriListen);
 		return {
 			hasHandler: () => handler !== null,
 			fire: () => handler?.(),
@@ -115,7 +115,7 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		vi.clearAllMocks();
 	});
 
-	it("calls notifyShellExit immediately for a remote tab with no agent (today's race)", async () => {
+	it("does NOT call notifyShellExit for a remote tab with no agent (session-closed owns it instead)", async () => {
 		const sessionId = "remote-shell-sess";
 		const exit = captureExitHandler(sessionId);
 		const id = terminalsStore.add({
@@ -136,11 +136,11 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		});
 		exit.fire();
 
-		expect(notifySpy).toHaveBeenCalledWith(id);
+		expect(notifySpy).not.toHaveBeenCalled();
 		notifySpy.mockRestore();
 	});
 
-	it("locally wipes agentType/sessionId for a remote agent tab today, pre-empting session-closed's own countdown", async () => {
+	it("leaves agentType/sessionId/shellState untouched for a remote agent tab (session-closed owns the teardown)", async () => {
 		const sessionId = "remote-agent-sess";
 		const exit = captureExitHandler(sessionId);
 		const id = terminalsStore.add({
@@ -159,10 +159,57 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		});
 		exit.fire();
 
-		// Today: Terminal.tsx's own hadAgent branch nulls these immediately,
-		// regardless of isRemote — before session-closed's countdown (which
-		// reads its OWN payload's agent_type, not the store) ever gets a
-		// chance to run against a still-intact tab.
+		// Terminal.tsx must not mutate the shared store for a remote tab —
+		// useAppInit.ts's session-closed listener (which reads its OWN payload's
+		// agent_type) is the sole owner of this teardown now.
+		const terminal = terminalsStore.get(id);
+		expect(terminal?.agentType).toBe("claude");
+		expect(terminal?.sessionId).toBe(sessionId);
+		expect(terminal?.shellState).not.toBe("exited");
+	});
+
+	it("still calls notifyShellExit immediately for a non-remote tab with no agent (unchanged local behavior)", async () => {
+		const sessionId = "local-shell-sess";
+		const exit = captureExitHandler(sessionId);
+		const id = terminalsStore.add({
+			name: "Local Shell",
+			sessionId,
+			fontSize: 14,
+			cwd: "/repo",
+			awaitingInput: null,
+			isRemote: false,
+		});
+		render(() => <Terminal id={id} />);
+
+		const notifySpy = vi.spyOn(terminalsStore, "notifyShellExit");
+		await vi.waitFor(() => {
+			if (!exit.hasHandler()) throw new Error("pty-exit handler not registered yet");
+		});
+		exit.fire();
+
+		expect(notifySpy).toHaveBeenCalledWith(id);
+		notifySpy.mockRestore();
+	});
+
+	it("still locally wipes agentType/sessionId for a non-remote agent tab (unchanged local behavior)", async () => {
+		const sessionId = "local-agent-sess";
+		const exit = captureExitHandler(sessionId);
+		const id = terminalsStore.add({
+			name: "Local Agent",
+			sessionId,
+			fontSize: 14,
+			cwd: "/repo",
+			awaitingInput: null,
+			isRemote: false,
+			agentType: "claude",
+		});
+		render(() => <Terminal id={id} />);
+
+		await vi.waitFor(() => {
+			if (!exit.hasHandler()) throw new Error("pty-exit handler not registered yet");
+		});
+		exit.fire();
+
 		const terminal = terminalsStore.get(id);
 		expect(terminal?.agentType).toBeNull();
 		expect(terminal?.sessionId).toBeNull();
