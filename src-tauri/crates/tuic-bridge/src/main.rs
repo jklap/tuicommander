@@ -296,6 +296,12 @@ fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
     }
 }
 
+/// HTTP header naming the bridge process, logged by the server on initialize so
+/// a reconnect storm can be traced to the process that caused it.
+fn client_pid_header_line(pid: u32) -> String {
+    format!("x-tuic-client-pid: {pid}\r\n")
+}
+
 /// Project the protocol version carried by a stdio request into the HTTP
 /// transport header. Only the MCP date-revision grammar is reflected so an
 /// untrusted downstream string can never inject another header.
@@ -375,6 +381,7 @@ async fn post_mcp(
     // Assert our PTY identity so the server auto-binds swarm identity without an
     // explicit `agent register` round-trip. Read once, cached at startup.
     headers.push_str(&tuic_session_header_line(TUIC_SESSION_ENV.as_deref()));
+    headers.push_str(&client_pid_header_line(std::process::id()));
     headers.push_str("\r\n");
 
     stream
@@ -974,7 +981,8 @@ mod tests {
     #[cfg(unix)]
     use super::{BridgeState, dispatch_loop, proxy_request};
     use super::{
-        read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
+        client_pid_header_line, read_http_response, request_protocol_version, response_timeout,
+        tuic_session_header_line,
     };
     #[cfg(unix)]
     use std::path::PathBuf;
@@ -1379,6 +1387,13 @@ mod tests {
              name, or TUIC serves it the wrong tool surface: {}",
             bodies[1]
         );
+    }
+
+    /// Catches: a reconnect storm that cannot be traced to a process because the
+    /// bridge never says which pid opened the connection.
+    #[test]
+    fn the_bridge_names_its_process_to_the_server() {
+        assert_eq!(client_pid_header_line(4242), "x-tuic-client-pid: 4242\r\n");
     }
 
     #[test]
