@@ -9559,8 +9559,8 @@ pub(crate) fn flush_pending_injections(
 
 /// Codex can swallow the Enter of a queued command (paste-burst suppression)
 /// and keep the text in its composer. True when the tail of `text` is still on
-/// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed: an Enter on its empty composer is
-/// a no-op, so a stale echo of already-submitted text costs nothing.
+/// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed:
+/// an Enter on its empty composer is a no-op, so a stale echo of already-submitted text costs nothing.
 fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
     let is_codex = state
         .session_maps
@@ -9587,13 +9587,22 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
     state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
         let rows = vt.lock().screen_rows();
         squash(&rows.join("\n")).contains(&tail)
-            // A long paste collapses to a placeholder that never shows the text.
-            || find_codex_prompt_row(&rows).is_some_and(|row| rows[row].contains(CODEX_PASTE_PLACEHOLDER))
+            // A long paste collapses to a placeholder that never shows the text. It sits
+            // inline in a wrapped composer, so look at the bottom rows, not the `›` row.
+            || rows
+                .iter()
+                .rev()
+                .filter(|row| !row.trim().is_empty())
+                .take(COMPOSER_BOTTOM_ROWS)
+                .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
     })
 }
 
 /// What Codex shows in its composer in place of a long pasted text.
 const CODEX_PASTE_PLACEHOLDER: &str = "[Pasted Content";
+
+/// Non-empty bottom rows searched for the paste placeholder: a wrapped composer plus its footer.
+const COMPOSER_BOTTOM_ROWS: usize = 8;
 
 /// Number of trailing characters of a queued command searched for on screen.
 const COMPOSER_TAIL_CHARS: usize = 32;
