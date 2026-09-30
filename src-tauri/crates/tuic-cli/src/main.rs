@@ -1006,7 +1006,13 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
             }
         }
         AgentAction::Type { target, message } => {
-            let (payload, enter) = agent_send_parts(&message);
+            let (clear, payload, enter) = agent_send_parts(&message);
+            // Ctrl-U alone first, a real gap before the text: Claude Code treats
+            // a long input chunk as a paste and strips a Ctrl-U inside it as an
+            // invisible character, then refuses the Enter. Same recipe as the
+            // backend `write_agent_command_with_boundary` and `sendCommand.ts`.
+            mcp_session_call("input", &target, serde_json::json!({"input": clear}))?;
+            std::thread::sleep(std::time::Duration::from_millis(100));
             mcp_session_call("input", &target, serde_json::json!({"input": payload}))?;
 
             // Raw-mode agent TUIs require Enter in a later PTY read. A combined
@@ -1251,13 +1257,17 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
     Ok(())
 }
 
-fn agent_send_parts(message: &str) -> (String, &'static str) {
+/// The three writes of `tuic agent type`: Ctrl-U (clear pending input), the
+/// text (multiline rides in a bracketed paste), and Enter — each sent as its own
+/// PTY write a gap apart. The Ctrl-U is never bundled with the text: see the
+/// `AgentAction::Type` arm.
+fn agent_send_parts(message: &str) -> (&'static str, String, &'static str) {
     let payload = if message.contains('\n') {
-        format!("\x15\x1b[200~{message}\x1b[201~")
+        format!("\x1b[200~{message}\x1b[201~")
     } else {
-        format!("\x15{message}")
+        message.to_string()
     };
-    (payload, "\r")
+    ("\x15", payload, "\r")
 }
 
 fn cmd_status() -> Result<(), String> {
@@ -2321,17 +2331,30 @@ mod tests {
 
     #[test]
     fn agent_send_separates_framed_payload_from_enter() {
-        let (payload, enter) = agent_send_parts("report complete");
-        assert_eq!(payload, "\x15report complete");
+        let (clear, payload, enter) = agent_send_parts("report complete");
+        assert_eq!(clear, "\x15");
+        assert_eq!(payload, "report complete");
         assert!(!payload.contains('\r'));
         assert_eq!(enter, "\r");
     }
 
     #[test]
     fn agent_send_bracket_pastes_multiline_before_separate_enter() {
-        let (payload, enter) = agent_send_parts("line one\nline two");
-        assert_eq!(payload, "\x15\x1b[200~line one\nline two\x1b[201~");
+        let (clear, payload, enter) = agent_send_parts("line one\nline two");
+        assert_eq!(clear, "\x15");
+        assert_eq!(payload, "\x1b[200~line one\nline two\x1b[201~");
         assert_eq!(enter, "\r");
+    }
+
+    /// Claude Code strips a Ctrl-U that arrives inside the text chunk as an
+    /// "invisible character" and then refuses the Enter, so the clear must
+    /// never ride in the same write as the text.
+    #[test]
+    fn agent_send_never_bundles_ctrl_u_with_the_text() {
+        for message in ["report complete", "line one\nline two"] {
+            let (_, payload, _) = agent_send_parts(message);
+            assert!(!payload.contains('\x15'), "{message:?}: {payload:?}");
+        }
     }
 
     #[test]
