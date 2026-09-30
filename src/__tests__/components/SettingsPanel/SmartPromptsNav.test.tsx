@@ -130,9 +130,9 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		const content = getByRole("textbox", { name: "Content *" }) as HTMLTextAreaElement;
 		content.setSelectionRange(3, 6);
 		fireEvent.click(getByRole("button", { name: "Insert variable... ▼" }));
-		fireEvent.click(getByRole("button", { name: "{branch} Current branch name" }));
+		fireEvent.click(getByRole("button", { name: "{branch} Current git branch name" }));
 		expect(updatePrompt).toHaveBeenCalledWith("sp-test", { content: "Do {branch} thing" });
-		expect(queryByRole("button", { name: "{branch} Current branch name" })).toBeNull();
+		expect(queryByRole("button", { name: "{branch} Current git branch name" })).toBeNull();
 	});
 
 	// Catches: the cursor-restore frame outlives the editor, so a pending timer survives test teardown.
@@ -143,7 +143,7 @@ describe("SettingsPanel — Smart Prompts navigation", () => {
 		fireEvent.click(getByRole("button", { name: "Edit Test Smart Prompt" }));
 		const content = getByRole("textbox", { name: "Content *" }) as HTMLTextAreaElement;
 		fireEvent.click(getByRole("button", { name: "Insert variable... ▼" }));
-		fireEvent.click(getByRole("button", { name: "{branch} Current branch name" }));
+		fireEvent.click(getByRole("button", { name: "{branch} Current git branch name" }));
 		const focus = vi.spyOn(content, "focus");
 		unmount();
 		await nextAnimationFrame();
