@@ -402,6 +402,26 @@ function createGlobalWorkspaceStore() {
 			scope = key;
 			bumpPromoted();
 			syncToPaneStore();
+
+			// Reconcile focus/keyboard-routing (terminalsStore.state.activeId) to the
+			// newly-current scope's own layout when a DIFFERENT scope was already on
+			// screen (e.g. clicking the Global Workspace pill while a repo's
+			// auto-consolidated view is showing) — syncToPaneStore() only restores
+			// paneLayoutStore, so without this activeId keeps pointing at whatever
+			// terminal had focus in the PREVIOUS scope, and TerminalArea's flat
+			// (single-pane) rendering path gates content visibility on activeId, not
+			// on the pane layout's own activeTabId. Mirrors activate()'s identical
+			// reconciliation below. Only meaningful when isActive() is already true —
+			// every setScope() call site that starts inactive follows up with its own
+			// activate() call, which does this same reconciliation itself.
+			if (isActive()) {
+				const current = workspace().layout;
+				const activeGroup = current?.activeGroupId ? current.groups[current.activeGroupId] : undefined;
+				const activeTab = activeGroup?.activeTabId;
+				const members = workspace().promoted;
+				const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
+				if (target) terminalsStore.setActive(target);
+			}
 		},
 
 		/** Members of a scope without switching to it. */

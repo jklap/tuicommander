@@ -322,6 +322,34 @@ not a filter on `promoted` itself, so it doesn't reopen the "~22 tests use
 synthetic non-live ids" problem the badge-display fix above had to route
 around.
 
+**`setScope()` restored the pane layout on a scope switch but never
+reconciled `terminalsStore.state.activeId` — found live 2026-09-30.** With
+one terminal manually promoted while viewing a terminal in a repo's own
+auto-consolidated scope (i.e. `isActive()` already `true` for a *different*
+scope), clicking the Global Workspace pill changed the tab strip's displayed
+name (`TabBar.tsx`'s `activeTerminals()` reacts to `isActive()`/scope
+immediately) but left the previous scope's terminal's content on screen.
+`activate()` and `resetActiveLayout()` both reconcile `activeId` to the
+newly-shown layout's `activeTabId` after restoring it (see Bug 1c above) —
+`setScope()`'s own `syncToPaneStore()` call did not, so `activeId` kept
+pointing at the OLD scope's terminal. This is only visible with a
+single-pane layout: `TerminalArea.tsx`'s flat rendering path (used whenever
+`paneLayoutStore.isSplit()` is false, i.e. exactly one promoted terminal)
+gates content visibility purely on `terminalsStore.state.activeId`, with no
+reference to the pane layout's own `activeTabId` at all — a 2+-member
+layout is a `branch` and defers to the pane's own `activeTabId` instead, so
+the same staleness there is invisible. Fixed by adding the identical
+`activeGroup?.activeTabId` → `terminalsStore.setActive(...)` reconciliation
+directly inside `setScope()`, gated on `isActive()` being true after the
+scope swap (a `setScope()` call while inactive is always followed by an
+explicit `activate()` at every call site, which already does this). Any
+future code path that swaps `paneLayoutStore`'s contents without going
+through `activate()`/`resetActiveLayout()`/`setScope()` needs this same
+reconciliation — the pane-layout's `activeTabId` and `terminalsStore
+.state.activeId` are two independent pieces of state that only *look*
+redundant because `activate()` keeps them in sync by convention, not by any
+enforced invariant.
+
 
 ## SolidJS `<For>` Index Staleness
 
