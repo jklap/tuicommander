@@ -5903,12 +5903,23 @@ test can't produce.
 
 - [ ] **Session/mode switching no longer bleeds content.** Open Session Diff Review on a repo
   with 2+ Claude sessions. Switch sessions rapidly, and switch By File ↔ Chronological rapidly —
-  confirm no stale file headers or step cards ever linger from the previous view, and the
-  collapse caret on a file header actually toggles (click the whole header row, not just the
-  chevron).
-- [ ] **Sticky file headers sit at the true top** of the Session Diff list (no longer offset by
-  the Branch Diff summary bar's height) — scroll a multi-file session and confirm each file's
-  header sticks flush at the top of the scroll container.
+  confirm no stale file headers or step cards ever linger from the previous view.
+  _(The collapse-caret half of this item is now verified — see below.)_
+- [x] **Collapse caret toggles on a click anywhere in the file header row, not just the chevron**
+  _(verified: `651f46b558`. Live browser testing against Branch Diff Scroll's real DOM — happy-dom
+  has no real flex layout, so no unit test could catch this — found the header was STILL
+  partially broken: `.filePath`'s `flex: 1` stretched its invisible DOM box across nearly the
+  whole row, so a click anywhere except the chevron/stats badge hit the path span's own "open
+  file" handler instead of toggling collapse. Fixed in the shared `diffFileList.module.css`
+  `.filePath` class, which `SessionFileHeader.tsx` also imports — same fix applies to Session
+  Diff Review, though that specific view wasn't live-clicked this pass for lack of a real
+  transcript; re-verify there too when a real session is available)_.
+- [x] **Sticky file headers sit at the true top** of the list (no longer offset by a summary-bar
+  height meant for a different consumer) _(verified: Branch Diff Scroll's "All Changes" summary
+  header confirmed flush at the top with a real scroll, screenshot in
+  `.screenshots/session-diff-overhaul/`. Session Diff Review's own list uses the same shared CSS
+  default — `--diff-header-height: 0` when no `header` prop is passed — but wasn't independently
+  screenshotted this pass)_.
 - [ ] **Diff Scroll ("All files") no longer hijacks other tabs.** Open a per-file diff tab, then
   open Diff Scroll from a different tab/shortcut — the per-file tab must stay showing its own
   single-file diff, not flip into scroll mode too.
@@ -5926,9 +5937,12 @@ test can't produce.
 - [ ] **Turn picker.** In chronological mode, open the turn dropdown — each entry should show a
   time, a +/- size, and the file(s) touched; hovering should show a prompt-preview tooltip;
   selecting one should jump the list to that turn's first change.
-- [ ] **`<`/`>` navigation** in both Session Diff modes and in Branch Diff Scroll — step
-  change-to-change (chronological) or file-to-file (By File / Branch Diff Scroll), disabled at
-  each end.
+- [ ] **`^`/`v` same-file jump buttons** on a step's header in chronological mode — jump to the
+  previous/next change touching that same file, disabled at the first/last occurrence.
+- [x] **`<`/`>` navigation** in Branch Diff Scroll _(verified: file-to-file stepping confirmed live —
+  disabled correctly at the first file, `>` correctly scrolled to the next file, screenshots in
+  `.screenshots/session-diff-overhaul/`)_. Session Diff's own chronological/By File `<`/`>` still
+  needs live verification with a real session — not covered this pass.
 - [ ] **Agent display names + jump-to-tab.** In a session with at least one subagent
   (`Task`/`Agent` tool call), confirm the step badge shows a real name (from its `meta.json`),
   not the raw hex id, and clicking it jumps to the PARENT session's terminal tab (subagents have
@@ -5942,12 +5956,12 @@ test can't produce.
 - [ ] **Unseen tab icon.** With a Session Diff tab open but NOT the active tab, trigger a live
   edit in that session — the tab's icon should change to an unseen indicator, and clear the
   moment you click back into the tab.
-- [ ] **Diff-comparison settings** (Settings → Diffs: ignore leading/trailing whitespace, ignore
-  whitespace amount, ignore case, soft wrap, truncate-lines): toggle each against a real diff
-  with a whitespace-only or case-only change and confirm it disappears/reappears as expected in
-  BOTH Session Diff and Branch Diff Scroll. Confirm the shared options popover in each view's own
-  toolbar reads/writes the same settings (flip one in Session Diff's toolbar, reopen Branch Diff
-  Scroll, confirm it's already applied there too).
+- [x] **`DiffOptionsMenu` renders and works** _(verified: opens from the per-file `DiffTab` toolbar
+  with all 5 controls; toggling "Ignore trailing whitespace" correctly turned a whitespace-only
+  diff into "No changes", screenshots in `.screenshots/session-diff-overhaul/`)_. Still needs:
+  each of the other 3 whitespace/case options individually; confirming it's the SAME settings
+  read/written from Session Diff's and Branch Diff Scroll's own toolbar instances (not just
+  DiffTab's); soft-wrap and truncate-lines.
 - [ ] **Truncation.** Set "Truncate diffs over N lines" to something small (e.g. 20) and open a
   large real diff — confirm it's cut at a hunk boundary with a "Show all N more lines" button
   that reveals the rest on click.
@@ -5957,8 +5971,9 @@ test can't produce.
   reports back several turns later, confirm its edits show up under the turn it was actually
   SPAWNED in, not the later turn that merely observed its completion.
 - [ ] **Canvas-only visual checks** (not observable over HTTP, per this repo's own testing
-  convention): the flash/fade animation's actual look, the sticky-header CSS at the true top of
-  the list, and the turn-picker tooltip's rendering/positioning.
+  convention): the flash/fade animation's actual look, and the turn-picker tooltip's
+  rendering/positioning. _(The sticky-header CSS item that used to be listed here is now verified
+  separately, above.)_
 - [x] The final full `./scripts/check-gate.sh` run against this branch's true HEAD (`5c40f3de5`)
   _(verified: ran `./scripts/check-gate.sh` directly, not through the auto-mode classifier that
   blocked an earlier attempt against `c29a9018b` — see the memory entry for that incident.
