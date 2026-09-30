@@ -8475,6 +8475,23 @@ impl ChunkProcessor {
                                     .claude_session_map
                                     .remove_if(&old_claude_id, |_, owner| owner == session_id);
                             }
+                            // The reverse case: this claude_session_id may already be
+                            // claimed by a DIFFERENT TUIC session (e.g. two tabs racing
+                            // to resume the same transcript, or attacker-supplied PTY
+                            // output claiming an id another live session already owns).
+                            // That other session's own `tuic_to_claude_session` entry
+                            // would otherwise go stale, pointing at an id this map is
+                            // about to reassign — clear it so it can't later be used to
+                            // wrongly evict THIS session's mapping on close.
+                            if let Some(prev_owner) =
+                                state.claude_session_map.get(&claude_session_id)
+                                && *prev_owner != session_id
+                            {
+                                let prev_owner = prev_owner.clone();
+                                state
+                                    .tuic_to_claude_session
+                                    .remove_if(&prev_owner, |_, v| *v == claude_session_id);
+                            }
                             state
                                 .claude_session_map
                                 .insert(claude_session_id.clone(), session_id.to_string());
