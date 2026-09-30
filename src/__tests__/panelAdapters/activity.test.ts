@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { snapshotToRows } from "../../panelAdapters/activity";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import "../mocks/tauri";
+import { activityPanelAdapter, snapshotToRows } from "../../panelAdapters/activity";
+import { globalWorkspaceStore } from "../../stores/globalWorkspace";
+import { terminalsStore } from "../../stores/terminals";
 import type { ActivitySnapshot, ActivityTerminalRow } from "../../utils/activitySnapshot";
+
+vi.mock("../../utils/navigateToTerminal", () => ({ navigateToTerminal: vi.fn() }));
 
 /**
  * The detached Activity panel re-serializes its whole snapshot once per second
@@ -137,5 +142,41 @@ describe("snapshotToRows sub-agent tag", () => {
 		const second = snapshotToRows(snapshot(terminal({ subAgentTag: "new" })), first);
 		expect(second[0]).not.toBe(first[0]);
 		expect(second[0].subAgentTag).toBe("new");
+	});
+});
+
+/**
+ * The detached Activity Dashboard's own "promote" dispatch — DetachedActivityDashboard's
+ * onPromote emits `{action: "promote", data: {termId}}` across the panel-sync boundary
+ * (see this file's DetachedActivityDashboard at line ~87), and the MAIN window's
+ * activityPanelAdapter.handleAction is what actually mutates globalWorkspaceStore for it.
+ * This had zero test coverage — untested until now.
+ */
+describe("activityPanelAdapter.handleAction", () => {
+	afterEach(() => {
+		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
+		for (const id of globalWorkspaceStore.getPromotedIds()) globalWorkspaceStore.unpromote(id);
+	});
+
+	it('toggles globalWorkspaceStore promotion for a "promote" action', () => {
+		const id = terminalsStore.add({ name: "detached", sessionId: null, fontSize: 14, cwd: null, awaitingInput: null });
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
+
+		activityPanelAdapter.handleAction?.("promote", { termId: id });
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(true);
+
+		activityPanelAdapter.handleAction?.("promote", { termId: id });
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
+	});
+
+	it("ignores a promote action with no termId", () => {
+		expect(() => activityPanelAdapter.handleAction?.("promote", {})).not.toThrow();
+		expect(() => activityPanelAdapter.handleAction?.("promote", null)).not.toThrow();
+	});
+
+	it("ignores an unrecognized action", () => {
+		const id = terminalsStore.add({ name: "detached", sessionId: null, fontSize: 14, cwd: null, awaitingInput: null });
+		activityPanelAdapter.handleAction?.("something-else", { termId: id });
+		expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
 	});
 });

@@ -7382,3 +7382,34 @@ section. All of the below needs a rebuilt build to check.
   approximation: kill a teammate pane's PTY process directly from a shell, e.g. `kill -9`, in a
   way that bypasses the app's own close path) can still be closed via the pane's close-pane
   action.
+
+## Global Workspace ambient-scope fix (2026-09-29, frontend-only)
+- Fixes the ambient-`scope` confusion documented in `src/AGENTS.md`'s "`globalWorkspaceStore`'s
+  Ambient `scope` Pointer..." section: sidebar badge inflated by dead ids, globe icon
+  disagreeing with the Activity Dashboard, removing a terminal via the Activity Dashboard not
+  sticking, and the sidebar pill's click having no visible effect. Extensively unit-tested
+  (new `GlobalWorkspaceEntry.test.tsx`, `PaneTree.test.tsx`, plus additions across
+  `globalWorkspaceScopes.test.ts`, `useWorktreeConsolidation.test.ts`,
+  `createBranchSelectionCoordinator.test.ts`, `TabBar.test.tsx`, `ActivityDashboard.test.tsx`,
+  `useAppShortcutHandlers.test.ts`) — the items below are the parts a unit test can't fully
+  prove (real click sequencing, real visual rendering).
+- **Sidebar pill is now one-way** — click "Global Workspace" with at least one terminal
+  manually promoted; confirm it shows the merged view. Click it again while already showing —
+  confirm nothing changes (no flicker, no layout reset). Click any ordinary terminal or branch
+  in the sidebar tree — confirm it exits Global Workspace and shows that terminal's own repo
+  (its normal view, or its own auto-consolidated worktree view if that repo has the setting on).
+- **Badge count** — promote 2-3 terminals across different repos via the Activity Dashboard's
+  globe button; confirm the sidebar badge matches exactly. Repeat with a repo that has
+  "consolidate worktrees" on and has its own worktree terminals — confirm the badge only counts
+  your manual promotions, not that repo's auto-consolidated ones.
+- **Globe icon parity** — promote a terminal, confirm its tab (both in the normal TabBar strip
+  and, if split, in a PaneTree pane) shows the globe icon, and the Activity Dashboard's promote
+  button shows the same "promoted" state. Click the tab's own globe icon to unpromote directly
+  from the tab; confirm the Activity Dashboard updates to match.
+- **Repo-name hover overlay** — while Global Workspace is showing (multiple repos' terminals
+  merged), hover a tab and confirm the repo-name overlay appears. Switch to a repo that has
+  "consolidate worktrees" on (its own automatic merged view, not Global Workspace) and hover a
+  tab there — confirm the overlay does NOT appear, since you're already in that one repo.
+- **Tab close still does a real close** — while Global Workspace is showing, click a tab's `×`.
+  Confirm the terminal is actually gone (not just removed from the Global Workspace view) —
+  check it no longer appears anywhere, including that terminal's own repo in the sidebar.

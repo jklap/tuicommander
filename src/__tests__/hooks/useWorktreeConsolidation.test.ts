@@ -71,6 +71,28 @@ describe("worktree consolidation", () => {
 		});
 	});
 
+	/**
+	 * `branch.terminals` is deliberately never pruned when a terminal's process
+	 * exits (see src/AGENTS.md) — only its liveness in `terminalsStore` changes.
+	 * Feeding a dead id straight into `syncScopeMembers` as "wanted" would
+	 * resurrect it into the repo's scope on every reactive re-run, even after
+	 * `onTerminalRemoved` already swept it out. This is what stops that.
+	 */
+	it("excludes a dead terminal even though branch.terminals still lists it", () => {
+		testInScope(() => {
+			const ids = seedRepo(["feat-1", "feat-2"]);
+			terminalsStore.remove(ids["feat-1"]);
+
+			const selected = hook.worktreeTerminalsOf(REPO);
+
+			expect(selected).toEqual([ids["feat-2"]]);
+			// branch.terminals itself is untouched — the convention this repo
+			// relies on elsewhere (worktree-removal cleanup, the sidebar's
+			// expandable tab list) is not disturbed by this filter.
+			expect(repositoriesStore.state.repositories[REPO]?.workspaces["feat-1"]?.terminals).toContain(ids["feat-1"]);
+		});
+	});
+
 	it("lists only the repos whose toggle is on", () => {
 		testInScope(() => {
 			repoSettingsStore.getOrCreate(REPO, "a");
@@ -186,6 +208,69 @@ describe("worktree consolidation", () => {
 
 				expect(globalWorkspaceStore.isActive()).toBe(false);
 				expect(globalWorkspaceStore.getScope()).toBe(MANUAL_SCOPE);
+			});
+		});
+
+		/**
+		 * syncScopeForActiveRepo is exported specifically so an imperative caller
+		 * (navigateToTerminal.ts, createBranchSelectionCoordinator.ts) can force a
+		 * re-sync without relying on Solid's reactive effect, which only re-fires
+		 * on an actual change to activeRepoPath — clicking a terminal within the
+		 * *same* already-active repo won't trigger it. No createEffect/flushing
+		 * involved here — this calls it directly, the way those callers do.
+		 */
+		it("syncScopeForActiveRepo can be called imperatively with the same effect as the reactive trigger", () => {
+			testInScope(() => {
+				seedRepo(["feat-1"]);
+				repoSettingsStore.getOrCreate(REPO, "a");
+				repoSettingsStore.update(REPO, { autoConsolidateWorktrees: true });
+				repositoriesStore.setActive(REPO);
+				// Normally the first effect of useWorktreeConsolidation() keeps this
+				// populated in the background; called imperatively here to isolate
+				// exactly what syncScopeForActiveRepo itself does, with no
+				// createEffect/flushing involved.
+				globalWorkspaceStore.syncScopeMembers(REPO, hook.worktreeTerminalsOf(REPO));
+
+				hook.syncScopeForActiveRepo();
+
+				expect(globalWorkspaceStore.getScope()).toBe(REPO);
+				expect(globalWorkspaceStore.isActive()).toBe(true);
+			});
+		});
+
+		/**
+		 * Gap (f) from the coverage audit: no prior test exercised a hand-promoted
+		 * manual workspace AND auto-consolidation both in play at once. This is
+		 * exactly the shape navigateToTerminal.ts's fix depends on: exit the
+		 * manual view, then let syncScopeForActiveRepo assert the now-active
+		 * repo's own (consolidated) view — imperatively, not via the reactive
+		 * effect, since a real sidebar click doesn't mount a fresh
+		 * useWorktreeConsolidation().
+		 */
+		it("exiting a manual promotion and landing on a consolidated repo shows that repo's own view, not the manual one", () => {
+			testInScope(() => {
+				const manualTerm = terminalsStore.add(makeTerminal({ name: "manual" }));
+				globalWorkspaceStore.promote(manualTerm);
+				globalWorkspaceStore.activate();
+				expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+
+				seedRepo(["feat-1"]);
+				repoSettingsStore.getOrCreate(REPO, "a");
+				repoSettingsStore.update(REPO, { autoConsolidateWorktrees: true });
+				globalWorkspaceStore.syncScopeMembers(REPO, hook.worktreeTerminalsOf(REPO));
+
+				// What navigateToTerminal.ts does: exit the manual view first,
+				// switch the active repo, then re-sync.
+				globalWorkspaceStore.deactivate();
+				repositoriesStore.setActive(REPO);
+				hook.syncScopeForActiveRepo();
+
+				expect(globalWorkspaceStore.getScope()).toBe(REPO);
+				expect(globalWorkspaceStore.isActive()).toBe(true);
+				expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(false);
+				// The manual promotion itself is untouched — only the visible
+				// scope changed.
+				expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toEqual([manualTerm]);
 			});
 		});
 	});

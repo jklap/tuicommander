@@ -290,7 +290,7 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `toggle-file-browser-content-search` | `Cmd+Shift+F` | File content search |
 | `toggle-diff-scroll` | `Cmd+Shift+G` | Diff scroll view |
 | `open-session-review` | _unbound_ | Session diff review — step through everything a Claude Code session changed (Command Palette) |
-| `toggle-global-workspace` | `Cmd+Shift+X` | Toggle global workspace |
+| `toggle-global-workspace` | `Cmd+Shift+X` | Show Global Workspace (one-way — click a terminal/branch in the sidebar to leave it) |
 | `toggle-ai-chat` | `Cmd+Alt+A` | Toggle the ego-backed AI Chat panel. Listed only while **Experimental features** is on |
 | `clear-scrollback` | `Cmd+K` | Clear scrollback |
 | `open-folder` | `Cmd+Shift+O` | Open folder picker |
