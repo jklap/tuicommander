@@ -293,9 +293,13 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				// The snapshot was requested after the workspace entered the store, but
 				// it may still be a cached/coalesced answer older than the checkout.
 				if (requestedAt - (firstSeen.get(branchName) ?? requestedAt) < CREATION_GRACE_WINDOW_MS) {
-					appLogger.info("git", `refreshAllBranchStats: SNAPSHOT MAY PREDATE "${branchName}" — not judging it deleted`, {
-						repoPath,
-					});
+					appLogger.info(
+						"git",
+						`refreshAllBranchStats: SNAPSHOT MAY PREDATE "${branchName}" — not judging it deleted`,
+						{
+							repoPath,
+						},
+					);
 					continue;
 				}
 				const replacement = replacementByPath.get(currentRepo.workspaces[branchName]?.worktreePath ?? "");
