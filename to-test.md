@@ -52,6 +52,15 @@ used by cron/PR-review) never actually had this race in the first place (see
   "Test-coverage asymmetry, on purpose" note for why).
 - [ ] [HUMAN] Spawn a normal, real-task agent through both paths (something needing at least one
   tool call) and confirm both behave exactly as before — invisible for real work.
+  **Not independently re-tested 2026-09-30 — code-confirmed to share the exact same
+  regression found testing the sibling entry above.** All three spawn paths (`agent
+  action=spawn`, `POST /sessions/agent`, and the desktop `spawn_agent` command) call the
+  identical shared `spawn_deferred_prompt_delivery` (`mcp_transport.rs:2566`, referenced from
+  `agent.rs:1132`, `agent_routes.rs:474`, and `mcp_transport.rs:4727`) → `deliver_notice_to_pty`
+  forced-write path — there is no path-specific divergence, so a real-task spawn through this
+  route would reproduce the same 500+s hang documented in
+  `plans/deferred-prompt-forced-write-startup-race.md` rather than exercising anything new.
+  Re-verify this bullet once that plan's investigation lands a fix.
 - [ ] Delete this section once verified — `agent_routes.rs` has full unit + real-child-process
   test coverage (`spawn_agent_session_defers_claude_prompt_until_mcp_identity_binds`,
   `spawn_agent_session_does_not_defer_a_print_mode_claude_prompt`,
