@@ -69,7 +69,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 				kind: interaction.kind,
 			})),
 		);
-		notificationsStore.syncAcpAttention(interactions, !uiStore.state.aiChatPanelVisible);
+		notificationsStore.syncAcpAttention(interactions);
 	});
 	const [showPrDetailPopover, setShowPrDetailPopover] = createSignal(false);
 	const [cwdCopied, setCwdCopied] = createSignal(false);

@@ -11,6 +11,9 @@ pub(crate) enum NativeNoticeTarget {
         #[serde(rename = "ptyId")]
         pty_id: Option<String>,
     },
+    AiChat {
+        id: String,
+    },
 }
 
 #[cfg(target_os = "macos")]

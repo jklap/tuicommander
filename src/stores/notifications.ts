@@ -11,7 +11,6 @@ import { isTauri } from "../transport";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 import { setToastBellMirrorResolver } from "./toasts";
-import { uiStore } from "./ui";
 
 interface PlayOptions {
 	terminalId?: string;
@@ -25,19 +24,6 @@ const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
 	info: "Info",
 	attention: "Agent needs you",
 };
-
-let osNotificationPermission: NotificationPermission | null = null;
-
-async function ensureNotificationPermission(): Promise<boolean> {
-	if (!("Notification" in window)) return false;
-	if (osNotificationPermission === null) {
-		osNotificationPermission = Notification.permission;
-	}
-	if (osNotificationPermission === "granted") return true;
-	if (osNotificationPermission === "denied") return false;
-	osNotificationPermission = await Notification.requestPermission();
-	return osNotificationPermission === "granted";
-}
 
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
 const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
@@ -67,7 +53,7 @@ interface NotificationsState {
 function createNotificationsStore() {
 	const defaults = copyDefaults();
 	notificationManager.updateConfig(defaults);
-	const acpNotifications = new Map<string, Notification | null>();
+	const notifiedAcpInteractions = new Set<string>();
 
 	const [state, setState] = createStore<NotificationsState>({
 		config: defaults,
@@ -76,33 +62,20 @@ function createNotificationsStore() {
 	});
 
 	const actions = {
-		/** Keep one desktop notification per pending ACP question until it settles. */
-		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[], panelHidden: boolean): void {
+		/** Send one native notice per pending ACP question; a notice still in flight is dropped once the question settles. */
+		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[]): void {
 			const pending = new Set(interactions.map((interaction) => interaction.id));
-			for (const [id, notification] of acpNotifications) {
-				if (pending.has(id)) continue;
-				notification?.close();
-				acpNotifications.delete(id);
-			}
-			if (!panelHidden || !isTauri()) return;
+			for (const id of notifiedAcpInteractions) if (!pending.has(id)) notifiedAcpInteractions.delete(id);
 			for (const interaction of interactions) {
-				if (acpNotifications.has(interaction.id)) continue;
-				acpNotifications.set(interaction.id, null);
-				void ensureNotificationPermission()
-					.then((allowed) => {
-						if (!allowed || !acpNotifications.has(interaction.id)) return;
-						const notification = new Notification("AI Chat needs input", {
-							body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
-							silent: true,
-						});
-						acpNotifications.set(interaction.id, notification);
-						notification.onclick = () => {
-							notification.close();
-							void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setFocus());
-							uiStore.setAiChatPanelVisible(true);
-						};
-					})
-					.catch((error) => appLogger.debug("ai-chat", "Could not show ACP notification", error));
+				if (notifiedAcpInteractions.has(interaction.id)) continue;
+				notifiedAcpInteractions.add(interaction.id);
+				void showNativeNotice({
+					title: "AI Chat needs input",
+					body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
+					key: `acp:${interaction.id}`,
+					target: { kind: "aichat", id: interaction.id },
+					isCurrent: () => notifiedAcpInteractions.has(interaction.id),
+				}).catch((error: unknown) => appLogger.warn("ai-chat", "Could not show ACP notification", error));
 			}
 		},
 		/** Load config from Rust backend; migrate from localStorage on first run */
