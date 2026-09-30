@@ -6,6 +6,7 @@ import type { DiffViewMode } from "../../stores/ui";
 import { openFileAction } from "../../utils/filePreview";
 import s from "../PrDiffTab/PrDiffTab.module.css";
 import { DiffFileList, fileRowKeys } from "../shared/DiffFileList";
+import type { DiffListNavHandle } from "../shared/diffListNav";
 import { parseDiffFiles } from "../ui/DiffViewer";
 
 export interface BranchDiffScrollViewProps {
@@ -17,6 +18,10 @@ export interface BranchDiffScrollViewProps {
 	mode: DiffViewMode;
 	/** Pass a ref callback to get the scroll container for Cmd+F search */
 	contentRef?: (el: HTMLElement) => void;
+	/** Forwarded straight to the underlying `DiffFileList` — a `<`/`>`
+	 *  file-to-file toolbar (owned by `DiffTab`, which hosts this component)
+	 *  drives it. */
+	ref?: (handle: DiffListNavHandle) => void;
 }
 
 /**
@@ -122,6 +127,7 @@ export const BranchDiffScrollView: Component<BranchDiffScrollViewProps> = (props
 				headerHeight={35}
 				collapsedKeys={collapsedKeys()}
 				onToggleCollapsed={toggleCollapsed}
+				ref={props.ref}
 			/>
 		</Show>
 	);
