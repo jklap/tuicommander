@@ -84,7 +84,7 @@ interface LiveValue {
 const hide = Decoration.replace({});
 const HEADING = /^ATXHeading([1-6])$/;
 const TASK_MARK = /^\[([ xX~])\](?=\s|$)/;
-const BULLETS = ["\u2022", "\u25E6", "\u25AA"];
+const BULLETS = ["\u2022", "\u25CB", "\u25AA"];
 /** Preview list padding, in em per nesting level. */
 const LIST_INDENT_EM = 2;
 
@@ -104,7 +104,7 @@ class BulletWidget extends WidgetType {
 	}
 	toDOM() {
 		const el = document.createElement("span");
-		el.className = "cm-live-bullet";
+		el.className = this.glyph === BULLETS[0] ? "cm-live-bullet" : "cm-live-bullet cm-live-bullet-nested";
 		el.textContent = this.glyph;
 		return el;
 	}
@@ -184,6 +184,11 @@ function buildLive(state: EditorState): LiveValue {
 		return selected.some((l) => l.from <= b && a <= l.to);
 	};
 	const overlapsTweak = (from: number, to: number) => tweakRegions.some((r) => from < r.to && r.from < to);
+	/** A line that starts where a hidden multi-line region ends is drawn inside the region's first line. */
+	const lineStart = (pos: number) => {
+		const region = tweakRegions.find((r) => r.from < pos && pos <= r.to);
+		return region ? doc.lineAt(region.from).from : pos;
+	};
 	const hideMark = (from: number, to: number) => {
 		if (overlapsTweak(from, to)) return;
 		marks.push({ from, to });
@@ -195,7 +200,7 @@ function buildLive(state: EditorState): LiveValue {
 		enter: (ref) => {
 			const heading = HEADING.exec(ref.name);
 			if (heading) {
-				decos.push(Decoration.line({ class: `cm-live-h${heading[1]}` }).range(doc.lineAt(ref.from).from));
+				decos.push(Decoration.line({ class: `cm-live-h${heading[1]}` }).range(lineStart(doc.lineAt(ref.from).from)));
 				if (!revealed(ref.from, ref.to)) {
 					const mark = ref.node.getChild("HeaderMark");
 					if (mark) hideMark(mark.from, doc.sliceString(mark.to, mark.to + 1) === " " ? mark.to + 1 : mark.to);
@@ -203,7 +208,7 @@ function buildLive(state: EditorState): LiveValue {
 				return;
 			}
 			if (ref.name === "ListMark" && ref.node.parent?.name === "ListItem") {
-				listItem(ref.node, doc, decos, revealed, overlapsTweak);
+				listItem(ref.node, doc, decos, revealed, overlapsTweak, lineStart);
 				return;
 			}
 			const styleClass = INLINE_STYLE[ref.name];
@@ -234,6 +239,7 @@ function listItem(
 	decos: CmRange<Decoration>[],
 	revealed: (from: number, to: number) => boolean,
 	overlapsTweak: (from: number, to: number) => boolean,
+	lineStart: (pos: number) => number,
 ) {
 	const line = doc.lineAt(mark.from);
 	if (revealed(line.from, line.to)) return;
@@ -247,7 +253,7 @@ function listItem(
 	decos.push(
 		Decoration.line({
 			attributes: { style: `padding-left:${(depth + 1) * LIST_INDENT_EM}em;text-indent:-${LIST_INDENT_EM}em` },
-		}).range(line.from),
+		}).range(lineStart(line.from)),
 	);
 	if (ordered) {
 		if (mark.from > line.from) decos.push(hide.range(line.from, mark.from));
@@ -399,7 +405,7 @@ const tweakGuard = EditorState.transactionFilter.of((tr): TransactionSpec | read
  */
 const liveTheme = EditorView.theme({
 	".cm-scroller": { fontFamily: "var(--font-ui)", fontSize: "var(--font-lg)" },
-	".cm-content": { padding: "16px", lineHeight: "1.6", color: "var(--fg-primary)" },
+	".cm-content": { padding: "40px", lineHeight: "1.6", color: "var(--fg-primary)" },
 	".cm-line": { padding: "0" },
 	".cm-live-h1, .cm-live-h2, .cm-live-h3, .cm-live-h4, .cm-live-h5, .cm-live-h6": {
 		fontWeight: "600",
@@ -429,7 +435,8 @@ const liveTheme = EditorView.theme({
 	},
 	".cm-live-link": { color: "var(--accent)", textDecoration: "none" },
 	".cm-live-bullet, .cm-live-olmark": { display: "inline-block", minWidth: "2em", textIndent: "0" },
-	".cm-live-bullet": { textAlign: "center" },
+	".cm-live-bullet": { textAlign: "right", boxSizing: "border-box", paddingRight: "0.4em" },
+	".cm-live-bullet-nested": { fontSize: "0.7em" },
 	".cm-live-checkbox": { margin: "0 0.5em 0 0", verticalAlign: "middle", cursor: "pointer" },
 	".tweak-highlight": {
 		background: "color-mix(in srgb, var(--tweak-highlight) 25%, transparent)",

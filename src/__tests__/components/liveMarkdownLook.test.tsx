@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveMarkdownEditor } from "../../components/MarkdownTab/LiveMarkdownEditor";
+import { CONVENTION_HEADER } from "../../utils/tweakComments";
 
 // jsdom has no layout; CodeMirror's measure pass asks Range for client rects.
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
@@ -157,6 +158,12 @@ describe("Live headings", () => {
 		// catches: the first heading keeps its # when the cursor is on another line or the editor is unfocused on open
 		const t = mount("# Title\n\ntext\n");
 		expect(t.lines()[0].textContent).toBe("Title");
+	});
+
+	it("styles a heading that follows the hidden tweak convention header", () => {
+		// catches: the heading line decoration lost inside the hidden header, so the first heading looks like prose
+		const t = mount(`${CONVENTION_HEADER}# Title\n\ntext\n`);
+		expect(t.lines()[0].className).toContain("cm-live-h1");
 	});
 
 	it("shows the mark while the cursor is on the heading and the editor has focus", async () => {
