@@ -7,7 +7,7 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
-import { effectiveMergeMethod, isMergeMethodNotAllowed } from "../../utils/prMerge";
+import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 
@@ -21,7 +21,12 @@ interface WorktreeWorkflowCoordinatorDeps {
 			createBranch?: boolean,
 			baseRef?: string,
 		) => Promise<PendingCreation["result"] & { status: "ok" }>;
-		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		mergePrViaGithub: (
+			repoPath: string,
+			prNumber: number,
+			mergeMethod: string,
+			expectedHeadSha: string,
+		) => Promise<string>;
 		mergeAndArchiveWorktree: (
 			repoPath: string,
 			branchName: string,
@@ -234,10 +239,11 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				const preferred = repoSettingsStore.getEffective(repoPath)?.prMergeStrategy ?? "merge";
 				const method = effectiveMergeMethod(pr, preferred);
 				try {
-					await deps.repo.mergePrViaGithub(repoPath, pr.number, method);
+					await deps.repo.mergePrViaGithub(repoPath, pr.number, method, pr.head_ref_oid);
 				} catch (githubErr) {
-					if (isMergeMethodNotAllowed(githubErr)) {
-						// Surface 405 to the caller — branch protection rules disallow this merge method
+					if (isMergeMethodNotAllowed(githubErr) || isMergeHeadChanged(githubErr)) {
+						// Surface 405 (branch protection disallows the method) and head-moved (unreviewed
+						// commits: a local merge would include them too) to the caller
 						throw githubErr;
 					}
 					// Other GitHub API failures — fall back to local git merge

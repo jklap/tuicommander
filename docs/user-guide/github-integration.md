@@ -203,7 +203,7 @@ Clicking the PR badge on any branch (local or remote-only) opens the detail popo
 | Button | When Shown | What It Does |
 |--------|------------|--------------|
 | **View Diff** | Always | Opens PR diff in a dedicated panel tab |
-| **Merge** | PR is open, approved, CI green | Merges via GitHub API (auto-detects allowed merge method) |
+| **Merge** | PR is open, approved, CI green | Merges via GitHub API (auto-detects allowed merge method). The merge is pinned to the head commit the panel showed: if the agent pushed since, GitHub refuses and the panel shows "PR head changed" — refresh and review before merging again |
 | **Approve** | Remote-only PRs | Submits an approving review via GitHub API |
 
 ### Post-Merge Cleanup
