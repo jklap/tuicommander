@@ -1568,6 +1568,20 @@
     width: 36px;
     height: 36px;
   }
+
+  /* The repo name has priority, like a branch name: it keeps its full width and
+     the action cluster gives way (tighter gaps, no extra margin on +). */
+  .sidebar[data-density="rich"] .repoName {
+    flex: 1 0 auto;
+  }
+
+  .sidebar[data-density="rich"] .repoActions {
+    gap: 0;
+  }
+
+  .sidebar[data-density="rich"] .repoActions .addBtn {
+    margin-right: 0;
+  }
 }
 
 /* ── Remote-only PR popover ── */
