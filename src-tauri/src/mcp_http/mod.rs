@@ -6309,6 +6309,74 @@ mod tests {
         assert!(!linked.exists());
     }
 
+    // Catches: a client that predates `confirmedSessions` (field absent) being treated as
+    // having reviewed every session, so its removal closes a live checkout.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+    }
+
+    // Catches: an id list that names sessions which do not (or no longer) live in the checkout
+    // blocking a removal that has no live session at all.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_ignores_stale_confirmed_ids() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args(["worktree", "add", "--detach", linked.to_str().unwrap(), "HEAD"])
+            .run()
+            .unwrap();
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": ["gone-1"],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a path outside the repo's worktree list being refused as a server error (500)
+    // instead of 400 on the confirmed (safeOnly=false) path.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
+        let (repo, _linked, state) = orphan_with_live_session();
+        let stranger = tempfile::tempdir().unwrap();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": stranger.path().display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": [],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(stranger.path().exists());
+    }
+
     #[tokio::test]
     async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
         let repo = create_temp_git_repo();

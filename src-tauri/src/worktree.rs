@@ -2068,6 +2068,102 @@ mod tests {
         assert!(worktree.join("after-confirmation.txt").exists());
     }
     #[cfg(unix)]
+    mod orphan_removal_guard_critic {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(
+            state: &AppState,
+            repo: &Path,
+            checkout: &Path,
+            confirmed: &[&str],
+        ) -> Result<(), String> {
+            let confirmed: Vec<String> = confirmed.iter().map(|s| s.to_string()).collect();
+            orphan_removal_guard(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+                false,
+                &confirmed,
+            )
+        }
+
+        // Catches: a session in a subdirectory of the checkout escaping the unreviewed-session
+        // check on the confirmed path (exact cwd match instead of prefix).
+        #[test]
+        fn refuses_an_unreviewed_session_in_a_subdirectory() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir_all(linked.join("sub/deeper")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.join("sub/deeper").to_string_lossy());
+
+            assert!(guard(&state, repo.path(), &linked, &[]).is_err());
+            guard(&state, repo.path(), &linked, &["agent"]).expect("reviewed");
+        }
+
+        // Catches: a session in a sibling checkout whose name shares a string prefix
+        // ("linked" vs "linked-2") being counted as inside this checkout.
+        #[test]
+        fn a_sibling_with_a_shared_name_prefix_is_not_unreviewed() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let sibling = detached(repo.path(), "linked-2");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked, &[]).expect("sibling is outside");
+        }
+
+        // Catches: the refusal text hiding which session was not reviewed, so the caller cannot
+        // act on a 400.
+        #[test]
+        fn the_refusal_names_the_unreviewed_session_and_not_the_reviewed_one() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            for (id, name) in [("seen", "Seen Agent"), ("late", "Late Agent")] {
+                insert_dummy_session(&state, id);
+                set_session_cwd(&state, id, &linked.to_string_lossy());
+                state.session_maps.sessions.get(id).unwrap().lock().display_name =
+                    Some(name.to_string());
+            }
+
+            let error = guard(&state, repo.path(), &linked, &["seen"]).unwrap_err();
+
+            assert!(error.contains("Late Agent"), "{error}");
+            assert!(!error.contains("Seen Agent"), "{error}");
+        }
+
+        // Catches: an already-removed checkout with stale sessions still refusing the
+        // confirmed removal (idempotent retry must succeed).
+        #[test]
+        fn a_missing_checkout_never_blocks() {
+            let repo = setup_test_repo();
+            let gone = repo.path().join("gone");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &gone.to_string_lossy());
+
+            guard(&state, repo.path(), &gone, &[]).expect("nothing left to protect");
+        }
+    }
+    #[cfg(unix)]
     mod orphan_session_guard {
         use super::*;
         use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
