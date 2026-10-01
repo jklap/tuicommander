@@ -624,6 +624,49 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
 
+	// Catches: a card rendered as plain assistant text, with no button.
+	it("renders a salience=card notice as a card with its action, and opens the result file from it", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/results/worker.md" };
+			return undefined;
+		});
+		const { container } = await renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Worker finished: RESULT" },
+				_meta: { ego: { salience: "card", action: { kind: "open_result", path: "results/worker.md" } } },
+			},
+		});
+		await settle();
+		const card = container.querySelector('[aria-label="Notice"]') as HTMLElement;
+		expect(card.textContent).toContain("Worker finished: RESULT");
+		expect(container.querySelector(".assistantMsg")).toBeNull();
+		// Catches: a dead action button.
+		const button = [...card.querySelectorAll("button")].find((item) => item.textContent === "Open result");
+		button?.click();
+		await settle();
+		expect(invoke).toHaveBeenCalledWith("resolve_terminal_path", { cwd: CHAT_ROOT, candidate: "results/worker.md" });
+		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/results/worker.md");
+	});
+
+	// Catches: breaking non-ego or older ego sessions.
+	it("renders an update without _meta as an assistant message, not a card", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "plain reply" } },
+		});
+		await settle();
+		expect(container.querySelector('[aria-label="Notice"]')).toBeNull();
+		expect(container.querySelector(".assistantMsg")?.textContent).toContain("plain reply");
+	});
+
 	it("makes a bare source path clickable only after the backend resolves it", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
