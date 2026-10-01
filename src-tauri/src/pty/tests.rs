@@ -21484,6 +21484,7 @@ fn bgtasksummary_is_stamped_with_the_sessions_current_turn_epoch() {
         .get_mut("test-bgsummary-epoch")
         .unwrap()
         .turn_epoch = 4;
+    feed_bgtasks(&state, "test-bgsummary-epoch", &silence, "completed");
     feed_tuic_verb(
         &state,
         "test-bgsummary-epoch",
@@ -21496,6 +21497,55 @@ fn bgtasksummary_is_stamped_with_the_sessions_current_turn_epoch() {
     assert!(
         !sl.declared_background_work_for_epoch(5),
         "self-expires on a new turn"
+    );
+}
+
+#[test]
+fn bgtasksummary_without_a_bgtasks_observation_for_this_epoch_is_ignored() {
+    // Orphan: nothing recorded yet.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-orphan");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-orphan",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    {
+        let sl = silence.lock();
+        assert!(!sl.declared_background_work_for_epoch(0));
+        assert!(sl.declared_task_summary_for_epoch(0).is_none());
+    }
+
+    // Epoch race: the two verbs of one hook fire are dispatched separately, and a new
+    // prompt can land between them (bumping the epoch and wiping the observation). The
+    // late summary must not stamp the NEW turn with the previous turn's data.
+    let mut sl = SilenceState::new();
+    sl.set_declared_background_work(false, 3);
+    sl.reset_declared_background_work();
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 1,
+            teammate_running: 0,
+        },
+        4,
+    );
+    assert!(!sl.declared_background_work_for_epoch(4));
+    assert!(sl.declared_task_summary_for_epoch(4).is_none());
+
+    // ...and one for an older epoch than the recorded observation is ignored too.
+    sl.set_declared_background_work(true, 5);
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 0,
+        },
+        4,
+    );
+    assert!(
+        sl.declared_background_work_for_epoch(5),
+        "a summary for another epoch must not clear this epoch's declaration"
     );
 }
 
