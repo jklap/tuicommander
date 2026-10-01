@@ -3633,18 +3633,23 @@ describe("useGitOperations", () => {
 
 		// Catches: terminals left alive on a removed checkout with only a log line: the status line must
 		// say how many could not be closed, counting every failing terminal, not just the first.
-		it("auto mode: the status line says how many terminals of a removed orphan could not be closed", async () => {
+		it("auto mode: the status line sums the terminals that could not be closed across several removed orphans", async () => {
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
-			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/gone", safe: true }]);
-			mockCloseTerminal.mockRejectedValueOnce(new Error("pty busy")).mockRejectedValueOnce(new Error("pty busy"));
-			terminalsStore.add(makeTerminal({ name: "A", cwd: "/wt/gone" }));
-			terminalsStore.add(makeTerminal({ name: "B", cwd: "/wt/gone/sub" }));
+			mockRepo.assessOrphanCleanup.mockResolvedValue([
+				{ path: "/wt/a", safe: true },
+				{ path: "/wt/b", safe: true },
+			]);
+			for (let i = 0; i < 3; i++) mockCloseTerminal.mockRejectedValueOnce(new Error("pty busy"));
+			terminalsStore.add(makeTerminal({ name: "A1", cwd: "/wt/a" }));
+			terminalsStore.add(makeTerminal({ name: "A2", cwd: "/wt/a/sub" }));
+			terminalsStore.add(makeTerminal({ name: "B1", cwd: "/wt/b" }));
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(mockCloseTerminal).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledTimes(3);
+			expect(mockSetStatusInfo).toHaveBeenCalledTimes(1);
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(
-				"Removed 1 orphaned worktree(s); 2 terminal(s) could not be closed",
+				"Removed 2 orphaned worktree(s); 3 terminal(s) could not be closed",
 			);
 		});
 
