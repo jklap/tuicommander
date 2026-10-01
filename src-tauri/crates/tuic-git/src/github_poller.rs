@@ -408,4 +408,27 @@ mod tests {
         let t = detect_transitions("/repo", &old, &new);
         assert!(t.is_empty());
     }
+
+    /// Catches: the OS notification "PR ready to merge" firing for a PR the badge and
+    /// panel show as "Comments" (unresolved review threads) or "CI Running" — two
+    /// readiness verdicts for the same PR (story 1347: one shared verdict).
+    #[test]
+    fn ready_transition_waits_for_unresolved_threads_and_pending_checks() {
+        let old = make_pr("OPEN", "UNKNOWN", "", 1, 0);
+
+        let mut open_threads = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 0);
+        open_threads.unresolved_threads = 2;
+        let t = detect_transitions("/repo", &old, &open_threads);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "unresolved threads must not notify ready: {t:?}"
+        );
+
+        let pending = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 3);
+        let t = detect_transitions("/repo", &old, &pending);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "pending checks must not notify ready: {t:?}"
+        );
+    }
 }
