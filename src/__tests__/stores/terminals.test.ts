@@ -830,6 +830,41 @@ describe("terminalsStore", () => {
 			});
 		});
 
+		it("update({ sessionId: null }) also clears declaredBackgroundWork so an exited tab stops reading as working", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-declared" }));
+				store.update(id, { shellState: "idle", declaredBackgroundWork: true });
+				expect(store.isWorking(id)).toBe(true);
+				store.update(id, { sessionId: null });
+				expect(store.get(id)?.declaredBackgroundWork).toBe(false);
+				expect(store.isWorking(id)).toBe(false);
+			});
+		});
+
+		it("update({ sessionId: newId }) does NOT clear declaredBackgroundWork (only losing the session does)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-a" }));
+				store.update(id, { shellState: "idle", declaredBackgroundWork: true });
+				store.update(id, { sessionId: "sess-b" });
+				expect(store.get(id)?.declaredBackgroundWork).toBe(true);
+			});
+		});
+
+		it("register() also defaults declaredBackgroundWork to false", () => {
+			testInScope(() => {
+				store.register("term-reg-default", { ...makeTerminal(), sessionId: "sess-reg-default" });
+				expect(store.get("term-reg-default")?.declaredBackgroundWork).toBe(false);
+				expect(store.isWorking("term-reg-default")).toBe(false);
+			});
+		});
+
+		it("add() defaults declaredBackgroundWork to false", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-default" }));
+				expect(store.get(id)?.declaredBackgroundWork).toBe(false);
+			});
+		});
+
 		it("update({ sessionId: newId }) replaces prior reverse map entry", () => {
 			testInScope(() => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-old" }));

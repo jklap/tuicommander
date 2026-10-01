@@ -84,6 +84,64 @@ describe("useAgentPolling", () => {
 		expect(store.getLastDataAt(id)).toBe(now - 30_000);
 	});
 
+	it("mirrors declared_background_work onto the terminal, independent of raw shell busy", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: { shell_state: "idle", agent_state: "working", declared_background_work: true },
+			},
+		]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.declaredBackgroundWork).toBe(true);
+		// The OS-heuristic flag is a separate field and must not be set by the declared one.
+		expect(store.get(id)?.backgroundWork).toBe(false);
+		// Indicators (isWorking) see it; the raw-busy predicate does not.
+		expect(store.isWorking(id)).toBe(true);
+		expect(store.isBusy(id)).toBe(false);
+	});
+
+	it("clears declaredBackgroundWork when a later snapshot reports false or omits the field", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: { shell_state: "idle", agent_state: "working", declared_background_work: true },
+			},
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.declaredBackgroundWork).toBe(true);
+
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: { shell_state: "idle", agent_state: "working", declared_background_work: false },
+			},
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.declaredBackgroundWork).toBe(false);
+
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: { shell_state: "idle", agent_state: "working", declared_background_work: true },
+			},
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.declaredBackgroundWork).toBe(true);
+
+		// serde omits a false/absent field: absence means "not declared", not "unknown".
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "working" } },
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.declaredBackgroundWork).toBe(false);
+	});
+
 	it("tracks the queued-command depth, treating an omitted field as an empty queue", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([
@@ -1123,6 +1181,35 @@ describe("useAgentPolling", () => {
 				expect(store.get(id)?.awaitingInputConfident).toBe(false);
 				expect(store.get(id)?.agentState).toBe("working");
 				expect(store.get(id)?.queuedCommands).toBe(0);
+			});
+		});
+
+		it("applies declared_background_work from a push and retracts it when the field is omitted", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshot);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				const push = listeners.get("session-state-changed");
+
+				push?.({
+					payload: {
+						session_id: "sess-1",
+						state: { shell_state: "idle", agent_state: "working", declared_background_work: true },
+					},
+				});
+				expect(store.get(id)?.declaredBackgroundWork).toBe(true);
+				expect(store.isWorking(id)).toBe(true);
+				expect(store.isBusy(id)).toBe(false);
+
+				// serde omits a false field, so the retraction arrives as an absence.
+				push?.({ payload: { session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle" } } });
+				expect(store.get(id)?.declaredBackgroundWork).toBe(false);
+				expect(store.isWorking(id)).toBe(false);
 			});
 		});
 
