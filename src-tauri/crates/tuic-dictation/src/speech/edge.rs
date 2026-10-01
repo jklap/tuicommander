@@ -1349,7 +1349,7 @@ mod critic_round1 {
         let one = {
             let m = mp3.clone();
             let (speech, _, _) = dial_with(move |_| vec![audio_frame(&m), turn_end()]);
-            synth(&speech, "ciao").unwrap().samples.len()
+            synth(&speech, "Ciao Boss, il pannello è su main.").unwrap().samples.len()
         };
         let text = "parola ".repeat(600);
         assert_eq!(split_text(&text).len(), 2);
