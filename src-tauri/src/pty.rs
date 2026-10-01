@@ -7867,6 +7867,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // decision, not a cleanup tweak.
     state.session_maps.session_parent.remove(session_id);
     state.keep_open_sessions.remove(session_id);
+    state.blocked_children.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.

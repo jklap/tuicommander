@@ -2454,6 +2454,8 @@ pub(super) async fn handle_session_submit(
         BeginSubmission::Response(response) => return response,
         BeginSubmission::Started(started) => started,
     };
+    // The coordinator answers a BLOCKED child through the terminal.
+    state.blocked_children.remove(&started.session_id);
     apply_pty_description(state, &started.session_id, pty_description);
 
     let deadline =
@@ -10092,6 +10094,22 @@ mod tests {
             .lock()
             .write(b"child moved");
         call.await.unwrap()
+    }
+
+    /// Catches: the coordinator answering a BLOCKED child with `session action=submit`
+    /// (tuic-say) leaving the idle-close hold in place, so the child resumes, finishes
+    /// without mailing and is then never closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_to_a_blocked_child_releases_its_idle_close_hold() {
+        let state = test_state();
+        let session_id = "submit-blocked";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state.blocked_children.insert(session_id.to_string());
+
+        submit_with_child_movement(&state, session_id, "the box is back", &bytes).await;
+
+        assert!(!state.blocked_children.contains(session_id));
     }
 
     #[cfg(unix)]

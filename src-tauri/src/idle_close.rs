@@ -86,6 +86,19 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
+/// Nobody can answer a child whose parent has no PTY and no MCP session left.
+fn parent_alive(state: &AppState, child: &str) -> bool {
+    let Some(parent) = state.session_maps.session_parent.get(child) else {
+        return false;
+    };
+    state.session_maps.sessions.contains_key(parent.value())
+        || state
+            .mcp
+            .session_to_mcp
+            .get(parent.value())
+            .is_some_and(|sessions| !sessions.is_empty())
+}
+
 fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
     let parent = state.session_maps.session_parent.get(session_id)?.clone();
     if !state.session_maps.sessions.contains_key(session_id)
@@ -161,7 +174,7 @@ fn sweep_with_snapshot(
         .retain(|session_id, _| children.contains(session_id));
     state
         .blocked_children
-        .retain(|session_id| children.contains(session_id));
+        .retain(|session_id| children.contains(session_id) && parent_alive(state, session_id));
     let mut runner_commands: Option<Option<Vec<String>>> = None;
     for session_id in children {
         let candidate = observation(state, &session_id);
@@ -316,6 +329,14 @@ mod tests {
                 ..Default::default()
             },
         );
+    }
+
+    /// The parent is an MCP peer without a PTY, as an orchestrator usually is.
+    fn live_parent(state: &Arc<AppState>) {
+        state
+            .mcp
+            .session_to_mcp
+            .insert("parent".into(), vec!["parent-mcp".into()]);
     }
 
     fn idle() -> Observation {
@@ -607,6 +628,7 @@ mod tests {
             .session_maps
             .session_parent
             .insert(child.into(), "parent".into());
+        live_parent(&state);
         let mail = |from: &str, content: &str, timestamp| crate::state::AgentMessage {
             id: format!("mail-{timestamp}"),
             from_tuic_session: from.into(),
@@ -696,6 +718,7 @@ mod tests {
 
     #[cfg(unix)]
     fn critic_child(state: &Arc<AppState>, child: &str, dir: &std::path::Path) {
+        live_parent(state);
         live_child(state, child, dir.to_path_buf());
         state
             .session_maps
@@ -912,25 +935,18 @@ mod tests {
         );
     }
 
-    /// Catches: the parent answering through the PTY (session submit / tuic-say) instead
-    /// of `agent send`. That path never reaches push_agent_inbox, so the hold is never
-    /// released: the child resumes, finishes without mailing, and is kept open for ever.
+    /// Catches: a dead parent leaving its blocked child held for ever, with nobody
+    /// left to answer it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn input_typed_into_the_child_after_blocked_releases_the_hold() {
+    async fn blocked_child_of_a_dead_parent_is_closed_like_any_idle_child() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let temp = critic_temp();
         let _config = crate::config::set_config_dir_override(temp.path().join("config"));
         critic_child(&state, "c", temp.path());
         state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
-        state
-            .session_maps
-            .last_input_ms
-            .insert("c".into(), std::sync::atomic::AtomicU64::new(20));
+        state.mcp.session_to_mcp.remove("parent");
         critic_sweep_to_maturity(&state);
-        assert!(
-            !state.session_maps.sessions.contains_key("c"),
-            "the parent answered through the terminal; the hold must not outlive that"
-        );
+        assert!(!state.session_maps.sessions.contains_key("c"));
     }
 }
