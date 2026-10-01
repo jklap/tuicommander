@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
@@ -2031,6 +2031,28 @@ fn is_unc_markdown_path(path: &str) -> bool {
 }
 
 fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> MarkdownLinkTarget {
+    resolve_markdown_link_with_home(root, current_file, href, dirs::home_dir().as_deref())
+}
+
+/// `~/rest` under `home`, or `None` when the path has no `~/` prefix or `rest` would not stay
+/// under home. Leading separators are trimmed (`~//x` must not join as an absolute path) and a
+/// drive-prefixed rest (`~/C:\x`) is refused: on Windows `join` would replace home with it.
+fn expand_home_prefix(path: &str, home: &Path) -> Option<String> {
+    let rest = path.strip_prefix("~/")?.trim_start_matches(['/', '\\']);
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return None;
+    }
+    Some(home.join(rest).to_string_lossy().into_owned())
+}
+
+/// `~/` in a link names the home directory, as it does in the terminal paths.
+fn resolve_markdown_link_with_home(
+    root: &str,
+    current_file: &str,
+    href: &str,
+    home: Option<&Path>,
+) -> MarkdownLinkTarget {
     let (raw_path, raw_anchor) = href.split_once('#').unwrap_or((href, ""));
     let raw_path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
     let Some(mut path) = decode_markdown_link_part(raw_path) else {
@@ -2047,6 +2069,9 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
         return MarkdownLinkTarget::Blocked {
             reason: "Network paths are not supported in Markdown links".into(),
         };
+    }
+    if let Some(expanded) = home.and_then(|home| expand_home_prefix(&path, home)) {
+        path = expanded;
     }
     let mut line = anchor
         .strip_prefix('L')
@@ -3486,6 +3511,216 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn markdown_link_expands_home_prefix_and_keeps_line_suffix() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        let canonical = home.path().canonicalize().unwrap();
+        let expected = canonical.join("notes/design.md");
+        let expected = expected.to_string_lossy();
+        for (href, line) in [
+            ("~/notes/design.md", None),
+            ("~/notes/design.md:7", Some(7)),
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(home.path())),
+                    MarkdownLinkTarget::File { absolute_path, open_path, line: actual, .. }
+                        if absolute_path == expected && open_path == expected && actual == line
+                ),
+                "{href}"
+            );
+        }
+        assert!(matches!(
+            resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                "~/notes/gone.md",
+                Some(home.path())
+            ),
+            MarkdownLinkTarget::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn critic_markdown_link_home_prefix_with_doubled_slash_stays_under_home() {
+        // Catches: `Path::join` with an absolute remainder replaces the home
+        // dir, so `~//etc/hosts` resolved to `/etc/hosts` instead of `$HOME/etc/hosts`.
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        let expected = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("notes/design.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            matches!(
+                resolve_markdown_link_with_home(
+                    "/repo",
+                    "/repo/review.md",
+                    "~//notes/design.md",
+                    Some(home.path())
+                ),
+                MarkdownLinkTarget::File { absolute_path, .. } if absolute_path == expected
+            ),
+            "~//notes/design.md must resolve inside home"
+        );
+    }
+
+    #[test]
+    fn critic_markdown_link_home_prefix_alone_is_the_home_directory() {
+        // Catches: a bare `~/` treated as a relative path next to the file.
+        let home = TempDir::new().unwrap();
+        let canonical = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path())),
+            MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == canonical
+        ));
+    }
+
+    #[test]
+    fn critic_markdown_link_bare_tilde_and_unknown_home_stay_relative() {
+        // Catches: `~user/x` or a missing home dir panicking or expanding to the wrong root.
+        let dir = TempDir::new().unwrap();
+        let review = dir.path().join("review.md");
+        fs::write(&review, "").unwrap();
+        for (href, home) in [("~user/x.md", Some(dir.path())), ("~/x.md", None)] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        dir.path().to_str().unwrap(),
+                        review.to_str().unwrap(),
+                        href,
+                        home
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic2_markdown_link_home_prefix_into_tcc_dir_is_blocked() {
+        // Catches: `~/Library/x.md` bypassing the TCC guard (the guard must see the
+        // expanded path, including when `..` reaches the protected dir).
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/Library/x.md",
+            "~/Desktop/x.md",
+            "~/notes/../Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic2_markdown_link_home_prefix_keeps_heading_anchor() {
+        // Catches: expansion running before the anchor split, losing `#L9` / `#heading`.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#L9", Some(home.path())),
+            MarkdownLinkTarget::File {
+                line: Some(9),
+                anchor: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#intro", Some(home.path())),
+            MarkdownLinkTarget::File { anchor: Some(a), .. } if a == "intro"
+        ));
+    }
+
+    #[test]
+    fn critic2_markdown_link_percent_encoded_tilde_expands_like_literal() {
+        // Catches: expansion on the raw href so `%7E/a.md` resolves next to the file instead of home.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "%7E/a.md", Some(home.path())),
+            MarkdownLinkTarget::File { .. }
+        ));
+    }
+
+    #[test]
+    fn home_prefix_expansion_never_escapes_home() {
+        let home = Path::new("/home/boss");
+        assert_eq!(
+            expand_home_prefix("~/a/b.md", home).as_deref(),
+            Some("/home/boss/a/b.md")
+        );
+        assert_eq!(
+            expand_home_prefix("~//a.md", home).as_deref(),
+            Some("/home/boss/a.md")
+        );
+        // A drive-prefixed rest would replace home in a Windows join.
+        assert_eq!(expand_home_prefix("~/C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~/c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("notes/a.md", home), None);
+    }
+
+    #[test]
+    fn critic3_expand_home_prefix_edges() {
+        // Catches: a drive hidden behind leading separators (`~/\\C:\x`) slipping past the
+        // guard because the trim ran after the check; a multibyte first char panicking the
+        // byte probe; a 2-letter `CD:x` first segment refused as a drive.
+        let home = Path::new("/home/boss");
+        assert_eq!(expand_home_prefix("~/\\C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~//c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("~/C:", home), None);
+        assert_eq!(
+            expand_home_prefix("~/é:x", home).as_deref(),
+            Some("/home/boss/é:x")
+        );
+        assert_eq!(
+            expand_home_prefix("~/CD:x", home).as_deref(),
+            Some("/home/boss/CD:x")
+        );
+        assert_eq!(
+            expand_home_prefix("~/", home).as_deref(),
+            Some("/home/boss/")
+        );
+        assert_eq!(expand_home_prefix("~", home), None);
+        assert_eq!(expand_home_prefix("~user/a", home), None);
+    }
+
+    #[test]
+    fn critic3_markdown_link_home_prefix_with_dot_segments_into_tcc_dir_is_blocked() {
+        // Catches: `~/./Desktop/x.md` or `~//Library/x.md` reaching a TCC dir because the
+        // expansion left a `.`/doubled separator the guard does not normalise.
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/./Desktop/x.md",
+            "~//Library/x.md",
+            "~/%2E/Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
     }
 
     #[test]
