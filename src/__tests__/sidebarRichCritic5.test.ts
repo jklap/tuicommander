@@ -64,18 +64,22 @@ describe("createMinuteClock (critic r5)", () => {
 	it("keeps ticking while one consumer remains", () => {
 		vi.setSystemTime(NOW);
 		let disposeA!: () => void;
+		let disposeB!: () => void;
 		let clockB!: () => number;
 		createRoot((d) => {
 			disposeA = d;
 			createMinuteClock();
 		});
-		createRoot(() => {
+		createRoot((d) => {
+			disposeB = d;
 			clockB = createMinuteClock();
 		});
 		disposeA();
 		const before = clockB();
 		vi.advanceTimersByTime(120_000);
-		expect(clockB()).toBeGreaterThan(before);
+		const after = clockB();
+		disposeB();
+		expect(after).toBeGreaterThan(before);
 	});
 
 	// Catches: the interval leaking after the last consumer disposes.
@@ -107,12 +111,19 @@ describe("createMinuteClock (critic r5)", () => {
 	// Catches: a consumer that joins a running clock reading a time up to a minute old.
 	it("hands a late joiner the current time", () => {
 		vi.setSystemTime(NOW);
-		createRoot(() => createMinuteClock());
+		const disposeFirst = createRoot((d) => {
+			createMinuteClock();
+			return d;
+		});
 		vi.setSystemTime(NOW + 50_000);
 		let late!: () => number;
-		createRoot(() => {
+		const disposeLate = createRoot((d) => {
 			late = createMinuteClock();
+			return d;
 		});
-		expect(late()).toBe(NOW + 50_000);
+		const seen = late();
+		disposeLate();
+		disposeFirst();
+		expect(seen).toBe(NOW + 50_000);
 	});
 });
