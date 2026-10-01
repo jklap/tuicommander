@@ -51,6 +51,9 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 	const [hasSelection, setHasSelection] = createSignal(false);
 	const [composing, setComposing] = createSignal(false);
 	const [draft, setDraft] = createSignal("");
+	let commentInput: HTMLInputElement | undefined;
+	// The toolbar button never takes focus (mousedown is prevented to keep the selection), so hand it to the input.
+	createEffect(on(composing, (open) => open && commentInput?.focus(), { defer: true }));
 
 	const [dirty, setDirty] = createSignal(false);
 	const markDirty = (value: boolean) => {
@@ -260,6 +263,11 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 		refreshDirty();
 	};
 
+	const cancelComment = () => {
+		setComposing(false);
+		active?.view.focus();
+	};
+
 	const addComment = () => {
 		const body = draft().trim();
 		const view = active?.view;
@@ -304,18 +312,26 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 				<Show when={composing()}>
 					<input
 						class={s.input}
+						ref={commentInput}
 						value={draft()}
 						placeholder={t("markdownTab.commentPlaceholder", "Comment on the selection")}
 						onInput={(ev) => setDraft(ev.currentTarget.value)}
 						onKeyDown={(ev) => {
-							if (ev.key === "Enter") addComment();
-							if (ev.key === "Escape") setComposing(false);
+							// The key's default action lands where focus is after the handler; keep it out of the editor.
+							if (ev.key === "Enter") {
+								ev.preventDefault();
+								addComment();
+							}
+							if (ev.key === "Escape") {
+								ev.preventDefault();
+								cancelComment();
+							}
 						}}
 					/>
 					<button type="button" class={s.btn} onClick={addComment}>
 						{t("markdownTab.addCommentConfirm", "Add")}
 					</button>
-					<button type="button" class={s.btn} onClick={() => setComposing(false)}>
+					<button type="button" class={s.btn} onClick={cancelComment}>
 						{t("markdownTab.addCommentCancel", "Cancel")}
 					</button>
 				</Show>
