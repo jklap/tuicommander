@@ -217,11 +217,11 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_local_branches` | `path` | `Vec<String>` | List local branches |
 | `checkout_remote_branch` | `repo_path, branch_name` | `()` | Check out a remote-only branch as a new local tracking branch |
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
-| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason? }>` | Classify every orphan for automatic removal using tracked/untracked status and branch reachability. |
+| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason?, live_sessions? }>` | Classify every orphan for automatic removal using tracked/untracked status, branch reachability and live sessions in the checkout. |
 | `begin_orphan_cleanup` | `repo_path, paths` | `()` | Register the open Ask dialog for an agent answer. |
 | `pending_orphan_cleanup_answer` | `repo_path` | `bool?` | Read the pending answer, or `null` while unanswered. |
 | `clear_orphan_cleanup` | `repo_path` | `()` | Clear the pending answer when the dialog closes. |
-| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status and branch reachability immediately before removal. |
+| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?, confirmed_sessions?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status, branch reachability and live sessions immediately before removal. Without it, refuse when a live session in the checkout is not in `confirmed_sessions` (the session ids the user saw). |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
 | `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive or delete. A pre-flight counts commits and checks the exact checkout. For `archive` or `delete`, an unverified or dirty checkout or one with a live session returns `action: "needs_confirmation"` **before merging**. Re-call with `force: true` and the confirmed lifecycle `expected_fingerprint` to proceed; a changed fingerprint aborts. A locked checkout is not archived. If conflict cleanup abort fails, the error includes the manual abort command. |
 | `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up after a completed merge. Uses the same lifecycle review as one-click cleanup and also requires merged commit status before automatic cleanup. Without `force`, a dirty, unverified, or live checkout returns `action: "needs_confirmation"` (`merged: true` — only cleanup stopped). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. A lock stops archiving. Delete may include `branch_delete_warning` if safe branch deletion kept the branch. |
@@ -281,7 +281,9 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_active_tunnels` | -- | `Vec<JSON>` | List all active tunnels with ID, status, and started_at |
 | `get_tunnel_status` | `id` | `JSON` | Get the current status of a specific tunnel (starting, connected, reconnecting, stopped, error) |
 | `list_ssh_config_hosts` | -- | `Vec<String>` | Parse `~/.ssh/config` and return all non-negated, non-wildcard Host entries |
-| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe deduplicated SSH config hosts with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
+| `list_discovered_ssh_hosts` | -- | `DiscoveredSshHosts` | List non-wildcard `~/.ssh/config` aliases and plain `~/.ssh/known_hosts` names deduplicated by resolved host and port; hashed known_hosts entries are counted in `hashed_count` |
+| `probe_discovered_ssh_host` | `target, port?` | `SshHostStatus` | Probe one discovered entry (known_hosts entries use `StrictHostKeyChecking=yes`); refuses a host not in the discovered list |
+| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe the `~/.ssh/config` aliases (known_hosts names excluded) with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
 | `get_tunnel_audit` | `id, limit?` | `Vec<JSON>` | Query audit log events for a tunnel (default limit 20). Returns timestamp, kind, and extracted message |
 | `list_ssh_agent_keys` | -- | `SshAgentInfo` | Detect SSH agent type (1Password, Secretive, GPG, generic) and list loaded keys via `ssh-add -l` |
 

@@ -7380,7 +7380,7 @@ impl ChunkProcessor {
         // otherwise stays latched after the completed turn. Require the newly
         // painted result and a ready composer; a dialog still on screen must
         // retain its badge, including while Claude repaints its status line.
-        let declined_claude_question = if agent_type.as_deref() == Some("claude")
+        let declined_screen = agent_type.as_deref() == Some("claude")
             && screen_activity == AgentScreenActivity::Ready
             && changed_rows.iter().any(|row| {
                 row.text.contains("User declined") && row.text.contains("answer questions")
@@ -7392,37 +7392,38 @@ impl ChunkProcessor {
                     event,
                     ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
                 )
-            }) {
-            state
-                .session_maps
-                .session_states
-                .get(session_id)
-                .and_then(|session| {
-                    if session.awaiting_input
-                        && session.question_confident
-                        && session.choice_prompt.is_none()
-                    {
-                        session
-                            .question_text
-                            .as_ref()
-                            .map(|text| (text.clone(), session.turn_epoch))
-                    } else {
-                        None
-                    }
-                })
-        } else {
-            None
-        };
-        if let Some((expected_question_text, turn_epoch)) = declined_claude_question {
-            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                session_id: session_id.to_string(),
-                parsed: serde_json::json!({
-                    "type": "protocol-question-cleared",
-                    "expected_question_text": expected_question_text,
-                    "_turn_epoch": turn_epoch,
-                })
-                .into(),
             });
+        let declined_session = declined_screen
+            .then(|| state.session_maps.session_states.get(session_id))
+            .flatten()
+            .filter(|session| session.awaiting_input && session.question_confident)
+            .map(|session| {
+                // A live choice overlay owns its own clear; only the shell
+                // state below is ours then.
+                let question = if session.choice_prompt.is_none() {
+                    session.question_text.clone()
+                } else {
+                    None
+                };
+                (question, session.turn_epoch)
+            });
+        if let Some((question, turn_epoch)) = declined_session {
+            if let Some(expected_question_text) = question {
+                state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                    session_id: session_id.to_string(),
+                    parsed: serde_json::json!({
+                        "type": "protocol-question-cleared",
+                        "expected_question_text": expected_question_text,
+                        "_turn_epoch": turn_epoch,
+                    })
+                    .into(),
+                });
+            }
+            // Esc ends the turn without a Stop hook (live capture: busy, busy,
+            // awaiting, then nothing), so the hook-driven BUSY would stay latched
+            // with the queue stuck until the next input. The ready composer under
+            // the fresh cancellation is the Stop it never sent.
+            transition_explicit_shell_state(state, session_id, SHELL_IDLE, "idle", true);
         }
 
         // Update silence state for fallback question detection.
@@ -7989,6 +7990,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // decision, not a cleanup tweak.
     state.session_maps.session_parent.remove(session_id);
     state.keep_open_sessions.remove(session_id);
+    state.blocked_children.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.
@@ -11864,6 +11866,16 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
+    close_pty_core_with_reason(state, session_id, cleanup_worktree, "close_requested")
+}
+
+/// `close_pty_core` with the cause that the close log line reports.
+pub(crate) fn close_pty_core_with_reason(
+    state: &AppState,
+    session_id: &str,
+    cleanup_worktree: bool,
+    reason: &str,
+) -> Option<crate::state::WorktreeInfo> {
     flush_open_intent_before_session_removal(session_id, state);
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
@@ -11875,7 +11887,7 @@ pub(crate) fn close_pty_core(
     tracing::info!(
         source = "session",
         session_id = %session_id,
-        reason = "close_requested",
+        reason,
         "Closing session: sending Ctrl-C"
     );
 

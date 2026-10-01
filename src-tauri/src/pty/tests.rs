@@ -17288,6 +17288,8 @@ async fn confident_awaiting_is_never_retracted() {
 /// Live Claude 2.1.280 capture: AskUserQuestion notified a confident wait,
 /// Esc dismissed it without a typed line, and the turn ended at the composer.
 /// The badge must follow that completed turn, not the historical notification.
+/// The mobile choice overlay is still set when the decline paints, and the shell
+/// state must still leave BUSY: Claude sends no Stop hook after Esc.
 #[tokio::test(flavor = "current_thread")]
 async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
@@ -17373,16 +17375,24 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
         "the completed turn must retract Claude's dismissed question"
     );
 
-    // The captured composer is ready after Claude finishes. Model the normal
-    // idle settlement, then exercise the same PTY write used by MCP submit.
-    #[cfg(unix)]
-    {
+    // Catches: Esc ends the turn with no Stop hook, so the hook-driven BUSY
+    // stays latched and queued input never flushes. Nothing here stores IDLE by
+    // hand: the dismissal itself must have released the session.
+    assert_eq!(
         state
             .session_maps
             .shell_states
             .get(sid)
             .unwrap()
-            .store(SHELL_IDLE, Ordering::Release);
+            .load(Ordering::Acquire),
+        SHELL_IDLE,
+        "the dismissed AskUserQuestion must return the session to idle"
+    );
+
+    // The captured composer is ready after Claude finishes; exercise the same
+    // PTY write used by MCP submit.
+    #[cfg(unix)]
+    {
         silence.lock().confirm_idle();
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(
@@ -20034,6 +20044,124 @@ fn placeholder_probe_counts_non_empty_rows_not_screen_rows() {
     outside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]); // 9th from bottom
     let state = codex_state_showing("crit-edge-out", &outside);
     assert!(!composer_retains_text(&state, "crit-edge-out", "brief"));
+}
+
+// ---- critic-1302: dismissed AskUserQuestion, attack cases -----------------
+
+/// Replays the live Claude Esc capture through the production chunk processor
+/// and returns once the whole capture was consumed.
+#[cfg(test)]
+async fn replay_claude_askuser_esc(
+    sid: &str,
+) -> (Arc<AppState>, Arc<Mutex<SilenceState>>, ChunkProcessor) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+    }
+    (state, silence, processor)
+}
+
+fn shell_of(state: &AppState, sid: &str) -> u8 {
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire)
+}
+
+/// Catches: the declined-question idle is recorded at a rank that later hooks
+/// cannot override, so the next turn's `state=busy` hook is ignored and the tab
+/// shows idle while Claude works.
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_hook_busy_after_a_dismissed_question_is_honoured() {
+    let sid = "critic-1302-late-busy";
+    let (state, silence, processor) = replay_claude_askuser_esc(sid).await;
+    assert_eq!(shell_of(&state, sid), SHELL_IDLE);
+
+    processor.handle_tuic_state("busy", sid, &state);
+    assert_eq!(
+        shell_of(&state, sid),
+        SHELL_BUSY,
+        "a busy hook after the dismissal starts a new turn"
+    );
+    assert!(silence.lock().hook_busy());
+
+    processor.handle_tuic_state("idle", sid, &state);
+    assert_eq!(shell_of(&state, sid), SHELL_IDLE);
+}
+
+/// Catches: the idle released by the dismissal is not confirmed idle, so the
+/// queued message of the stuck-queue symptom still waits for the silence timer.
+/// Nothing here calls `confirm_idle` by hand.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_queued_injection_flushes_after_a_dismissed_question() {
+    use std::collections::VecDeque;
+    let sid = "critic-1302-queue";
+    let (state, _silence, _processor) = replay_claude_askuser_esc(sid).await;
+    let bytes = insert_recording_session(&state, sid);
+    let mut queue = VecDeque::new();
+    queue.push_back(crate::state::PendingInjection::notice("after esc"));
+    state.pending_injections.insert(sid.to_string(), queue);
+
+    flush_pending_injections(&state, sid);
+    for _ in 0..300 {
+        if bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        String::from_utf8_lossy(&bytes.lock().unwrap()).contains("after esc"),
+        "the queued injection must reach the composer once Esc released BUSY"
+    );
+}
+
+/// Catches: the decline wording in ordinary output (an agent quoting it, a
+/// diff) idles a Claude that is busy and not awaiting any question.
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_decline_text_without_a_pending_question_leaves_busy_alone() {
+    let sid = "critic-1302-quote";
+    let (state, silence, mut processor) = replay_claude_askuser_esc(sid).await;
+    processor.handle_tuic_state("busy", sid, &state);
+    assert_eq!(shell_of(&state, sid), SHELL_BUSY);
+
+    processor.process_chunk(
+        "\r\nUser declined to answer questions\r\n",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        shell_of(&state, sid),
+        SHELL_BUSY,
+        "no confident question was pending, so the text proves nothing"
+    );
 }
 
 // --- critic-1299: attacks on the OpenCode --mini status-row detector. A false Ready

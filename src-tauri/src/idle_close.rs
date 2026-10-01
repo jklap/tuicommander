@@ -86,16 +86,23 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
+/// Nobody can answer a child whose parent has no PTY and no MCP session. The
+/// hold is kept meanwhile: a parent that reconnects still owes its answer.
+fn parent_alive(state: &AppState, parent: &str) -> bool {
+    state.session_maps.sessions.contains_key(parent)
+        || state
+            .mcp
+            .session_to_mcp
+            .get(parent)
+            .is_some_and(|sessions| !sessions.is_empty())
+}
+
 fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
+    let parent = state.session_maps.session_parent.get(session_id)?.clone();
     if !state.session_maps.sessions.contains_key(session_id)
-        || !state
-            .session_maps
-            .session_parent
-            .get(session_id)
-            .is_some_and(|parent| {
-                !crate::mcp_http::mcp_transport::is_pending_parent(parent.value())
-            })
+        || crate::mcp_http::mcp_transport::is_pending_parent(&parent)
         || state.keep_open_sessions.contains(session_id)
+        || (state.blocked_children.contains(session_id) && parent_alive(state, &parent))
     {
         return None;
     }
@@ -163,6 +170,9 @@ fn sweep_with_snapshot(
     tracker
         .seen
         .retain(|session_id, _| children.contains(session_id));
+    state
+        .blocked_children
+        .retain(|session_id| children.contains(session_id));
     let mut runner_commands: Option<Option<Vec<String>>> = None;
     for session_id in children {
         let candidate = observation(state, &session_id);
@@ -317,6 +327,14 @@ mod tests {
                 ..Default::default()
             },
         );
+    }
+
+    /// The parent is an MCP peer without a PTY, as an orchestrator usually is.
+    fn live_parent(state: &Arc<AppState>) {
+        state
+            .mcp
+            .session_to_mcp
+            .insert("parent".into(), vec!["parent-mcp".into()]);
     }
 
     fn idle() -> Observation {
@@ -595,6 +613,46 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn child_whose_last_mail_to_parent_is_blocked_stays_open_until_a_newer_mail() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = tempfile::Builder::new()
+            .prefix("idle-close-blocked-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        let child = "managed-child";
+        live_child(&state, child, temp.path().to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+        live_parent(&state);
+        let mail = |from: &str, content: &str, timestamp| crate::state::AgentMessage {
+            id: format!("mail-{timestamp}"),
+            from_tuic_session: from.into(),
+            from_name: from.into(),
+            content: content.into(),
+            timestamp,
+            delivered_via_channel: false,
+        };
+        state.push_agent_inbox("parent", mail(child, "BLOCKED: rb box unreachable", 10));
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key(child),
+            "a BLOCKED child waiting for its parent must not be idle-closed"
+        );
+        state.push_agent_inbox(child, mail("parent", "box is back", 20));
+        state.agent_read_cursor.insert(child.into(), 20);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 3_600_000, &[]);
+        assert!(!state.session_maps.sessions.contains_key(child));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn failed_or_retrying_bg_wake_keeps_child_open_until_a_successful_wake() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let temp = tempfile::Builder::new()
@@ -635,5 +693,341 @@ mod tests {
         sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
         sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
         assert!(!state.session_maps.sessions.contains_key(child));
+    }
+
+    // ---- critic-1319: adversarial cases for the BLOCKED hold and the close reason ----
+
+    #[cfg(unix)]
+    fn critic_mail(
+        id: &str,
+        from: &str,
+        content: &str,
+        timestamp: u64,
+    ) -> crate::state::AgentMessage {
+        crate::state::AgentMessage {
+            id: id.into(),
+            from_tuic_session: from.into(),
+            from_name: from.into(),
+            content: content.into(),
+            timestamp,
+            delivered_via_channel: false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn critic_child(state: &Arc<AppState>, child: &str, dir: &std::path::Path) {
+        live_parent(state);
+        live_child(state, child, dir.to_path_buf());
+        state
+            .session_maps
+            .session_parent
+            .insert(child.into(), "parent".into());
+    }
+
+    #[cfg(unix)]
+    fn critic_temp() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("idle-close-critic-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap()
+    }
+
+    /// Two sweeps 15 minutes apart: the first starts the window, the second matures it.
+    #[cfg(unix)]
+    fn critic_sweep_to_maturity(state: &Arc<AppState>) {
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(state, &mut tracker, 0, &[]);
+        sweep_with_commands(state, &mut tracker, 900_000, &[]);
+    }
+
+    #[derive(Clone)]
+    struct CriticLogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CriticLogSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CriticLogSink {
+        type Writer = CriticLogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Catches: idle close still logging `close_requested` (or the reason being dropped),
+    /// so the cause of an idle kill is invisible in the log (criterion 3).
+    #[cfg(unix)]
+    #[test]
+    fn idle_close_of_an_unblocked_child_logs_reason_idle_close() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "quiet-child", temp.path());
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(CriticLogSink(output.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || critic_sweep_to_maturity(&state));
+        assert!(!state.session_maps.sessions.contains_key("quiet-child"));
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("Closing session"), "{log}");
+        assert!(log.contains("reason=\"idle_close\""), "{log}");
+        assert!(!log.contains("close_requested"), "{log}");
+    }
+
+    /// Catches: the hold keying on any earlier BLOCKED instead of the LAST mail, so a
+    /// child that reported BLOCKED and later finished with RESULT is kept open for ever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_that_mailed_blocked_then_result_is_closed() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox("parent", critic_mail("m2", "c", "RESULT: done", 20));
+        critic_sweep_to_maturity(&state);
+        assert!(!state.session_maps.sessions.contains_key("c"));
+    }
+
+    /// Catches: a lifecycle notice (`tuic-auto-*`) that TUIC itself files for the child
+    /// after its BLOCKED being treated as the child's last mail, so the hold is lost and
+    /// the blocked child is closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lifecycle_notice_after_blocked_does_not_release_the_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox(
+            "parent",
+            critic_mail("tuic-auto-state-1", "c", "state idle", 20),
+        );
+        critic_sweep_to_maturity(&state);
+        assert!(state.session_maps.sessions.contains_key("c"));
+    }
+
+    /// Catches: the hold matching on the parent's inbox without filtering by sender, so
+    /// one child's BLOCKED keeps every sibling open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sibling_blocked_does_not_hold_a_child_with_no_mail() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "quiet", temp.path());
+        state.push_agent_inbox(
+            "parent",
+            critic_mail("m1", "other", "BLOCKED: box down", 10),
+        );
+        critic_sweep_to_maturity(&state);
+        assert!(!state.session_maps.sessions.contains_key("quiet"));
+    }
+
+    /// Catches: the hold living only in the parent's bounded inbox (capacity 100): once
+    /// the BLOCKED mail is evicted by later traffic from other children, the blocked
+    /// child is closed while it still waits for an answer.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_hold_survives_parent_inbox_overflow_from_other_senders() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        for index in 0..crate::state::AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(
+                "parent",
+                critic_mail(
+                    &format!("noise-{index}"),
+                    "other",
+                    "RESULT: x",
+                    11 + index as u64,
+                ),
+            );
+        }
+        critic_sweep_to_maturity(&state);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "BLOCKED mail was evicted from the parent inbox and the child was closed"
+        );
+    }
+
+    /// Catches: comparing the parent inbox's logical clock with the child inbox's clock.
+    /// A burst of same-millisecond mail makes the parent clock run ahead of wall time, so
+    /// a reply stamped with the real time is judged older than BLOCKED and never releases.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reply_releases_the_hold_even_when_parent_clock_ran_ahead() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        for index in 0..20 {
+            state.push_agent_inbox(
+                "parent",
+                critic_mail(&format!("burst-{index}"), "other", "RESULT: x", 1_000),
+            );
+        }
+        // Stored as 1_020 by the per-recipient logical clock.
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 1_000));
+        // The parent answers 5 ms later in wall time.
+        state.push_agent_inbox("c", critic_mail("reply", "parent", "box is back", 1_005));
+        state.agent_read_cursor.insert("c".into(), 1_005);
+        critic_sweep_to_maturity(&state);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "the parent replied, the hold must be released"
+        );
+    }
+
+    // ---- critic-1319 round 2: lifecycle of the blocked_children set ----
+
+    /// Catches: the hold surviving the child's PTY. The set is only swept by the idle
+    /// sweep, so a session re-created under the same durable id before the next sweep
+    /// inherits a stale BLOCKED hold and is never closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_a_blocked_child_drops_its_hold_before_the_id_is_reused() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        assert!(state.blocked_children.contains("c"));
+        crate::pty::close_pty_core(&state, "c", false);
+        critic_child(&state, "c", temp.path());
+        critic_sweep_to_maturity(&state);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "a new session under a reused id inherited the dead session's BLOCKED hold"
+        );
+    }
+
+    /// Catches: any non-lifecycle mail to the child releasing the hold. A sibling's
+    /// chatter is not the parent answering; once the child has read it, the child is
+    /// still blocked on its parent and must stay open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mail_from_a_sibling_does_not_release_the_blocked_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox("c", critic_mail("s1", "sibling", "fyi", 20));
+        state.agent_read_cursor.insert("c".into(), 20);
+        critic_sweep_to_maturity(&state);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "a sibling's mail released a hold that only the parent can end"
+        );
+    }
+
+    /// Catches: a dead parent leaving its blocked child held for ever, with nobody
+    /// left to answer it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_child_of_a_dead_parent_is_closed_like_any_idle_child() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.mcp.session_to_mcp.remove("parent");
+        critic_sweep_to_maturity(&state);
+        assert!(!state.session_maps.sessions.contains_key("c"));
+    }
+
+    // ---- critic-1319 round 3: release paths ----
+
+    /// Catches: a transient parent absence (MCP session reaped, then reconnect) dropping
+    /// the hold for good. The sweep prunes the hold while the parent is away; when the
+    /// parent returns still waiting to answer, the blocked child is closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_reconnecting_after_a_sweep_still_finds_its_child_held() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        let mut tracker = IdleCloseTracker::default();
+        state.mcp.session_to_mcp.remove("parent");
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        live_parent(&state);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "the parent was only away for one sweep; its BLOCKED child was closed"
+        );
+    }
+
+    /// Catches: a late BLOCKED mail from a child that is already closed re-creating a
+    /// hold that outlives it (and is inherited by a reused id).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_mail_from_a_closed_child_sets_no_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        crate::pty::close_pty_core(&state, "c", false);
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: late", 10));
+        assert!(!state.blocked_children.contains("c"));
+    }
+
+    /// Catches: the hold and its release staying bound to the old parent id after the
+    /// parent re-registers under a new one (session_parent rewritten). The hold must
+    /// survive the rebind, the old id's mail must not release it, the new parent's must.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_hold_follows_the_parent_to_its_new_identity() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.mcp.session_to_mcp.remove("parent");
+        state
+            .mcp
+            .session_to_mcp
+            .insert("parent2".into(), vec!["parent2-mcp".into()]);
+        state
+            .session_maps
+            .session_parent
+            .insert("c".into(), "parent2".into());
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "hold lost on rebind"
+        );
+        state.push_agent_inbox("c", critic_mail("old", "parent", "stale id", 20));
+        state.agent_read_cursor.insert("c".into(), 20);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "mail from the retired parent id released the hold"
+        );
+        state.push_agent_inbox("c", critic_mail("new", "parent2", "box is back", 30));
+        state.agent_read_cursor.insert("c".into(), 30);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "the new parent's mail did not release the hold"
+        );
     }
 }

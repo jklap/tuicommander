@@ -115,7 +115,8 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
         }
     }
 
-    // Destination — must be last
+    // Destination — must be last; `--` keeps a user starting with `-` from being an option
+    args.push("--".to_string());
     args.push(format!("{}@{}", profile.user, profile.host));
 
     args
@@ -214,6 +215,18 @@ mod tests {
             control_path.len() < 100,
             "ControlPath exceeds ssh sun_path limit"
         );
+    }
+
+    /// Catches: a profile user starting with `-` becoming an ssh option because
+    /// no `--` precedes the destination.
+    #[test]
+    fn tunnel_destination_follows_double_dash() {
+        let mut profile = base_profile();
+        profile.user = "-oProxyCommand=evil".to_string();
+        let args = build_ssh_args(&profile);
+        let n = args.len();
+        assert_eq!(args[n - 2], "--", "{args:?}");
+        assert_eq!(args[n - 1], "-oProxyCommand=evil@example.com");
     }
 
     #[test]
