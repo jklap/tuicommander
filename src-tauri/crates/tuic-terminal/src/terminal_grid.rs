@@ -674,9 +674,12 @@ pub struct TerminalGrid {
     /// Tail of the previous chunk, so a frame end split across chunks is seen.
     frame_end_carry: Vec<u8>,
     /// Screen rows at the last frame end seen while armed (or at the resize). A
-    /// merge needs the compared rows to differ from these: that is the proof the
-    /// frame rewrote them, as opposed to history that already repeated them.
+    /// merge needs every compared row to differ from these, with no scroll in
+    /// between: that is the proof the frame rewrote them, as opposed to history
+    /// that already repeated them or output that moved them.
     reprint_head_snapshot: Vec<String>,
+    /// `total_scrolled` when `reprint_head_snapshot` was taken.
+    reprint_snapshot_scrolled: usize,
 }
 
 impl TerminalGrid {
@@ -727,6 +730,7 @@ impl TerminalGrid {
             reprint_merge_armed_at: None,
             frame_end_carry: Vec::new(),
             reprint_head_snapshot: Vec::new(),
+            reprint_snapshot_scrolled: 0,
         }
     }
 
@@ -1213,6 +1217,7 @@ impl TerminalGrid {
         self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
         self.frame_end_carry.clear();
         self.reprint_head_snapshot = self.armed_screen_rows();
+        self.reprint_snapshot_scrolled = self.term.grid().total_scrolled();
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
     }
@@ -1297,12 +1302,18 @@ impl TerminalGrid {
         let tail: Vec<String> = (-m..0).map(text).collect();
         let head = self.armed_screen_rows();
         let snapshot = std::mem::replace(&mut self.reprint_head_snapshot, head.clone());
+        // A screen that scrolled since the snapshot shifted every row, so a
+        // difference proves nothing about what was rewritten.
+        let unscrolled =
+            std::mem::replace(&mut self.reprint_snapshot_scrolled, scrolled) == scrolled;
         let overlap = (MIN_ROWS..=m as usize)
             .rev()
             .find(|&k| {
                 tail[m as usize - k..] == head[..k]
                     && head[..k].iter().filter(|row| !row.is_empty()).count() >= MIN_ROWS
-                    && snapshot.get(..k) != Some(&head[..k])
+                    && unscrolled
+                    && snapshot.len() >= k
+                    && (0..k).all(|i| snapshot[i] != head[i])
             })
             .unwrap_or(0);
         if overlap == 0 {
