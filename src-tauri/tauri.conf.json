@@ -40,15 +40,13 @@
       ],
       "assetProtocol": {
         "enable": true,
-        "scope": {
-          "allow": [
-            "$APPDATA/**",
-            "$APPDATA/**/*",
-            "$HOME/**",
-            "/**"
-          ],
-          "requireLiteralLeadingDot": false
-        }
+        "scope": [
+          "$APPDATA/**",
+          "$APPDATA/**/*",
+          "$HOME/**",
+          "/**",
+          "$HOME/Gits/**/.tmp/**"
+        ]
       }
     }
   },

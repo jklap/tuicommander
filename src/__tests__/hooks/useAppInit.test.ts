@@ -243,6 +243,24 @@ describe("initApp", () => {
 		expect(editorTabsStore.getActive()).toBeUndefined();
 	});
 
+	// Catches: tuic://open of an image routed to the editor (UTF-8 read fails, "can't be displayed")
+	// or to a Markdown tab, instead of the asset-protocol preview.
+	it.each([
+		["outside any repo", "tuic://open//Users/boss/Gits/.tmp/boss/shot.png", "/Users/boss/Gits/.tmp/boss/shot.png"],
+		["inside a repo", "tuic://open//repos/tuicommander/docs/shot.png", "docs/shot.png"],
+	])("opens an image %s in the preview tab, not the editor", async (_label, url, expectedPath) => {
+		let uiTabCallback: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repos/tuicommander", displayName: "tuicommander" });
+		await initApp(createMockDeps());
+		uiTabCallback!({ payload: { id: "img", title: "Shot", html: "", pinned: false, url, focus: true } });
+		expect(mdTabsStore.getActive()).toMatchObject({ type: "html-preview", filePath: expectedPath });
+		expect(editorTabsStore.getActive()).toBeUndefined();
+	});
+
 	it.each([true, false])("binds an external MCP file to its caller repo with focus=%s", async (focus) => {
 		let uiTabCallback:
 			| ((event: {
