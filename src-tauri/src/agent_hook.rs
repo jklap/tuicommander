@@ -341,9 +341,12 @@ mod tests {
             // payload carries them, and pty.rs::notification_awaiting_outcome decides
             // whether this awaiting badges (see the real-binary wire test below).
             ("claude", "Notification", "", &[("state", "awaiting")]),
-            // `bgtasks` (raw `background_tasks[].status`, comma-joined) precedes the
-            // state when the payload carries the field; pty.rs decides "still
-            // running" (declared_background_work). Same for StopFailure.
+            // `bgtasks` (raw `background_tasks[].status`, comma-joined) then
+            // `bgtasksummary` (distinct `type/status` pairs with `*N` counts)
+            // precede the state when the payload carries the field; pty.rs decides
+            // "still running" (declared_background_work). Same for StopFailure.
+            // Pinned on the real binary by
+            // `stop_with_background_tasks_writes_bgtasks_and_bgtasksummary_before_state_on_the_actual_wire`.
             ("claude", "Stop", "", &[("state", "idle")]),
             (
                 "claude",
@@ -911,6 +914,106 @@ mod tests {
                 written, expected,
                 "toolfail must be the first bytes on the wire, before state=idle"
             );
+        }
+
+        /// The scrape half of the Stop/StopFailure wire contract: when the
+        /// payload carries `background_tasks`, the real binary writes `bgtasks`
+        /// (statuses only, for older receivers) and then `bgtasksummary`
+        /// (`type/status` pairs with counts, so pty.rs can tell an idle Agent
+        /// Teams teammate from real background work), both before `state`
+        /// (after `toolfail` on StopFailure). The other spec'd events never
+        /// emit either verb, even with the field present.
+        #[test]
+        fn stop_with_background_tasks_writes_bgtasks_and_bgtasksummary_before_state_on_the_actual_wire()
+         {
+            let _binary = install_binary();
+            let map = claude_hook_map();
+            let tasks = r#"[{"type":"teammate","status":"running"},{"type":"shell","status":"completed"},{"type":"teammate","status":"running"}]"#;
+            let cmd_for = |event: &str| {
+                map.iter()
+                    .find(|(e, m, _)| *e == event && m.is_empty())
+                    .unwrap_or_else(|| panic!("{event} entry present"))
+                    .2
+                    .clone()
+            };
+
+            let stdin = format!(r#"{{"hook_event_name":"Stop","background_tasks":{tasks}}}"#);
+            let (code, written) = run(&cmd_for("Stop"), true, None, Some(stdin.as_bytes()));
+            assert_eq!(code, 0);
+            let expected = [
+                osc("bgtasks", "running%2Ccompleted%2Crunning"),
+                osc(
+                    "bgtasksummary",
+                    "teammate%2Frunning%2A2%2Cshell%2Fcompleted",
+                ),
+                osc("state", "idle"),
+            ]
+            .concat();
+            assert_eq!(
+                String::from_utf8_lossy(&written),
+                String::from_utf8_lossy(&expected)
+            );
+
+            let stdin =
+                format!(r#"{{"hook_event_name":"StopFailure","background_tasks":{tasks}}}"#);
+            let (code, written) = run(&cmd_for("StopFailure"), true, None, Some(stdin.as_bytes()));
+            assert_eq!(code, 0);
+            let expected = [
+                osc("toolfail", "1"),
+                osc("bgtasks", "running%2Ccompleted%2Crunning"),
+                osc(
+                    "bgtasksummary",
+                    "teammate%2Frunning%2A2%2Cshell%2Fcompleted",
+                ),
+                osc("state", "idle"),
+            ]
+            .concat();
+            assert_eq!(
+                String::from_utf8_lossy(&written),
+                String::from_utf8_lossy(&expected)
+            );
+
+            // An empty array is a real "nothing outstanding" observation: both
+            // verbs still emit, with empty payloads.
+            let (_, written) = run(
+                &cmd_for("Stop"),
+                true,
+                None,
+                Some(br#"{"hook_event_name":"Stop","background_tasks":[]}"#),
+            );
+            assert_eq!(
+                written,
+                [
+                    osc("bgtasks", ""),
+                    osc("bgtasksummary", ""),
+                    osc("state", "idle")
+                ]
+                .concat()
+            );
+
+            for spec in ALL_SPECS
+                .iter()
+                .filter(|(agent, _)| *agent == "claude")
+                .flat_map(|(_, specs)| specs.iter())
+                .filter(|s| s.event != "Stop" && s.event != "StopFailure")
+            {
+                let (_, _, cmd) = map
+                    .iter()
+                    .find(|(e, m, _)| *e == spec.event && *m == spec.matcher)
+                    .expect("map entry for spec");
+                let stdin = format!(
+                    r#"{{"hook_event_name":"{}","background_tasks":{tasks}}}"#,
+                    spec.event
+                );
+                let (_, written) = run(cmd, true, None, Some(stdin.as_bytes()));
+                let written = String::from_utf8_lossy(&written);
+                assert!(
+                    !written.contains("bgtasks=") && !written.contains("bgtasksummary="),
+                    "({}, {:?}) must not scrape background_tasks: {written:?}",
+                    spec.event,
+                    spec.matcher
+                );
+            }
         }
 
         #[test]
