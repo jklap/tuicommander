@@ -1,9 +1,9 @@
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { notifyPrTransition } from "../services/prNativeNotifications";
 import type { BranchPrStatus, CheckDetail, CheckSummary, GitHubIssue, GitHubStatus } from "../types";
 import { appLogger } from "./appLogger";
 import { isNotificationType, prNotificationsStore } from "./prNotifications";
-import { notifyPrTransition } from "../services/prNativeNotifications";
 import { repositoriesStore } from "./repositories";
 import { settingsStore } from "./settings";
 
