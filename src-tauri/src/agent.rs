@@ -1306,8 +1306,9 @@ pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
         "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" => &["{prompt}"],
         // Aider: non-interactive single message, auto-confirm edits.
         "aider" => &["--yes-always", "--message", "{prompt}"],
-        // Goose: the `session` subcommand carries the prompt.
-        "goose" => &["session", "{prompt}"],
+        // Goose 1.49: `session` takes no positional prompt (exit 2); `run -s -t`
+        // runs the text, then stays interactive.
+        "goose" => &["run", "-s", "-t", "{prompt}"],
         _ => return None,
     };
     Some(args.iter().map(|s| s.to_string()).collect())
@@ -1833,10 +1834,15 @@ mod tests {
                 "{prompt}".to_string()
             ])
         );
-        // Goose: session subcommand carries the prompt.
+        // Goose 1.49: `goose session <prompt>` exits 2 (unrecognized subcommand);
+        // `run -s -t` runs the text and stays interactive.
         assert_eq!(
             default_prompt_args("goose"),
-            Some(vec!["session".to_string(), "{prompt}".to_string()])
+            Some(
+                ["run", "-s", "-t", "{prompt}"]
+                    .map(String::from)
+                    .to_vec()
+            )
         );
         // Every template must contain the placeholder so substitution works.
         for agent in ["gemini", "codex", "aider", "goose"] {
