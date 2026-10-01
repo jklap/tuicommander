@@ -23,6 +23,46 @@ function getHashParams(): { sessionId: string; tabId: string; name: string } {
 	};
 }
 
+// Was reading undefined vars (--text-muted, --text-secondary — never
+// defined anywhere in global.css) for the exited/default cases, so this
+// window's status dot always rendered the literal hex fallback instead
+// of following the theme. Also collapsed question and error into the
+// same color, unlike every other terminal-state indicator in the app —
+// fixed to distinguish them now that both flow through the same
+// registry vars as the main tab bar.
+//
+// Exported (and taking a plain `isBusy` boolean rather than reading
+// `terminalsStore` itself) for direct unit testing — the caller is
+// responsible for sourcing `isBusy` from `terminalsStore.isWorking`, not
+// `.isBusy`, so a session with declared background work still renders busy
+// despite an idle shell (see that method's doc comment).
+export function floatingTerminalStatusColor(
+	awaitingInput: string | null | undefined,
+	isBusy: boolean,
+	shellState: string | null | undefined,
+): string {
+	if (awaitingInput === "error") return "var(--ind-terminal-error)";
+	if (awaitingInput) return "var(--ind-terminal-question)";
+	if (isBusy) return "var(--ind-terminal-busy)";
+	if (shellState === "idle") return "var(--ind-terminal-idle)";
+	if (shellState === "exited") return "var(--ind-terminal-exited)";
+	return "var(--ind-terminal-none)";
+}
+
+export function floatingTerminalStatusLabel(
+	awaitingInput: string | null | undefined,
+	isBusy: boolean,
+	shellState: string | null | undefined,
+): string {
+	if (awaitingInput === "question") return "Waiting for input";
+	if (awaitingInput === "error") return "Error";
+	if (awaitingInput) return "Awaiting input";
+	if (isBusy) return "Running";
+	if (shellState === "idle") return "Idle";
+	if (shellState === "exited") return "Exited";
+	return "";
+}
+
 /**
  * Minimal app rendered inside a floating (detached) terminal window.
  * Connects to an existing PTY session by sessionId — the PTY stays alive in Rust.
@@ -172,35 +212,14 @@ export const FloatingTerminal: Component = () => {
 	});
 
 	const terminal = () => terminalsStore.get(tabId);
-	const isBusy = () => terminalsStore.isBusy(tabId);
+	// Includes declaredBackgroundWork (see terminalsStore.isWorking's doc comment) so this
+	// window's status pill doesn't render idle while Claude has declared background work.
+	const isBusy = () => terminalsStore.isWorking(tabId);
 	const shellState = () => terminal()?.shellState;
 	const awaitingInput = () => terminal()?.awaitingInput;
 
-	// Was reading undefined vars (--text-muted, --text-secondary — never
-	// defined anywhere in global.css) for the exited/default cases, so this
-	// window's status dot always rendered the literal hex fallback instead
-	// of following the theme. Also collapsed question and error into the
-	// same color, unlike every other terminal-state indicator in the app —
-	// fixed to distinguish them now that both flow through the same
-	// registry vars as the main tab bar.
-	const statusColor = () => {
-		if (awaitingInput() === "error") return "var(--ind-terminal-error)";
-		if (awaitingInput()) return "var(--ind-terminal-question)";
-		if (isBusy()) return "var(--ind-terminal-busy)";
-		if (shellState() === "idle") return "var(--ind-terminal-idle)";
-		if (shellState() === "exited") return "var(--ind-terminal-exited)";
-		return "var(--ind-terminal-none)";
-	};
-
-	const statusLabel = () => {
-		if (awaitingInput() === "question") return "Waiting for input";
-		if (awaitingInput() === "error") return "Error";
-		if (awaitingInput()) return "Awaiting input";
-		if (isBusy()) return "Running";
-		if (shellState() === "idle") return "Idle";
-		if (shellState() === "exited") return "Exited";
-		return "";
-	};
+	const statusColor = () => floatingTerminalStatusColor(awaitingInput(), isBusy(), shellState());
+	const statusLabel = () => floatingTerminalStatusLabel(awaitingInput(), isBusy(), shellState());
 
 	return (
 		<div

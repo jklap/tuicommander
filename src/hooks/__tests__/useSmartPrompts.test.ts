@@ -27,7 +27,7 @@ vi.mock("../../stores/agentConfigs", () => ({
 }));
 
 vi.mock("../../stores/terminals", () => ({
-	terminalsStore: { getActive: vi.fn(), isBusy: vi.fn() },
+	terminalsStore: { getActive: vi.fn(), isBusy: vi.fn(), isWorking: vi.fn() },
 }));
 
 vi.mock("../../stores/github", () => ({
@@ -106,6 +106,7 @@ const mockedGetHeadlessTemplate = vi.mocked(agentConfigsStore.getHeadlessTemplat
 const mockedWarn = vi.mocked(appLogger.warn);
 const mockedGetActive = vi.mocked(terminalsStore.getActive);
 const mockedIsBusy = vi.mocked(terminalsStore.isBusy);
+const mockedIsWorking = vi.mocked(terminalsStore.isWorking);
 const mockedGetRunConfigs = vi.mocked(agentConfigsStore.getRunConfigs);
 
 /** Build a minimal SavedPrompt fixture with headless executionMode */
@@ -397,6 +398,18 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		expect(result.ok).toBe(false);
 		expect(result.reason).toBe("No agent detected in terminal");
 		expect(mockedIsBusy).not.toHaveBeenCalled();
+	});
+
+	it("gates off terminalsStore.isBusy, not isWorking — declared background work alone must not block a prompt into the main agent", () => {
+		// isWorking also folds in declaredBackgroundWork (a background task/teammate
+		// still running). That must not stop the user injecting into the main agent,
+		// which is idle; only the main agent's own busy state gates the prompt.
+		mockedIsBusy.mockReturnValue(false);
+		mockedIsWorking.mockReturnValue(true);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+		expect(result.ok).toBe(true);
+		expect(mockedIsWorking).not.toHaveBeenCalled();
 	});
 });
 

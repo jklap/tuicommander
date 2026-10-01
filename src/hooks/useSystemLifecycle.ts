@@ -14,7 +14,7 @@ export function useSystemLifecycle(): void {
 	let lastSleepBlocked: boolean | null = null;
 	createEffect(() => {
 		if (!isTauri()) return;
-		const shouldBlock = settingsStore.state.preventSleepWhenBusy && terminalsStore.isAnyBusy();
+		const shouldBlock = settingsStore.state.preventSleepWhenBusy && terminalsStore.isAnyWorking();
 		if (shouldBlock === lastSleepBlocked) return;
 		lastSleepBlocked = shouldBlock;
 		invoke(shouldBlock ? "block_sleep" : "unblock_sleep").catch((error) =>

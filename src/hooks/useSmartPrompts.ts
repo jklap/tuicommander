@@ -246,6 +246,8 @@ export function useSmartPrompts() {
 		// Idle only matters when this action will submit. Review-only insertions do
 		// not steer the active turn, regardless of their preferred UI target.
 		if (shouldSubmitInjectPrompt(prompt, composeIsOpen) && prompt.requiresIdle !== false) {
+			// isBusy, not isWorking: declared background work (teammates, bg tasks) must not
+			// block a prompt into the main agent, which is free to take it.
 			const busy = terminalsStore.isBusy(active.id);
 			if (busy) return { ok: false, reason: "Agent is busy" };
 		}

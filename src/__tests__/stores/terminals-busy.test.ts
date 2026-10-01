@@ -100,6 +100,89 @@ describe("terminalsStore debounced busy signal", () => {
 		});
 	});
 
+	describe("isWorking()", () => {
+		it("mirrors isBusy while shellState is busy", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "busy" });
+				expect(store.isBusy(id)).toBe(true);
+				expect(store.isWorking(id)).toBe(true);
+			});
+		});
+
+		it("is true when declaredBackgroundWork is set, even with an idle shell", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "idle", declaredBackgroundWork: true });
+				expect(store.isBusy(id)).toBe(false);
+				expect(store.isWorking(id)).toBe(true);
+			});
+		});
+
+		it("is false for an idle shell with no declared background work", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "idle" });
+				expect(store.isWorking(id)).toBe(false);
+			});
+		});
+
+		it("is false for an unknown terminal id", () => {
+			testInScope(() => {
+				expect(store.isWorking("no-such-id")).toBe(false);
+			});
+		});
+
+		it("stays true through the debounce hold after shellState goes idle, same as isBusy", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "busy" });
+				store.update(id, { shellState: "idle" });
+				expect(store.isWorking(id)).toBe(true);
+				vi.advanceTimersByTime(2000);
+				expect(store.isWorking(id)).toBe(false);
+			});
+		});
+	});
+
+	describe("isAnyWorking()", () => {
+		it("returns false when no terminals exist", () => {
+			testInScope(() => {
+				expect(store.isAnyWorking()).toBe(false);
+			});
+		});
+
+		it("returns false when every terminal is idle with no declared background work", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "idle" });
+				expect(store.isAnyWorking()).toBe(false);
+			});
+		});
+
+		it("returns true when one terminal has declared background work despite an idle shell", () => {
+			testInScope(() => {
+				addTerminal("Idle");
+				const working = addTerminal("Working");
+				store.update(working, { shellState: "idle", declaredBackgroundWork: true });
+
+				expect(store.isAnyWorking()).toBe(true);
+				// isAnyBusy is the raw-busy predicate isAnyWorking is meant to replace for
+				// "is anything still doing something" callers — it must stay blind to
+				// declaredBackgroundWork, or the two predicates collapse into one.
+				expect(store.isAnyBusy()).toBe(false);
+			});
+		});
+
+		it("returns true when one terminal is raw-busy", () => {
+			testInScope(() => {
+				const id = addTerminal();
+				store.update(id, { shellState: "busy" });
+				expect(store.isAnyWorking()).toBe(true);
+			});
+		});
+	});
+
 	describe("getBusyDuration()", () => {
 		it("returns 0 for terminal that was never busy", () => {
 			testInScope(() => {

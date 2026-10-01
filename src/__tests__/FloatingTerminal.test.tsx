@@ -31,6 +31,7 @@ vi.mock("../stores/terminals", () => ({
 		setActive: vi.fn(),
 		get: vi.fn(() => undefined),
 		isBusy: vi.fn(() => false),
+		isWorking: vi.fn(() => false),
 		setFontSize: vi.fn(),
 	},
 }));
