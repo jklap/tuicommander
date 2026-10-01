@@ -25172,4 +25172,262 @@ mod tests {
         );
         kill_test_session(&state, &session_id);
     }
+
+    // ---- critic 1358 round 2: the suspend request/verdict handshake ----
+
+    async fn crit1358_next_request(
+        events: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+    ) -> (String, String) {
+        loop {
+            if let Ok(crate::state::AppEvent::SessionSuspendRequested {
+                session_id,
+                request_id,
+            }) = events.recv().await
+            {
+                return (session_id, request_id);
+            }
+        }
+    }
+
+    fn crit1358_attached_state(sessions: &[&str]) -> Arc<AppState> {
+        let state = test_state();
+        for sid in sessions {
+            idle_suspend_candidate(&state, sid);
+        }
+        state
+            .sse_client_count
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        state
+    }
+
+    // Catches: `suspend` missing from the non-loopback deny list now that it has its own
+    // early arm, so a remote client reaches the UI request and waits for a tab.
+    #[tokio::test]
+    async fn crit1358_suspend_is_rejected_before_any_request_for_non_loopback_callers() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d01";
+        let state = crit1358_attached_state(&[sid]);
+        let mut events = state.event_bus.subscribe();
+
+        let response = handle_mcp_tool_call(
+            &state,
+            non_loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "suspend", "session_id": sid}),
+            None,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("restricted to localhost")),
+            "got {response}"
+        );
+        assert!(events.try_recv().is_err(), "no request may reach the UI");
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    // Catches: loopback dispatch not reaching the waiting handler (old sync arm answering
+    // `requested`): the tool call must return the tab's verdict.
+    #[tokio::test]
+    async fn crit1358_loopback_tool_call_returns_the_tabs_verdict() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d02";
+        let state = crit1358_attached_state(&[sid]);
+        let mut events = state.event_bus.subscribe();
+        let call = tokio::spawn({
+            let state = state.clone();
+            async move {
+                handle_mcp_tool_call(
+                    &state,
+                    "127.0.0.1:1".parse().unwrap(),
+                    "session",
+                    &serde_json::json!({"action": "suspend", "session_id": sid}),
+                    None,
+                )
+                .await
+            }
+        });
+        let (_, request_id) = crit1358_next_request(&mut events).await;
+        resolve_session_suspend(&state, &request_id, false, Some("no live session".into()));
+        let result = call.await.unwrap();
+        assert_eq!(result["error"], "Cannot suspend: no live session");
+    }
+
+    // Catches: a verdict for another request id (a different session, or a made-up id)
+    // resolving this pending call.
+    #[tokio::test]
+    async fn crit1358_a_verdict_for_another_request_does_not_resolve_this_one() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d03";
+        let state = crit1358_attached_state(&[sid]);
+        let mut events = state.event_bus.subscribe();
+        let call = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, sid).await }
+        });
+        let (_, request_id) = crit1358_next_request(&mut events).await;
+
+        resolve_session_suspend(&state, "not-the-request-id", true, None);
+        tokio::task::yield_now().await;
+        assert!(!call.is_finished(), "a foreign id resolved the call");
+        assert!(state.suspend_responses.contains_key(&request_id));
+
+        resolve_session_suspend(&state, &request_id, false, None);
+        let result = call.await.unwrap();
+        assert_eq!(result["error"], "Cannot suspend: refused");
+    }
+
+    // Catches: two concurrent suspends sharing one request id (or one slot), so one tab's
+    // refusal is delivered to the other session's caller.
+    #[tokio::test]
+    async fn crit1358_concurrent_suspends_each_get_their_own_verdict() {
+        let a = "550e8400-e29b-41d4-a716-446655440d04";
+        let b = "550e8400-e29b-41d4-a716-446655440d05";
+        let state = crit1358_attached_state(&[a, b]);
+        let mut events = state.event_bus.subscribe();
+        let call_a = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, a).await }
+        });
+        let call_b = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, b).await }
+        });
+        let mut ids = std::collections::HashMap::new();
+        for _ in 0..2 {
+            let (sid, rid) = crit1358_next_request(&mut events).await;
+            ids.insert(sid, rid);
+        }
+        assert_ne!(ids[a], ids[b], "request ids must be unique per call");
+
+        resolve_session_suspend(&state, &ids[b], false, Some("agent working".into()));
+        resolve_session_suspend(&state, &ids[a], true, None);
+
+        assert_eq!(call_a.await.unwrap(), serde_json::json!({"ok": true}));
+        assert_eq!(
+            call_b.await.unwrap()["error"],
+            "Cannot suspend: agent working"
+        );
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    // Catches: a second client answering the same request (two UIs own the tab) overriding
+    // or panicking after the first verdict, or leaving the slot behind.
+    #[tokio::test]
+    async fn crit1358_the_first_verdict_wins_and_a_duplicate_is_ignored() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d06";
+        let state = crit1358_attached_state(&[sid]);
+        let mut events = state.event_bus.subscribe();
+        let call = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, sid).await }
+        });
+        let (_, request_id) = crit1358_next_request(&mut events).await;
+
+        resolve_session_suspend(&state, &request_id, true, None);
+        resolve_session_suspend(&state, &request_id, false, Some("late".into()));
+
+        assert_eq!(call.await.unwrap(), serde_json::json!({"ok": true}));
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    // Catches: a verdict arriving after the 20 s timeout re-creating or leaking state, or the
+    // timed-out slot blocking a later suspend of the same session.
+    #[tokio::test(start_paused = true)]
+    async fn crit1358_a_late_verdict_after_the_timeout_is_ignored_and_a_retry_works() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d07";
+        let state = crit1358_attached_state(&[sid]);
+        let mut events = state.event_bus.subscribe();
+        let first = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, sid).await }
+        });
+        let (_, stale_id) = crit1358_next_request(&mut events).await;
+        assert_eq!(
+            first.await.unwrap()["error"],
+            "Cannot suspend: no tab answered the request"
+        );
+        assert!(state.suspend_responses.is_empty());
+
+        resolve_session_suspend(&state, &stale_id, true, None);
+        assert!(state.suspend_responses.is_empty());
+
+        let retry = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, sid).await }
+        });
+        let (_, fresh_id) = crit1358_next_request(&mut events).await;
+        assert_ne!(fresh_id, stale_id);
+        resolve_session_suspend(&state, &stale_id, false, Some("stale".into()));
+        resolve_session_suspend(&state, &fresh_id, true, None);
+        assert_eq!(retry.await.unwrap(), serde_json::json!({"ok": true}));
+    }
+
+    // Catches: the exited check running after the UI request, or only for the PTY id (an
+    // exited session addressed by alias/tuic_session still passing).
+    #[tokio::test]
+    async fn crit1358_an_exited_session_is_refused_before_the_ui_is_asked() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d08";
+        let state = crit1358_attached_state(&[sid]);
+        state.session_maps.exit_codes.insert(sid.to_string(), 137);
+        let mut events = state.event_bus.subscribe();
+
+        let result = suspend(&state, sid).await;
+
+        assert_eq!(result["error"], "Cannot suspend: session has exited");
+        assert!(events.try_recv().is_err());
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    // Catches: the busy rule skipped for an attached UI (refusal reported only by the tab).
+    #[tokio::test]
+    async fn crit1358_a_working_agent_is_refused_even_with_a_ui_attached() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d09";
+        let state = crit1358_attached_state(&[]);
+        let mut working = suspend_candidate(Some("claude"), Some("working"), Some("busy"));
+        working.awaiting_input = true;
+        state
+            .session_maps
+            .session_states
+            .insert(sid.to_string(), working);
+        let result = suspend(&state, sid).await;
+        assert_eq!(result["error"], "Cannot suspend: waiting for input");
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    // Catches: self-suspend allowed once the arm moved out of handle_session (the guard
+    // dropped in the move), ending the caller's own session.
+    #[tokio::test]
+    async fn crit1358_an_agent_cannot_suspend_its_own_session() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d0a";
+        let state = crit1358_attached_state(&[sid]);
+        state
+            .mcp
+            .to_session
+            .insert("mcp-own".to_string(), sid.to_string());
+        let mut events = state.event_bus.subscribe();
+
+        let result = handle_session_suspend(
+            &state,
+            &serde_json::json!({"action": "suspend", "session_id": sid}),
+            Some("mcp-own"),
+        )
+        .await;
+
+        assert_eq!(result["error"], "Cannot suspend own session.");
+        assert!(events.try_recv().is_err());
+    }
+
+    // Catches: `suspend` dropped from handle_session's dispatcher leaving a stale sync path
+    // that answers success without a tab (a direct handle_session call must not succeed).
+    #[test]
+    fn crit1358_handle_session_has_no_fire_and_forget_suspend() {
+        let sid = "550e8400-e29b-41d4-a716-446655440d0b";
+        let state = crit1358_attached_state(&[sid]);
+        let result = handle_session(
+            &state,
+            &serde_json::json!({"action": "suspend", "session_id": sid}),
+            None,
+        );
+        assert!(result.get("ok").is_none(), "got {result}");
+    }
 }

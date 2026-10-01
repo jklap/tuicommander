@@ -9211,4 +9211,53 @@ mod tests {
             "remote"
         );
     }
+
+    // Catches: /mcp/suspend-response missing from the router the app serves (the browser/PWA
+    // half of session_suspend_response), so a web tab's verdict never reaches the MCP caller.
+    #[tokio::test]
+    async fn crit1358_suspend_response_route_delivers_the_verdict_and_ignores_unknown_ids() {
+        let state = test_state();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.suspend_responses.insert("req-1".to_string(), tx);
+
+        let unknown = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "other", "ok": true, "reason": null}),
+            ))
+            .await
+            .expect("unknown id response");
+        assert_eq!(unknown.status(), StatusCode::OK);
+        assert!(state.suspend_responses.contains_key("req-1"));
+
+        let known = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "req-1", "ok": false, "reason": "agent working"}),
+            ))
+            .await
+            .expect("known id response");
+        assert_eq!(known.status(), StatusCode::OK);
+        assert_eq!(rx.await.unwrap(), Err("agent working".to_string()));
+    }
+
+    // Catches: a body without `reason` (the web client sends null, other clients may omit it)
+    // being rejected, so a refusal never arrives and the caller waits 20 s.
+    #[tokio::test]
+    async fn crit1358_suspend_response_route_accepts_a_missing_reason() {
+        let state = test_state();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.suspend_responses.insert("req-2".to_string(), tx);
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "req-2", "ok": false}),
+            ))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
+    }
 }
