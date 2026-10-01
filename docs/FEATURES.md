@@ -313,6 +313,13 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Sidebar footer button opens a popover showing all parked repos
 - Unpark a repo from the popover to restore it to the main list
 
+### 2.7a Sidebar Layout (compact / rich)
+- Toolbar button (left of the filter icon) cycles auto, compact and rich and prints the mode (A, C, R); the mode is saved in UI prefs (`sidebar_density`)
+- Compact: the one-line rows. Rich: detail lines under every row. Auto: rich when the list fits the window (rich row about 52 px; 12 rows at 768 px, 15 at 900 px) or the primary pointer is a finger, compact otherwise
+- Rich branch row: PR state word and title; last-commit age, ahead/behind the upstream, diff stats, dirty-file count (opens Changes), merged, stale (no commit for 30 days), unknown (removal blocked), unmerged; never stale, merged, dirty or unknown on a main checkout. Compact carries the age, ahead/behind and stale rule on the branch name tooltip
+- Rich agent row: state (working, idle, needs input, error) and the agent's intent, task or last prompt; in-session subagents (state, title, tool calls, age; more than 3 fold into a count); TUIC child sessions nested under the parent. Compact carries state and line on the row tooltip
+- Rich repo header: current branch, open PR count, worktree count, age of the last remote poll
+
 ### 2.8 Active-Only Filter
 - Toggled from the filter icon in the toolbar (next to the sidebar collapse button); the icon turns accent-colored while engaged
 - When on, the sidebar shows only repositories that have at least one open terminal — empty groups are dropped entirely (no orphaned headers)
