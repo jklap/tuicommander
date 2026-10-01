@@ -919,8 +919,13 @@ The fix has three parts, all additive and fail-safe:
    non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
    in the same hook fire and under the same turn epoch. It is authoritative for that fire —
    it sets or clears the declaration itself, repairing a `bgtasks` whose joined statuses were
-   cut at the OSC payload cap and lost a late `running`; a fresh `bgtasks` drops it, and
-   `reset_declared_background_work` clears it. **No
+   cut at the OSC payload cap and lost a late `running` — but only when a `bgtasks` observation
+   for the SAME turn epoch is already recorded (even one that said "nothing running"). The two
+   arms read the live epoch separately, so a new prompt landing between the two verbs of one
+   fire would otherwise let the late summary stamp the new turn with the previous turn's data.
+   A fresh `bgtasks` drops it, and `reset_declared_background_work` clears it. Known limit: the
+   summary goes through the same 512-byte payload cap, so an unrealistically wide set of
+   distinct `type/status` pairs could still truncate it. **No
    summary (an older hook) means every running task counts, as before.**
 3. `SilenceState::declared_background_work_for_epoch_with(epoch, teammates_may_be_working)` is
    the teammate-aware read every consumer uses (`AppState::declared_background_work_for`, the
