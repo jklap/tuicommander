@@ -143,7 +143,8 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		const view = render(() => <CanvasTerminal sessionId="link-1324" terminalId="link-1324" onOpenFilePath={onOpen} />);
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
-		frameSink.current?.(frame());
+		// The reset above narrows `current` to null for the compiler; the subscribe mock refills it.
+		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame());
 		const found = view.container.querySelector('canvas[tabindex="0"]');
 		if (!found) throw new Error("terminal canvas not mounted");
 		canvas = found;
