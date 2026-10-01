@@ -1603,6 +1603,28 @@ describe("initApp", () => {
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBe("abc-123-uuid");
 	});
 
+	// The flag is what keeps a suspended tab suspended across a restart; a snapshot that
+	// dropped it would restore the tab as an ordinary one (or not at all for a plain shell).
+	it("snapshots the suspended flag into savedTerminals on beforeunload", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-s", cwd: "/repo" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		terminalsStore.update(terminalsStore.getIds()[0], { suspended: true });
+		window.dispatchEvent(new Event("beforeunload"));
+
+		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		expect(saved?.suspended).toBe(true);
+	});
+
 	it("snapshots null agentSessionId for terminals without it", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

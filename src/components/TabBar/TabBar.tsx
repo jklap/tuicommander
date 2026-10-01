@@ -29,6 +29,7 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
@@ -43,6 +44,7 @@ import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
+import { resumeTerminal, type SuspendOutcome, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import type { ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
@@ -119,6 +121,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const handleNewTabClick = () => {
 		if (newAgentMenu.consumeClick()) return;
 		props.onNewTab();
+	};
+
+	const reportOutcome = async (pending: Promise<SuspendOutcome>) => {
+		const outcome = await pending;
+		if (!outcome.ok) toastsStore.add(t("tabBar.suspendRefused", "Tab not changed"), outcome.reason, "warn");
 	};
 
 	const getTabContextMenuItems = (): ContextMenuItem[] => {
@@ -315,6 +322,16 @@ export const TabBar: Component<TabBarProps> = (props) => {
 						label: t("tabBar.detachToWindow", "Detach to Window"),
 						action: () => props.onDetachTab?.(id),
 						disabled: !hasSession || exited,
+					},
+			term?.suspended
+				? {
+						label: t("tabBar.resumeTab", "Resume Tab"),
+						action: () => void reportOutcome(resumeTerminal(id)),
+					}
+				: {
+						label: t("tabBar.suspendTab", "Suspend Tab"),
+						action: () => void reportOutcome(suspendTerminal(id)),
+						disabled: !term || suspendRefusal(term) !== null,
 					},
 		];
 		if (worktreeTargets.length > 0) {

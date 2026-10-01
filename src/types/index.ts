@@ -206,6 +206,8 @@ export interface SavedTerminal {
 	agentIntent?: string | null;
 	/** Last user prompt seen before the snapshot, truncated at persist time */
 	lastPrompt?: string | null;
+	/** Ended on purpose (Suspend): restored without a PTY, resumed by the user */
+	suspended?: boolean;
 }
 
 /** GitHub Issue from GraphQL API */

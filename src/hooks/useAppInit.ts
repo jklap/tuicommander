@@ -27,6 +27,7 @@ import { classifyFile, isImageFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
+import { suspendTerminal } from "../utils/suspendTerminal";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -178,6 +179,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 					alias: t.alias ?? null,
 					agentIntent: t.agentIntent ?? null,
 					lastPrompt: t.lastPrompt ? t.lastPrompt.slice(0, SAVED_PROMPT_MAX_CHARS) : null,
+					suspended: t.suspended,
 				});
 			}
 
@@ -645,6 +647,16 @@ export async function initApp(deps: AppInitDeps) {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
 		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
+
+	// `session action=suspend` already refused a busy session; the tab is ended here.
+	listen<{ session_id: string; __tuic_origin?: unknown }>("session-suspend-requested", (event) => {
+		if (event.payload.__tuic_origin !== undefined) return;
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (!termId) return;
+		suspendTerminal(termId).then((outcome) => {
+			if (!outcome.ok) appLogger.warn("terminal", "MCP suspend refused by the tab", { termId, reason: outcome.reason });
+		});
+	}).catch((err) => appLogger.error("app", "Failed to register session-suspend-requested listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
 		// A mirrored alias names a session on another machine: no tab here ever

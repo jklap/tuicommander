@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Suspend Tab** — Right-click a terminal tab → Suspend Tab ends its process and agent to free memory and CPU, and keeps the tab (marked `zz`) restorable like after a restart. Resume Tab, or the Resume button in the tab, opens a new session in the same folder and resumes the agent. A suspended tab stays suspended across a restart. Suspend is refused while the agent is working or a question awaits input. MCP: `session action=suspend`. Unlike auto-standby, which only pauses an idle process, a suspended tab holds no process.
+
 - **Branch integration proofs** — MCP can list integration verdicts for all local branches or query one branch, including its worktrees and proof. The sidebar and branch panel recognise squash merges, no-op merges and revised twin patches. Content-based verdicts require an archive of the current tip before safe deletion.
 
 - **AI Chat toasts and bubbles** — Toasts keep clear of the docked AI Chat panel and return to their usual corner when it closes or is detached. A short user message no longer shows an empty second line: its Copy button moved outside the bubble.
