@@ -632,6 +632,34 @@ mod tests {
     }
 
     #[test]
+    fn label_is_default_without_l_or_s_and_l_wins_over_s() {
+        // No socket flags: the fixed "default" label (plain `tuic alias` users).
+        let (plain, _) = split_globals(&s(&["list-sessions"])).unwrap();
+        assert_eq!(plain.label(), "default");
+
+        // `-L` takes precedence over `-S` when both are given.
+        let (both, _) =
+            split_globals(&s(&["-S", "/tmp/sock", "-L", "claude-swarm-9", "ls"])).unwrap();
+        assert_eq!(both.label(), "claude-swarm-9");
+    }
+
+    #[test]
+    fn label_from_dash_s_is_an_s_prefixed_hex_key_not_a_claude_swarm_label() {
+        // Pinned because the server treats only `claude-swarm*` labels as an
+        // automated swarm (`tmux_routes.rs::is_automated_swarm_label`); the
+        // `-S` leader path yields `S-<hex>`, which is NOT one.
+        let (g, _) = split_globals(&s(&["-S", "/tmp/leader.sock", "ls"])).unwrap();
+        let label = g.label();
+        let hex = label.strip_prefix("S-").expect("S- prefix");
+        assert!(!hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!label.starts_with("claude-swarm"));
+
+        // Different paths -> different labels (partitioning actually works).
+        let (other, _) = split_globals(&s(&["-S", "/tmp/other.sock", "ls"])).unwrap();
+        assert_ne!(label, other.label());
+    }
+
+    #[test]
     fn split_globals_with_no_subcommand_is_bare_or_version() {
         assert_eq!(split_globals(&s(&[])).unwrap().1, None);
         let (g, split) = split_globals(&s(&["-V"])).unwrap();
