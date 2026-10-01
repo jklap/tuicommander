@@ -154,6 +154,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/dictation/speech/voices?language=${encodeURIComponent(String(args.language))}`,
 		}),
 	},
+	get_edge_voices: {
+		map: (args) => ({
+			method: "GET",
+			path: `/dictation/speech/edge-voices?language=${encodeURIComponent(String(args.language))}`,
+		}),
+	},
 	import_speech_voice: {
 		map: (args) => ({
 			method: "POST",

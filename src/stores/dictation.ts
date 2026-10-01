@@ -27,8 +27,12 @@ interface DictationConfig {
 	hands_free_start_notice: string;
 	/** Play the hands-free earcons on the owning client. On by default. */
 	hands_free_earcons: boolean;
-	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
+	/** A user-supplied speech engine as argv, used when `speech_engine` is `external`. Edited in Expert. */
 	speech_command: string[];
+	/** Which engine speaks replies. Rust answers an unset value from what is installed, so this is never empty on read. */
+	speech_engine: SpeechEngineId;
+	/** The Edge voice (`it-IT-IsabellaNeural`). Empty means the language's default. */
+	speech_edge_voice: string;
 	/** Which of the language's voices speaks. Empty means the first one it ships. */
 	speech_voice: string;
 	/** Speech level of every reply in dBFS (-30..=-12). */
@@ -66,6 +70,17 @@ export interface SpeechAsset {
 	state: string;
 	/** Which files an incomplete asset is missing. Empty otherwise. */
 	missing: string[];
+}
+
+/** The engines that can speak a reply. Edge is the default; the other two are Expert. */
+export type SpeechEngineId = "edge" | "pocket" | "external";
+
+/** One Microsoft Edge voice, as the service lists it. Mirrors Rust's `EdgeVoice`. */
+export interface EdgeVoice {
+	id: string;
+	locale: string;
+	gender: string;
+	label: string;
 }
 
 /** One voice a language can speak with. Mirrors Rust's `VoiceChoice`. */
@@ -344,7 +359,17 @@ interface DictationStoreState {
 	handsFreeActivationPhrase: string;
 	/** Whether the delivered/dropped earcons play. Defaults to true, as in Rust. */
 	handsFreeEarcons: boolean;
-	/** Which voice speaks. Empty means the language's first, decided in Rust. */
+	/** Which engine speaks replies. */
+	speechEngine: SpeechEngineId;
+	/** The external speech command as argv; empty when none is set. */
+	speechCommand: string[];
+	/** The Edge voice. Empty means the language's default, decided in Rust. */
+	speechEdgeVoice: string;
+	/** The service's voices for the language last asked for (`refreshEdgeVoices`). */
+	edgeVoices: EdgeVoice[];
+	/** Why the Edge voice list could not be read (offline, service down), or null. */
+	edgeVoicesError: string | null;
+	/** Which Pocket voice speaks. Empty means the language's first, decided in Rust. */
 	speechVoice: string;
 	/** Speech level of every reply in dBFS (-30..=-12). */
 	speechVolumeDb: number;
@@ -406,6 +431,7 @@ function createDictationStore() {
 	// A language switch may start a second request before the first answers.
 	// Only the most recently requested voice list may update the picker.
 	let speechVoicesRequest = 0;
+	let edgeVoicesRequest = 0;
 
 	const [state, setState] = createStore<DictationStoreState>({
 		enabled: false,
@@ -431,6 +457,11 @@ function createDictationStore() {
 		handsFreeHoldBackMs: DEFAULT_HOLD_BACK_MS,
 		handsFreeActivationPhrase: "",
 		handsFreeEarcons: true,
+		speechEngine: "edge",
+		speechCommand: [],
+		speechEdgeVoice: "",
+		edgeVoices: [],
+		edgeVoicesError: null,
 		speechVoice: "",
 		speechVolumeDb: DEFAULT_SPEECH_VOLUME_DB,
 		speechLevelling: DEFAULT_SPEECH_LEVELLING,
@@ -569,6 +600,9 @@ function createDictationStore() {
 					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
 					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
 					handsFreeEarcons: config.hands_free_earcons ?? true,
+					speechEngine: config.speech_engine || "edge",
+					speechCommand: config.speech_command ?? [],
+					speechEdgeVoice: config.speech_edge_voice ?? "",
 					speechVoice: config.speech_voice ?? "",
 					speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
 					speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
@@ -626,6 +660,9 @@ function createDictationStore() {
 				if (partial.hands_free_start_notice !== undefined)
 					storeUpdate.handsFreeStartNotice = partial.hands_free_start_notice;
 				if (partial.speech_voice !== undefined) storeUpdate.speechVoice = partial.speech_voice;
+				if (partial.speech_engine !== undefined) storeUpdate.speechEngine = partial.speech_engine;
+				if (partial.speech_command !== undefined) storeUpdate.speechCommand = partial.speech_command;
+				if (partial.speech_edge_voice !== undefined) storeUpdate.speechEdgeVoice = partial.speech_edge_voice;
 				if (partial.speech_volume_db !== undefined) storeUpdate.speechVolumeDb = partial.speech_volume_db;
 				if (partial.speech_levelling !== undefined) storeUpdate.speechLevelling = partial.speech_levelling;
 				if (partial.hands_free_earcons !== undefined) storeUpdate.handsFreeEarcons = partial.hands_free_earcons;
@@ -701,6 +738,34 @@ function createDictationStore() {
 
 		setSpeechVoice(value: string): void {
 			actions.saveConfig({ speech_voice: value });
+		},
+
+		setSpeechEngine(value: SpeechEngineId): Promise<void> {
+			return actions.saveConfig({ speech_engine: value });
+		},
+
+		setSpeechCommand(argv: string[]): Promise<void> {
+			return actions.saveConfig({ speech_command: argv });
+		},
+
+		setSpeechEdgeVoice(value: string): void {
+			actions.saveConfig({ speech_edge_voice: value });
+		},
+
+		/**
+		 * Read the service's voices for a language. A failure (offline, service
+		 * down) is kept as text for the picker to show: an empty list with no
+		 * reason would look like "this language has no voices".
+		 */
+		async refreshEdgeVoices(language: string): Promise<void> {
+			const request = ++edgeVoicesRequest;
+			try {
+				const voices = await invoke<EdgeVoice[]>("get_edge_voices", { language });
+				if (request === edgeVoicesRequest) setState({ edgeVoices: voices, edgeVoicesError: null });
+			} catch (err) {
+				appLogger.warn("dictation", `Failed to list Edge voices for ${language}`, err);
+				if (request === edgeVoicesRequest) setState({ edgeVoices: [], edgeVoicesError: String(err) });
+			}
 		},
 
 		setSpeechVolumeDb(value: number): Promise<void> {

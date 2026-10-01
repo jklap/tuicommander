@@ -129,6 +129,12 @@ pub(super) async fn get_speech_voices_http(
     json_result(dictation::commands::get_speech_voices(query.language))
 }
 
+pub(super) async fn get_edge_voices_http(
+    axum::extract::Query(query): axum::extract::Query<SpeechVoicesQuery>,
+) -> Response {
+    json_result(dictation::commands::get_edge_voices(query.language).await)
+}
+
 /// The same keys as the IPC twin's arguments, which Tauri spells in
 /// camelCase (`dataBase64`). It is the whole voice file, which is why its
 /// route has a larger body limit than the rest (see
