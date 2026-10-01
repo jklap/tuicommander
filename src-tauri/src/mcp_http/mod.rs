@@ -1184,6 +1184,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/foreground",
             get(session::get_foreground_process),
         )
+        .route("/sessions/{id}/explain-state", get(session::explain_state))
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
         .route(
             "/sessions/{id}/input-if-empty",
@@ -1397,6 +1398,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/diagnostics/markers",
             get(log_routes::marker_compliance_get),
+        )
+        .route(
+            "/diagnostics/sessions",
+            get(log_routes::session_overload_get),
         )
         .route(
             "/diagnostics/capture",

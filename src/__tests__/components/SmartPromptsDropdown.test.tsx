@@ -42,10 +42,16 @@ vi.mock("../../stores/promptLibrary", () => ({
 	},
 }));
 
+const { mockIsBusy, mockIsWorking } = vi.hoisted(() => ({
+	mockIsBusy: vi.fn(() => false),
+	mockIsWorking: vi.fn(() => false),
+}));
+
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		getActive: vi.fn(() => ({ id: "t1", sessionId: "s1", agentType: "claude" })),
-		isBusy: vi.fn(() => false),
+		isBusy: mockIsBusy,
+		isWorking: mockIsWorking,
 	},
 }));
 
@@ -146,4 +152,45 @@ it("keeps filtering and Manage dismissal connected through shared controls", asy
 	expect(onOpenSettings).toHaveBeenCalledOnce();
 	expect(smartPromptsDropdownStore.state.isOpen).toBe(false);
 	cleanup();
+});
+
+describe("SmartPromptsDropdown — disabled-reason banner (getDisabledReason)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockCanExecute.mockReturnValue({ ok: true });
+		smartPromptsDropdownStore.open();
+	});
+
+	afterEach(() => {
+		cleanup();
+		smartPromptsDropdownStore.close();
+	});
+
+	it("shows the busy banner when terminalsStore.isBusy is true", async () => {
+		mockIsBusy.mockReturnValue(true);
+		const { getByText } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+
+		expect(getByText("Agent is busy — wait for it to finish")).toBeTruthy();
+	});
+
+	it("shows NO busy banner when only declared background work (isWorking) is true but the main agent is not busy", async () => {
+		// isWorking folds in declaredBackgroundWork (teammates / background tasks still running).
+		// The main agent can take a prompt, so the banner must key off isBusy alone.
+		mockIsBusy.mockReturnValue(false);
+		mockIsWorking.mockReturnValue(true);
+		const { queryByText } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+
+		expect(queryByText(/Agent is busy/)).toBeNull();
+		expect(mockIsWorking).not.toHaveBeenCalled();
+	});
+
+	it("shows no busy banner when terminalsStore.isBusy is false", async () => {
+		mockIsBusy.mockReturnValue(false);
+		const { queryByText } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+
+		expect(queryByText(/Agent is busy/)).toBeNull();
+	});
 });

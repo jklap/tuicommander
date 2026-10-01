@@ -20,11 +20,31 @@ set -euo pipefail
 
 event="${1:-unknown}"
 logfile="/Users/jason.klapste/src/external/tuicommander/.claude/hook-debug.log"
+retention_days=7
 payload="$(cat)"
 
+# Daily rotation: if the live log was last written on an earlier day, archive
+# it as hook-debug.log.YYYY-MM-DD (the day it was last written) and prune
+# archives older than ${retention_days} days. Pruning only runs on rotation.
+# Errors are swallowed (a concurrent hook may have rotated first) so a
+# rotation hiccup never breaks the hook or loses the current entry.
+if [[ -f "${logfile}" ]]; then
+  log_day="$(stat -f '%Sm' -t '%Y-%m-%d' "${logfile}" 2>/dev/null || true)"
+  today="$(date '+%Y-%m-%d')"
+  if [[ -n "${log_day}" && "${log_day}" != "${today}" ]]; then
+    mv -n "${logfile}" "${logfile}.${log_day}" 2>/dev/null || true
+    find "$(dirname "${logfile}")" -maxdepth 1 -name "$(basename "${logfile}").*" \
+      -mtime "+${retention_days}" -delete 2>/dev/null || true
+  fi
+fi
+
 {
-  printf '\n===== %s | %s | %s =====\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$event" "${CLAUDE_PROJECT_DIR:-unknown}"
+  printf '\n===== %s | %s | %s | tuic_session=%s =====\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$event" "${CLAUDE_PROJECT_DIR:-unknown}" "${TUIC_SESSION:-none}"
   printf '%s\n' "$payload"
+  # Hook-process env (CLAUDE_*/TUIC_*/TMUX*) to find any parent/team linkage the
+  # payload lacks. Credential-looking names are excluded so they never hit the log.
+  printf '%s\n' "--- env ---"
+  env | grep -E '^(CLAUDE|TUIC|TMUX)' | grep -viE '(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)' | sort || true
 } >> "$logfile"
 
 exit 0

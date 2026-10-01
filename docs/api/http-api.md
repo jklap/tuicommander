@@ -634,6 +634,22 @@ GET /sessions/:id/foreground
 
 Returns the foreground process info for a session. Detection uses the spawn-recorded root role and foreground process group. Returning to a shell root revokes an observed agent; a child of a direct agent holds unattended input without revoking its identity. Unknown root ownership refuses unattended input. Concurrent observations apply in generation order.
 
+### Explain State
+
+```
+GET /sessions/:id/explain-state
+```
+
+Read-only troubleshooting dump for why a session's status badge is what it is: the ranked
+evidence held per axis (busy/idle/awaiting), whether the arbiter would flip the shell state
+right now (`decide_now`), which rung of the `agent_state` ladder produced the visible state,
+screen/silence-timer bookkeeping, the last `Notification`-sourced classification, and an
+always-on decision trail — including rejected evidence attempts and what outranked them. `404`
+with `{"error": "session not found", "session_id": ...}` if the session doesn't exist. Shares
+`pty/explain.rs::explain_session_state_impl` with the desktop `explain_session_state` Tauri
+command and the MCP `debug action=explain_state` tool — see `docs/backend/pty.md`'s "Session
+state explain" section for the full payload shape.
+
 ### PTY / Terminal Read State
 
 ```
@@ -1100,7 +1116,7 @@ the server is back to the filter the connection was opened with.
 | `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
-| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It fires with `"connect"` once the initial subscription is live, closing any gap after the initial snapshot read, and with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop. A stream that lags 3 times in a row, or misses 1000 events in total, is closed by the server after the `lagged` event (`cpu_watchdog::should_disconnect_for_lag`; the per-session WebSockets use the same bound), so the client reconnects instead of falling further behind |
 | `session-standby` | `{session_id, standby}` | A session was parked in (or woken from) SIGSTOP standby. Visibility-driven — see `is_session_visible`/`sessions_not_visible` in `AGENTS.md`'s per-viewer visibility notes |
 | `pty-capture-changed` | `{enabled, session_filter}` — `session_filter` omitted (not `null`) when absent | The raw PTY diagnostics-capture tap started/stopped or its filter changed, via `POST /diagnostics/capture`, the `set_pty_capture` Tauri command, or a raw curl POST from outside the app. Global, not per-session — `session_filter: null`/omitted means every session is being recorded, so a client evaluates "is this session captured" itself from `enabled` + `session_filter` |
 | `themes-changed` | `{}` | The themes directory changed on disk (hot-reload); clients should re-fetch `GET /config/themes` |
@@ -2157,6 +2173,26 @@ GET /metrics
 ```
 
 Returns `{ "total_spawned": N, "failed_spawns": N, "bytes_emitted": N, "pauses_triggered": N }`.
+
+### Session overload attribution (diagnostics)
+
+```
+GET /diagnostics/sessions
+```
+
+Answers "which session is hot right now" on demand — the same numbers the CPU
+watchdog's `CPU SPIKE`/`SESSION OVERLOAD` log lines report, without waiting for
+either to fire. A peek, not a drain: reading this never resets the counters the
+watchdog's own next tick relies on to compute a rate. Only sessions with at
+least one nonzero counter, or an outstanding grid frame, are listed.
+
+```json
+{"sessions":[
+  {"session_id":"...", "events_since_last_tick":42,
+   "output_bytes_since_last_tick":2048, "cumulative_ws_lag_since_last_tick":7,
+   "outstanding_grid_frames":0}
+]}
+```
 
 ### Raw PTY Capture
 

@@ -117,6 +117,79 @@ describe("RepoSection", () => {
 		});
 	});
 
+	describe("BranchTabList dot / declared background work", () => {
+		afterEach(() => {
+			terminalsStore.remove("dot-declared-bg");
+			terminalsStore.remove("dot-declared-bg-idle");
+		});
+
+		it("shows the busy variant when the terminal has declared background work despite an idle shell", () => {
+			terminalsStore.register("dot-declared-bg", {
+				name: "shell",
+				cwd: "/repo",
+				sessionId: null,
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.update("dot-declared-bg", { shellState: "idle", declaredBackgroundWork: true });
+			const { container } = render(() => <BranchTabList terminalIds={["dot-declared-bg"]} repoPath="/repo" />);
+			const dot = container.querySelector("span[aria-hidden='true']");
+			expect(dot?.className).toMatch(/branchTabDotBusy/);
+		});
+
+		it("shows the idle variant (not busy) for a plain idle terminal with no declared background work", () => {
+			terminalsStore.register("dot-declared-bg-idle", {
+				name: "shell",
+				cwd: "/repo",
+				sessionId: null,
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.update("dot-declared-bg-idle", { shellState: "idle" });
+			const { container } = render(() => <BranchTabList terminalIds={["dot-declared-bg-idle"]} repoPath="/repo" />);
+			const dot = container.querySelector("span[aria-hidden='true']");
+			expect(dot?.className).toMatch(/branchTabDotIdle/);
+			expect(dot?.className).not.toMatch(/branchTabDotBusy/);
+		});
+	});
+
+	describe("branch-row icon color (hasBusy)", () => {
+		afterEach(() => {
+			terminalsStore.remove("branch-row-declared-bg");
+			terminalsStore.remove("branch-row-plain-idle");
+		});
+
+		it("colors the branch icon as active/busy when an attached terminal has declared background work despite an idle shell", () => {
+			terminalsStore.register("branch-row-declared-bg", {
+				name: "shell",
+				cwd: "/repo",
+				sessionId: null,
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.update("branch-row-declared-bg", { shellState: "idle", declaredBackgroundWork: true });
+
+			const { container } = renderBranchItem(makeBranch({ terminals: ["branch-row-declared-bg"] }));
+			const icon = container.querySelector(".branchIcon");
+			expect(icon?.className).toMatch(/branchIconActivity/);
+		});
+
+		it("does not color the branch icon as active/busy for a plain idle terminal with no declared background work", () => {
+			terminalsStore.register("branch-row-plain-idle", {
+				name: "shell",
+				cwd: "/repo",
+				sessionId: null,
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.update("branch-row-plain-idle", { shellState: "idle" });
+
+			const { container } = renderBranchItem(makeBranch({ terminals: ["branch-row-plain-idle"] }));
+			const icon = container.querySelector(".branchIcon");
+			expect(icon?.className).not.toMatch(/branchIconActivity/);
+		});
+	});
+
 	describe("gitOpBadge (existing indicator, baseline coverage)", () => {
 		it("shows the rebasing badge with its tooltip when a rebase is in progress", () => {
 			settingsStore.setShowGitState(true);

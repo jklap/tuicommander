@@ -886,6 +886,43 @@ pub(crate) fn worktree_warm_completed_payload(
     })
 }
 
+/// The `agent_state` ladder `session_state_with_shell` derives from its
+/// inputs — extracted into its own pure function so the state-explain
+/// feature's snapshot assembler can report the exact rung that produced the
+/// visible `agent_state` (the second element, e.g. `"shell_busy"`) without
+/// re-deriving this if/else a second time and risking the two callers
+/// disagreeing. `session_state_with_shell` keeps only the first element,
+/// exactly as before this extraction.
+pub(crate) fn resolve_agent_state(
+    agent_type: Option<&str>,
+    foreground_input_blocked: bool,
+    awaiting_input: bool,
+    has_choice_prompt: bool,
+    background_work: bool,
+    completion_declared: bool,
+    shell_state: Option<&str>,
+) -> (Option<&'static str>, &'static str) {
+    if agent_type.is_none() {
+        (None, "no_agent_type")
+    } else if foreground_input_blocked {
+        // A direct program's child owns the terminal even if the retained
+        // ready screen or completion marker still describes the parent.
+        (Some("working"), "foreground_input_blocked")
+    } else if awaiting_input || has_choice_prompt {
+        (Some("awaiting_input"), "awaiting_or_choice_prompt")
+    } else if background_work {
+        (Some("working"), "background_work")
+    } else if completion_declared {
+        (Some("completed"), "completion_declared")
+    } else if shell_state == Some("busy") {
+        (Some("working"), "shell_busy")
+    } else if shell_state == Some("idle") {
+        (Some("idle"), "shell_idle")
+    } else {
+        (Some("starting"), "fallthrough")
+    }
+}
+
 impl AppEvent {
     /// Session id for the PTY-scoped variants that are routed to a per-session
     /// channel in addition to the global bus. `None` for all other variants
@@ -2531,6 +2568,83 @@ pub struct SessionMaps {
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
     pub(crate) marker_stats: DashMap<String, MarkerStats>,
+    /// Per-session count of `AppEvent`s sent through `emit_pty_event`, since the
+    /// watchdog last read-and-reset it. Answers "which session pushed the most
+    /// events recently" — nothing tracked this before #session-overload-watchdog;
+    /// only a global aggregate (`SessionMetrics`) existed. Read via
+    /// `drain_counter_map`, which zeroes each entry as it reads it, so each
+    /// watchdog tick reports a rate rather than a lifetime total.
+    pub(crate) session_event_counts: DashMap<String, AtomicU64>,
+    /// Per-session PTY output bytes, since the watchdog last read-and-reset it.
+    /// Sibling to `SessionMetrics.bytes_emitted` (global-only) — bumped at the
+    /// same call site in the PTY reader loop. Same read-and-reset contract as
+    /// `session_event_counts`.
+    pub(crate) session_output_bytes: DashMap<String, AtomicU64>,
+    /// Cumulative broadcast lag (`RecvError::Lagged(n)`, summed) a session's
+    /// per-session WS handlers (`handle_ws_session`/`handle_ws_grid_session`)
+    /// have observed since the watchdog last read-and-reset it. Feeds both the
+    /// `top_sessions_by_ws_lag` attribution and the SESSION OVERLOAD trigger —
+    /// see `cpu_watchdog::MAX_CUMULATIVE_LAG`, which both this map's consumer
+    /// and the handlers' own disconnect decision share.
+    pub(crate) session_ws_lag: DashMap<String, AtomicU64>,
+    // NOTE (found in code review, FIXED 2026-09-29): all three maps above use
+    // lazy `.entry().or_default()` creation, so they used to inherit a
+    // pre-existing gap `pty_raw_rings`/`output_buffers` already had —
+    // `cleanup_session` removed the session with a bare
+    // `.remove(session_id).is_some()`, dropping the `Mutex<PtySession>` (and
+    // its `Box<dyn portable_pty::Child>`, which on Unix wraps a plain
+    // `std::process::Child`) with NO kill and no wait. Per std's own
+    // documented behavior, dropping a `Child` does not terminate its
+    // process, so an agent that ignores Ctrl-C (`close_pty_core`'s own
+    // comment names this) leaked its real OS process — and the reader thread
+    // still blocked reading its now-orphaned PTY master — for as long as
+    // that process happened to keep running on its own, potentially
+    // forever for a long-lived shell/agent, not merely "until the tombstone
+    // sweep reaps it." `cleanup_session` (`pty.rs`) now shares
+    // `terminate_child_with_grace` with `close_pty_core` — the same
+    // wait-then-SIGKILL-with-foreground-process-group-kill fallback the
+    // explicit-kill path already had. Regression test:
+    // `pty::tests::close_pty_core_actually_kills_a_process_that_ignores_everything_but_sigkill`.
+}
+
+/// Read every entry of a per-session counter map and zero it in the same pass,
+/// so each caller's read is a rate since the last read, not a lifetime total.
+/// Shared by `session_event_counts`/`session_output_bytes`/`session_ws_lag` —
+/// three maps with the identical "bump on the hot path, drain on a slow tick"
+/// shape, so this is the one place that shape is written rather than three
+/// hand-copies that could drift on the swap-vs-load ordering.
+pub(crate) fn drain_counter_map(map: &DashMap<String, AtomicU64>) -> Vec<(String, u64)> {
+    map.iter()
+        .filter_map(|entry| {
+            let n = entry.value().swap(0, std::sync::atomic::Ordering::Relaxed);
+            (n > 0).then(|| (entry.key().clone(), n))
+        })
+        .collect()
+}
+
+/// Add `n` to `session_id`'s entry in one of the counter maps above. Hot path
+/// (every PTY event and every reader chunk): look the key up first and only
+/// allocate an owned key on the session's first bump. Keys of sessions that are
+/// gone are pruned by the watchdog tick (`cpu_watchdog::collect_session_rates`).
+pub(crate) fn bump_counter(map: &DashMap<String, AtomicU64>, session_id: &str, n: u64) {
+    if let Some(counter) = map.get(session_id) {
+        counter.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    map.entry(session_id.to_string())
+        .or_default()
+        .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read `session_id`'s current value in one of the counter maps above without
+/// resetting it — for an on-demand read (`GET /diagnostics/sessions`) that
+/// must not disturb the watchdog's own periodic drain. Zero (never bumped, or
+/// the session doesn't exist) is indistinguishable from "nothing happened
+/// yet," which is the correct answer either way for a monitoring read.
+pub(crate) fn peek_counter(map: &DashMap<String, AtomicU64>, session_id: &str) -> u64 {
+    map.get(session_id)
+        .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(0)
 }
 
 /// Global state for managing PTY sessions and worktrees
@@ -2942,10 +3056,14 @@ impl AppState {
                 .session_state_events
                 .send(event.clone(), parented);
         }
-        if let Some(sid) = event.pty_session_id()
-            && let Some(tx) = self.session_maps.pty_event_channels.get(sid)
-        {
-            let _ = tx.send(event.clone());
+        if let Some(sid) = event.pty_session_id() {
+            // Counted unconditionally — a session with no live WS subscriber
+            // still had an event happen, and the watchdog's attribution needs
+            // that to be true regardless of who's listening.
+            bump_counter(&self.session_maps.session_event_counts, sid, 1);
+            if let Some(tx) = self.session_maps.pty_event_channels.get(sid) {
+                let _ = tx.send(event.clone());
+            }
         }
         let _ = self.event_bus.send(event);
     }
@@ -5332,6 +5450,22 @@ impl AppState {
     /// Get a SessionState snapshot with shell_state from the PTY reader's state machine.
     /// Also expires stale rate limits based on retry_after_ms + timestamp.
     pub(crate) fn session_state_with_shell(&self, session_id: &str) -> Option<SessionState> {
+        self.session_state_with_shell_detailed(session_id)
+            .map(|(state, ..)| state)
+    }
+
+    /// Same as `session_state_with_shell`, but also returns the ladder rung
+    /// (`resolve_agent_state`'s second element) and the two locals it
+    /// consulted (`completion_declared`, `background_work`) that
+    /// `session_state_with_shell` computes but discards. The state-explain
+    /// snapshot assembler (`pty/explain.rs`) needs all three so it never
+    /// re-derives them and risks disagreeing with this method's own answer —
+    /// see `resolve_agent_state`'s doc comment for why the rung is returned
+    /// at all.
+    pub(crate) fn session_state_with_shell_detailed(
+        &self,
+        session_id: &str,
+    ) -> Option<(SessionState, &'static str, bool, bool)> {
         // Expire stale rate limits in-place before building the snapshot.
         if let Some(mut entry) = self.session_maps.session_states.get_mut(session_id)
             && entry.rate_limited
@@ -5404,31 +5538,25 @@ impl AppState {
         if completion_settled && !background_work {
             state.shell_state = Some("idle".to_string());
         }
-        state.agent_state = if state.agent_type.is_none() {
-            None
-        } else if state.foreground_input_blocked {
-            // A direct program's child owns the terminal even if the retained
-            // ready screen or completion marker still describes the parent.
-            Some("working".to_string())
-        } else if state.awaiting_input || state.choice_prompt.is_some() {
-            Some("awaiting_input".to_string())
-        } else if background_work {
-            Some("working".to_string())
-        } else if completion_settled {
-            Some("completed".to_string())
-        } else if state.shell_state.as_deref() == Some("busy") {
-            Some("working".to_string())
-        } else if state.shell_state.as_deref() == Some("idle") {
-            Some("idle".to_string())
-        } else {
-            Some("starting".to_string())
-        };
+        // Main's completion signal is `completion_settled` (Claude settles its
+        // marker only once blocking Stop hooks finish); it feeds the ladder's
+        // `completion_declared` rung and the explain snapshot alike.
+        let (agent_state, rung) = resolve_agent_state(
+            state.agent_type.as_deref(),
+            state.foreground_input_blocked,
+            state.awaiting_input,
+            state.choice_prompt.is_some(),
+            background_work,
+            completion_settled,
+            state.shell_state.as_deref(),
+        );
+        state.agent_state = agent_state.map(str::to_string);
         if state.agent_type.is_some()
             || crate::idle_close::shell_last_io_ms(self, session_id) != state.abandoned_since_ms
         {
             state.abandoned_since_ms = None;
         }
-        Some(state)
+        Some((state, rung, completion_settled, background_work))
     }
 
     /// Spawn a background task that turns ACP wake signals into `AppEvent`s.
@@ -8481,6 +8609,86 @@ mod tests {
             seen.push(e.pty_session_id().map(str::to_string));
         }
         assert_eq!(seen, vec![Some("a".to_string()), Some("b".to_string())]);
+    }
+
+    /// The watchdog's attribution needs a true count of what happened, not
+    /// just what a live WS subscriber happened to see — a session with zero
+    /// subscribers is exactly as capable of overloading the backend as one
+    /// with a dozen. Counted unconditionally, same as the global bus send
+    /// just above it, not gated on `pty_event_channels.get(sid)` succeeding.
+    #[tokio::test]
+    async fn emit_pty_event_counts_every_event_even_with_no_subscriber() {
+        let state = tests_support::make_test_app_state();
+
+        state.emit_pty_event(AppEvent::PtyParsed {
+            session_id: "no-subscriber".to_string(),
+            parsed: serde_json::json!({ "type": "x" }).into(),
+        });
+        state.emit_pty_event(AppEvent::PtyParsed {
+            session_id: "no-subscriber".to_string(),
+            parsed: serde_json::json!({ "type": "y" }).into(),
+        });
+        state.emit_pty_event(AppEvent::PtyExit {
+            session_id: "other".to_string(),
+        });
+
+        let counts = drain_counter_map(&state.session_maps.session_event_counts);
+        assert_eq!(
+            counts
+                .iter()
+                .find(|(id, _)| id == "no-subscriber")
+                .map(|(_, n)| *n),
+            Some(2)
+        );
+        assert_eq!(
+            counts.iter().find(|(id, _)| id == "other").map(|(_, n)| *n),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn drain_counter_map_reads_and_resets_in_the_same_pass() {
+        let map: DashMap<String, AtomicU64> = DashMap::new();
+        map.insert("s1".to_string(), AtomicU64::new(7));
+
+        let first = drain_counter_map(&map);
+        assert_eq!(first, vec![("s1".to_string(), 7)]);
+
+        let second = drain_counter_map(&map);
+        assert!(
+            second.is_empty(),
+            "a second drain in the same tick must see zero, or a slow consumer's \
+             re-drain would double-count what the first drain already reported"
+        );
+    }
+
+    #[test]
+    fn drain_counter_map_omits_zero_entries() {
+        let map: DashMap<String, AtomicU64> = DashMap::new();
+        map.insert("untouched".to_string(), AtomicU64::new(0));
+        assert!(
+            drain_counter_map(&map).is_empty(),
+            "an entry that was never bumped is not a session worth naming"
+        );
+    }
+
+    #[test]
+    fn peek_counter_does_not_reset_the_value() {
+        let map: DashMap<String, AtomicU64> = DashMap::new();
+        map.insert("s1".to_string(), AtomicU64::new(9));
+
+        assert_eq!(peek_counter(&map, "s1"), 9);
+        assert_eq!(
+            peek_counter(&map, "s1"),
+            9,
+            "an on-demand read must not disturb what the watchdog's own drain relies on"
+        );
+    }
+
+    #[test]
+    fn peek_counter_is_zero_for_an_unknown_session() {
+        let map: DashMap<String, AtomicU64> = DashMap::new();
+        assert_eq!(peek_counter(&map, "never-existed"), 0);
     }
 
     #[tokio::test]
@@ -12445,6 +12653,456 @@ mod tests {
             assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
             assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         }
+    }
+
+    /// Direct table test of `resolve_agent_state` itself, pinning all 7
+    /// rungs and their precedence order at the source — the extracted
+    /// function's own callers (`session_state_with_shell` and, later, the
+    /// state-explain assembler) are exercised only through the
+    /// characterization tests below, which is indirect coverage of exactly
+    /// the kind Phase 0 flagged as a gap for the ladder before this
+    /// extraction existed.
+    #[test]
+    fn resolve_agent_state_ladder_table() {
+        // (agent_type, foreground_input_blocked, awaiting_input,
+        //  has_choice_prompt, background_work, completion_declared,
+        //  shell_state) -> (agent_state, rung)
+        let cases: &[(
+            Option<&str>,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            Option<&str>,
+            Option<&str>,
+            &str,
+        )] = &[
+            (
+                None,
+                false,
+                false,
+                false,
+                false,
+                false,
+                Some("busy"),
+                None,
+                "no_agent_type",
+            ),
+            (
+                Some("claude"),
+                true,
+                true,
+                true,
+                true,
+                true,
+                Some("idle"),
+                Some("working"),
+                "foreground_input_blocked",
+            ),
+            (
+                Some("claude"),
+                false,
+                true,
+                false,
+                true,
+                false,
+                Some("busy"),
+                Some("awaiting_input"),
+                "awaiting_or_choice_prompt",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                true,
+                false,
+                false,
+                Some("busy"),
+                Some("awaiting_input"),
+                "awaiting_or_choice_prompt",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                true,
+                true,
+                Some("busy"),
+                Some("working"),
+                "background_work",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                true,
+                Some("idle"),
+                Some("completed"),
+                "completion_declared",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                false,
+                Some("busy"),
+                Some("working"),
+                "shell_busy",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                false,
+                Some("idle"),
+                Some("idle"),
+                "shell_idle",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                false,
+                None,
+                Some("starting"),
+                "fallthrough",
+            ),
+        ];
+        for (
+            agent_type,
+            foreground_input_blocked,
+            awaiting_input,
+            has_choice_prompt,
+            background_work,
+            completion_declared,
+            shell_state,
+            expected_state,
+            expected_rung,
+        ) in cases
+        {
+            let (state, rung) = resolve_agent_state(
+                *agent_type,
+                *foreground_input_blocked,
+                *awaiting_input,
+                *has_choice_prompt,
+                *background_work,
+                *completion_declared,
+                *shell_state,
+            );
+            assert_eq!(
+                state, *expected_state,
+                "case {agent_type:?}/{awaiting_input}/{has_choice_prompt}/{background_work}/{completion_declared}/{shell_state:?}"
+            );
+            assert_eq!(rung, *expected_rung);
+        }
+    }
+
+    /// Characterization of `session_state_with_shell`'s full `agent_state`
+    /// ladder — written before the state-explain feature extracts this
+    /// if/else into a shared `resolve_agent_state` (so both callers keep
+    /// agreeing), and before that extraction, so a behavior change during it
+    /// shows up as a test failure rather than a silent drift. Existing tests
+    /// each pin one rung as a side effect of a different feature; this pins
+    /// the two rungs (no agent_type, and awaiting-beats-background_work
+    /// precedence) that had no direct coverage anywhere.
+    #[test]
+    fn test_agent_state_ladder_none_when_no_agent_type() {
+        let state = fresh_state();
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        // agent_type left at its `fresh_state` default of None.
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(
+            snapshot.agent_state, None,
+            "agent_state must stay None for a session with no detected/preset agent_type, \
+             regardless of shell activity"
+        );
+    }
+
+    #[test]
+    fn test_agent_state_ladder_awaiting_input_beats_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.awaiting_input = true;
+            session.background_work = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(
+            snapshot.agent_state.as_deref(),
+            Some("awaiting_input"),
+            "a pending question must outrank background work in the ladder's precedence"
+        );
+    }
+
+    #[test]
+    fn test_agent_state_ladder_choice_prompt_also_yields_awaiting_input() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
+                title: "Confirm".into(),
+                options: vec![
+                    crate::output_parser::ChoiceOption {
+                        key: "1".into(),
+                        label: "Yes".into(),
+                        highlighted: true,
+                        destructive: false,
+                        hint: None,
+                    },
+                    crate::output_parser::ChoiceOption {
+                        key: "2".into(),
+                        label: "No".into(),
+                        highlighted: false,
+                        destructive: true,
+                        hint: None,
+                    },
+                ],
+                dismiss_key: None,
+                amend_key: None,
+                selection_mode: Default::default(),
+            });
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
+    }
+
+    // ── `declared_background_work` readers (characterization) ──────────────
+    //
+    // Claude's hook-declared background work (`SilenceState::declared_background_work`,
+    // written by the `bgtasks` OSC verb) is read in exactly two places in this
+    // file: `AppState::declared_background_work_for` and the
+    // `session_state_with_shell_detailed` ladder that folds it in. These pin
+    // today's behavior before the teammate/subagent split changes the write side.
+
+    fn declare_background_work(state: &AppState, sid: &str, active: bool, epoch: u64) {
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .expect("silence state for session")
+            .lock()
+            .set_declared_background_work(active, epoch);
+    }
+
+    #[test]
+    fn test_declared_background_work_for_is_false_without_silence_state() {
+        let state = fresh_state();
+        assert!(
+            !state.declared_background_work_for("no-such-session", 0),
+            "an unknown session has no declaration"
+        );
+        state.session_maps.silence_states.remove("s1");
+        assert!(
+            !state.declared_background_work_for("s1", 0),
+            "a session whose SilenceState is gone reads as not declared"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_for_requires_matching_epoch() {
+        let state = fresh_state();
+        assert!(!state.declared_background_work_for("s1", 4));
+        declare_background_work(&state, "s1", true, 4);
+        assert!(state.declared_background_work_for("s1", 4));
+        assert!(
+            !state.declared_background_work_for("s1", 5),
+            "a declaration from epoch 4 must not apply to epoch 5"
+        );
+        assert!(!state.declared_background_work_for("s1", 3));
+        declare_background_work(&state, "s1", false, 4);
+        assert!(
+            !state.declared_background_work_for("s1", 4),
+            "an explicit not-active declaration reads as not declared"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_alone_yields_working_on_background_work_rung() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".into());
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+
+        let (snapshot, rung, completion_declared, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert_eq!(rung, "background_work");
+        assert!(snapshot.declared_background_work, "wire field is set");
+        assert!(
+            !snapshot.background_work,
+            "the OS-heuristic field is a separate signal and stays false"
+        );
+        assert!(!completion_declared);
+        assert!(
+            background_work,
+            "the ladder's folded background_work input includes the declaration"
+        );
+    }
+
+    #[test]
+    fn test_stale_epoch_declaration_does_not_hold_agent_working() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.turn_epoch = 2;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        // Declared during epoch 1; the session has since moved to epoch 2.
+        declare_background_work(&state, "s1", true, 1);
+
+        let (snapshot, rung, _, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert!(
+            !snapshot.declared_background_work,
+            "a declaration from a previous turn epoch must read as not declared"
+        );
+        assert!(!background_work);
+        assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+        assert_eq!(rung, "shell_idle");
+    }
+
+    #[test]
+    fn test_declared_background_work_is_independent_of_os_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.background_work = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert!(snapshot.background_work);
+        assert!(
+            !snapshot.declared_background_work,
+            "OS-level background work must not read as a hook declaration"
+        );
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+
+        // The reverse: a declaration never writes the OS-level field back.
+        declare_background_work(&state, "s1", true, 0);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .background_work = false;
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert!(snapshot.declared_background_work);
+        assert!(!snapshot.background_work);
+    }
+
+    #[test]
+    fn test_declared_background_work_outranks_completion_declared() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.suggested_actions = Some(vec!["Next".into()]);
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        declare_background_work(&state, "s1", true, 0);
+
+        let (snapshot, rung, completion_declared, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert!(completion_declared);
+        assert!(background_work);
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert_eq!(rung, "background_work");
+        assert_eq!(
+            snapshot.shell_state.as_deref(),
+            Some("busy"),
+            "the completion-declared idle normalization only applies when NO background work remains"
+        );
+
+        // Once the declaration clears, the same session normalizes to completed/idle.
+        declare_background_work(&state, "s1", false, 0);
+        let (snapshot, rung, _, _) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert_eq!(rung, "completion_declared");
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn test_awaiting_input_outranks_declared_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.awaiting_input = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+        let (snapshot, rung, _, _) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
+        assert_eq!(rung, "awaiting_or_choice_prompt");
+        assert!(
+            snapshot.declared_background_work,
+            "the wire field still reports the declaration while a higher rung wins"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_without_agent_type_keeps_agent_state_none() {
+        let state = fresh_state();
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.agent_state, None);
+        assert!(snapshot.declared_background_work);
     }
 
     #[test]

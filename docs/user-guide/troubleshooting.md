@@ -28,6 +28,8 @@ Agent state is inferred from terminal output and, for supported agents, can also
 
 If only one agent is affected, capture the terminal output and check the relevant agent page under `docs/architecture/agents/` before reporting a regression.
 
+For a specific session, use **Explain State** (Activity Dashboard row's "?" button, or a terminal tab's right-click menu → "Explain State…") to see exactly why the badge reads what it does — the ranked evidence held for busy/idle/awaiting, which rule produced the current badge, and a decision trail of recent evidence updates including any that were rejected. Also available over HTTP (`GET /sessions/{id}/explain-state`) and MCP (`debug` tool, `explain_state` action).
+
 ## A session was not restored
 
 Session restore is lazy and branch-scoped. Select the repository and branch that owned the session first. Agent sessions may show a resume banner instead of executing a resume command automatically; activate the banner to continue.
