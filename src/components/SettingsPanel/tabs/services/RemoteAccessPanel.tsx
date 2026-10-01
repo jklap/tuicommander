@@ -46,7 +46,7 @@ export const RemoteAccessPanel: Component = () => {
 	const [raHasPassword, setRaHasPassword] = createSignal(false);
 	const [raShowPassword, setRaShowPassword] = createSignal(false);
 	const [qrDataUrl, setQrDataUrl] = createSignal<string | null>(null);
-	const [tokenDuration, setTokenDuration] = createSignal(86400);
+	const [tokenDuration, setTokenDuration] = createSignal(2592000);
 	const [ipv6Enabled, setIpv6Enabled] = createSignal(false);
 	const [lanAuthBypass, setLanAuthBypass] = createSignal(false);
 	const [urlCopied, setUrlCopied] = createSignal(false);
@@ -120,7 +120,7 @@ export const RemoteAccessPanel: Component = () => {
 			setRaPort(config.services.server.port);
 			setRaUsername(config.services.auth.username);
 			setRaHasPassword(config.services.auth.password_hash.length > 0);
-			setTokenDuration(config.services.auth.session_token_duration_secs ?? 86400);
+			setTokenDuration(config.services.auth.session_token_duration_secs ?? 2592000);
 			setIpv6Enabled(config.services.server.ipv6_enabled ?? false);
 			setLanAuthBypass(config.services.auth.lan_auth_bypass ?? false);
 			setRelayEnabled(config.services.relay.enabled ?? false);
@@ -193,6 +193,7 @@ export const RemoteAccessPanel: Component = () => {
 		{ value: 3600, label: t("services.tokenDuration.1h", "1 hour") },
 		{ value: 86400, label: t("services.tokenDuration.24h", "24 hours") },
 		{ value: 604800, label: t("services.tokenDuration.7d", "7 days") },
+		{ value: 2592000, label: t("services.tokenDuration.30d", "30 days") },
 		{ value: 31536000, label: t("services.tokenDuration.never", "Never") },
 	];
 
@@ -347,7 +348,7 @@ export const RemoteAccessPanel: Component = () => {
 								options={TOKEN_DURATIONS.map((o) => ({ value: String(o.value), label: o.label }))}
 								hint={t(
 									"services.hint.tokenDuration",
-									"How long remote sessions stay authenticated. Token always resets on app restart.",
+									"How long a device may stay unused before it must log in again. Every use renews it.",
 								)}
 							/>
 						</ExpertSetting>

@@ -144,8 +144,52 @@ carry an `Authorization` header, and with `remote_auth` on the server answers
 is the only credential HTTP, WS and SSE can all carry. `503` means the server
 has no session token configured.
 
-`tuic-remote` generates its token in memory at startup and never persists it, so
-a client re-fetches it on every connect and after any daemon restart.
+`tuic-remote` generates its token on the first start and stores it in the
+credential vault like the desktop does, so a restart keeps the token and every
+paired phone stays logged in. A host with no usable vault falls back to a token
+that lives for one run (logged as a warning); a client re-fetches the token on
+every connect either way.
+
+### Session cookie
+
+A successful login (QR token, Basic Auth or the form below) sets the
+`tui-session` cookie. It is **sliding**: every authenticated request re-issues
+it with a fresh `Max-Age`, so a device in use never expires. The lifetime is
+`services.auth.session_token_duration_secs`, **30 days** (2592000) by default —
+the longest a device may sit unused before it must log in again. Rotating the
+session token logs every device out.
+
+### Mobile login form: `/mobile/login` and `POST /auth/login`
+
+A page navigation of the mobile app (`GET /mobile`, `/mobile/*`, `Accept:
+text/html`) without a valid session is redirected (`302`) to
+`/mobile/login?next=<path>` when a username and password are configured. An iOS
+home-screen app never shows the native Basic dialog, so the in-app form is the
+only way back in. Every other unauthenticated request keeps the `401` +
+`WWW-Authenticate: Basic` contract, and so does a navigation when no password is
+configured.
+
+Public without a session: `GET /mobile/login`, `GET /mobile-login.js` and
+`POST /auth/login` (nothing else).
+
+```
+POST /auth/login
+Content-Type: application/json
+{ "username": "…", "password": "…", "next": "/mobile/session/a" }
+```
+
+- `200 {"ok":true,"next":"/mobile/session/a"}` + `Set-Cookie: tui-session=…`.
+  `next` is returned only if it is inside `/mobile`, otherwise `/mobile`.
+- `401` wrong credentials or no password configured; no `WWW-Authenticate`.
+- `403` cross-origin: `Sec-Fetch-Site` must be `same-origin`, or, when the
+  browser sends none (plain HTTP on a LAN address), `Origin` must match `Host`.
+- `415` not `application/json`; `400` malformed body; `413` body over 4 KiB.
+- `429` + `Retry-After`: the per-IP failure budget is spent.
+
+Credentials are checked by the same code as the Basic fallback (per-IP rate
+limit, failed-credential cache, bcrypt on a blocking thread), so form and Basic
+failures spend one shared budget. The service worker never caches
+`/mobile/login` or a non-200 response as the offline shell.
 
 ## Server Limits
 
