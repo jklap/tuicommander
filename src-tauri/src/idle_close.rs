@@ -949,4 +949,87 @@ mod tests {
         critic_sweep_to_maturity(&state);
         assert!(!state.session_maps.sessions.contains_key("c"));
     }
+
+    // ---- critic-1319 round 3: release paths ----
+
+    /// Catches: a transient parent absence (MCP session reaped, then reconnect) dropping
+    /// the hold for good. The sweep prunes the hold while the parent is away; when the
+    /// parent returns still waiting to answer, the blocked child is closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_reconnecting_after_a_sweep_still_finds_its_child_held() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        let mut tracker = IdleCloseTracker::default();
+        state.mcp.session_to_mcp.remove("parent");
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        live_parent(&state);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "the parent was only away for one sweep; its BLOCKED child was closed"
+        );
+    }
+
+    /// Catches: a late BLOCKED mail from a child that is already closed re-creating a
+    /// hold that outlives it (and is inherited by a reused id).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_mail_from_a_closed_child_sets_no_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        crate::pty::close_pty_core(&state, "c", false);
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: late", 10));
+        assert!(!state.blocked_children.contains("c"));
+    }
+
+    /// Catches: the hold and its release staying bound to the old parent id after the
+    /// parent re-registers under a new one (session_parent rewritten). The hold must
+    /// survive the rebind, the old id's mail must not release it, the new parent's must.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_hold_follows_the_parent_to_its_new_identity() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.mcp.session_to_mcp.remove("parent");
+        state
+            .mcp
+            .session_to_mcp
+            .insert("parent2".into(), vec!["parent2-mcp".into()]);
+        state
+            .session_maps
+            .session_parent
+            .insert("c".into(), "parent2".into());
+        let mut tracker = IdleCloseTracker::default();
+        sweep_with_commands(&state, &mut tracker, 0, &[]);
+        sweep_with_commands(&state, &mut tracker, 900_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "hold lost on rebind"
+        );
+        state.push_agent_inbox("c", critic_mail("old", "parent", "stale id", 20));
+        state.agent_read_cursor.insert("c".into(), 20);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "mail from the retired parent id released the hold"
+        );
+        state.push_agent_inbox("c", critic_mail("new", "parent2", "box is back", 30));
+        state.agent_read_cursor.insert("c".into(), 30);
+        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "the new parent's mail did not release the hold"
+        );
+    }
 }
