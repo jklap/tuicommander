@@ -128,6 +128,8 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	// A pasted image is saved to disk and referenced inline in the same
 	// `[image: path]` form Ideas appends on send, so the agent can read it.
 	let imageNoteId: string | undefined;
+	// Saves settle in any order; chaining the insertions keeps the tags in paste order.
+	let insertions: Promise<void> = Promise.resolve();
 	createExtension(
 		EditorView.domEventHandlers({
 			paste: (event, view) => {
@@ -137,9 +139,11 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				});
 				// preventDefault runs synchronously inside the helper.
 				if (!event.defaultPrevented) return false;
-				void saved.then((path) => {
-					if (path) view.dispatch(view.state.replaceSelection(`[image: ${path}]`));
-				});
+				insertions = insertions.then(() =>
+					saved.then((path) => {
+						if (path) view.dispatch(view.state.replaceSelection(`[image: ${path}]`));
+					}),
+				);
 				return true;
 			},
 		}),

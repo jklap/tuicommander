@@ -346,4 +346,25 @@ describe("ComposePanel", () => {
 		expect(editorText(container)).toBe("plain words");
 		expect(invoke).not.toHaveBeenCalled();
 	});
+
+	// Catches: a spreadsheet cell copy (text/plain + rendered image) attaching a picture instead of pasting the text.
+	it("pastes the text and saves no image when the clipboard carries text/plain with an image", async () => {
+		vi.mocked(invoke).mockClear();
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		content.dispatchEvent(
+			pasteEvent(
+				[
+					{ type: "image/png", file: new File(["x"], "cell.png", { type: "image/png" }) },
+					{ type: "text/plain", file: null },
+				],
+				"A1\tB1",
+			),
+		);
+
+		expect(invoke).not.toHaveBeenCalled();
+		expect(editorText(container)).toBe("A1\tB1");
+	});
 });

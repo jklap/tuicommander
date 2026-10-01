@@ -20,7 +20,9 @@ async function blobToBase64(blob: Blob): Promise<string> {
 /** Save the first accepted image on a paste event and return its path.
  *
  *  Returns null when the paste carries no accepted image (the default text paste
- *  proceeds) or when saving failed (logged). The default action is cancelled
+ *  proceeds), when it also carries text/plain (a spreadsheet cell copy puts a
+ *  rendered picture next to its text; the text wins), or when saving failed
+ *  (logged). The default action is cancelled
  *  synchronously, before the first await, so the caller may rely on
  *  `event.defaultPrevented` to know the paste was claimed.
  *  `getNoteId` is only called once an image is found: it names the asset
@@ -28,6 +30,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 export async function savePastedImage(e: ClipboardEvent, getNoteId: () => string): Promise<string | null> {
 	const items = e.clipboardData?.items;
 	if (!items) return null;
+	if (Array.from(items).some((item) => item.type === "text/plain")) return null;
 
 	for (const item of items) {
 		const extension = IMAGE_EXTENSIONS.get(item.type);

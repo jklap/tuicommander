@@ -89,7 +89,7 @@ function dispatchPaste(view: EditorView, items: Item[]): Event {
 describe("ComposePanel paste round 2 (critic 1350)", () => {
 	it("pastes the text when the image item has no file — catches the Compose handler claiming a paste the helper declined", async () => {
 		const view = await mountCompose();
-		const e = dispatchPaste(view, [
+		dispatchPaste(view, [
 			{ kind: "file", type: "image/png", getAsFile: () => null },
 			{ kind: "string", type: "text/plain", getAsFile: () => null },
 		]);
