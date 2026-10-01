@@ -20555,3 +20555,38 @@ fn critic4_width_does_not_change_other_agents() {
         );
     }
 }
+
+/// Catches: the width gate off by one (`<=` instead of `<`, or 45/47 typed in the constant):
+/// OpenCode paints ` BUILD` from exactly 46 columns and nothing at 45.
+#[test]
+fn critic5_mini_bare_label_gate_is_exact_at_45_46_47() {
+    for label in ["BUILD", "PLAN"] {
+        let rows = vec!["  tool output".to_string(), format!(" {label}")];
+        for (columns, expected) in [
+            (Some(45), AgentScreenActivity::Unknown),
+            (Some(46), AgentScreenActivity::Ready),
+            (Some(47), AgentScreenActivity::Ready),
+            (None, AgentScreenActivity::Ready),
+        ] {
+            assert_eq!(
+                detect_agent_screen_activity_at(Some("opencode"), &rows, columns),
+                expected,
+                "{label} at {columns:?}"
+            );
+        }
+    }
+}
+
+/// Catches: the lowered gate also admitting non-status shapes at 46..63 columns
+/// (a bare non-primary label or a truncated usage row reading Ready mid-turn).
+#[test]
+fn critic5_mini_narrow_non_status_rows_stay_unknown_at_46() {
+    for row in [" BUILD 52.9K", " BUILD 52.9K (26%)", " REVIEW", " BUILD  ctrl+p", " Build"] {
+        let rows = vec![row.to_string()];
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("opencode"), &rows, Some(46)),
+            AgentScreenActivity::Unknown,
+            "{row:?}"
+        );
+    }
+}
