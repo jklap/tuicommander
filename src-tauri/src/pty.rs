@@ -3872,7 +3872,7 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
         .iter()
         .rposition(|row| is_opencode_frame_close_row(row))
     else {
-        return AgentScreenActivity::Unknown;
+        return detect_opencode_mini_screen_activity(rows);
     };
     if !rows[..close_idx]
         .iter()
@@ -3889,6 +3889,40 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
+    }
+}
+
+/// OpenCode's `--mini` interface, which `agent_hook_launch` adds to every launch,
+/// has no composer frame. Its only fixed element is a status row at the bottom, captured live on
+/// 1.18.30 at 120 and 64 columns:
+///
+/// ```text
+/// ready:    ` BUILD                                 52.9K (26%) · ctrl+p cmd`
+/// working:  ` BUILD  ⬝⬝⬝■■■■■ esc interrupt                      ctrl+p cmd`
+/// narrow:   ` BUILD`   /   ` BUILD  ⬝⬝■■■■■■ esc interrupt`
+/// ```
+///
+/// The `ctrl+p cmd` hint is dropped below roughly 80 columns, so it cannot anchor
+/// Ready; the uppercase agent label that opens the last painted row does, and
+/// `esc interrupt` marks a running turn exactly as in the framed interface.
+fn detect_opencode_mini_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    const INTERRUPT_HINT: &str = "esc interrupt";
+
+    let Some(status) = rows.iter().rev().find(|row| !row.trim().is_empty()) else {
+        return AgentScreenActivity::Unknown;
+    };
+    let is_agent_label = status.split_whitespace().next().is_some_and(|label| {
+        label.chars().count() >= 2
+            && label
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    });
+    if !is_agent_label {
+        AgentScreenActivity::Unknown
+    } else if status.contains(INTERRUPT_HINT) {
+        AgentScreenActivity::Working
+    } else {
+        AgentScreenActivity::Ready
     }
 }
 
