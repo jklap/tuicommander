@@ -1202,6 +1202,55 @@ describe("initApp", () => {
 			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
 		});
 
+		describe("session-suspend-requested", () => {
+			async function initWithSuspendListener() {
+				let cb: ((event: { payload: { session_id: string; request_id: string } }) => void) | null = null;
+				vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+					if (event === "session-suspend-requested") cb = handler as typeof cb;
+					return Promise.resolve(vi.fn());
+				}) as unknown as typeof listen);
+				await initApp(createMockDeps());
+				mockRpc.mockClear();
+				return cb!;
+			}
+			const verdicts = () => mockRpc.mock.calls.filter(([cmd]) => cmd === "session_suspend_response");
+
+			// The MCP call waits for this answer; without it a refusal read as success.
+			it("answers ok after suspending the tab that owns the session", async () => {
+				const fire = await initWithSuspendListener();
+				const id = terminalsStore.add(makeTerminal({ name: "Idle shell" }));
+				terminalsStore.setSessionId(id, "sess-susp-ok");
+
+				fire({ payload: { session_id: "sess-susp-ok", request_id: "req-ok" } });
+
+				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
+				expect(verdicts()[0][1]).toEqual({ requestId: "req-ok", ok: true, reason: null });
+				expect(terminalsStore.get(id)?.suspended).toBe(true);
+			});
+
+			it("answers with the refusal reason when the tab is busy and leaves the tab alone", async () => {
+				const fire = await initWithSuspendListener();
+				const id = terminalsStore.add(makeTerminal({ name: "Busy shell" }));
+				terminalsStore.setSessionId(id, "sess-susp-busy");
+				terminalsStore.update(id, { shellState: "busy" });
+
+				fire({ payload: { session_id: "sess-susp-busy", request_id: "req-busy" } });
+
+				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
+				expect(verdicts()[0][1]).toEqual({ requestId: "req-busy", ok: false, reason: "command running" });
+				expect(terminalsStore.get(id)?.suspended).toBeFalsy();
+			});
+
+			it("stays silent for a session no tab here owns", async () => {
+				const fire = await initWithSuspendListener();
+
+				fire({ payload: { session_id: "sess-elsewhere", request_id: "req-none" } });
+				await Promise.resolve();
+
+				expect(verdicts()).toHaveLength(0);
+			});
+		});
+
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
 			const getCb = captureAliasAssigned();
 			const deps = createMockDeps();
@@ -1601,6 +1650,28 @@ describe("initApp", () => {
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.savedTerminals?.length).toBe(1);
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBe("abc-123-uuid");
+	});
+
+	// The flag is what keeps a suspended tab suspended across a restart; a snapshot that
+	// dropped it would restore the tab as an ordinary one (or not at all for a plain shell).
+	it("snapshots the suspended flag into savedTerminals on beforeunload", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-s", cwd: "/repo" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		terminalsStore.update(terminalsStore.getIds()[0], { suspended: true });
+		window.dispatchEvent(new Event("beforeunload"));
+
+		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		expect(saved?.suspended).toBe(true);
 	});
 
 	it("snapshots null agentSessionId for terminals without it", async () => {
@@ -2286,6 +2357,24 @@ describe("initApp", () => {
 
 			// Tab must be gone
 			expect(terminalsStore.get(termId)).toBeUndefined();
+		});
+
+		// Suspend closes the PTY, so the backend reports session-closed; for a tab opened over
+		// HTTP/MCP that started the countdown and deleted the tab the user had just parked.
+		it("keeps a suspended remote tab when its session closes", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "parked-sess", cwd: null, agent_type: "claude" } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "parked-sess")!;
+			terminalsStore.update(termId, { suspended: true });
+
+			getClosed()!({ payload: { session_id: "parked-sess", reason: "closed", agent_type: "claude" } });
+			vi.advanceTimersByTime(60_000);
+
+			expect(terminalsStore.get(termId)).toBeDefined();
+			expect(terminalsStore.get(termId)?.name).not.toMatch(/\(\d+s\)/);
 		});
 
 		it("records the spawning agent on a sub-agent tab and nothing on a plain one", async () => {

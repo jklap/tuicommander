@@ -137,6 +137,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					isExited() && s.shellExited,
 					terminal()?.isRemote && s.remoteTab,
 					terminal()?.standby && s.standby,
+					terminal()?.suspended && s.suspended,
 					...dragClasses(props),
 				)}
 				data-tab-id={props.id}
@@ -186,6 +187,11 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 										<rect x="0" y="0" width="3" height="10" />
 										<rect x="5" y="0" width="3" height="10" />
 									</svg>
+								</span>
+							</Show>
+							<Show when={terminal()?.suspended}>
+								<span class={s.suspendedBadge} title={t("tabBar.suspended", "Suspended")}>
+									zz
 								</span>
 							</Show>
 							<Show when={isDetached()}>

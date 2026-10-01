@@ -171,6 +171,7 @@
 /logs
 /mcp/confirm-response
 /mcp/status
+/mcp/suspend-response
 /mcp/upstream-status
 /mcp/upstreams
 /mcp/upstreams/credential

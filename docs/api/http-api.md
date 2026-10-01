@@ -741,6 +741,7 @@ the server is back to the filter the connection was opened with.
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
+| `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
@@ -1470,6 +1471,17 @@ GET /mcp/status
 ```
 
 Returns MCP server status (enabled, port, connected clients).
+
+### MCP Suspend Response
+
+```
+POST /mcp/suspend-response
+Content-Type: application/json
+
+{"request_id": "...", "ok": false, "reason": "agent working"}
+```
+
+The tab's verdict on a `session action=suspend` request announced by the `session-suspend-requested` event. The waiting MCP call returns it. Unknown or already-answered ids are ignored.
 
 ### MCP Upstream Status
 

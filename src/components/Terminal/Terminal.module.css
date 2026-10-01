@@ -167,3 +167,20 @@
   max-width: 42ch;
   line-height: 1.5;
 }
+
+/* Resume action of the suspended-tab notice. */
+.resumeButton {
+  margin-top: 6px;
+  padding: 4px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.resumeButton:hover {
+  color: var(--accent);
+  background: var(--bg-highlight);
+}
