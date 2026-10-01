@@ -7867,6 +7867,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // decision, not a cleanup tweak.
     state.session_maps.session_parent.remove(session_id);
     state.keep_open_sessions.remove(session_id);
+    state.blocked_children.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.
@@ -11742,6 +11743,16 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
+    close_pty_core_with_reason(state, session_id, cleanup_worktree, "close_requested")
+}
+
+/// `close_pty_core` with the cause that the close log line reports.
+pub(crate) fn close_pty_core_with_reason(
+    state: &AppState,
+    session_id: &str,
+    cleanup_worktree: bool,
+    reason: &str,
+) -> Option<crate::state::WorktreeInfo> {
     flush_open_intent_before_session_removal(session_id, state);
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
@@ -11753,7 +11764,7 @@ pub(crate) fn close_pty_core(
     tracing::info!(
         source = "session",
         session_id = %session_id,
-        reason = "close_requested",
+        reason,
         "Closing session: sending Ctrl-C"
     );
 
