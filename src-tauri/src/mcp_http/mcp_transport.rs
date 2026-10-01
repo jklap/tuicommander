@@ -25420,3 +25420,52 @@ mod tests {
         kill_test_session(&state, &session_id);
     }
 }
+
+#[cfg(test)]
+mod critic_story_tool_text {
+    use super::*;
+
+    /// Catches: a StoryAction variant (transition_history) published in the input schema but
+    /// missing from the tool text, so an agent never learns it may call it.
+    #[test]
+    fn story_tool_text_names_every_published_action() {
+        let definition = native_tool_definitions()
+            .as_array()
+            .expect("definitions")
+            .iter()
+            .find(|tool| tool["name"] == "story")
+            .expect("story tool")
+            .clone();
+        let description = definition["description"].as_str().unwrap_or_default();
+        let variants = definition["inputSchema"]["properties"]["input"]["oneOf"]
+            .as_array()
+            .expect("oneOf");
+        let mut missing = Vec::new();
+        for variant in variants {
+            let action = &variant["properties"]["action"];
+            let name = action["const"]
+                .as_str()
+                .or_else(|| action["enum"][0].as_str())
+                .expect("action tag");
+            if !description.contains(name) {
+                missing.push(name.to_string());
+            }
+        }
+        assert!(missing.is_empty(), "actions absent from the tool text: {missing:?}");
+    }
+
+    /// Catches: the dependency sentence promising demotion only for a not-done dependency while
+    /// a Done dependency without a receipt also demotes in a workflow-owned plan.
+    #[test]
+    fn story_tool_text_mentions_the_receipt_condition_for_dependencies() {
+        let definition = native_tool_definitions()
+            .as_array()
+            .expect("definitions")
+            .iter()
+            .find(|tool| tool["name"] == "story")
+            .expect("story tool")
+            .clone();
+        let description = definition["description"].as_str().unwrap_or_default();
+        assert!(description.contains("receipt"), "{description}");
+    }
+}
