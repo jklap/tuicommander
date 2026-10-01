@@ -16009,6 +16009,146 @@ fn opencode_mini_resize_repaint_does_not_reopen_an_idle_turn() {
     }
 }
 
+/// OpenCode 1.18.30 `--mini` has no composer frame, so the framed adapter read
+/// every screen as Unknown: the queue deferred `idle_unconfirmed` forever and the
+/// shell stayed busy after the turn (#1299-3ce1). Replays two live captures, wide
+/// and 64 columns (the narrow one drops the `ctrl+p cmd` hint and runs a tool).
+/// Catches an adapter that cannot see the turn at all, and one that reads Ready
+/// while the turn still runs and would type the queue into it.
+#[test]
+fn opencode_mini_turn_captures_read_working_then_ready() {
+    for fixture in [
+        "opencode-1.18.30-mini-turn.tcap",
+        "opencode-1.18.30-mini-narrow-tool-turn.tcap",
+    ] {
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture))
+            .expect("valid live capture");
+        let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        let mut submitted = false;
+        let mut after_submit = Vec::new();
+        for record in capture.records {
+            match record.direction {
+                crate::pty_capture::CaptureDirection::Input => {
+                    submitted |= record.data == b"\r";
+                }
+                crate::pty_capture::CaptureDirection::Output => {
+                    vt.process(&record.data);
+                    if submitted {
+                        after_submit.push(detect_agent_screen_activity(
+                            Some("opencode"),
+                            &vt.screen_rows(),
+                        ));
+                    }
+                }
+            }
+        }
+        let first_working = after_submit
+            .iter()
+            .position(|activity| *activity == AgentScreenActivity::Working)
+            .unwrap_or_else(|| panic!("{fixture}: the running turn never read Working"));
+        let last_working = after_submit
+            .iter()
+            .rposition(|activity| *activity == AgentScreenActivity::Working)
+            .unwrap();
+        assert!(
+            !after_submit[first_working..=last_working].contains(&AgentScreenActivity::Ready),
+            "{fixture}: Ready while the turn was still running"
+        );
+        assert_eq!(
+            after_submit.last(),
+            Some(&AgentScreenActivity::Ready),
+            "{fixture}: the finished turn must read Ready; screen: {:#?}",
+            vt.screen_rows()
+        );
+    }
+}
+
+/// The user-visible failure: a command queued on OpenCode while it works never
+/// reached the composer, because the finished turn was never recognised as
+/// Ready and the busy shell never went idle. Replays the live turn through the
+/// production reader path, then lets the silence timer run.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-turn.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-queue";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let bytes = insert_recording_session(&state, sid);
+    // The turn is running when the user queues: the Enter of its own prompt
+    // left the shell busy, as observed live (`shell-state` stayed `busy`).
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        enqueue_user_command(&state, sid, "resume queued work")
+            .unwrap()
+            .queued,
+        1
+    );
+
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "the reader must classify the finished turn as Ready"
+    );
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    for _ in 0..300 {
+        if bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        "\u{15}resume queued work\r",
+        "the Ready screen must release the queue into the composer"
+    );
+}
+
 /// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
 /// nothing is running, so the session must read Ready. Without this the OSC 133
 /// busy bit set once by the long-lived `goose session` command survives for the
