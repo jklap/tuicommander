@@ -57,6 +57,7 @@ import {
 	installFrameRows,
 	reconcileDelay,
 	rowText,
+	rowTextLayout,
 	shouldFireReconcile,
 	snapLineHeight,
 	textSpanToCellRanges,
@@ -228,7 +229,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Link detection
 	const linkController = createCanvasLinkController();
 	const linkCache = linkController.rowCache;
-	let hoveredLink: {
+	type HoveredLink = {
 		row: number;
 		colStart: number;
 		colEnd: number;
@@ -236,7 +237,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		line?: number;
 		col?: number;
 		spans?: { row: number; colStart: number; colEnd: number }[];
-	} | null = null;
+	};
+	const STALE = Symbol("stale link lookup");
+	let hoveredLink: HoveredLink | null = null;
 	const detectedLinks = linkController.detectedSpans;
 	// Spans of links that span soft-wrapped rows (web + file://), keyed by row.
 	// scanRowForLinks() merges these each time it rebuilds a row's dashed-underline
@@ -265,14 +268,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	};
 
-	// The press claimed a span; what it opens is resolved now, at the pointer, not
-	// taken from whatever the hover probe last left in `hoveredLink`.
+	// The press claimed a span; what it opens is resolved now, at the pointer, by its
+	// own lookup — neither `hoveredLink` nor the hover probe's staleness check.
 	const linkPress = createLinkPressTracker();
-	const currentHover = () => hoveredLink;
 	async function openLinkAt(row: number, col: number) {
-		await checkLinksAtRow(row, col);
-		const link = currentHover();
-		if (link && linkCovers(link, row, col)) openLink(link);
+		const link = await resolveLinkAt(row, col, () => !alive);
+		if (link && link !== STALE && linkCovers(link, row, col)) openLink(link);
+	}
+	/** What a span underlines on screen right now; "" when there is none. */
+	function underlinedText(row: number, span: { colStart: number; colEnd: number } | undefined): string {
+		const decoded = rowMap.get(row);
+		if (!decoded || !span) return "";
+		const { text, utf16Starts } = rowTextLayout(decoded);
+		return text.slice(
+			utf16Starts[Math.min(span.colStart, decoded.count)],
+			utf16Starts[Math.min(span.colEnd, decoded.count)],
+		);
+	}
+	function underlinedTextAt(row: number, col: number): string {
+		return underlinedText(row, spanAt(detectedLinks.get(row), col));
 	}
 
 	const copyLink = (link: LinkTarget) => {
@@ -1990,10 +2004,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let linkThrottle: ReturnType<typeof setTimeout> | undefined;
 
+	/** Hover probe: the link under the cell becomes `hoveredLink`; a newer probe supersedes this one. */
 	async function checkLinksAtRow(row: number, col: number) {
-		const ref = invokeRef;
-		if (!ref || !alive) return;
+		if (!invokeRef || !alive) return;
 		const gen = linkController.beginCheck();
+		const found = await resolveLinkAt(row, col, () => !linkController.isCurrent(gen));
+		if (found === STALE) return;
+		hoveredLink = found;
+		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
+		if (currentFrame) {
+			const m = metrics();
+			if (m) repaintOverlay(currentFrame, m);
+		}
+	}
+
+	/** The link under the cell, or `STALE` when `isStale` turned true while resolving. Touches no hover state. */
+	async function resolveLinkAt(
+		row: number,
+		col: number,
+		isStale: () => boolean,
+	): Promise<HoveredLink | null | typeof STALE> {
+		const ref = invokeRef;
+		if (!ref || !alive) return STALE;
 
 		// OSC 8 hyperlinks take priority — the program explicitly tagged this cell
 		try {
@@ -2020,19 +2052,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						/* resolve failed — use raw URI */
 					}
 				}
-				if (!alive || !linkController.isCurrent(gen)) return;
-				hoveredLink = { row, colStart, colEnd, path: resolvedPath };
-				canvasRef.style.cursor = "pointer";
-				if (currentFrame) {
-					const m = metrics();
-					if (m) repaintOverlay(currentFrame, m);
-				}
-				return;
+				if (!alive || isStale()) return STALE;
+				return { row, colStart, colEnd, path: resolvedPath };
 			}
 		} catch {
 			/* ignore — command may not exist on older backend */
 		}
-		if (!alive || !linkController.isCurrent(gen)) return;
+		if (!alive || isStale()) return STALE;
 
 		let rowText: string;
 		try {
@@ -2041,9 +2067,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				row,
 			})) as string;
 		} catch {
-			return;
+			return STALE;
 		}
-		if (!alive || !linkController.isCurrent(gen)) return;
+		if (!alive || isStale()) return STALE;
 
 		const cacheKey = `${row}:${rowText}`;
 		let links = linkCache.get(cacheKey);
@@ -2126,7 +2152,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
-		hoveredLink = null;
+		let found: HoveredLink | null = null;
 		const decodedRow = rowMap.get(row);
 		if (links) {
 			for (const link of links) {
@@ -2136,7 +2162,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					? textSpanToCellRanges([{ index: row, row: decodedRow }], rowText, start, end)?.[0]
 					: null;
 				if (cells && col >= cells.colStart && col < cells.colEnd) {
-					hoveredLink = {
+					found = {
 						row,
 						colStart: cells.colStart,
 						colEnd: cells.colEnd,
@@ -2155,13 +2181,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const rowHasEdgeUrl = matchWebUrls(rowText).some((url) => url.index + url.text.length >= rowText.length);
 
 		// If no single-row link found, try logical line (joins soft-wrapped rows)
-		if (!hoveredLink && ref) {
+		if (!found && ref) {
 			try {
 				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
 					sessionId: props.sessionId,
 					row,
 				})) as [number, string];
-				if (!alive || !linkController.isCurrent(gen)) return;
+				if (!alive || isStale()) return STALE;
 				if (startRow !== row || logicalText !== rowText || rowHasEdgeUrl) {
 					const logicalOffset = logicalCellToStringOffset(startRow, logicalText, row, col);
 					const fuRe = FILE_URL_RE;
@@ -2194,14 +2220,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 									absolute_path: string;
 									is_directory: boolean;
 								} | null;
-								if (!alive || !linkController.isCurrent(gen)) return;
+								if (!alive || isStale()) return STALE;
 								if (!r) break;
 								resolvedPath = r.absolute_path;
 							}
 							const spans = logicalStringSpanToCells(startRow, logicalText, lm.index, matchEnd);
 							if (spans.length === 0) break;
 							const firstSpan = spans[0];
-							hoveredLink = {
+							found = {
 								row: firstSpan.row,
 								colStart: firstSpan.colStart,
 								colEnd: firstSpan.colEnd,
@@ -2217,11 +2243,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
-		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
-		if (currentFrame) {
-			const m = metrics();
-			if (m) repaintOverlay(currentFrame, m);
-		}
+		return found;
 	}
 
 	let scrollGestureEndTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2798,7 +2820,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			keyInputRef.focus({ preventScroll: true });
 			{
 				const at = canvasToGrid(e);
-				linkPress.begin(e.button, at.row, spanAt(detectedLinks.get(at.row), at.col));
+				const span = spanAt(detectedLinks.get(at.row), at.col);
+				linkPress.begin(e.button, at.row, span, underlinedText(at.row, span));
 			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
@@ -2811,6 +2834,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// we neither forward nor preventDefault: the app loses this one press,
 				// but the link works — UI-first (see #57). Shift bypasses reporting.
 				if (linkClaimsPress(e.button, isOverSpan(detectedLinks.get(pos.row), pos.col))) {
+					// A leftover Shift-drag selection would make the click bail as a drag.
+					if (linkPress.isClaimed() && selection.hasRange()) {
+						selection.clear();
+						fullRepaintNeeded = true;
+						scheduleRepaint();
+					}
 					return;
 				}
 				if (currentFrame.sgrMouse) {
@@ -3042,7 +3071,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Link click — plain click opens, skip if user was selecting text
 		bindings.listen(canvasRef, "click", (e: MouseEvent) => {
 			const at = canvasToGrid(e);
-			const claimed = linkPress.release(at.row, at.col);
+			const claimed = linkPress.release(at.row, at.col, underlinedTextAt(at.row, at.col));
 			// The first click of a double-click already opened it.
 			if (!claimed || e.detail > 1 || selection.hasRange()) return;
 			void openLinkAt(at.row, at.col);

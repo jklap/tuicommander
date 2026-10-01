@@ -50,33 +50,40 @@ describe("link press tracker", () => {
 	// Catches: a drag-select that ends on a path opening it, because no press ever claimed it.
 	it("opens nothing for a release whose press was not on a span", () => {
 		const t = createLinkPressTracker();
-		t.begin(0, 0, undefined);
+		t.begin(0, 0, undefined, "");
 		expect(t.isClaimed()).toBe(false);
-		expect(t.release(0, 10)).toBeNull();
+		expect(t.release(0, 10, "")).toBeNull();
 	});
 
 	// Catches: a press dragged off its span still opening the link.
 	it("opens nothing when the release leaves the claimed span or row", () => {
 		const t = createLinkPressTracker();
-		t.begin(0, 0, span);
-		expect(t.release(0, 30)).toBeNull();
-		t.begin(0, 0, span);
-		expect(t.release(1, 10)).toBeNull();
+		t.begin(0, 0, span, "a.md");
+		expect(t.release(0, 30, "a.md")).toBeNull();
+		t.begin(0, 0, span, "a.md");
+		expect(t.release(1, 10, "a.md")).toBeNull();
 	});
 
 	it("returns the claim once for a release on the same span", () => {
 		const t = createLinkPressTracker();
-		t.begin(0, 0, span);
+		t.begin(0, 0, span, "a.md");
 		expect(t.isClaimed()).toBe(true);
-		expect(t.release(0, 10)).toEqual({ row: 0, span });
-		expect(t.release(0, 10)).toBeNull();
+		expect(t.release(0, 10, "a.md")).toEqual({ row: 0, span, target: "a.md" });
+		expect(t.release(0, 10, "a.md")).toBeNull();
+	});
+
+	// Catches: a redraw putting link B under a held press opening B.
+	it("opens nothing when another link is under the pointer at release", () => {
+		const t = createLinkPressTracker();
+		t.begin(0, 0, span, "a.md");
+		expect(t.release(0, 10, "b.md")).toBeNull();
 	});
 
 	// Catches: a right or middle press leaving a left claim from an earlier press alive.
 	it("forgets the previous claim on any other press", () => {
 		const t = createLinkPressTracker();
-		t.begin(0, 0, span);
-		t.begin(2, 0, span);
+		t.begin(0, 0, span, "a.md");
+		t.begin(2, 0, span, "a.md");
 		expect(t.isClaimed()).toBe(false);
 	});
 });

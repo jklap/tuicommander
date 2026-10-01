@@ -21,39 +21,41 @@ export function linkClaimsPress(button: number, overLink: boolean): boolean {
 	return overLink && (button === 0 || button === 2);
 }
 
-/** The underlined span a left press landed on. */
+/** The underlined span a left press landed on, and the text it underlined at that moment. */
 export interface ClaimedPress {
 	row: number;
 	span: LinkSpan;
+	target: string;
 }
 
 /**
  * The one record of a link press. A link opens only for a left press that began
- * on an underlined span and ended on that same span — never from a stale hover,
- * a drag-select that happens to end on a path, or a press the app received.
+ * on an underlined span and ended on that same span still underlining the same
+ * text — never from a stale hover, a drag-select that happens to end on a path,
+ * a press the app received, or another link a redraw moved under the pointer.
  */
 export interface LinkPressTracker {
 	/** Record a press; a left press on a span is claimed, any other press forgets the last claim. */
-	begin(button: number, row: number, span: LinkSpan | undefined): void;
+	begin(button: number, row: number, span: LinkSpan | undefined, target: string): void;
 	/** True between a claimed press and its release. */
 	isClaimed(): boolean;
-	/** The claim when the release is on its span, else null. The claim is consumed either way. */
-	release(row: number, col: number): ClaimedPress | null;
+	/** The claim when the release is on its span and `target` (the text under the pointer now) is the pressed one, else null. The claim is consumed either way. */
+	release(row: number, col: number, target: string): ClaimedPress | null;
 }
 
 export function createLinkPressTracker(): LinkPressTracker {
 	let claim: ClaimedPress | null = null;
 	return {
-		begin(button, row, span) {
-			claim = button === 0 && span ? { row, span } : null;
+		begin(button, row, span, target) {
+			claim = button === 0 && span ? { row, span, target } : null;
 		},
 		isClaimed() {
 			return claim !== null;
 		},
-		release(row, col) {
+		release(row, col, target) {
 			const held = claim;
 			claim = null;
-			return held && held.row === row && isOverSpan([held.span], col) ? held : null;
+			return held && held.row === row && isOverSpan([held.span], col) && held.target === target ? held : null;
 		},
 	};
 }
