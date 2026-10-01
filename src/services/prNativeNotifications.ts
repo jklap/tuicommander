@@ -29,7 +29,8 @@ export function notifyPrTransition(n: PrTransitionNotice): void {
 	const heading = TITLES[n.type];
 	if (!heading || !notificationsStore.state.config.pr_native_notifications) return;
 
-	const key = `pr:${n.repoName}#${n.prNumber}:${n.type}`;
+	// The URL names owner, repo and number; repoName alone collides across repos with the same folder name.
+	const key = `pr:${n.url}:${n.type}`;
 	const now = Date.now();
 	if (now - (lastSent.get(key) ?? -Infinity) < DEDUP_WINDOW_MS) return;
 	for (const [k, at] of lastSent) if (now - at >= DEDUP_WINDOW_MS) lastSent.delete(k);

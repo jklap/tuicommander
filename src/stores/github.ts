@@ -296,7 +296,8 @@ function createGitHubStore() {
 			type: t.type,
 		});
 
-		// Transitions are emitted before `github-pr-update`, so the store still holds this PR's row.
+		// Transitions are emitted before `github-pr-update`, so the store can still hold the branch's
+		// previous PR: take only the repo base from its URL and address the transitioning PR number.
 		const pr = getPrStatus(t.repo_path, t.branch);
 		if (pr?.url) {
 			notifyPrTransition({
@@ -304,7 +305,7 @@ function createGitHubStore() {
 				prNumber: t.pr_number,
 				title: t.title,
 				type: t.type,
-				url: pr.url,
+				url: pr.url.replace(/\/pull\/\d+$/, `/pull/${t.pr_number}`),
 			});
 		}
 
