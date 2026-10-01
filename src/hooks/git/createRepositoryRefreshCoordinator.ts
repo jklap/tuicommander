@@ -587,7 +587,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			const seen = (entry.live_sessions ?? []).map((session) => session.session_id);
 			await deps.repo.removeOrphanWorktree(repoPath, entry.path, false, seen);
 		}
-		await deps.closeTerminalsInWorktree(entry.path);
+		// The checkout is gone: a terminal that will not close must not turn that into a failed removal.
+		try {
+			await deps.closeTerminalsInWorktree(entry.path);
+		} catch (err) {
+			appLogger.warn("git", `Removed orphan worktree ${entry.path} but could not close its terminals`, err);
+		}
 	};
 	const handleOrphanCleanup = async (repoPath: string) => {
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
