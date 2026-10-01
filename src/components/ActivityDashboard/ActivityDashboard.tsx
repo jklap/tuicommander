@@ -369,38 +369,40 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 								<span class={s.agent}>{term.agent}</span>
 								<span class={`${s.status} ${term.status.className}`}>{term.status.label}</span>
 								<span class={s.lastActivity}>{term.isWorking ? "" : formatRelativeTime(term.idleSince)}</span>
-								<Show when={term.sessionId}>
+								<div class={s.rowActions}>
+									<Show when={term.sessionId}>
+										<Button
+											variant="ghost"
+											shape="icon"
+											aria-label="Explain why this session is in this state"
+											class={s.explainBtn}
+											title="Explain why this session is in this state"
+											onClick={(e) => {
+												e.stopPropagation();
+												stateExplainStore.open(term.id);
+											}}
+										>
+											?
+										</Button>
+									</Show>
 									<Button
 										variant="ghost"
 										shape="icon"
-										aria-label="Explain why this session is in this state"
-										class={s.explainBtn}
-										title="Explain why this session is in this state"
+										aria-label={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
+										class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
+										title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
 										onClick={(e) => {
 											e.stopPropagation();
-											stateExplainStore.open(term.id);
+											if (props.onPromote) {
+												props.onPromote(term.id);
+											} else {
+												globalWorkspaceStore.togglePromote(term.id);
+											}
 										}}
 									>
-										?
+										<GlobeIcon />
 									</Button>
-								</Show>
-								<Button
-									variant="ghost"
-									shape="icon"
-									aria-label={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
-									class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
-									title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
-									onClick={(e) => {
-										e.stopPropagation();
-										if (props.onPromote) {
-											props.onPromote(term.id);
-										} else {
-											globalWorkspaceStore.togglePromote(term.id);
-										}
-									}}
-								>
-									<GlobeIcon />
-								</Button>
+								</div>
 							</div>
 							<Show when={term.currentTask}>
 								{(task) => (

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +20,7 @@ import { snapshotToRows } from "../../panelAdapters/activity";
 import { activityDashboardStore } from "../../stores/activityDashboard";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { __resetModalStackForTest } from "../../stores/modalStack";
+import { stateExplainStore } from "../../stores/stateExplain";
 import type { ActivitySnapshot } from "../../utils/activitySnapshot";
 
 function row(overrides: Partial<TerminalRow> = {}): TerminalRow {
@@ -189,6 +192,88 @@ describe("ActivityDashboard", () => {
 			expect(spy).toHaveBeenCalledWith("t1");
 			spy.mockRestore();
 		});
+
+		it("reflects the unpromoted state in its title and class", () => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ isPromoted: false })]} />);
+			const btn = document.querySelector(".promoteBtn")!;
+			expect(btn.getAttribute("title")).toBe("Promote to Global Workspace");
+			expect(btn.classList.contains("promoted")).toBe(false);
+		});
+
+		it("reflects the promoted state in its title and class", () => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ isPromoted: true })]} />);
+			const btn = document.querySelector(".promoteBtn")!;
+			expect(btn.getAttribute("title")).toBe("Remove from Global Workspace");
+			expect(btn.classList.contains("promoted")).toBe(true);
+		});
+	});
+
+	describe("explain button", () => {
+		afterEach(() => stateExplainStore.close());
+
+		it("is hidden when the row has no sessionId", () => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ sessionId: null })]} />);
+			expect(document.querySelector(".explainBtn")).toBeNull();
+		});
+
+		it("is shown when the row has a sessionId", () => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ sessionId: "s1" })]} />);
+			expect(document.querySelector(".explainBtn")).not.toBeNull();
+		});
+
+		it("opens the explain modal for the row's terminal id and does not select the row", () => {
+			const onSelect = vi.fn();
+			const openSpy = vi.spyOn(stateExplainStore, "open");
+			render(() => (
+				<ActivityDashboard embedded onSelect={onSelect} terminals={() => [row({ id: "t1", sessionId: "s1" })]} />
+			));
+			fireEvent.click(document.querySelector(".explainBtn")!);
+			expect(openSpy).toHaveBeenCalledWith("t1");
+			expect(stateExplainStore.openTermId()).toBe("t1");
+			expect(onSelect).not.toHaveBeenCalled();
+			openSpy.mockRestore();
+		});
+	});
+
+	describe("row grid layout", () => {
+		// jsdom has no grid layout, so guard the invariant structurally: every direct
+		// child of .rowMain occupies one grid track; an extra child wraps onto a new line.
+		const gridTrackCount = () => {
+			const css = readFileSync(
+				join(process.cwd(), "src/components/ActivityDashboard/ActivityDashboard.module.css"),
+				"utf8",
+			);
+			const block = css.match(/\.rowMain\s*\{([^}]*)\}/)?.[1] ?? "";
+			const columns = block.match(/grid-template-columns:\s*([^;]+);/)?.[1] ?? "";
+			// `minmax(0, 1fr)` is ONE track: collapse each function call first.
+			return columns
+				.replace(/\([^)]*\)/g, "()")
+				.trim()
+				.split(/\s+/)
+				.filter(Boolean).length;
+		};
+
+		it.each([
+			["without", null],
+			["with", "s1"],
+		])("has exactly one direct child per grid column %s a sessionId", (_label, sessionId) => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ sessionId })]} />);
+			const rowMain = document.querySelector(".rowMain")!;
+			expect(gridTrackCount()).toBeGreaterThan(0);
+			expect(rowMain.children).toHaveLength(gridTrackCount());
+		});
+
+		it("keeps the explain and promote buttons together in the trailing actions cell", () => {
+			render(() => <ActivityDashboard embedded terminals={() => [row({ sessionId: "s1" })]} />);
+			const actions = document.querySelector(".rowMain > .rowActions")!;
+			expect(actions).not.toBeNull();
+			expect(actions).toBe(document.querySelector(".rowMain")!.lastElementChild);
+			// ui Button puts its own `control` class first; check the feature class.
+			const children = Array.from(actions.children);
+			expect(children).toHaveLength(2);
+			expect(children[0].classList.contains("explainBtn")).toBe(true);
+			expect(children[1].classList.contains("promoteBtn")).toBe(true);
+		});
 	});
 
 	describe("overlay mode", () => {
@@ -224,6 +309,61 @@ describe("ActivityDashboard", () => {
 			const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
 			document.body.dispatchEvent(e);
 			expect(activityDashboardStore.state.isOpen).toBe(false);
+		});
+	});
+
+	describe("store-backed rows / declared background work", () => {
+		const added: string[] = [];
+		const addTerm = (name: string, patch: Parameters<typeof terminalsStore.update>[1] = {}) => {
+			const id = terminalsStore.add({ name, sessionId: null, fontSize: 14, cwd: null, awaitingInput: null });
+			terminalsStore.update(id, { agentType: "claude", agentState: "idle", shellState: "idle", ...patch });
+			added.push(id);
+			return id;
+		};
+
+		afterEach(() => {
+			for (const id of added.splice(0)) terminalsStore.remove(id);
+		});
+
+		it("renders an idle-shell terminal with declared background work as a Working (non-idle) row", () => {
+			const id = addTerm("declared", { declaredBackgroundWork: true });
+			render(() => <ActivityDashboard embedded />);
+
+			const el = rowFor(id);
+			expect(el).not.toBeNull();
+			expect(el?.className).not.toContain("idleRow");
+			expect(el?.textContent).toContain("Working");
+		});
+
+		it("renders the same terminal as an Idle row when declaredBackgroundWork is false", () => {
+			const id = addTerm("plain");
+			render(() => <ActivityDashboard embedded />);
+
+			const el = rowFor(id);
+			expect(el?.className).toContain("idleRow");
+			expect(el?.textContent).toContain("Idle");
+			expect(el?.textContent).not.toContain("Working");
+		});
+
+		it("orders a declared-work terminal above a plain idle one regardless of insertion order", () => {
+			const idleId = addTerm("plain idle");
+			const declaredId = addTerm("declared", { declaredBackgroundWork: true });
+			render(() => <ActivityDashboard embedded />);
+
+			const ids = rowEls().map((el) => el.getAttribute("data-term-id"));
+			expect(ids).toEqual([declaredId, idleId]);
+		});
+
+		it("reacts live when declaredBackgroundWork is set and later cleared", () => {
+			const id = addTerm("toggle");
+			render(() => <ActivityDashboard embedded />);
+			expect(rowFor(id)?.className).toContain("idleRow");
+
+			terminalsStore.update(id, { declaredBackgroundWork: true });
+			expect(rowFor(id)?.className).not.toContain("idleRow");
+
+			terminalsStore.update(id, { declaredBackgroundWork: false });
+			expect(rowFor(id)?.className).toContain("idleRow");
 		});
 	});
 

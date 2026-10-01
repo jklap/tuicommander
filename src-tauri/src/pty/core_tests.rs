@@ -1190,6 +1190,37 @@ fn explain_session_state_returns_none_for_an_unknown_session() {
     assert!(explain_session_state_impl(&state, "no-such-session").is_none());
 }
 
+/// `agent_session_id` exists specifically so a pasted `explain_state` snapshot
+/// can be joined directly against a hook transcript (e.g. `hook-debug.log`)
+/// without re-deriving the mapping via the pid registry — it must round-trip
+/// unchanged from `SessionState`.
+#[test]
+fn explain_session_state_surfaces_the_hook_reported_agent_session_id() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "explain-agent-session-id-test";
+
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            agent_session_id: Some("02fa3f80-c777-4277-9723-65fd872c46aa".into()),
+            ..Default::default()
+        },
+    );
+    state.session_maps.silence_states.insert(
+        session_id.into(),
+        std::sync::Arc::new(parking_lot::Mutex::new(SilenceState::new())),
+    );
+
+    let explain = explain_session_state_impl(&state, session_id)
+        .expect("explain_session_state_impl should find the session");
+
+    assert_eq!(
+        explain.agent.agent_session_id.as_deref(),
+        Some("02fa3f80-c777-4277-9723-65fd872c46aa")
+    );
+}
+
 #[test]
 fn test_tool_error_no_candidate_returns_none() {
     let mut s = SilenceState::new();
@@ -13751,6 +13782,18 @@ fn cleanup_session_clears_transient_session_maps() {
         .session_maps
         .pty_accent_colors
         .insert(sid.to_string(), "blue".to_string());
+    state
+        .session_maps
+        .session_event_counts
+        .insert(sid.to_string(), AtomicU64::new(5));
+    state
+        .session_maps
+        .session_output_bytes
+        .insert(sid.to_string(), AtomicU64::new(1024));
+    state
+        .session_maps
+        .session_ws_lag
+        .insert(sid.to_string(), AtomicU64::new(3));
 
     cleanup_session(sid, &state, "closed");
 
@@ -13779,6 +13822,12 @@ fn cleanup_session_clears_transient_session_maps() {
          shim's set-option dispatch is the only writer, but every session that ever \
          gets one must still have it reaped on close"
     );
+    assert!(
+        !state.session_maps.session_event_counts.contains_key(sid),
+        "must not leak a stale watchdog attribution counter past teardown"
+    );
+    assert!(!state.session_maps.session_output_bytes.contains_key(sid));
+    assert!(!state.session_maps.session_ws_lag.contains_key(sid));
 }
 
 // ── list_active_sessions ────────────────────────────────────────

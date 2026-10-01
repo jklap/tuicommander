@@ -161,6 +161,76 @@ pub(crate) async fn marker_compliance_get(
     Json(serde_json::json!({ "sessions": sessions }))
 }
 
+/// GET /diagnostics/sessions — per-session overload attribution, live.
+///
+/// Answers "which session is hot right now" on demand, instead of only after
+/// the fact in a `CPU SPIKE`/`SESSION OVERLOAD` log line — diagnosing the
+/// `0b421c3a`/`cddded98` incident took ~45 minutes of manual correlation
+/// across `debug logs`, `explain_state`, and `lsof` precisely because nothing
+/// gave a direct answer to this question. A peek, not a drain
+/// (`state::peek_counter`): reading this must not reset the counters the
+/// watchdog's own periodic tick relies on to compute a rate.
+pub(crate) async fn session_overload_get(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    // The set of sessions worth reporting is "anything with a measurable
+    // number right now," not literally every open PTY — a quiet session
+    // would just be a row of zeros. Union the three counter maps' keys with
+    // `grid.gates`'s (outstanding frames can be nonzero with no event/byte/lag
+    // activity at all, e.g. a backgrounded tab that never acks).
+    let mut session_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in [
+        &state.session_maps.session_event_counts,
+        &state.session_maps.session_output_bytes,
+        &state.session_maps.session_ws_lag,
+    ] {
+        session_ids.extend(m.iter().map(|e| e.key().clone()));
+    }
+    session_ids.extend(state.grid.gates.iter().map(|e| e.key().clone()));
+
+    let sessions: Vec<serde_json::Value> = session_ids
+        .into_iter()
+        .filter_map(|session_id| {
+            let events_since_last_tick =
+                crate::state::peek_counter(&state.session_maps.session_event_counts, &session_id);
+            let output_bytes_since_last_tick =
+                crate::state::peek_counter(&state.session_maps.session_output_bytes, &session_id);
+            let cumulative_ws_lag_since_last_tick =
+                crate::state::peek_counter(&state.session_maps.session_ws_lag, &session_id);
+            let outstanding_grid_frames = state
+                .grid
+                .gates
+                .get(&session_id)
+                .map(|g| g.outstanding())
+                .unwrap_or(0);
+            // `drain_counter_map` zeroes a counter but never removes its key
+            // (the entry stays so a later bump doesn't need to re-`entry()`
+            // it) — so a session the watchdog already drained back to zero is
+            // still in the union above. Without this filter it would sit here
+            // forever as a dead all-zero row, exactly the "quiet session is
+            // just a row of zeros" outcome the comment above already says to
+            // avoid; only re-check happens here, at read time, since that's
+            // the only place both "did the watchdog reset this" and "is it
+            // truly idle" can be told apart from "never had any activity."
+            let has_signal = events_since_last_tick > 0
+                || output_bytes_since_last_tick > 0
+                || cumulative_ws_lag_since_last_tick > 0
+                || outstanding_grid_frames > 0;
+            if !has_signal {
+                return None;
+            }
+            Some(serde_json::json!({
+                "session_id": session_id,
+                "events_since_last_tick": events_since_last_tick,
+                "output_bytes_since_last_tick": output_bytes_since_last_tick,
+                "cumulative_ws_lag_since_last_tick": cumulative_ws_lag_since_last_tick,
+                "outstanding_grid_frames": outstanding_grid_frames,
+            }))
+        })
+        .collect();
+    Json(serde_json::json!({ "sessions": sessions }))
+}
+
 /// POST /diagnostics — toggle diagnostic mode. Body: `{ "enabled": true }`.
 pub(crate) async fn diagnostics_set(
     Json(body): Json<super::types::SetApiDebugRequest>,
@@ -392,6 +462,111 @@ mod tests {
             alone can't distinguish that from the agent ignoring the protocol"
         );
         assert_eq!(off["suggest_enabled"], false);
+    }
+
+    /// The "who's hot right now" endpoint the `0b421c3a`/`cddded98` incident
+    /// motivated — see `cpu_watchdog.rs`'s `SessionRates`/`check_session_overload`
+    /// for the same numbers' periodic log-line twin.
+    #[tokio::test]
+    async fn session_overload_reports_live_counters_without_resetting_them() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_maps
+            .session_event_counts
+            .entry("hot".to_string())
+            .or_default()
+            .fetch_add(42, std::sync::atomic::Ordering::Relaxed);
+        state
+            .session_maps
+            .session_output_bytes
+            .entry("hot".to_string())
+            .or_default()
+            .fetch_add(2048, std::sync::atomic::Ordering::Relaxed);
+        state
+            .session_maps
+            .session_ws_lag
+            .entry("hot".to_string())
+            .or_default()
+            .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+        let result = session_overload_get(State(state.clone())).await.0;
+        let hot = session_entry(&result, "hot");
+        assert_eq!(hot["events_since_last_tick"], 42);
+        assert_eq!(hot["output_bytes_since_last_tick"], 2048);
+        assert_eq!(hot["cumulative_ws_lag_since_last_tick"], 7);
+        assert_eq!(hot["outstanding_grid_frames"], 0);
+
+        // A second read must see the same numbers — an on-demand GET must not
+        // steal what the watchdog's own next tick needs to compute a rate.
+        let result_again = session_overload_get(State(state)).await.0;
+        assert_eq!(
+            session_entry(&result_again, "hot")["events_since_last_tick"],
+            42
+        );
+    }
+
+    #[tokio::test]
+    async fn session_overload_omits_a_session_with_no_activity_at_all() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = session_overload_get(State(state)).await.0;
+        assert_eq!(result["sessions"].as_array().unwrap().len(), 0);
+    }
+
+    /// `drain_counter_map` zeroes a counter's value but never removes its key
+    /// (a code-review finding on the first version of this endpoint) — so a
+    /// session that was briefly hot, then drained back to zero by a watchdog
+    /// tick, must NOT keep showing up as a permanent all-zero row for the rest
+    /// of its life. This is the actual gap the "never had activity" test above
+    /// doesn't cover: that test's session never had an entry created at all,
+    /// while this one simulates the real production shape — an entry that
+    /// exists, with value zero.
+    #[tokio::test]
+    async fn session_overload_omits_a_session_the_watchdog_already_drained_to_zero() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_maps
+            .session_event_counts
+            .entry("was-hot-now-quiet".to_string())
+            .or_default()
+            .fetch_add(99, std::sync::atomic::Ordering::Relaxed);
+
+        // Simulate the watchdog's own periodic tick draining it back to zero —
+        // the key stays in the map (matching `drain_counter_map`'s real
+        // behavior), only the value resets.
+        let drained = crate::state::drain_counter_map(&state.session_maps.session_event_counts);
+        assert_eq!(drained, vec![("was-hot-now-quiet".to_string(), 99)]);
+        assert!(
+            state
+                .session_maps
+                .session_event_counts
+                .contains_key("was-hot-now-quiet"),
+            "drain_counter_map resets the value, not the key — pinning that \
+             behavior here since the route's correctness depends on it"
+        );
+
+        let result = session_overload_get(State(state)).await.0;
+        assert_eq!(
+            result["sessions"].as_array().unwrap().len(),
+            0,
+            "a session drained back to zero must not linger as a dead row"
+        );
+    }
+
+    /// A session with outstanding grid frames but nothing in any of the three
+    /// counter maps must still be listed — the union in `session_overload_get`
+    /// pulls session ids from `grid.gates` too, not just the three counters.
+    #[tokio::test]
+    async fn session_overload_includes_a_session_known_only_via_grid_gates() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let gate = std::sync::Arc::new(crate::grid_gate::GridGate::new());
+        gate.mark_sent();
+        gate.mark_sent();
+        state.grid.gates.insert("frame-only".to_string(), gate);
+
+        let result = session_overload_get(State(state)).await.0;
+        let entry = session_entry(&result, "frame-only");
+        assert_eq!(entry["outstanding_grid_frames"], 2);
+        assert_eq!(entry["events_since_last_tick"], 0);
     }
 
     /// The newest entries in the buffer are all "info"; the older ones are the

@@ -94,6 +94,7 @@ const BROWSER_ACTION_IDS = new Set([
 	"answers-only",
 	"toggle-compose-panel",
 	"toggle-hands-free",
+	"explain-session-state",
 	"progress",
 	"automations",
 	"plans-stories",
