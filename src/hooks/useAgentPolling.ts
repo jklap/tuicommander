@@ -3,6 +3,7 @@ import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
+import { scheduleRemoteAutoClose } from "../stores/remoteAutoClose";
 import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
 import { isTauri, rpc, subscribeEvents, type Unsubscribe } from "../transport";
 import { verifyAndBuildResumeCommand } from "../utils/agentSession";
@@ -252,6 +253,15 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 			terminalsStore.getShellStateRevision(termId) === requested.shellStateRevision
 		) {
 			terminalsStore.update(termId, { shellState: "exited", sessionId: null, agentState: null, backgroundWork: false });
+			// Unlike `session-closed`, this catch-up path has no backend event to
+			// react to — the session is just absent from a fresh snapshot — so
+			// nothing else starts the remote-tab auto-close countdown for it. Without
+			// this call a remote tab exiting while this client wasn't listening (app
+			// was closed/reloading, or an SSE gap) would sit "exited" with no
+			// countdown and no eventual removal — see `scheduleRemoteAutoClose`'s doc
+			// comment, and `agentType` is read fresh from the store since it isn't
+			// touched by the update above.
+			scheduleRemoteAutoClose(termId);
 		}
 	}
 	for (const session of sessions) {

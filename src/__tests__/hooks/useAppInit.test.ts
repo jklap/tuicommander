@@ -3018,6 +3018,50 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("stranded remote-tab self-heal", () => {
+		/**
+		 * A remote tab can already be sitting in the store `shellState: "exited"`
+		 * with no countdown ever having run (e.g. a prior countdown's timer died
+		 * with a page reload before this fix existed) by the time `initApp` runs
+		 * again. When the initial `listActiveSessions` call fails, every pre-init
+		 * terminal is deliberately left untouched (see the comment at that branch
+		 * in useAppInit.ts) rather than pruned — the one path where such a
+		 * terminal can actually survive to reach the stranded-tab sweep instead
+		 * of being wiped outright by the ordinary success-path cleanup.
+		 */
+		it("resumes a countdown for an already-stuck exited remote tab when listActiveSessions fails at startup", async () => {
+			const { REMOTE_TAB_AUTOCLOSE_MS } = await import("../../stores/remoteAutoClose");
+			const id = terminalsStore.add({
+				sessionId: null,
+				fontSize: 14,
+				name: "Stuck Agent",
+				cwd: "/repo",
+				awaitingInput: null,
+				isRemote: true,
+			});
+			terminalsStore.update(id, { shellState: "exited" });
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("backend unreachable")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+
+			expect(terminalsStore.get(id)?.name).toBe(`Stuck Agent (${Math.round(REMOTE_TAB_AUTOCLOSE_MS / 1000)}s)`);
+
+			// Also drains the detached bounded-retry chain (1s+3s+9s, all rejecting
+			// via the same mock) so it settles before the test ends instead of
+			// leaking a pending promise.
+			await vi.advanceTimersByTimeAsync(REMOTE_TAB_AUTOCLOSE_MS - 1);
+			expect(terminalsStore.get(id)).toBeDefined();
+
+			await vi.advanceTimersByTimeAsync(2);
+			expect(terminalsStore.get(id)).toBeUndefined();
+		});
+	});
+
 	describe("close-html-tabs event", () => {
 		function captureCloseHtmlTabs() {
 			const listenMock = vi.mocked(listen);
