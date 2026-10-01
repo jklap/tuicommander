@@ -3679,6 +3679,51 @@ mod tests {
     }
 
     #[test]
+    fn critic3_expand_home_prefix_edges() {
+        // Catches: a drive hidden behind leading separators (`~/\\C:\x`) slipping past the
+        // guard because the trim ran after the check; a multibyte first char panicking the
+        // byte probe; a 2-letter `CD:x` first segment refused as a drive.
+        let home = Path::new("/home/boss");
+        assert_eq!(expand_home_prefix("~/\\C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~//c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("~/C:", home), None);
+        assert_eq!(
+            expand_home_prefix("~/é:x", home).as_deref(),
+            Some("/home/boss/é:x")
+        );
+        assert_eq!(
+            expand_home_prefix("~/CD:x", home).as_deref(),
+            Some("/home/boss/CD:x")
+        );
+        assert_eq!(
+            expand_home_prefix("~/", home).as_deref(),
+            Some("/home/boss/")
+        );
+        assert_eq!(expand_home_prefix("~", home), None);
+        assert_eq!(expand_home_prefix("~user/a", home), None);
+    }
+
+    #[test]
+    fn critic3_markdown_link_home_prefix_with_dot_segments_into_tcc_dir_is_blocked() {
+        // Catches: `~/./Desktop/x.md` or `~//Library/x.md` reaching a TCC dir because the
+        // expansion left a `.`/doubled separator the guard does not normalise.
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/./Desktop/x.md",
+            "~//Library/x.md",
+            "~/%2E/Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_link_resolution_blocks_invalid_percent_encoding() {
         for href in ["file%ZZ.md", "file.md#%ZZ", "file%E0.md"] {
             assert!(matches!(
