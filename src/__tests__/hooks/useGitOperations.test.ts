@@ -3537,6 +3537,87 @@ describe("useGitOperations", () => {
 		});
 	});
 
+	describe("orphan cleanup deletion guard (critic-1188)", () => {
+		const live = (path: string) => ({
+			path,
+			safe: false,
+			reason: "live session: Claude: refactor",
+			live_sessions: [{ session_id: "s1", name: "Claude: refactor" }],
+		});
+		const gitOpsWith = (confirmOrphanCleanup: ReturnType<typeof vi.fn>) =>
+			useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+
+		beforeEach(() => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+		});
+
+		// Catches: closing the worktree's terminals BEFORE the backend guard has accepted the
+		// removal — a session that started after the assessment is killed, then the removal is refused.
+		it("auto mode: does not close terminals of a checkout whose removal the backend refuses", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/late", safe: true }]);
+			mockRepo.removeOrphanWorktree.mockRejectedValue(new Error("live session: Claude: late"));
+			terminalsStore.add(makeTerminal({ name: "Late agent", cwd: "/wt/late" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
+
+		// Catches: widening the Auto-mode review to every unsafe orphan, which would pop a dialog
+		// for dirty checkouts that Auto mode has always skipped silently.
+		it("auto mode: a dirty orphan without a live session stays skipped and opens no dialog", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/dirty", safe: false, reason: "untracked files" }]);
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
+
+			await gitOpsWith(confirmOrphanCleanup).refreshAllBranchStats();
+
+			expect(confirmOrphanCleanup).not.toHaveBeenCalled();
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+		});
+
+		// Catches: a Keep on a live orphan not being remembered, so every refresh poll
+		// re-opens the same review dialog.
+		it("auto mode: a Keep on a live orphan is not asked again on the next refresh", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([live("/wt/busy")]);
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+			const ops = gitOpsWith(confirmOrphanCleanup);
+
+			await ops.refreshAllBranchStats();
+			await ops.refreshAllBranchStats();
+
+			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+		});
+
+		// Catches: the confirmed removal of a live orphan going out as safeOnly=true (the backend
+		// then refuses the very removal the user just approved), or a safe sibling losing its recheck.
+		it("ask mode: after confirm the live orphan is removed unchecked and the safe one rechecked", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/idle", safe: true }, live("/wt/busy")]);
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
+
+			await gitOpsWith(confirmOrphanCleanup).refreshAllBranchStats();
+
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/idle", true);
+		});
+	});
+
 	describe("orphan worktree cleanup", () => {
 		beforeEach(() => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });

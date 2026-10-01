@@ -2031,4 +2031,170 @@ mod tests {
         );
         assert!(worktree.join("after-confirmation.txt").exists());
     }
+    #[cfg(unix)]
+    mod orphan_session_guard {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(state: &AppState, repo: &Path, checkout: &Path) -> Result<(), String> {
+            orphan_cleanup_safety_with_sessions(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+            )
+        }
+
+        // Catches: an equality or exact-match cwd test, so an agent whose shell sits
+        // in a subdirectory of the checkout is not seen and its checkout is removed.
+        #[test]
+        fn refuses_a_session_working_in_a_subdirectory_of_the_checkout() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir(linked.join("src")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.join("src").to_string_lossy());
+
+            let error = guard(&state, repo.path(), &linked).expect_err("live session");
+            assert!(error.contains("live session"), "{error}");
+        }
+
+        // Catches: a string-prefix cwd test, so a session in `wt-2` blocks the
+        // cleanup of `wt` for ever (or, inverted, `wt` hides a session of `wt-2`).
+        #[test]
+        fn ignores_a_sibling_directory_whose_name_extends_the_checkout_name() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "wt");
+            let sibling = repo.path().join("wt-2");
+            fs::create_dir(&sibling).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked).expect("sibling session is not inside the checkout");
+        }
+
+        // Catches: comparing raw cwd text, so a session that entered the checkout
+        // through a symlink is invisible to the guard.
+        #[test]
+        fn refuses_a_session_whose_cwd_reaches_the_checkout_through_a_symlink() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let alias = repo.path().join("alias");
+            std::os::unix::fs::symlink(&linked, &alias).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &alias.to_string_lossy());
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: reading only `cwd`, so a session created for a worktree but with
+        // no OSC 7 cwd report yet does not protect that worktree.
+        #[test]
+        fn falls_back_to_the_session_worktree_when_the_cwd_is_unknown() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            state.session_maps.sessions.get("agent").unwrap().lock().worktree = Some(WorktreeInfo {
+                name: "linked".into(),
+                path: linked.clone(),
+                branch: None,
+                base_repo: repo.path().to_path_buf(),
+            });
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: treating a session with no location as "inside everything", which
+        // would block every orphan cleanup while any such session exists.
+        #[test]
+        fn a_session_with_no_cwd_and_no_worktree_blocks_nothing() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+
+            guard(&state, repo.path(), &linked).expect("no location, no claim on the checkout");
+        }
+
+        // Catches: a dead session left in the registry blocking the cleanup for
+        // ever — the exit path must drop it from what the guard reads.
+        #[test]
+        fn a_session_that_exited_no_longer_blocks_the_cleanup() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+            assert!(guard(&state, repo.path(), &linked).is_err());
+
+            crate::pty::mark_session_exited("agent", &state);
+
+            guard(&state, repo.path(), &linked).expect("exited session is gone");
+        }
+
+        // Catches: one live session flipping the verdict of every orphan in the
+        // repo (a shared flag instead of a per-checkout check).
+        #[test]
+        fn assessment_marks_only_the_orphan_a_session_works_in() {
+            let repo = setup_test_repo();
+            let idle = detached(repo.path(), "idle");
+            let busy = detached(repo.path(), "busy");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &busy.to_string_lossy());
+
+            let rows =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy()).unwrap();
+
+            let row_of = |dir: &Path| {
+                rows.iter()
+                    .find(|row| Path::new(&row.assessment.path).ends_with(dir.file_name().unwrap()))
+                    .expect("orphan listed")
+            };
+            assert!(row_of(&idle).assessment.safe);
+            assert!(row_of(&idle).live_sessions.is_empty());
+            assert!(!row_of(&busy).assessment.safe);
+            assert_eq!(row_of(&busy).live_sessions.len(), 1);
+        }
+
+        // Catches: the live-session reason overwriting the git reason, so a dirty
+        // checkout with a session in it hides the uncommitted work from the dialog.
+        #[test]
+        fn assessment_keeps_the_git_reason_next_to_the_live_session() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::write(linked.join("scratch.txt"), "unsaved").unwrap();
+            let git_reason = tuic_git::worktree::assess_orphan_worktrees(&repo.path().to_string_lossy())
+                .unwrap()
+                .remove(0)
+                .reason
+                .expect("untracked file is unsafe");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+
+            let rows =
+                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy()).unwrap();
+
+            let reason = rows[0].assessment.reason.clone().unwrap();
+            assert!(reason.contains(&git_reason), "{reason}");
+            assert!(reason.contains("live session"), "{reason}");
+        }
+    }
 }
