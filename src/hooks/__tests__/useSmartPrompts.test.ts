@@ -314,7 +314,7 @@ describe("canExecuteInject — idle gate by inject target", () => {
 	});
 
 	it("unset target (auto) with Compose closed resolves to terminal and is gated by a busy agent", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		// ACTIVE has no ref, so isComposeOpen() is unavailable → composeIsOpen defaults to false.
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: undefined }));
@@ -323,7 +323,7 @@ describe("canExecuteInject — idle gate by inject target", () => {
 	});
 
 	it("unset target (auto) with Compose already open resolves to compose and is not gated", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		mockedGetActive.mockReturnValue({
 			id: "t1",
 			sessionId: "s1",
@@ -333,11 +333,11 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: undefined }));
 		expect(result.ok).toBe(true);
-		expect(mockedIsWorking).not.toHaveBeenCalled();
+		expect(mockedIsBusy).not.toHaveBeenCalled();
 	});
 
 	it("compose target with autoExecute=true is gated because it will submit", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "compose", autoExecute: true }));
 		expect(result.ok).toBe(false);
@@ -345,7 +345,7 @@ describe("canExecuteInject — idle gate by inject target", () => {
 	});
 
 	it("terminal target is blocked while the agent is busy", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
 		expect(result.ok).toBe(false);
@@ -353,25 +353,25 @@ describe("canExecuteInject — idle gate by inject target", () => {
 	});
 
 	it("terminal target is allowed when the agent is idle", () => {
-		mockedIsWorking.mockReturnValue(false);
+		mockedIsBusy.mockReturnValue(false);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
 		expect(result.ok).toBe(true);
 	});
 
 	it("terminal target with requiresIdle=false is allowed even while busy", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal", requiresIdle: false }));
 		expect(result.ok).toBe(true);
 	});
 
 	it("terminal target with autoExecute=false is not gated because it only inserts text", () => {
-		mockedIsWorking.mockReturnValue(true);
+		mockedIsBusy.mockReturnValue(true);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal", autoExecute: false }));
 		expect(result.ok).toBe(true);
-		expect(mockedIsWorking).not.toHaveBeenCalled();
+		expect(mockedIsBusy).not.toHaveBeenCalled();
 	});
 
 	it("requires an active terminal with a detected agent regardless of target", () => {
@@ -397,20 +397,19 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal", autoExecute: false }));
 		expect(result.ok).toBe(false);
 		expect(result.reason).toBe("No agent detected in terminal");
-		expect(mockedIsWorking).not.toHaveBeenCalled();
+		expect(mockedIsBusy).not.toHaveBeenCalled();
 	});
 
-	it("gates off terminalsStore.isWorking, not the raw isBusy — a session Claude has declared background work for must also block", () => {
-		// isWorking is the combined signal (debounced busy OR declaredBackgroundWork,
-		// see terminalsStore.isWorking's doc comment); a plain isBusy=false with
-		// isWorking=true (idle shell, declared background work in flight) must still block.
+	it("gates off terminalsStore.isBusy, not isWorking — declared background work alone must not block a prompt into the main agent", () => {
+		// isWorking also folds in declaredBackgroundWork (a background task/teammate
+		// still running). That must not stop the user injecting into the main agent,
+		// which is idle; only the main agent's own busy state gates the prompt.
 		mockedIsBusy.mockReturnValue(false);
 		mockedIsWorking.mockReturnValue(true);
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
-		expect(result.ok).toBe(false);
-		expect(result.reason).toBe("Agent is busy");
-		expect(mockedIsBusy).not.toHaveBeenCalled();
+		expect(result.ok).toBe(true);
+		expect(mockedIsWorking).not.toHaveBeenCalled();
 	});
 });
 
@@ -430,7 +429,6 @@ describe("executeInject — routing by inject target", () => {
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		// resolve_prompt_variables → no variables needed.
 		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
 		mockedProcess.mockResolvedValue(PROCESSED);
@@ -558,7 +556,6 @@ describe("executeHeadless — 'agentType:configName' composite value parsing", (
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		mockedProcess.mockResolvedValue(PROCESSED);
 		mockedInvoke.mockImplementation(async (cmd: string) => {
 			if (cmd === "resolve_prompt_variables") return { vars: {}, needed: [] };
@@ -623,7 +620,6 @@ describe("executeSmartPrompt — variable resolution", () => {
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		mockedGetActive.mockReturnValue(activeTerminal());
 		mockedRepoGetActive.mockReturnValue({ path: "/repo" } as unknown as ReturnType<typeof repositoriesStore.getActive>);
 		mockedRepoGet.mockReturnValue(undefined);
@@ -698,7 +694,6 @@ describe("resolveFrontendVars (via executeSmartPrompt)", () => {
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		mockedRepoGetActive.mockReturnValue({ path: "/repo" } as unknown as ReturnType<typeof repositoriesStore.getActive>);
 		mockedProcess.mockResolvedValue("PROCESSED");
 		mockedInvoke.mockResolvedValue({ vars: {}, needed: ["agent_type", "cwd", "pr_title"] });
@@ -782,7 +777,6 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		mockedProcess.mockResolvedValue("PROCESSED");
 		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
 		mockedGetBranchPrData.mockReturnValue(null);
@@ -916,7 +910,6 @@ describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesT
 
 	beforeEach(() => {
 		mockedIsBusy.mockReturnValue(false);
-		mockedIsWorking.mockReturnValue(false);
 		mockedProcess.mockResolvedValue("PROCESSED");
 		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
 		mockedGetBranchPrData.mockReturnValue(null);
