@@ -667,7 +667,7 @@ fn retire_repaired_phantom_identity(
                 .into_iter()
                 .map(|message| {
                     let message_id = message.id.clone();
-                    let message_timestamp = state.push_agent_inbox(repaired, message);
+                    let message_timestamp = state.store_agent_inbox(repaired, message);
                     (message_id, message_timestamp)
                 })
                 .collect(),
@@ -13134,6 +13134,61 @@ mod tests {
             carried,
             "mail buffered under the phantom must survive the repair"
         );
+    }
+
+    /// Catches: the identity handoff replaying a child's old BLOCKED mail through the
+    /// hold-tracking push, which re-sets a hold the parent already released by
+    /// answering, so the child is kept open for ever.
+    #[cfg(unix)]
+    #[test]
+    fn repairing_an_identity_does_not_resurrect_a_released_blocked_hold() {
+        let state = test_state();
+        let mcp = "mcp-replay-hold";
+        insert_managed_test_session(&state, "pty-replay-hold", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-replay-hold");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        state
+            .session_maps
+            .session_parent
+            .insert("blocked-child".to_string(), TEST_UUID_B.to_string());
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-blocked".to_string(),
+                from_tuic_session: "blocked-child".to_string(),
+                from_name: "child".to_string(),
+                content: "BLOCKED: box down".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+        assert!(state.blocked_children.contains("blocked-child"));
+        // The parent answered through the terminal.
+        state.blocked_children.remove("blocked-child");
+
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-blocked")),
+            "the old mail must still be carried over"
+        );
+        assert!(!state.blocked_children.contains("blocked-child"));
     }
 
     /// A caller that reconnects and registers a NEW uuid arrives with no implicit
