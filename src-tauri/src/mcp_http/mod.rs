@@ -3646,7 +3646,12 @@ mod tests {
             StoryStatus::Done
         );
         assert_eq!(
-            store.transition_history(&story.id).unwrap().last().unwrap().actor,
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .actor,
             StoryTransitionActor::LocalApi
         );
     }

@@ -482,7 +482,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            stories.transition_history(&story_id).unwrap().last().unwrap().actor,
+            stories
+                .transition_history(&story_id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .actor,
             crate::stories::StoryTransitionActor::ManagedSession {
                 session_id: "reviewer".into(),
             }
@@ -1568,7 +1573,13 @@ mod tests {
         let stories = StoryStore::open().unwrap();
         let manual_plan = stories
             .create_plan(NewPlan {
-                project: project.path().canonicalize().unwrap().to_str().unwrap().into(),
+                project: project
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .into(),
                 title: "Manual".into(),
                 source: "manual.md".into(),
             })
@@ -1624,7 +1635,10 @@ mod tests {
         let recovered = opened.snapshot(&run.id).unwrap();
         assert_eq!(recovered.status, RunStatus::Paused);
         let reopened = RunStore::open().unwrap();
-        assert_eq!(reopened.snapshot(&run.id).unwrap().sequence, recovered.sequence);
+        assert_eq!(
+            reopened.snapshot(&run.id).unwrap().sequence,
+            recovered.sequence
+        );
     }
 
     #[test]
