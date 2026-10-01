@@ -3808,6 +3808,16 @@ pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
         .build()
 }
 
+/// A full review-thread walk of one PR, valid for the PR state it was taken at.
+#[derive(Clone)]
+pub(crate) struct SettledReviewThreads {
+    pub(crate) updated_at: String,
+    pub(crate) head_ref_oid: String,
+    pub(crate) unresolved: u32,
+    pub(crate) complete: bool,
+    pub(crate) walked_at: Instant,
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
@@ -3823,6 +3833,10 @@ pub(crate) struct GitCacheState {
     /// Excluded from batch queries until the cooldown expires (1 hour).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
+    /// "owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
+    /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
+    pub(crate) settled_review_threads: DashMap<String, SettledReviewThreads>,
     /// Count of entries evicted by TTL expiry (watcher-miss observability).
     /// Shared across all git caches; surfaced in the cpu_watchdog snapshot.
     pub(crate) ttl_fallbacks: Arc<AtomicU64>,
@@ -3840,6 +3854,7 @@ impl GitCacheState {
             git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
     }
