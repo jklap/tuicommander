@@ -40,6 +40,24 @@ describe("native notification delivery", () => {
 		}
 	});
 
+	// Catches: a reminder for a background tab being swallowed by the focus guard.
+	it("notifies while focused when the caller sets ignoreFocus", async () => {
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		try {
+			const { showNativeNotice } = await import("../services/nativeNotifications");
+			await showNativeNotice({
+				title: "Agent needs input",
+				body: "Deploy Agent",
+				key: "reminder:question:term-1",
+				target: { kind: "terminal", id: "term-1" },
+				ignoreFocus: true,
+			});
+			expect(send).toHaveBeenCalledWith({ title: "Agent needs input", body: "Deploy Agent" });
+		} finally {
+			focus.mockRestore();
+		}
+	});
+
 	it("does not notify if TUIC gains focus while permission is pending", async () => {
 		let focused = false;
 		const focus = vi.spyOn(document, "hasFocus").mockImplementation(() => focused);

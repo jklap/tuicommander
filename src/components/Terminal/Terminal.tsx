@@ -29,6 +29,7 @@ import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
+import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
 import { TerminalSearch } from "./TerminalSearch";
 import {
@@ -276,6 +277,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		}
 	});
+
+	trackQuestionReminder(props.id);
 
 	// Original tab name before any OSC title overwrote it
 	let originalName: string | null = null;
