@@ -124,6 +124,7 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
             agent_type,
             display_name,
             parent_session,
+            is_remote,
         } => {
             serde_json::json!({
                 "session_id": session_id,
@@ -132,6 +133,7 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "agent_type": agent_type,
                 "display_name": display_name,
                 "parent_session": parent_session,
+                "is_remote": is_remote,
             })
         }
         AppEvent::SessionClosed {

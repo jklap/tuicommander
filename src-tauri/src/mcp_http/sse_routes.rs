@@ -568,6 +568,7 @@ mod tests {
             agent_type: Some("codex".into()),
             display_name: Some("linux-primary".into()),
             parent_session: Some("tuic-parent".into()),
+            is_remote: true,
         };
 
         assert_eq!(event_type_name(&event), "session-created");
@@ -578,6 +579,23 @@ mod tests {
         assert_eq!(body["display_name"], "linux-primary");
         // Browser clients tag sub-agent tabs from this field, as the desktop does.
         assert_eq!(body["parent_session"], "tuic-parent");
+    }
+
+    #[test]
+    fn session_created_payload_carries_is_remote() {
+        for is_remote in [true, false] {
+            let event = AppEvent::SessionCreated {
+                session_id: "session-1".into(),
+                tuic_session: None,
+                cwd: None,
+                agent_type: None,
+                display_name: None,
+                parent_session: None,
+                is_remote,
+            };
+            let body = event_payload(&event);
+            assert_eq!(body["is_remote"], is_remote, "body: {body}");
+        }
     }
 
     #[test]
