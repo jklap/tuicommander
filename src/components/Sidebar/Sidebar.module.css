@@ -75,6 +75,7 @@
     margin-bottom: 6px;
   }
 
+  .sidebar[data-density="rich"] .branchMoreBtn,
   .sidebar[data-density="rich"] .branchAddBtn,
   .sidebar[data-density="rich"] .branchRemoveBtn {
     width: 36px;
@@ -1181,13 +1182,17 @@
 /* No hover on touch: the actions (+ with its long-press agent list) stay visible. */
 @media (hover: none) {
   .branchActions {
-    max-width: 44px;
+    max-width: 68px;
     opacity: 1;
     pointer-events: auto;
   }
 
   .sidebar[data-density="rich"] .branchActions {
-    max-width: 84px;
+    max-width: 100px;
+  }
+
+  .branchActions .branchMoreBtn {
+    display: flex;
   }
 
   /* Rich rows wrap: the buttons stay on the name line, where only the branch
@@ -1208,6 +1213,20 @@
     width: 28px;
     height: 28px;
   }
+}
+
+.branchMoreBtn {
+  display: none;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
 }
 
 .branchAddBtn,
@@ -1497,6 +1516,31 @@
   .repoHeader:hover .repoActionsWithBadge .repoActionBtn {
     opacity: 1;
     pointer-events: auto;
+  }
+}
+
+/* No hover on touch: ⋯ and + are always visible. The cluster joins the header's
+   flex flow (name, badge, actions, chevron) instead of floating over it, so the
+   repo name gives way and is never covered. */
+@media (hover: none) {
+  .repoActions {
+    position: static;
+    transform: none;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+
+  .repoActionsWithBadge .repoActionBtn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar[data-density="rich"] .repoActionBtn {
+    width: 36px;
+    height: 36px;
   }
 }
 

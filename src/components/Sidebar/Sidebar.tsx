@@ -50,6 +50,7 @@ export interface SidebarProps {
 	onRepoSettings: (repoPath: string) => void;
 	onRemoveRepo: (repoPath: string) => void;
 	onOpenSettings: () => void;
+	onOpenRemoteMachines?: () => void;
 	onOpenHelp?: () => void;
 	onBackgroundGit?: (repoPath: string, op: string, args: string[]) => void;
 	runningGitOps?: Set<string>;
@@ -354,6 +355,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 					props.onBackgroundGit ? (worktreePath) => props.onBackgroundGit!(worktreePath, "push", ["push"]) : undefined
 				}
 				onSettings={() => props.onRepoSettings(repo.path)}
+				onOpenRemoteMachines={props.onOpenRemoteMachines}
 				onRemove={() => props.onRemoveRepo(repo.path)}
 				onToggle={() => repositoriesStore.toggleExpanded(repo.path)}
 				onToggleCollapsed={() => repositoriesStore.toggleCollapsed(repo.path)}

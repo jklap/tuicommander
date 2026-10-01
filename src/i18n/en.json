@@ -906,6 +906,7 @@
 	"sidebar.removeWorktree": "Remove worktree",
 	"sidebar.removingWorktree": "Removing…",
 	"sidebar.repoOptions": "Repository options",
+	"sidebar.branchOptions": "Branch options",
 	"sidebar.settings": "Settings",
 	"sidebar.showDismissed": "Show",
 	"sidebar.staleTempRepos": "Stale repositories awaiting repair",
