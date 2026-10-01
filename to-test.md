@@ -35,6 +35,10 @@
 
 - [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Restart-of-make-dev item; instance is a headless tuic-remote of HEAD bef15c20f. Backend crate-split behaviour exercised across r0 items (sessions, worktrees, git); UI part needs desktop build.)_
 
+## Ego notice cards (1075-05dc)
+
+- [ ] After the next desktop rebuild, with an ego build that publishes notices (story 171-cb51), open AI Chat on an idle session and let a worker finish so ego publishes a notice between turns. A bordered card appears in the transcript with a title, the notice text and one button, apart from the agent's last reply. Click **Open result**: the result file opens in a TUIC tab. A normal reply without `_meta` still renders as plain assistant text. For `answer` and `approve` cards the button only scrolls to the open question or permission below. Check that look and that behaviour. _(Component and store tests pass; no live ego session was available.)_
+
 <!-- tweak-comments v1: inline review comments.
      Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP
      comment body (free text, may span multiple lines)

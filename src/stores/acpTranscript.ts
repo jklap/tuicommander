@@ -26,12 +26,26 @@ import type {
  * that changed nothing a person can see.
  */
 
+/**
+ * What a card's button does, as ego's notice carries it in `_meta.ego.action`.
+ *
+ * Mirrors `NoticeAction` in ego-acp `project.rs`: the tag is `kind`, the payload
+ * keys are snake_case on the wire. An action this client does not know is
+ * dropped, leaving a card with text and no button.
+ */
+export type AcpNoticeAction =
+	| { kind: "open_result"; path: string }
+	| { kind: "answer"; questionId: string }
+	| { kind: "approve"; requestId: string };
+
 export type AcpTranscriptEntry =
 	| { id: string; kind: "user"; text: string }
 	| { id: string; kind: "agent"; text: string }
 	| { id: string; kind: "thought"; text: string }
 	| { id: string; kind: "tool"; call: AcpToolCall }
 	| { id: string; kind: "plan"; entries: AcpPlanEntry[] }
+	/** An ego notice (`_meta.ego.salience = "card"`), shown apart from the agent's prose. */
+	| { id: string; kind: "notice"; text: string; action?: AcpNoticeAction }
 	/** A turn that ended as something other than a finished answer. */
 	| { id: string; kind: "settled"; stopReason: string }
 	| { id: string; kind: "failed"; message: string };
@@ -66,6 +80,24 @@ function textOf(content: unknown): string {
 		return String((content as { text?: unknown }).text ?? "");
 	}
 	return "";
+}
+
+function noticeAction(raw: unknown): AcpNoticeAction | undefined {
+	const action = raw as { kind?: unknown; path?: unknown; question_id?: unknown; request_id?: unknown } | null;
+	if (!action || typeof action !== "object") return undefined;
+	if (action.kind === "open_result" && typeof action.path === "string" && action.path)
+		return { kind: "open_result", path: action.path };
+	if (action.kind === "answer" && typeof action.question_id === "string" && action.question_id)
+		return { kind: "answer", questionId: action.question_id };
+	if (action.kind === "approve" && typeof action.request_id === "string" && action.request_id)
+		return { kind: "approve", requestId: action.request_id };
+	return undefined;
+}
+
+/** The `_meta.ego` object of an update, when it has one. */
+function egoMeta(record: Record<string, unknown>): { salience?: unknown; action?: unknown } | undefined {
+	const ego = (record._meta as { ego?: unknown } | null | undefined)?.ego;
+	return ego && typeof ego === "object" ? (ego as { salience?: unknown; action?: unknown }) : undefined;
 }
 
 /**
@@ -205,11 +237,23 @@ function reduceUpdate(
 		case "user_message_chunk":
 			appendUserChunk(draft, sessionId, entries, textOf(record.content));
 			break;
-		case "agent_message_chunk":
+		case "agent_message_chunk": {
+			const ego = egoMeta(record);
+			if (ego?.salience === "card") {
+				// A card is one whole message. Chunk-joining it would glue it
+				// onto the agent's last reply, and the next reply onto it.
+				const cardText = textOf(record.content);
+				if (cardText) {
+					entries.push({ id: `e${draft.nextId}`, kind: "notice", text: cardText, action: noticeAction(ego.action) });
+					draft.nextId += 1;
+				}
+				break;
+			}
 			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "agent", textOf(record.content));
 			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
+		}
 		case "agent_thought_chunk":
 			delete draft.pendingUserEcho[sessionId];
 			appendChunk(draft, entries, "thought", textOf(record.content));
