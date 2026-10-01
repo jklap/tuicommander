@@ -19,7 +19,7 @@ import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { safeUnlisten } from "../../utils/safeUnlisten";
-import { resumeTerminal } from "../../utils/suspendTerminal";
+import { isSuspendingOrSuspended, resumeTerminal } from "../../utils/suspendTerminal";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
@@ -614,7 +614,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			() => {
 				if (disposed) return;
 				// Suspend closes the PTY on purpose and keeps the tab as it is.
-				if (terminalsStore.get(props.id)?.suspended) return;
+				if (isSuspendingOrSuspended(props.id)) return;
 				// Guard: terminal may have been removed from the store already
 				// (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
 				const stillExists = terminalsStore.get(props.id);

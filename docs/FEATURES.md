@@ -246,10 +246,11 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 A terminal tab can be suspended from its context menu (**Suspend Tab**) or with MCP `session action=suspend`. The PTY and its agent end, so memory and CPU are released, while the tab stays restorable exactly like a tab after a TUICommander restart.
 
 - **Kept on the tab** — cwd, worktree, alias, `tuic_session`, agent type, agent session id and launch command. The tab shows a `zz` badge and a **Suspended** notice with a **Resume** button.
-- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell.
+- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell. The command is typed automatically at the first idle prompt, with no restart banner: clicking Resume is the confirmation, and the banner would ask for a second click.
 - **Persistence** — `suspended` is stored in the tab's `savedTerminals` record, so a restart restores the tab suspended (a plain shell tab too) and never resumes it by itself.
-- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted.
-- **Event** — `session-suspend-requested` (`{ session_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
+- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted, and also for a session that already exited.
+- **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
+- **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
 
 ---
 

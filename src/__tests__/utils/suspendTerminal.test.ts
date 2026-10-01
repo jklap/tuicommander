@@ -139,7 +139,7 @@ describe("suspendTerminal", () => {
 	});
 
 	// A failed close must not leave a tab marked suspended while its process still runs.
-	it("reverts the suspended flag when closing the session fails", async () => {
+	it("never marks the tab suspended when closing the session fails", async () => {
 		await testInScope(async () => {
 			const id = addAgentTab();
 			mockRpc.mockRejectedValue(new Error("boom"));
@@ -159,7 +159,7 @@ describe("suspendTerminal", () => {
 
 			expect(await suspendTerminal(id)).toEqual({ ok: true });
 			expect(mockVerifyResume).not.toHaveBeenCalled();
-			expect(terminalsStore.get(id)?.cwd).toBe("/Gits/alpha");
+			expect(terminalsStore.get(id)).toMatchObject({ sessionId: null, suspended: true });
 		});
 	});
 });
@@ -169,9 +169,11 @@ describe("resumeTerminal", () => {
 		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
 	});
 
-	// "Resume uses the restart path": the command comes from the function the restore
-	// path uses, and it is typed on the new shell's first idle (pendingInitCommand).
-	it("clears the flag and queues the restart-path resume command for the new shell", async () => {
+	// The command comes from verifyAndBuildResumeCommand, the function the restore path uses.
+	// Resume queues it as pendingInitCommand (typed at the new shell's first idle, no banner)
+	// where a restart shows a banner (pendingResumeCommand): clicking Resume is the confirmation.
+	// That it is typed exactly once is asserted in Terminal-suspend-resume.test.tsx.
+	it("clears the flag and queues the resume command for the new shell", async () => {
 		await testInScope(async () => {
 			const id = addAgentTab({ suspended: true, sessionId: null });
 

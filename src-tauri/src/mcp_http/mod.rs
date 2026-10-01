@@ -1335,6 +1335,9 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
+        // The tab's verdict on a `session action=suspend` request (browser/PWA half
+        // of the desktop `session_suspend_response` command).
+        .route("/mcp/suspend-response", post(session_suspend_response_http))
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1359,6 +1362,22 @@ async fn mcp_confirm_response_http(
     Json(body): Json<McpConfirmResponseBody>,
 ) -> Json<serde_json::Value> {
     resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// Body of `POST /mcp/suspend-response`.
+#[derive(serde::Deserialize)]
+struct SessionSuspendResponseBody {
+    request_id: String,
+    ok: bool,
+    reason: Option<String>,
+}
+
+async fn session_suspend_response_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SessionSuspendResponseBody>,
+) -> Json<serde_json::Value> {
+    mcp_transport::resolve_session_suspend(&state, &body.request_id, body.ok, body.reason);
     Json(serde_json::json!({ "ok": true }))
 }
 

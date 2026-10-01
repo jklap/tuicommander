@@ -412,8 +412,11 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         } => {
             serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
-        AppEvent::SessionSuspendRequested { session_id } => {
-            serde_json::json!({ "session_id": session_id })
+        AppEvent::SessionSuspendRequested {
+            session_id,
+            request_id,
+        } => {
+            serde_json::json!({ "session_id": session_id, "request_id": request_id })
         }
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })
