@@ -2059,7 +2059,11 @@ fn resolve_markdown_link_with_home(
         };
     }
     if let (Some(rest), Some(home)) = (path.strip_prefix("~/"), home) {
-        path = home.join(rest).to_string_lossy().into_owned();
+        // `~//x` must stay under home: joining an absolute rest would replace it.
+        path = home
+            .join(rest.trim_start_matches(['/', '\\']))
+            .to_string_lossy()
+            .into_owned();
     }
     let mut line = anchor
         .strip_prefix('L')
