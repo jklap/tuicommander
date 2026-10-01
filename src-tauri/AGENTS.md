@@ -132,7 +132,11 @@ previously-built worktree but fail in a fresh one:
 
 1. **Frontend `dist/` stub** — `src-tauri/src/mcp_http/static_files.rs` does
    `include_dir!("$CARGO_MANIFEST_DIR/../dist")` at compile time. Without it: `mkdir -p dist &&
-   echo '<html></html>' > dist/index.html` (from the repo root).
+   echo '<html></html>' > dist/index.html` (from the repo root). **Also create `dist/mobile.html`**
+   the same way (`echo '<html></html>' > dist/mobile.html`) — `static_files.rs`'s `spa_fallback_file()`
+   maps every `/mobile`/`/mobile/*` path to `mobile.html` specifically, not `index.html`, so without
+   it `mcp_http::tests::unknown_api_path_404s_while_spa_deep_links_still_load` fails on a fresh
+   worktree's first `cargo nextest run` with a real 404 where the test expects the SPA shell.
 2. **Sidecar binary placeholders** — `tauri.conf.json`'s `externalBin` lists `binaries/tuic-bridge`,
    `binaries/tuic`, `binaries/tuic-hook`; the build script checks these paths exist for the host
    target triple. None of them are tracked in git (`src-tauri/binaries/*` is gitignored). Empty
