@@ -261,6 +261,20 @@ describe("initApp", () => {
 		expect(editorTabsStore.getActive()).toBeUndefined();
 	});
 
+	// Catches: html/htm moved to the preview tab by the image routing, losing its pinned flag.
+	it("keeps tuic://open of an html file off the preview tab", async () => {
+		let uiTabCallback: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		uiTabCallback!({
+			payload: { id: "page", title: "Page", html: "", pinned: true, url: "tuic://open//Users/boss/Gits/.tmp/p.html", focus: true },
+		});
+		expect(Object.values(mdTabsStore.state.tabs).some((t) => t.type === "html-preview")).toBe(false);
+	});
+
 	it.each([true, false])("binds an external MCP file to its caller repo with focus=%s", async (focus) => {
 		let uiTabCallback:
 			| ((event: {

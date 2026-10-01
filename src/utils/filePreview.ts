@@ -7,21 +7,13 @@ import { locateFile } from "../stores/repositories";
 export type FileOpenTarget = "markdown" | "preview" | "editor";
 
 const MD_EXTS = new Set(["md", "mdx"]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "ico", "bmp"]);
 const PREVIEW_EXTS = new Set([
+	...IMAGE_EXTS,
 	// Documents
 	"pdf",
 	"html",
 	"htm",
-	// Images
-	"png",
-	"jpg",
-	"jpeg",
-	"gif",
-	"webp",
-	"svg",
-	"avif",
-	"ico",
-	"bmp",
 	// Video
 	"mp4",
 	"webm",
@@ -39,6 +31,11 @@ const PREVIEW_EXTS = new Set([
 function extOf(filePath: string): string {
 	const dot = filePath.lastIndexOf(".");
 	return dot === -1 ? "" : filePath.slice(dot + 1).toLowerCase();
+}
+
+/** True for image files, which the preview tab serves through the asset protocol. */
+export function isImageFile(filePath: string): boolean {
+	return IMAGE_EXTS.has(extOf(filePath));
 }
 
 /** Classify how a file should be opened based on its extension. */
