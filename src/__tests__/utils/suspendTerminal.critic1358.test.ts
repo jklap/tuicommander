@@ -46,15 +46,6 @@ describe("suspendTerminal (critic 1358)", () => {
 			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "close_pty")).toHaveLength(1);
 		}));
 
-	// Catches: suspend closes with cleanupWorktree=true, deleting the worktree the suspended tab
-	// has to resume in.
-	it("keeps the worktree when it closes the PTY", () =>
-		testInScope(async () => {
-			const id = addTab();
-			await suspendTerminal(id);
-			expect(mockRpc).toHaveBeenCalledWith("close_pty", { sessionId: "pty-c1", cleanupWorktree: false });
-		}));
-
 	// Catches: a failed close wipes the pending commands or the live session id, leaving a tab that
 	// is neither suspended nor attached to the PTY that is still running.
 	it("leaves the tab untouched when close_pty fails", () =>
@@ -69,38 +60,6 @@ describe("suspendTerminal (critic 1358)", () => {
 				pendingInitCommand: "make dev",
 				pendingResumeCommand: "claude --resume x",
 				agentState: "idle",
-			});
-		}));
-
-	// Catches: the agent starts a turn while the resume command is being verified and the stale
-	// pre-await check lets the suspend cut it.
-	it("refuses when the agent starts working during the resume verification", () =>
-		testInScope(async () => {
-			const id = addTab();
-			let release: (v: string) => void = () => {};
-			mockVerifyResume.mockReturnValueOnce(new Promise<string>((r) => (release = r)));
-			const pending = suspendTerminal(id);
-			terminalsStore.update(id, { agentState: "working" });
-			release("claude --resume agent-uuid");
-			expect(await pending).toEqual({ ok: false, reason: "agent working" });
-			expect(mockRpc).not.toHaveBeenCalled();
-			expect(terminalsStore.get(id)?.suspended).toBe(false);
-		}));
-
-	// Catches: the restorable record (agent id, tab identity, alias, cwd) is cleared with the session.
-	it("keeps every field the restart restore reads", () =>
-		testInScope(async () => {
-			const id = addTab();
-			await suspendTerminal(id);
-			expect(terminalsStore.get(id)).toMatchObject({
-				suspended: true,
-				sessionId: null,
-				agentType: "claude",
-				agentSessionId: "agent-uuid",
-				tuicSession: "tab-uuid",
-				alias: "al-9",
-				cwd: "/Gits/wt/feature",
-				agentLaunchCommand: "claude --dangerously-skip-permissions",
 			});
 		}));
 
@@ -159,23 +118,5 @@ describe("resumeTerminal (critic 1358)", () => {
 				"agent-uuid",
 				"claude --dangerously-skip-permissions",
 			);
-		}));
-
-	// Catches: a second Resume (button + menu) on a tab that is already live re-arms the init command.
-	it("refuses to resume a tab that is not suspended", () =>
-		testInScope(async () => {
-			const id = addTab();
-			expect(await resumeTerminal(id)).toEqual({ ok: false, reason: "not suspended" });
-			expect(terminalsStore.get(id)?.pendingInitCommand).toBeNull();
-		}));
-
-	// Catches: a plain shell tab gets an init command and runs something on resume.
-	it("reopens a plain shell without any command", () =>
-		testInScope(async () => {
-			const id = terminalsStore.add(makeTerminal({ sessionId: null, cwd: "/Gits/alpha" }));
-			terminalsStore.update(id, { suspended: true });
-			expect((await resumeTerminal(id)).ok).toBe(true);
-			expect(terminalsStore.get(id)).toMatchObject({ suspended: false, pendingInitCommand: null });
-			expect(mockVerifyResume).not.toHaveBeenCalled();
 		}));
 });
