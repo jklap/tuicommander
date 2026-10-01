@@ -13,10 +13,8 @@ describe("tauri.conf.json assetProtocol scope", () => {
 		expect(Array.isArray(scope)).toBe(true);
 	});
 
-	// Catches: ~/Gits/.tmp (Boss digests, screenshots) 403ing because `/**` cannot match `.tmp`.
-	it("allows the Gits .tmp dot-directories explicitly", () => {
-		expect(scope).toContain("$HOME/Gits/**/.tmp/**");
-	});
+	// Real glob matching (~/Gits/.tmp served, other dot paths denied) is covered by
+	// src-tauri/tests/asset_scope_glob.rs.
 
 	// Catches: a broad dot-directory allow slipping in next to the .tmp one.
 	it("names no other dot-directory (so $HOME/.ssh stays out of scope)", () => {
