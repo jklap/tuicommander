@@ -23,7 +23,8 @@ describe("classifyDiffFile", () => {
 		const patterns = parseLinguistGenerated(
 			"# c\n*.gen.ts linguist-generated\nsrc/schema/** linguist-generated=true\n*.md text\nkeep.ts -linguist-generated\n",
 		);
-		expect(patterns).toEqual(["*.gen.ts", "src/schema/**"]);
+		// The later unset line is kept as a `!` override: last matching line wins.
+		expect(patterns).toEqual(["*.gen.ts", "src/schema/**", "!keep.ts"]);
 		expect(classifyDiffFile("a/b/x.gen.ts", patterns)).toBe("generated");
 		expect(classifyDiffFile("src/schema/deep/x.ts", patterns)).toBe("generated");
 		expect(classifyDiffFile("keep.ts", patterns)).toBeNull();
