@@ -7,6 +7,15 @@ import { type RepositoryState, repositoriesStore } from "../../stores/repositori
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
+/** The backend's removal verdict for one detached checkout. `live_sessions` lists the sessions
+ *  still working inside it; a checkout with any is never `safe`. */
+export interface OrphanAssessment {
+	path: string;
+	safe: boolean;
+	reason?: string;
+	live_sessions?: Array<{ session_id: string; name: string }>;
+}
+
 interface WorkspaceLifecycleResponse {
 	dirty_files: number | null;
 	commit_status: import("../../stores/workspaceIdentity").WorkspaceCommitStatus;
@@ -40,7 +49,7 @@ interface RepositoryRefreshCoordinatorDeps {
 			workspace_statuses: Record<string, WorkspaceLifecycleResponse>;
 		}>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		assessOrphanCleanup: (repoPath: string) => Promise<Array<{ path: string; safe: boolean; reason?: string }>>;
+		assessOrphanCleanup: (repoPath: string) => Promise<OrphanAssessment[]>;
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
 		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
@@ -566,7 +575,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
 		if (orphanCleanup === "off") return;
 
-		let assessments: Array<{ path: string; safe: boolean; reason?: string }>;
+		let assessments: OrphanAssessment[];
 		try {
 			assessments = await deps.repo.assessOrphanCleanup(repoPath);
 		} catch {
@@ -574,6 +583,9 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 		if (assessments.length === 0) return;
 
+		// A checkout a session still works in is never removed unattended: it waits
+		// for the review below, in both modes.
+		let reviewable = assessments;
 		if (orphanCleanup === "on") {
 			// Auto-remove only the worktrees the backend classified as safe.
 			let removed = 0;
@@ -591,13 +603,13 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 					}),
 			);
 			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
-			return;
+			reviewable = assessments.filter((entry) => (entry.live_sessions?.length ?? 0) > 0);
 		}
 
-		// orphanCleanup === "ask"
+		// Ask flow (orphanCleanup === "ask", or "on" with live sessions to review).
 		// Skip orphans the user already chose to keep — otherwise the dialog re-fires
 		// on every refresh until the underlying worktree state changes. (#65)
-		const pending = assessments.filter((entry) => !keptOrphans.has(entry.path));
+		const pending = reviewable.filter((entry) => !keptOrphans.has(entry.path));
 		if (pending.length === 0) return;
 
 		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes

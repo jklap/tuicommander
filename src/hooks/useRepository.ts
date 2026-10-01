@@ -3,6 +3,7 @@ import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
+import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
 // ---------------------------------------------------------------------------
 // TCC (macOS permission) error detection — global, shown once per session
@@ -422,9 +423,7 @@ export function useRepository() {
 		}
 	}
 
-	async function assessOrphanCleanup(
-		repoPath: string,
-	): Promise<Array<{ path: string; safe: boolean; reason?: string }>> {
+	async function assessOrphanCleanup(repoPath: string): Promise<OrphanAssessment[]> {
 		return await invoke("assess_orphan_cleanup", { repoPath });
 	}
 

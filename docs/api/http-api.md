@@ -1032,9 +1032,11 @@ GET /repo/orphan-worktrees?repoPath=/path/to/repo
 Returns list of worktree directory paths that are in detached HEAD state (their branch was deleted).
 
 `GET /repo/orphan-cleanup-assessment?repoPath=/path/to/repo` returns each orphan's
-`{ path, safe, reason? }`. A checkout is safe for automatic removal only when it
-has no tracked or untracked changes and its HEAD is reachable from a local or
-remote branch. Ignored files do not make it dirty. Assessment failures are
+`{ path, safe, reason?, live_sessions? }`. A checkout is safe for automatic removal only when it
+has no tracked or untracked changes, its HEAD is reachable from a local or
+remote branch, and no live session has its cwd inside it. `live_sessions`
+(`[{ session_id, name }]`, omitted when empty) names those sessions and `reason`
+repeats them. Ignored files do not make it dirty. Assessment failures are
 unsafe.
 
 While the Ask dialog is open, `POST /repo/orphan-cleanup/begin` with
@@ -1042,7 +1044,7 @@ While the Ask dialog is open, `POST /repo/orphan-cleanup/begin` with
 `GET /repo/orphan-cleanup/pending?repoPath=...` returns its answer (`true` for
 remove, `false` for keep, or `null` while unanswered).
 `POST /repo/orphan-cleanup/answer` with `{ "repoPath": "...", "decision": "remove" }`
-answers it; remove rechecks every path server-side and refuses unsafe or stale
+answers it; remove rechecks every path server-side and refuses unsafe (including live-session) or stale
 worktrees. `POST /repo/orphan-cleanup/clear` with `{ "repoPath": "..." }` clears
 the request when the dialog closes. MCP `repo action=orphan_cleanup_answer`
 uses the same answer operation with `path` and `decision=remove|keep`.
@@ -1056,7 +1058,7 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree", "safeOnly": true }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status and branch reachability immediately before removal.
+Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment.
 
 ### Merge PR via GitHub
 

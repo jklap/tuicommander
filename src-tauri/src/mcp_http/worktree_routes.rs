@@ -360,7 +360,10 @@ pub(super) async fn detect_orphan_worktrees_http(Query(q): Query<OptionalRepoQue
     json_result(crate::worktree::detect_orphan_worktrees(repo_path).await)
 }
 
-pub(super) async fn assess_orphan_cleanup_http(Query(q): Query<OptionalRepoQuery>) -> Response {
+pub(super) async fn assess_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<OptionalRepoQuery>,
+) -> Response {
     let repo_path = match q.repo_path {
         Some(path) if !path.is_empty() => path,
         _ => {
@@ -374,7 +377,7 @@ pub(super) async fn assess_orphan_cleanup_http(Query(q): Query<OptionalRepoQuery
     if let Err(error) = validate_repo_path(&repo_path) {
         return error.into_response();
     }
-    json_result(crate::worktree::assess_orphan_cleanup(repo_path).await)
+    json_result(crate::worktree::assess_orphan_cleanup_internal(state, repo_path).await)
 }
 
 pub(super) async fn begin_orphan_cleanup_http(
@@ -477,10 +480,15 @@ pub(super) async fn remove_orphan_worktree_http(
     let repo_path = body.repo_path.clone();
     let worktree_path = body.worktree_path.clone();
     let safe_only = body.safe_only;
+    let guard_state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
         if safe_only {
-            tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
+            crate::worktree::orphan_cleanup_safety_with_sessions(
+                &guard_state,
+                &repo_path,
+                &worktree_path,
+            )?;
         }
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)

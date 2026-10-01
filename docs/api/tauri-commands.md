@@ -217,7 +217,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_local_branches` | `path` | `Vec<String>` | List local branches |
 | `checkout_remote_branch` | `repo_path, branch_name` | `()` | Check out a remote-only branch as a new local tracking branch |
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
-| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason? }>` | Classify every orphan for automatic removal using tracked/untracked status and branch reachability. |
+| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason?, live_sessions? }>` | Classify every orphan for automatic removal using tracked/untracked status, branch reachability and live sessions in the checkout. |
 | `begin_orphan_cleanup` | `repo_path, paths` | `()` | Register the open Ask dialog for an agent answer. |
 | `pending_orphan_cleanup_answer` | `repo_path` | `bool?` | Read the pending answer, or `null` while unanswered. |
 | `clear_orphan_cleanup` | `repo_path` | `()` | Clear the pending answer when the dialog closes. |

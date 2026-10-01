@@ -3556,6 +3556,67 @@ describe("useGitOperations", () => {
 			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
 		});
 
+		// Catches: Auto mode closing the terminals of and removing a clean detached
+		// checkout while an agent session still works in it.
+		it("holds a live-session orphan for review instead of auto-removing it (orphanCleanup=on)", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+			const onGitOps = useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			const live = {
+				path: "/wt/busy",
+				safe: false,
+				reason: "live session: Claude: refactor",
+				live_sessions: [{ session_id: "s1", name: "Claude: refactor" }],
+			};
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/idle", safe: true }, live]);
+			terminalsStore.add(makeTerminal({ name: "Busy", cwd: "/wt/busy" }));
+
+			await onGitOps.refreshAllBranchStats();
+
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledTimes(1);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/idle", true);
+			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [live], 10);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
+
+		// Catches: the confirmation listing paths only, so the user approves removal
+		// without learning an agent is running there.
+		it("passes the live session to the confirmation and removes after approval (orphanCleanup=ask)", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
+			const askGitOps = useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+			const live = {
+				path: "/wt/busy",
+				safe: false,
+				reason: "live session: Claude: refactor",
+				live_sessions: [{ session_id: "s1", name: "Claude: refactor" }],
+			};
+			mockRepo.assessOrphanCleanup.mockResolvedValue([live]);
+
+			await askGitOps.refreshAllBranchStats();
+
+			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [live], 10);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false);
+		});
+
 		it("auto-removes orphans silently when orphanCleanup=on", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
