@@ -20031,3 +20031,191 @@ fn placeholder_probe_counts_non_empty_rows_not_screen_rows() {
     let state = codex_state_showing("crit-edge-out", &outside);
     assert!(!composer_retains_text(&state, "crit-edge-out", "brief"));
 }
+
+// --- critic-1299: attacks on the OpenCode --mini status-row detector. A false Ready
+// feeds auto-standby (SIGSTOP) and the queue drain, so every row below is a live turn
+// or a screen that must not be read as idle.
+
+fn opencode_mini_rows(last: &str) -> Vec<String> {
+    vec![
+        "  I will run the build now.".to_string(),
+        last.to_string(),
+        String::new(),
+    ]
+}
+
+fn assert_opencode_mini_not_ready(last: &str) {
+    assert_ne!(
+        detect_agent_screen_activity(Some("opencode"), &opencode_mini_rows(last)),
+        AgentScreenActivity::Ready,
+        "last painted row {last:?} must not read as an idle OpenCode"
+    );
+}
+
+/// Catches: a label made only of `-`/`_` reads as an agent label, so a diff header or
+/// markdown rule printed by a tool mid-turn flips the session to Ready.
+#[test]
+fn opencode_mini_dash_run_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("--- a/src/lib.rs");
+    assert_opencode_mini_not_ready("---");
+    assert_opencode_mini_not_ready("___");
+}
+
+/// Catches: a digits-only first token satisfies the label rule, so tool output such as a
+/// match count reads as an idle status row.
+#[test]
+fn opencode_mini_numeric_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("1234 files matched");
+    assert_opencode_mini_not_ready("42");
+}
+
+/// Catches: any uppercase first word of the last painted row (test runner `PASS`, `OK`,
+/// `NOTE`) is taken for the agent label while the status row is not painted.
+#[test]
+fn opencode_mini_uppercase_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("PASS src/foo.test.ts");
+    assert_opencode_mini_not_ready("OK");
+    assert_opencode_mini_not_ready("NOTE remember to rebase");
+}
+
+/// Catches: at very narrow widths `esc interrupt` is cut mid-word, the contains check
+/// misses it and a running turn reads Ready.
+#[test]
+fn opencode_mini_truncated_interrupt_hint_is_not_ready() {
+    assert_opencode_mini_not_ready(
+        " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc inte",
+    );
+    assert_opencode_mini_not_ready(" BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc");
+}
+
+/// Catches: the progress bar is painted before its `esc interrupt` text, so a status row
+/// that already shows the running bar but not yet the hint reads Ready.
+#[test]
+fn opencode_mini_progress_bar_without_hint_is_not_ready() {
+    assert_opencode_mini_not_ready(
+        " BUILD  \u{2B1D}\u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}",
+    );
+}
+
+/// Catches: a permission dialog below a running status row is read as Ready because the
+/// label row is still on screen.
+#[test]
+fn opencode_mini_permission_prompt_under_working_status_is_not_ready() {
+    let rows = vec![
+        " BUILD  \u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc interrupt"
+            .to_string(),
+        "  Permission required: bash".to_string(),
+        "  Allow once   Allow always   Reject".to_string(),
+    ];
+    assert_ne!(
+        detect_agent_screen_activity(Some("opencode"), &rows),
+        AgentScreenActivity::Ready
+    );
+}
+
+/// Catches: a one-letter uppercase token (`A`, `I`) opening the last row passes the label
+/// rule.
+#[test]
+fn opencode_mini_single_letter_token_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("A");
+    assert_opencode_mini_not_ready("I think the build passed");
+}
+
+/// Catches: trailing blank rows below the status row hide it, so an idle mini screen
+/// never reads Ready and the queue never drains.
+#[test]
+fn opencode_mini_ready_status_row_survives_trailing_blank_rows() {
+    let rows = vec![
+        "  done".to_string(),
+        " BUILD                                 52.9K (26%) \u{00B7} ctrl+p cmd".to_string(),
+        String::new(),
+        "   ".to_string(),
+    ];
+    assert_eq!(
+        detect_agent_screen_activity(Some("opencode"), &rows),
+        AgentScreenActivity::Ready
+    );
+}
+
+/// Catches: the queue drain of a captured OpenCode mini turn happens for a reason other
+/// than the Ready classification (silence, a stale epoch), so the drain test passes with
+/// the adapter blind. The same replay, but the status row is overwritten by a permission
+/// prompt before the timer runs: the screen is not Ready and nothing may be typed.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_command_does_not_drain_when_the_captured_mini_screen_is_not_ready() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-turn.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-queue-held";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let bytes = insert_recording_session(&state, sid);
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    enqueue_user_command(&state, sid, "resume queued work").unwrap();
+
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    processor.process_chunk(
+        &format!("\x1b[{rows};1H\x1b[2K  Allow once   Allow always   Reject"),
+        &silence,
+        sid,
+        &state,
+    );
+    assert_ne!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "a permission prompt on the last row is not an idle composer"
+    );
+    let replayed = bytes.lock().unwrap().len();
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        bytes.lock().unwrap()[replayed..].to_vec(),
+        Vec::<u8>::new(),
+        "nothing may be typed into a session that is not at an idle composer"
+    );
+}
