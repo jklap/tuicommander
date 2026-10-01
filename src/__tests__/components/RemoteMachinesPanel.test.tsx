@@ -33,7 +33,12 @@ const { actions, connections } = vi.hoisted(() => ({
 		>(() => Promise.resolve({ hosts: [], hashed_count: 0 })),
 		sshAgentInfo: vi.fn<
 			() => Promise<{ keys: Array<{ fingerprint: string; comment: string; key_type: string }>; agent_type: string }>
-		>(() => Promise.resolve({ keys: [{ fingerprint: "SHA256:abc", comment: "boss@mac", key_type: "ED25519" }], agent_type: "SSH Agent" })),
+		>(() =>
+			Promise.resolve({
+				keys: [{ fingerprint: "SHA256:abc", comment: "boss@mac", key_type: "ED25519" }],
+				agent_type: "SSH Agent",
+			}),
+		),
 		removeConnection: vi.fn(() => Promise.resolve()),
 	},
 	connections: {} as Record<string, unknown>,
