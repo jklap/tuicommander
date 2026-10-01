@@ -3569,7 +3569,7 @@ describe("useGitOperations", () => {
 		it("auto mode: does not close terminals of a checkout whose removal the backend refuses", async () => {
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
 			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/late", safe: true }]);
-			mockRepo.removeOrphanWorktree.mockRejectedValue(new Error("live session: Claude: late"));
+			mockRepo.removeOrphanWorktree.mockRejectedValueOnce(new Error("live session: Claude: late"));
 			terminalsStore.add(makeTerminal({ name: "Late agent", cwd: "/wt/late" }));
 
 			await gitOps.refreshAllBranchStats();
