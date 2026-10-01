@@ -362,6 +362,57 @@ describe("progressStore", () => {
 			store.resetForTests();
 		});
 
+		// Catches: a trailing refresh firing after the last row showing the flow has left.
+		it("cancels the trailing refresh when the last holder releases, not before", async () => {
+			vi.useFakeTimers();
+			try {
+				invokeMock.mockResolvedValue(flow);
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				const releaseA = store.holdSidebarFlow("/repo");
+				const releaseB = store.holdSidebarFlow("/repo");
+				await store.refreshSidebarFlow("/repo");
+				await store.refreshSidebarFlow("/repo"); // inside the gap: schedules the trailing read
+				releaseA();
+				await vi.advanceTimersByTimeAsync(6000);
+				expect(invokeMock).toHaveBeenCalledTimes(2); // still held: trailing read ran
+				await vi.advanceTimersByTimeAsync(6000);
+				await store.refreshSidebarFlow("/repo"); // read 3
+				await store.refreshSidebarFlow("/repo"); // inside the gap: schedules the trailing read
+				releaseB();
+				await vi.advanceTimersByTimeAsync(6000);
+				expect(invokeMock).toHaveBeenCalledTimes(3); // released: trailing read cancelled
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		// Catches: a failed newer read discarding an older response that is still valid.
+		it("applies an older response when the newer request failed", async () => {
+			vi.useFakeTimers();
+			try {
+				let resolveOld: (f: typeof flow) => void = () => {};
+				invokeMock
+					.mockImplementationOnce(
+						() =>
+							new Promise((r) => {
+								resolveOld = r;
+							}),
+					)
+					.mockRejectedValueOnce(new Error("boom"));
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				const first = store.refreshSidebarFlow("/repo");
+				vi.advanceTimersByTime(6000);
+				await store.refreshSidebarFlow("/repo");
+				resolveOld(flow);
+				await first;
+				expect(store.sidebarFlow("/repo")).toEqual(flow);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		// Catches: a failed read blanking the subagent lines that were already on screen.
 		it("keeps the last flow when a read fails", async () => {
 			vi.useFakeTimers();
