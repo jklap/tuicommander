@@ -7316,7 +7316,11 @@ mod settled_threads_critic5_tests {
         settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
         let mut prs = vec![truncated(7, "t2", "h1", 2)];
         settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 0)).await;
-        assert_eq!(walks.load(Ordering::SeqCst), 2, "new updatedAt walks at once");
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            2,
+            "new updatedAt walks at once"
+        );
         assert!(!prs[0].unresolved_threads_truncated);
     }
 
@@ -7336,7 +7340,11 @@ mod settled_threads_critic5_tests {
         age_all(&cache, 120);
         let mut prs = vec![truncated(7, "t1", "h1", 2)];
         settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 99)).await;
-        assert_eq!(walks.load(Ordering::SeqCst), 2, "settled entry reused after 120 s");
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            2,
+            "settled entry reused after 120 s"
+        );
         assert_eq!(prs[0].unresolved_threads, 6);
         assert!(!prs[0].unresolved_threads_truncated);
     }
