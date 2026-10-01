@@ -1,6 +1,21 @@
 use super::*;
 use std::collections::HashSet;
 
+fn wrong_status(story: &Story, required: &str) -> String {
+    format!(
+        "story must be {required} for this command (status: {})",
+        story.status.as_str()
+    )
+}
+
+/// The wire name of a command, as an agent writes it in the request.
+fn command_name(command: &StoryCommand) -> String {
+    match serde_json::to_value(command) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => format!("{command:?}"),
+    }
+}
+
 impl StoryStore {
     pub fn add_dependency(
         &self,
@@ -17,16 +32,23 @@ impl StoryStore {
             return Err("dependencies must belong to one plan".into());
         }
         if !matches!(story.status, StoryStatus::Backlog | StoryStatus::Ready) {
-            return Err("dependencies can be edited only before work starts".into());
+            return Err(format!(
+                "dependencies can be edited only on backlog or ready stories (status: {})",
+                story.status.as_str()
+            ));
         }
         if story.dependencies.iter().any(|id| id == dependency_id) {
-            return Err("dependency already exists".into());
+            return Err(format!(
+                "dependency already exists: {dependency_id} is already a dependency of {story_id}"
+            ));
         }
         let mut seen = HashSet::new();
         let mut stack = vec![dependency_id.to_string()];
         while let Some(id) = stack.pop() {
             if id == story_id {
-                return Err("dependency cycle".into());
+                return Err(format!(
+                    "dependency cycle: {dependency_id} already depends on {story_id}"
+                ));
             }
             if seen.insert(id.clone()) {
                 stack.extend(read_story(&tx, &id)?.dependencies);
@@ -34,6 +56,7 @@ impl StoryStore {
         }
         story.dependencies.push(dependency_id.into());
         if dependency.status != StoryStatus::Done {
+            // A ready story with an unfinished dependency is no longer claimable.
             story.status = StoryStatus::Backlog;
         }
         save_story(&tx, &mut story, expected_revision)?;
@@ -49,21 +72,33 @@ impl StoryStore {
         actor_session: Option<&str>,
     ) -> Result<Story, String> {
         if actor_session.is_some() {
-            return Err("dependency removal requires a user action".into());
+            return Err("remove_dependency is user-only and requires a user action: an agent session cannot remove a dependency; ask the user to remove it from the Plans and Stories dialog".into());
         }
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Backlog {
-            return Err("dependencies can be removed only from backlog stories".into());
+            return Err(format!(
+                "dependencies can be removed only from backlog stories (status: {})",
+                story.status.as_str()
+            ));
         }
         if !story.dependencies.iter().any(|id| id == dependency_id) {
-            return Err("dependency does not exist on story".into());
+            return Err(format!(
+                "dependency does not exist on story: {dependency_id} is not listed in its dependencies"
+            ));
         }
         let dependency = read_story(&tx, dependency_id)?;
         if dependency.plan_id != story.plan_id || dependency.status != StoryStatus::WontFix {
-            return Err("only cancelled dependencies in the same plan can be removed".into());
+            return Err(format!(
+                "only cancelled (wont_fix) dependencies in the same plan can be removed; {dependency_id} is {}",
+                if dependency.plan_id != story.plan_id {
+                    "in another plan"
+                } else {
+                    dependency.status.as_str()
+                }
+            ));
         }
         story.dependencies.retain(|id| id != dependency_id);
         if dependencies_done(&tx, &story)? {
@@ -92,52 +127,71 @@ impl StoryStore {
                 | StoryCommand::UncheckCriterion(_)
                 | StoryCommand::SubmitReview => {
                     if story.claim_session.as_deref() != Some(actor) {
-                        return Err("story is not claimed by calling session".into());
+                        return Err(match story.claim_session.as_deref() {
+                            Some(_) => "story is claimed by another session".to_string(),
+                            None => format!(
+                                "story is not claimed (status: {}); claim it first",
+                                story.status.as_str()
+                            ),
+                        });
                     }
                 }
                 _ => {
-                    return Err(
-                        "review and administrative transitions require a user action".into(),
-                    );
+                    return Err(format!(
+                        "{} is user-only and requires a user action: an agent session may only check_criterion, uncheck_criterion and submit_review on its own claimed story; ask the user to perform it from the Plans and Stories dialog",
+                        command_name(&command)
+                    ));
                 }
             }
         }
         match command {
             StoryCommand::StartManual => {
                 if story.status != StoryStatus::Ready {
-                    return Err("story must be ready for manual work".into());
+                    return Err(wrong_status(&story, "ready"));
                 }
                 story.status = StoryStatus::InProgress;
             }
             StoryCommand::CheckCriterion(index) | StoryCommand::UncheckCriterion(index) => {
                 if story.status != StoryStatus::InProgress {
-                    return Err("criteria can change only during work".into());
+                    return Err(wrong_status(&story, "in_progress"));
                 }
-                let checked = story
-                    .checked
-                    .get_mut(index)
-                    .ok_or("criterion index out of range")?;
+                let checked = story.checked.get_mut(index).ok_or_else(|| {
+                    format!(
+                        "criterion index {index} out of range: story has {} criteria",
+                        story.criteria.len()
+                    )
+                })?;
                 *checked = matches!(command, StoryCommand::CheckCriterion(_));
             }
             StoryCommand::SubmitReview => {
                 if story.status != StoryStatus::InProgress {
-                    return Err("story must be in progress".into());
+                    return Err(wrong_status(&story, "in_progress"));
                 }
                 if !story.checked.iter().all(|checked| *checked) {
-                    return Err("criteria are incomplete".into());
+                    let open: Vec<String> = story
+                        .checked
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, checked)| !**checked)
+                        .map(|(index, _)| index.to_string())
+                        .collect();
+                    return Err(format!(
+                        "criteria are incomplete: unchecked indexes {}",
+                        open.join(", ")
+                    ));
                 }
                 story.status = StoryStatus::Review;
             }
             StoryCommand::Approve => {
                 if story.status != StoryStatus::Review {
-                    return Err("story must be in review".into());
+                    return Err(wrong_status(&story, "review"));
                 }
                 story.status = StoryStatus::Done;
                 story.claim_session = None;
             }
             StoryCommand::RejectReview => {
                 if story.status != StoryStatus::Review {
-                    return Err("story must be in review".into());
+                    return Err(wrong_status(&story, "review"));
                 }
                 story.status = if story.claim_session.is_some() {
                     StoryStatus::InProgress
@@ -150,14 +204,17 @@ impl StoryStore {
                     story.status,
                     StoryStatus::Ready | StoryStatus::InProgress | StoryStatus::Review
                 ) {
-                    return Err("story cannot be blocked from this state".into());
+                    return Err(format!(
+                        "story can be blocked only from ready, in_progress or review (status: {})",
+                        story.status.as_str()
+                    ));
                 }
                 story.status = StoryStatus::Blocked;
                 story.claim_session = None;
             }
             StoryCommand::Unblock => {
                 if story.status != StoryStatus::Blocked {
-                    return Err("story is not blocked".into());
+                    return Err(wrong_status(&story, "blocked"));
                 }
                 story.status = if dependencies_done(&tx, &story)? {
                     StoryStatus::Ready

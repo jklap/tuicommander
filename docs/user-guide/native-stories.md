@@ -33,3 +33,17 @@ To remove a cancelled prerequisite, send `{"action":"remove_dependency","story_i
 This follows the native workflow trust model: a managed MCP call carries a session identity and cannot remove a dependency. CLI and HTTP requests without a session identity are treated as user actions. This is a local workflow convention, not an authentication or security boundary; a local caller can omit a session identity.
 
 The same records are available through desktop IPC, authenticated HTTP, and the `story` MCP tool. Import, export, and external sync are not part of this feature.
+
+## Which caller can do what
+
+| Caller | Scope | Reads | Agent actions (claim, check criteria, submit review, add dependency, create) | User-only actions (approve, reject, block, unblock, won't fix, start manual, remove dependency) |
+|---|---|---|---|---|
+| `story` MCP tool in a managed session | The session's own registered project only | Yes | Yes, on its own claim | Refused; the refusal names the user action needed |
+| Plans and Stories dialog | The open project | Yes | Yes | Yes |
+| `tuic story ... --project /abs/path` (HTTP `POST /stories/action?path=...`, loopback or authenticated) | Any project named by `--project` | Yes | Yes | Yes (no `--session-id` means a user action) |
+
+An orchestrating session in another project cannot read or approve this repo's plan through its `story` MCP tool: the tool resolves the project from the calling session, so a plan id of another project is refused with `plan does not belong to project`. It can do both from a shell with `tuic story '{"action":"plan_view","plan_id":"..."}' --project /abs/path/of/the/repo` and, for review, `{"action":"transition","story_id":"...","expected_revision":N,"command":"approve"}`. That path carries no session identity, so it is accepted as the user's own action; as stated above, this is a workflow convention, not a security boundary. No cross-project MCP path exists, and none was added.
+
+## MCP tool schema
+
+The `story` tool publishes the full `StoryAction` JSON Schema (actions, fields, types, enums, the `origin` tag shape, priority range 1 to 3) in its `inputSchema`. It is generated from the Rust types, so it follows the code. Inside `input` the story fields are camelCase (`planId`, `fileScope`) while the action fields are snake_case (`story_id`, `expected_revision`).
